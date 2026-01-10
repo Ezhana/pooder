@@ -34,6 +34,7 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
 
     onMount(editor: Editor) {
         this.setup(editor);
+        this.updateWhiteInk(editor, this.options);
     }
 
     onUnmount(editor: Editor) {
@@ -78,8 +79,6 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
             editor.canvas.on('object:rotating', this.syncHandler);
             editor.canvas.on('object:modified', this.syncHandler);
         }
-
-        this.updateWhiteInk(editor, this.options);
     }
 
     private teardown(editor: Editor) {

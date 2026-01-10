@@ -62,6 +62,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
 
     onMount(editor: Editor) {
         this.createLayer(editor);
+        this.updateDieline(editor);
     }
 
     onUnmount(editor: Editor) {
@@ -98,11 +99,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
             editor.canvas.add(layer);
         }
 
-        // Ensure it's on top
         editor.canvas.bringObjectToFront(layer);
-
-        // Initial draw
-        this.updateDieline(editor);
     }
 
     private destroyLayer(editor: Editor) {

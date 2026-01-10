@@ -37,11 +37,10 @@ export class BackgroundTool implements Extension<BackgroundToolOptions> {
             editor.canvas.add(backgroundLayer)
             editor.canvas.sendObjectToBack(backgroundLayer)
         }
-
-        this.updateBackground(editor, this.options);
     }
     onMount(editor: Editor) {
         this.initLayer(editor);
+        this.updateBackground(editor, this.options);
     }
 
     onUnmount(editor: Editor) {

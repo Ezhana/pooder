@@ -43,6 +43,7 @@ export class FilmTool implements Extension<FilmToolOptions> {
     }
 
     onUpdate(editor: Editor, state: EditorState) {
+        this.updateFilm(editor, this.options);
     }
 
     private initLayer(editor: Editor) {

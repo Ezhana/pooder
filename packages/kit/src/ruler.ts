@@ -35,6 +35,7 @@ export class RulerTool implements Extension<RulerToolOptions> {
 
     onMount(editor: Editor) {
         this.createLayer(editor);
+        this.updateRuler(editor);
     }
 
     onUnmount(editor: Editor) {
@@ -42,6 +43,7 @@ export class RulerTool implements Extension<RulerToolOptions> {
     }
 
     onUpdate(editor: Editor, state: EditorState) {
+        this.updateRuler(editor);
     }
 
     onDestroy(editor: Editor) {
@@ -71,7 +73,6 @@ export class RulerTool implements Extension<RulerToolOptions> {
         }
 
         editor.canvas.bringObjectToFront(layer);
-        this.updateRuler(editor);
     }
 
     private destroyLayer(editor: Editor) {

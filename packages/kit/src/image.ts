@@ -27,6 +27,7 @@ export class ImageTool implements Extension<ImageToolOptions> {
 
     onMount(editor: Editor) {
         this.ensureLayer(editor);
+        this.updateImage(editor, this.options);
     }
 
     onUnmount(editor: Editor) {

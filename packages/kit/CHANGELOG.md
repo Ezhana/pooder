@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 1.0.0
+
+### Major Changes
+
+- fix
+
 ## 0.0.2
 
 ### Patch Changes
