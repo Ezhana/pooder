@@ -1,6 +1,6 @@
 {
   "name": "@pooder/vue",
-  "version": "0.0.3",
+  "version": "1.0.0",
   "main": "./dist/index.umd.js",
   "module": "./dist/index.es.js",
   "types": "./dist/index.d.ts",
@@ -24,8 +24,7 @@
   },
   "dependencies": {
     "@pooder/core": "workspace:*",
-    "@pooder/kit": "workspace:*",
-    "fabric": "^7.0.0"
+    "@pooder/kit": "workspace:*"
   },
   "peerDependencies": {
     "vue": "^3.0.0"
