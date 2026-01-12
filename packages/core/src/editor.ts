@@ -159,19 +159,11 @@ export class PooderEditor implements Editor {
     async loadFromJSON(json: any) {
         if (!json) return;
 
+        this.extensionManager.unmount();
+
         this.canvas.clear();
 
-        this.updateState(state => ({
-            ...state,
-            width: json.width || state.width,
-            height: json.height || state.height,
-            metadata: json.metadata || state.metadata
-        }));
-
-        this.canvas.setDimensions({
-            width: this.state.width,
-            height: this.state.height
-        });
+        this.extensionManager.mount();
 
         if (json.extensions) {
             for (const [name, data] of Object.entries(json.extensions)) {
@@ -180,8 +172,8 @@ export class PooderEditor implements Editor {
                     if (ext.loadFromJSON) {
                         await ext.loadFromJSON(data);
                     } else if (data) {
-                         // Fallback: restore options if loadFromJSON is missing
-                         ext.options = data;
+                        // Fallback: restore options if loadFromJSON is missing
+                        ext.options = data;
                     }
                 }
             }

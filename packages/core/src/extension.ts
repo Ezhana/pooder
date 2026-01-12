@@ -12,6 +12,7 @@ interface ExtensionManager{
     count():number
     list():Extension[]
     mount():void
+    unmount():void
     update():void
     destroy():void
 }
@@ -158,15 +159,35 @@ class DefaultExtensionManager implements ExtensionManager{
         this.editor.extensions.forEach((extension) => {
             if (extension.enabled) {
                 try {
+                    console.log(`Mounting plugin "${extension.name}"`)
                     extension.onMount?.(this.editor);
                 }catch (e){
                     console.error(`Error in onMount hook for plugin "${extension.name}":`, e);
                 }
             }
         })
+        console.log(`Plugins mounted`);
 
         this.mounted=true
     }
+
+    unmount(){
+        if(!this.mounted)return
+
+        this.editor.extensions.forEach((extension) => {
+            if (extension.enabled) {
+                try {
+                    extension.onUnmount?.(this.editor);
+                }catch (e){
+                    console.error(`Error in onUnmount hook for plugin "${extension.name}":`, e);
+                }
+            }
+        })
+        console.log(`Plugins unmounted`);
+
+        this.mounted=false
+    }
+
     update(){
         const state = this.editor.getState();
 
