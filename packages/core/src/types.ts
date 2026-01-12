@@ -57,6 +57,9 @@ export interface Extension<T extends ExtensionOptions=ExtensionOptions>{
     onUnmount?(editor: Editor):void
     onDestroy?(editor: Editor):void
 
+    toJSON?(): any
+    loadFromJSON?(data: any): void | Promise<void>
+
     commands?: Record<string, Command>
 }
 

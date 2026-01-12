@@ -27,7 +27,11 @@ export class PooderEditor implements Editor {
             width: options.width || 800,
             height: options.height || 600,
         };
-        this.canvas = new PooderCanvas(el, {width: this.state.width, height: this.state.height});
+        this.canvas = new PooderCanvas(el, {
+            width: this.state.width, 
+            height: this.state.height,
+            preserveObjectStacking: true
+        });
         this.eventBus=new EventBus()
         this.commandManager = new DefaultCommandManager(this);
 
@@ -135,14 +139,54 @@ export class PooderEditor implements Editor {
     }
 
     toJSON() {
+        const extensions: Record<string, any> = {};
+        this.extensionManager.list().forEach(ext => {
+            if (ext.toJSON) {
+                extensions[ext.name] = ext.toJSON();
+            } else if (ext.options) {
+                extensions[ext.name] = ext.options;
+            }
+        });
+
         return {
             width: this.state.width,
             height: this.state.height,
             metadata: this.state.metadata,
+            extensions
         }
     }
 
-    async loadFromJSON(json: any) {}
+    async loadFromJSON(json: any) {
+        if (!json) return;
+
+        this.canvas.clear();
+
+        this.updateState(state => ({
+            ...state,
+            width: json.width || state.width,
+            height: json.height || state.height,
+            metadata: json.metadata || state.metadata
+        }));
+
+        this.canvas.setDimensions({
+            width: this.state.width,
+            height: this.state.height
+        });
+
+        if (json.extensions) {
+            for (const [name, data] of Object.entries(json.extensions)) {
+                const ext = this.extensionManager.get(name);
+                if (ext) {
+                    if (ext.loadFromJSON) {
+                        await ext.loadFromJSON(data);
+                    } else if (data) {
+                         // Fallback: restore options if loadFromJSON is missing
+                         ext.options = data;
+                    }
+                }
+            }
+        }
+    }
     getState(): EditorState {
         return { ...this.state }
     }
