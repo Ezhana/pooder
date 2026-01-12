@@ -3,6 +3,11 @@ import {Command, Editor, EditorState, Extension, Image, OptionSchema, PooderLaye
 interface ImageToolOptions {
     url: string;
     opacity: number;
+    width?: number;
+    height?: number;
+    angle?: number;
+    left?: number;
+    top?: number;
 }
 export class ImageTool implements Extension<ImageToolOptions> {
     name = 'ImageTool';
@@ -22,6 +27,36 @@ export class ImageTool implements Extension<ImageToolOptions> {
             max: 1,
             step: 0.1,
             label: 'Opacity'
+        },
+        width: {
+            type: 'number',
+            label: 'Width',
+            min: 0,
+            max: 5000,
+        },
+        height: {
+            type: 'number',
+            label: 'Height',
+            min: 0,
+            max: 5000,
+        },
+        angle: {
+            type: 'number',
+            label: 'Rotation',
+            min: 0,
+            max: 360
+        },
+        left: {
+            type: 'number',
+            label: 'Left',
+            min: 0,
+            max: 1000,
+        },
+        top: {
+            type: 'number',
+            label: 'Top',
+            min: 0,
+            max: 1000,
         }
     };
 
@@ -68,7 +103,7 @@ export class ImageTool implements Extension<ImageToolOptions> {
     }
 
     private updateImage(editor: Editor, opts: ImageToolOptions) {
-        let { url, opacity } = opts;
+        let { url, opacity, width, height, angle, left, top } = opts;
 
         const layer = editor.getLayer("user");
         if (!layer) {
@@ -82,24 +117,52 @@ export class ImageTool implements Extension<ImageToolOptions> {
             const currentSrc = userImage.getSrc?.() || userImage._element?.src;
 
             if (currentSrc !== url) {
-                 this.loadImage(editor, layer, url, opacity, userImage);
+                 this.loadImage(editor, layer, opts, userImage);
             } else {
-                if (userImage.opacity !== opacity) {
-                    userImage.set({ opacity });
+                const updates: any = {};
+                if (userImage.opacity !== opacity) updates.opacity = opacity;
+                if (angle !== undefined && userImage.angle !== angle) updates.angle = angle;
+                if (left !== undefined && userImage.left !== left) updates.left = left;
+                if (top !== undefined && userImage.top !== top) updates.top = top;
+                
+                if (width !== undefined && userImage.width) updates.scaleX = width / userImage.width;
+                if (height !== undefined && userImage.height) updates.scaleY = height / userImage.height;
+
+                if (Object.keys(updates).length > 0) {
+                    userImage.set(updates);
                     editor.canvas.requestRenderAll();
                 }
             }
         } else {
-            this.loadImage(editor, layer, url, opacity);
+            this.loadImage(editor, layer, opts);
         }
     }
 
-    private loadImage(editor: Editor, layer: PooderLayer, url: string, opacity: number, oldImage?: any) {
+    private loadImage(editor: Editor, layer: PooderLayer, opts: ImageToolOptions, oldImage?: any) {
+        const { url, opacity, width, height, angle, left, top } = opts;
         Image.fromURL(url).then(image => {
             if (oldImage) {
-                 const { left, top, scaleX, scaleY, angle } = oldImage;
-                 image.set({ left, top, scaleX, scaleY, angle });
+                 const defaultLeft = oldImage.left;
+                 const defaultTop = oldImage.top;
+                 const defaultAngle = oldImage.angle;
+                 const defaultScaleX = oldImage.scaleX;
+                 const defaultScaleY = oldImage.scaleY;
+                 
+                 image.set({
+                     left: left !== undefined ? left : defaultLeft,
+                     top: top !== undefined ? top : defaultTop,
+                     angle: angle !== undefined ? angle : defaultAngle,
+                     scaleX: (width !== undefined && image.width) ? width / image.width : defaultScaleX,
+                     scaleY: (height !== undefined && image.height) ? height / image.height : defaultScaleY,
+                 });
+                 
                  layer.remove(oldImage);
+            } else {
+                 if (width !== undefined && image.width) image.scaleX = width / image.width;
+                 if (height !== undefined && image.height) image.scaleY = height / image.height;
+                 if (angle !== undefined) image.angle = angle;
+                 if (left !== undefined) image.left = left;
+                 if (top !== undefined) image.top = top;
             }
 
             image.set({
@@ -109,6 +172,19 @@ export class ImageTool implements Extension<ImageToolOptions> {
                 }
             });
             layer.add(image);
+            
+            // Bind events to keep options in sync
+            image.on('modified', (e) => {
+                this.options.left = e.target.oCoords.tl.x
+                this.options.top = e.target.oCoords.tl.y;
+                this.options.angle = e.target.angle;
+
+                if (image.width) this.options.width = e.target.width * e.target.scaleX;
+                if (image.height) this.options.height = e.target.height * e.target.scaleY;
+
+                editor.emit('update');
+            });
+            
             editor.canvas.requestRenderAll();
         }).catch(err => {
             console.error("Failed to load image", url, err);
@@ -117,11 +193,17 @@ export class ImageTool implements Extension<ImageToolOptions> {
 
     commands:Record<string, Command>={
         setUserImage:{
-            execute:(editor: Editor, url: string, opacity: number)=>{
-                if (this.options.url === url && this.options.opacity === opacity) return true;
+            execute:(editor: Editor, url: string, opacity: number, width?: number, height?: number, angle?: number, left?: number, top?: number)=>{
+                if (this.options.url === url && 
+                    this.options.opacity === opacity &&
+                    this.options.width === width &&
+                    this.options.height === height &&
+                    this.options.angle === angle &&
+                    this.options.left === left &&
+                    this.options.top === top
+                   ) return true;
                 
-                this.options.url = url;
-                this.options.opacity = opacity;
+                this.options = { url, opacity, width, height, angle, left, top };
                 
                 // Direct update
                 this.updateImage(editor, this.options);
@@ -140,7 +222,12 @@ export class ImageTool implements Extension<ImageToolOptions> {
                     min: 0,
                     max: 1,
                     required: true
-                }
+                },
+                width: { type: 'number', label: 'Width' },
+                height: { type: 'number', label: 'Height' },
+                angle: { type: 'number', label: 'Angle' },
+                left: { type: 'number', label: 'Left' },
+                top: { type: 'number', label: 'Top' }
             }
         }
     }
