@@ -178,6 +178,13 @@ export class PooderEditor implements Editor {
                 }
             }
         }
+
+        this.updateState(state => ({
+            ...state,
+            width: json.width,
+            height: json.height,
+            metadata: json.metadata
+        }))
     }
     getState(): EditorState {
         return { ...this.state }
