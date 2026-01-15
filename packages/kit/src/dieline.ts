@@ -12,6 +12,7 @@ export interface DielineToolOptions {
     style: 'solid' | 'dashed';
     insideColor: string;
     outsideColor: string;
+    showBleedLines?: boolean;
 }
 
 // Alias for compatibility if needed, or just use DielineToolOptions
@@ -36,7 +37,8 @@ export class DielineTool implements Extension<DielineToolOptions> {
         offset: 0,
         style: 'solid',
         insideColor: 'rgba(0,0,0,0)',
-        outsideColor: '#ffffff'
+        outsideColor: '#ffffff',
+        showBleedLines: true
     };
 
     public schema: Record<keyof DielineToolOptions, OptionSchema> = {
@@ -51,6 +53,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
         position: { type: 'string', label: 'Position' }, // Complex object, simplified for now or need custom handler
         borderLength: { type: 'number', min: 0, max: 500, label: 'Margin' },
         offset: { type: 'number', min: -100, max: 100, label: 'Bleed Offset' },
+        showBleedLines: { type: 'boolean', label: 'Show Bleed Lines' },
         style: {
             type: 'select',
             options: ['solid', 'dashed'],
@@ -135,7 +138,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
     }
 
     public updateDieline(editor: Editor) {
-        const { shape, radius, offset, style, insideColor, outsideColor, position, borderLength } = this.options;
+        const { shape, radius, offset, style, insideColor, outsideColor, position, borderLength, showBleedLines } = this.options;
         let { width, height } = this.options;
 
         const canvasW = editor.canvas.width || 800;
@@ -242,18 +245,20 @@ export class DielineTool implements Extension<DielineToolOptions> {
             }, offset);
 
             // Use solid red for hatch lines to match dieline, background is transparent
-            const pattern = this.createHatchPattern('red');
-            if (pattern) {
-                const bleedObj = new Path(bleedPathData, {
-                    fill: pattern,
-                    stroke: null,
-                    selectable: false,
-                    evented: false,
-                    objectCaching: false,
-                    originX: 'left',
-                    originY: 'top'
-                });
-                layer.add(bleedObj);
+            if (showBleedLines !== false) {
+                const pattern = this.createHatchPattern('red');
+                if (pattern) {
+                    const bleedObj = new Path(bleedPathData, {
+                        fill: pattern,
+                        stroke: null,
+                        selectable: false,
+                        evented: false,
+                        objectCaching: false,
+                        originX: 'left',
+                        originY: 'top'
+                    });
+                    layer.add(bleedObj);
+                }
             }
 
             // Offset Dieline Border
@@ -321,7 +326,8 @@ export class DielineTool implements Extension<DielineToolOptions> {
                     offset: 0,
                     style: 'solid',
                     insideColor: 'rgba(0,0,0,0)',
-                    outsideColor: '#ffffff'
+                    outsideColor: '#ffffff',
+                    showBleedLines: true
                 };
                 this.updateDieline(editor);
                 return true;
