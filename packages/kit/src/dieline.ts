@@ -446,13 +446,41 @@ export class DielineTool implements Extension<DielineToolOptions> {
                 editor.canvas.clipPath = clipPath;
                 
                 const bbox = clipPath.getBoundingRect();
+                // Adjust hole coordinates to be relative to the bounding box
+                const holeDataRelative = holes.map((h: any) => ({
+                    x: h.x - bbox.left,
+                    y: h.y - bbox.top,
+                    innerRadius,
+                    outerRadius
+                }));
+
+                const clipPathCorrected = new Path(pathData, {
+                    absolutePositioned: true,
+                    left: 0, 
+                    top: 0
+                });
+                
+                const tempPath = new Path(pathData);
+                const tempBounds = tempPath.getBoundingRect();
+                
+                clipPathCorrected.set({
+                    left: tempBounds.left,
+                    top: tempBounds.top,
+                    originX: 'left',
+                    originY: 'top'
+                });
+
+                // 4. Apply Clip & Export
+                editor.canvas.clipPath = clipPathCorrected;
+                
+                const exportBbox = clipPathCorrected.getBoundingRect();
                 const dataURL = editor.canvas.toDataURL({
                     format: 'png',
                     multiplier: 2,
-                    left: bbox.left,
-                    top: bbox.top,
-                    width: bbox.width,
-                    height: bbox.height
+                    left: exportBbox.left,
+                    top: exportBbox.top,
+                    width: exportBbox.width,
+                    height: exportBbox.height
                 });
 
                 // 5. Restore

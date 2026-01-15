@@ -1,4 +1,4 @@
-import {Command, Editor, EditorState, Extension, Image, OptionSchema, PooderLayer} from '@pooder/core';
+import {Command, Editor, EditorState, Extension, Image, OptionSchema, PooderLayer, util, Point} from '@pooder/core';
 
 interface ImageToolOptions {
     url: string;
@@ -123,10 +123,21 @@ export class ImageTool implements Extension<ImageToolOptions> {
                  this.loadImage(editor, layer, opts);
             } else {
                 const updates: any = {};
+                const centerX = editor.state.width / 2;
+                const centerY = editor.state.height / 2;
+
                 if (userImage.opacity !== opacity) updates.opacity = opacity;
                 if (angle !== undefined && userImage.angle !== angle) updates.angle = angle;
-                if (left !== undefined && userImage.left !== left) updates.left = left;
-                if (top !== undefined && userImage.top !== top) updates.top = top;
+                
+                if (left !== undefined) {
+                    const localLeft = left - centerX;
+                    if (Math.abs(userImage.left - localLeft) > 1) updates.left = localLeft;
+                }
+                
+                if (top !== undefined) {
+                    const localTop = top - centerY;
+                    if (Math.abs(userImage.top - localTop) > 1) updates.top = localTop;
+                }
                 
                 if (width !== undefined && userImage.width) updates.scaleX = width / userImage.width;
                 if (height !== undefined && userImage.height) updates.scaleY = height / userImage.height;
@@ -151,6 +162,8 @@ export class ImageTool implements Extension<ImageToolOptions> {
 
             const currentOpts = this.options;
             const { opacity, width, height, angle, left, top } = currentOpts;
+            const centerX = editor.state.width / 2;
+            const centerY = editor.state.height / 2;
             
             const existingImage = editor.getObject("user-image", "user") as any;
 
@@ -162,8 +175,8 @@ export class ImageTool implements Extension<ImageToolOptions> {
                  const defaultScaleY = existingImage.scaleY;
                  
                  image.set({
-                     left: left !== undefined ? left : defaultLeft,
-                     top: top !== undefined ? top : defaultTop,
+                     left: left !== undefined ? left - centerX : defaultLeft,
+                     top: top !== undefined ? top - centerY : defaultTop,
                      angle: angle !== undefined ? angle : defaultAngle,
                      scaleX: (width !== undefined && image.width) ? width / image.width : defaultScaleX,
                      scaleY: (height !== undefined && image.height) ? height / image.height : defaultScaleY,
@@ -174,8 +187,9 @@ export class ImageTool implements Extension<ImageToolOptions> {
                  if (width !== undefined && image.width) image.scaleX = width / image.width;
                  if (height !== undefined && image.height) image.scaleY = height / image.height;
                  if (angle !== undefined) image.angle = angle;
-                 if (left !== undefined) image.left = left;
-                 if (top !== undefined) image.top = top;
+                 
+                 if (left !== undefined) image.left = left - centerX;
+                 if (top !== undefined) image.top = top - centerY;
             }
 
             image.set({
@@ -188,8 +202,11 @@ export class ImageTool implements Extension<ImageToolOptions> {
             
             // Bind events to keep options in sync
             image.on('modified', (e) => {
-                this.options.left = e.target.oCoords.tl.x
-                this.options.top = e.target.oCoords.tl.y;
+                const matrix = image.calcTransformMatrix();
+                const globalPoint = util.transformPoint(new Point(0,0), matrix);
+
+                this.options.left = globalPoint.x;
+                this.options.top = globalPoint.y;
                 this.options.angle = e.target.angle;
 
                 if (image.width) this.options.width = e.target.width * e.target.scaleX;
