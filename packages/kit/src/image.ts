@@ -11,6 +11,7 @@ interface ImageToolOptions {
 }
 export class ImageTool implements Extension<ImageToolOptions> {
     name = 'ImageTool';
+    private _loadingUrl: string | null = null;
     options: ImageToolOptions = {
         url: '',
         opacity: 1
@@ -113,11 +114,13 @@ export class ImageTool implements Extension<ImageToolOptions> {
 
         const userImage = editor.getObject("user-image","user") as any;
 
+        if (this._loadingUrl === url) return;
+
         if (userImage) {
             const currentSrc = userImage.getSrc?.() || userImage._element?.src;
 
             if (currentSrc !== url) {
-                 this.loadImage(editor, layer, opts, userImage);
+                 this.loadImage(editor, layer, opts);
             } else {
                 const updates: any = {};
                 if (userImage.opacity !== opacity) updates.opacity = opacity;
@@ -138,15 +141,25 @@ export class ImageTool implements Extension<ImageToolOptions> {
         }
     }
 
-    private loadImage(editor: Editor, layer: PooderLayer, opts: ImageToolOptions, oldImage?: any) {
-        const { url, opacity, width, height, angle, left, top } = opts;
+    private loadImage(editor: Editor, layer: PooderLayer, opts: ImageToolOptions) {
+        const { url } = opts;
+        this._loadingUrl = url;
+        
         Image.fromURL(url).then(image => {
-            if (oldImage) {
-                 const defaultLeft = oldImage.left;
-                 const defaultTop = oldImage.top;
-                 const defaultAngle = oldImage.angle;
-                 const defaultScaleX = oldImage.scaleX;
-                 const defaultScaleY = oldImage.scaleY;
+            if (this._loadingUrl !== url) return;
+            this._loadingUrl = null;
+
+            const currentOpts = this.options;
+            const { opacity, width, height, angle, left, top } = currentOpts;
+            
+            const existingImage = editor.getObject("user-image", "user") as any;
+
+            if (existingImage) {
+                 const defaultLeft = existingImage.left;
+                 const defaultTop = existingImage.top;
+                 const defaultAngle = existingImage.angle;
+                 const defaultScaleX = existingImage.scaleX;
+                 const defaultScaleY = existingImage.scaleY;
                  
                  image.set({
                      left: left !== undefined ? left : defaultLeft,
@@ -156,7 +169,7 @@ export class ImageTool implements Extension<ImageToolOptions> {
                      scaleY: (height !== undefined && image.height) ? height / image.height : defaultScaleY,
                  });
                  
-                 layer.remove(oldImage);
+                 layer.remove(existingImage);
             } else {
                  if (width !== undefined && image.width) image.scaleX = width / image.width;
                  if (height !== undefined && image.height) image.scaleY = height / image.height;
@@ -166,7 +179,7 @@ export class ImageTool implements Extension<ImageToolOptions> {
             }
 
             image.set({
-                opacity,
+                opacity: opacity !== undefined ? opacity : 1,
                 data: {
                     id: 'user-image'
                 }
@@ -187,6 +200,7 @@ export class ImageTool implements Extension<ImageToolOptions> {
             
             editor.canvas.requestRenderAll();
         }).catch(err => {
+            if (this._loadingUrl === url) this._loadingUrl = null;
             console.error("Failed to load image", url, err);
         });
     }
