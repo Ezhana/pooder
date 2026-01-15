@@ -7,22 +7,28 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, onBeforeUnmount, ref, PropType } from 'vue';
-import { PooderEditor } from '@pooder/core';
+import {
+  defineComponent,
+  onMounted,
+  onBeforeUnmount,
+  ref,
+  PropType,
+} from "vue";
+import { PooderEditor } from "@pooder/core";
 
 export default defineComponent({
-  name: 'CanvasArea',
+  name: "CanvasArea",
   props: {
     width: {
       type: Number,
-      required: true
+      required: true,
     },
     height: {
       type: Number,
-      required: true
-    }
+      required: true,
+    },
   },
-  emits: ['init'],
+  emits: ["init"],
   setup(props, { emit }) {
     const canvasRef = ref<HTMLCanvasElement | null>(null);
     let editor: PooderEditor | null = null;
@@ -38,7 +44,7 @@ export default defineComponent({
           height: props.height,
         });
 
-        emit('init', editor);
+        emit("init", editor);
       }
     });
 
@@ -49,9 +55,9 @@ export default defineComponent({
     });
 
     return {
-      canvasRef
+      canvasRef,
     };
-  }
+  },
 });
 </script>
 
@@ -68,6 +74,6 @@ export default defineComponent({
 
 .canvas-wrapper {
   background: white;
-  box-shadow: 0 0 10px rgba(0,0,0,0.1);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
 }
 </style>

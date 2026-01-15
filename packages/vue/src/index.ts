@@ -1,2 +1,2 @@
-import PooderEditor from './PooderEditor.vue';
-export { PooderEditor } ;
+import PooderEditor from "./PooderEditor.vue";
+export { PooderEditor };

@@ -1,3 +1,3 @@
 import { Canvas } from "fabric";
 
-export { Canvas as PooderCanvas }
+export { Canvas as PooderCanvas };

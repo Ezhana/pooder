@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "lint": "pnpm exec prettier . --write",
     "build": "pnpm --filter \"./packages/**\" -r build",
     "changeset": "changeset",
     "version-packages": "changeset version",

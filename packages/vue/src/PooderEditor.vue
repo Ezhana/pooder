@@ -1,11 +1,7 @@
 <template>
   <div class="pooder-editor">
     <div class="center-area">
-      <CanvasArea
-        :width="width"
-        :height="height"
-        @init="onInit"
-      />
+      <CanvasArea :width="width" :height="height" @init="onInit" />
     </div>
     <div class="right-panel">
       <ToolPanel :editor="editor" />
@@ -14,8 +10,8 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, shallowRef } from 'vue';
-import { Editor } from '@pooder/core';
+import { defineComponent, shallowRef } from "vue";
+import { Editor } from "@pooder/core";
 import {
   BackgroundTool,
   DielineTool,
@@ -23,26 +19,26 @@ import {
   WhiteInkTool,
   FilmTool,
   HoleTool,
-} from '@pooder/kit';
+} from "@pooder/kit";
 
-import CanvasArea from './components/CanvasArea.vue';
-import ToolPanel from './components/ToolPanel.vue';
+import CanvasArea from "./components/CanvasArea.vue";
+import ToolPanel from "./components/ToolPanel.vue";
 
 export default defineComponent({
-  name: 'PooderEditor',
+  name: "PooderEditor",
   components: {
     CanvasArea,
-    ToolPanel
+    ToolPanel,
   },
   props: {
     width: {
       type: Number,
-      default: 1200
+      default: 1200,
     },
     height: {
       type: Number,
-      default: 600
-    }
+      default: 600,
+    },
   },
   setup(props) {
     const editor = shallowRef<Editor | null>(null);
@@ -63,9 +59,9 @@ export default defineComponent({
 
     return {
       editor,
-      onInit
+      onInit,
     };
-  }
+  },
 });
 </script>
 
