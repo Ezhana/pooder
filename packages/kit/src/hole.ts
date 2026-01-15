@@ -192,6 +192,14 @@ export class HoleTool implements Extension<HoleToolOptions> {
     }
 
     onUpdate(editor: Editor, state: EditorState) {
+        this.enforceConstraints(editor);
+        this.redraw(editor);
+
+        // Trigger Dieline update
+        const dielineTool = editor.getExtension('DielineTool') as any;
+        if (dielineTool && dielineTool.updateDieline) {
+            dielineTool.updateDieline(editor);
+        }
     }
 
     commands: Record<string, Command> = {
