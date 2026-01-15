@@ -160,8 +160,13 @@ export class DielineTool implements Extension<DielineToolOptions> {
         // Clear existing objects
         layer.remove(...layer.getObjects());
 
-        // Get Hole Data
+        // Get Hole Tool and Enforce Constraints
         const holeTool = editor.getExtension('HoleTool') as any;
+        if (holeTool && typeof holeTool.enforceConstraints === 'function') {
+            holeTool.enforceConstraints(editor);
+        }
+
+        // Get Hole Data
         const holes = holeTool ? (holeTool.options.holes || []) : [];
         const innerRadius = holeTool ? (holeTool.options.innerRadius || 15) : 15;
         const outerRadius = holeTool ? (holeTool.options.outerRadius || 25) : 25;

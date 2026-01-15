@@ -8,6 +8,7 @@ export interface HoleToolOptions {
     outerRadius: number;
     style: 'solid' | 'dashed';
     holes?: Array<{ x: number, y: number }>;
+    constraintTarget?: 'original' | 'bleed';
 }
 
 export class HoleTool implements Extension<HoleToolOptions> {
@@ -16,7 +17,8 @@ export class HoleTool implements Extension<HoleToolOptions> {
         innerRadius: 15,
         outerRadius: 25,
         style: 'solid',
-        holes: []
+        holes: [],
+        constraintTarget: 'bleed'
     };
 
     public schema: Record<keyof HoleToolOptions, OptionSchema> = {
@@ -36,6 +38,11 @@ export class HoleTool implements Extension<HoleToolOptions> {
             type: 'select',
             options: ['solid', 'dashed'],
             label: 'Line Style'
+        },
+        constraintTarget: {
+            type: 'select',
+            options: ['original', 'bleed'],
+            label: 'Constraint Target'
         },
         holes: {
             type: 'json',
@@ -65,7 +72,7 @@ export class HoleTool implements Extension<HoleToolOptions> {
         const geometry = dielineTool.getGeometry(editor);
         if (!geometry) return null;
 
-        const offset = dielineTool.options.offset || 0;
+        const offset = (this.options.constraintTarget === 'original') ? 0 : (dielineTool.options.offset || 0);
 
         // Apply offset to geometry
         return {
@@ -74,6 +81,40 @@ export class HoleTool implements Extension<HoleToolOptions> {
             height: Math.max(0, geometry.height + offset * 2),
             radius: Math.max(0, geometry.radius + offset)
         };
+    }
+
+    public enforceConstraints(editor: Editor) {
+        const geometry = this.getDielineGeometry(editor);
+        if (!geometry) return;
+
+        // Get all hole markers
+        const objects = editor.canvas.getObjects().filter((obj: any) => obj.data?.type === 'hole-marker');
+        
+        let changed = false;
+        // Sort objects by index to maintain order in options.holes
+        objects.sort((a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0));
+        
+        const newHoles: {x: number, y: number}[] = [];
+
+        objects.forEach((obj: any) => {
+            const currentPos = new Point(obj.left, obj.top);
+            const newPos = this.calculateConstrainedPosition(currentPos, geometry);
+            
+            if (currentPos.distanceFrom(newPos) > 0.1) {
+                obj.set({
+                    left: newPos.x,
+                    top: newPos.y
+                });
+                obj.setCoords();
+                changed = true;
+            }
+            newHoles.push({ x: obj.left, y: obj.top });
+        });
+
+        if (changed) {
+            this.options.holes = newHoles;
+            editor.canvas.requestRenderAll();
+        }
     }
 
     private setup(editor: Editor) {
