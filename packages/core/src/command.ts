@@ -5,7 +5,7 @@ export { CommandManager, DefaultCommandManager, CommandMap }
 interface CommandManager{
     register(name:string,command:Command):void
     unregister(name:string):void
-    execute(name:string,...args:any[]):boolean
+    execute(name:string,...args:any[]):any
     get(name:string):Command | undefined
     has(name:string):boolean
     count():number

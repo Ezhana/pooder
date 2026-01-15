@@ -21,7 +21,7 @@ export interface CommandSchema {
 }
 
 export interface Command {
-    execute(...args: any[]): boolean;
+    execute(...args: any[]): any;
     schema?: CommandSchema;
 }
 

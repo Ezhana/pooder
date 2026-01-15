@@ -401,6 +401,69 @@ export class DielineTool implements Extension<DielineToolOptions> {
                      required: true
                  }
              }
+        },
+        exportCutImage: {
+            execute: (editor: Editor) => {
+                // 1. Generate Path Data
+                const { shape, width, height, radius, position } = this.options;
+                const canvasW = editor.canvas.width || 800;
+                const canvasH = editor.canvas.height || 600;
+                const cx = position?.x ?? canvasW / 2;
+                const cy = position?.y ?? canvasH / 2;
+
+                const holeTool = editor.getExtension('HoleTool') as any;
+                const holes = holeTool ? (holeTool.options.holes || []) : [];
+                const innerRadius = holeTool ? (holeTool.options.innerRadius || 15) : 15;
+                const outerRadius = holeTool ? (holeTool.options.outerRadius || 25) : 25;
+                const holeData = holes.map((h: any) => ({ x: h.x, y: h.y, innerRadius, outerRadius }));
+
+                const pathData = generateDielinePath({
+                    shape, width, height, radius, x: cx, y: cy, holes: holeData
+                });
+
+                // 2. Create Clip Path
+                // @ts-ignore
+                const clipPath = new Path(pathData, {
+                    left: 0, top: 0, originX: 'left', originY: 'top', absolutePositioned: true
+                });
+
+                // 3. Hide UI Layers
+                const layer = this.getLayer(editor, 'dieline-overlay');
+                const wasVisible = layer?.visible ?? true;
+                if (layer) layer.visible = false;
+
+                // Hide hole markers
+                const holeMarkers = editor.canvas.getObjects().filter((o: any) => o.data?.type === 'hole-marker');
+                holeMarkers.forEach(o => o.visible = false);
+
+                // Hide Ruler Overlay
+                const rulerLayer = editor.canvas.getObjects().find((obj: any) => obj.data?.id === 'ruler-overlay');
+                const rulerWasVisible = rulerLayer?.visible ?? true;
+                if (rulerLayer) rulerLayer.visible = false;
+
+                // 4. Apply Clip & Export
+                const originalClip = editor.canvas.clipPath;
+                editor.canvas.clipPath = clipPath;
+                
+                const bbox = clipPath.getBoundingRect();
+                const dataURL = editor.canvas.toDataURL({
+                    format: 'png',
+                    multiplier: 2,
+                    left: bbox.left,
+                    top: bbox.top,
+                    width: bbox.width,
+                    height: bbox.height
+                });
+
+                // 5. Restore
+                editor.canvas.clipPath = originalClip;
+                if (layer) layer.visible = wasVisible;
+                if (rulerLayer) rulerLayer.visible = rulerWasVisible;
+                holeMarkers.forEach(o => o.visible = true);
+                editor.canvas.requestRenderAll();
+
+                return dataURL;
+            }
         }
     };
 
