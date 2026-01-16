@@ -1,5 +1,17 @@
 # @pooder/vue
 
+## 2.0.0
+
+### Major Changes
+
+- update
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/kit@2.0.0
+  - @pooder/core@0.1.0
+
 ## 1.0.0
 
 ### Major Changes
