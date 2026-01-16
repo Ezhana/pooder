@@ -5,3 +5,4 @@ export * from "./hole";
 export * from "./image";
 export * from "./white-ink";
 export * from "./ruler";
+export * from "./mirror";

@@ -181,8 +181,6 @@ export class ImageTool implements Extension<ImageToolOptions> {
 
         const currentOpts = this.options;
         const { opacity, width, height, angle, left, top } = currentOpts;
-        const centerX = editor.state.width / 2;
-        const centerY = editor.state.height / 2;
 
         const existingImage = editor.getObject("user-image", "user") as any;
 
@@ -194,8 +192,8 @@ export class ImageTool implements Extension<ImageToolOptions> {
           const defaultScaleY = existingImage.scaleY;
 
           image.set({
-            left: left !== undefined ? left - centerX : defaultLeft,
-            top: top !== undefined ? top - centerY : defaultTop,
+            left: left !== undefined ? left : defaultLeft,
+            top: top !== undefined ? top : defaultTop,
             angle: angle !== undefined ? angle : defaultAngle,
             scaleX:
               width !== undefined && image.width
@@ -215,8 +213,8 @@ export class ImageTool implements Extension<ImageToolOptions> {
             image.scaleY = height / image.height;
           if (angle !== undefined) image.angle = angle;
 
-          if (left !== undefined) image.left = left - centerX;
-          if (top !== undefined) image.top = top - centerY;
+          if (left !== undefined) image.left = left;
+          if (top !== undefined) image.top = top;
         }
 
         image.set({
