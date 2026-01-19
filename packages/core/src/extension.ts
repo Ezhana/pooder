@@ -116,15 +116,13 @@ class DefaultExtensionManager implements ExtensionManager {
       return;
     }
     if (extension.enabled) return;
-
     extension.enabled = true;
-    this._registerCommands(extension);
 
     if (this.mounted) {
       try {
-        extension.onMount?.(this.editor);
+        extension.onEnable?.(this.editor);
       } catch (error) {
-        console.error(`Error in onMount hook for plugin "${name}":`, error);
+        console.error(`Error in onEnable hook for plugin "${name}":`, error);
       }
     }
   }
@@ -136,15 +134,13 @@ class DefaultExtensionManager implements ExtensionManager {
       return;
     }
     if (!extension.enabled) return;
-
     extension.enabled = false;
-    this._unregisterCommands(extension);
 
     if (this.mounted) {
       try {
-        extension.onUnmount?.(this.editor);
+        extension.onDisable?.(this.editor);
       } catch (error) {
-        console.error(`Error in onUnmount hook for plugin "${name}":`, error);
+        console.error(`Error in onDisable hook for plugin "${name}":`, error);
       }
     }
   }

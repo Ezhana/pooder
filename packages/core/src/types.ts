@@ -53,7 +53,9 @@ export interface Extension<T extends ExtensionOptions = ExtensionOptions> {
 
   onCreate?(editor: Editor): void;
   onMount?(editor: Editor): void;
+  onEnable?(editor: Editor): void;
   onUpdate?(editor: Editor, state: EditorState): void;
+  onDisable?(editor: Editor): void;
   onUnmount?(editor: Editor): void;
   onDestroy?(editor: Editor): void;
 
