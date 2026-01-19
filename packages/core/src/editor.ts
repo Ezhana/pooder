@@ -96,7 +96,7 @@ export class PooderEditor implements Editor {
 
     this.emit("beforeCommand", name, ...args);
 
-    const result = this.commandManager.execute(name, ...args);
+    const result = this.commandManager.execute(name, this, ...args);
 
     this.emit("afterCommand", name, args, result);
 
