@@ -84,7 +84,7 @@ export interface Editor {
 
   registerCommand(name: string, command: Command): void;
   unregisterCommand(name: string): void;
-  executeCommand(name: string, ...args: any[]): void;
+  executeCommand(name: string, ...args: any[]): any;
 
   on(event: string, handler: EventHandler, priority?: number): void;
   off(event: string, handler: EventHandler): void;
