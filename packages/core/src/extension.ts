@@ -116,11 +116,11 @@ class DefaultExtensionManager implements ExtensionManager {
       return;
     }
     if (extension.enabled) return;
-    extension.enabled = true;
 
     if (this.mounted) {
       try {
         extension.onEnable?.(this.editor);
+        extension.enabled = true;
       } catch (error) {
         console.error(`Error in onEnable hook for plugin "${name}":`, error);
       }
@@ -134,11 +134,11 @@ class DefaultExtensionManager implements ExtensionManager {
       return;
     }
     if (!extension.enabled) return;
-    extension.enabled = false;
 
     if (this.mounted) {
       try {
         extension.onDisable?.(this.editor);
+        extension.enabled = false;
       } catch (error) {
         console.error(`Error in onDisable hook for plugin "${name}":`, error);
       }
