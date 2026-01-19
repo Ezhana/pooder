@@ -8,9 +8,8 @@ import {
   Group,
   Point,
 } from "@pooder/core";
-import { DielineTool, DielineGeometry } from "./dieline";
-import { getNearestPointOnDieline } from "./geometry";
-import paper from "paper";
+import { DielineGeometry } from "./dieline";
+import { getNearestPointOnDieline, HoleData } from "./geometry";
 
 export interface HoleToolOptions {
   innerRadius: number;
@@ -61,6 +60,11 @@ export class HoleTool implements Extension<HoleToolOptions> {
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
+  private handleDielineChange: ((geometry: DielineGeometry) => void) | null =
+    null;
+
+  // Cache geometry to enforce constraints during drag
+  private currentGeometry: DielineGeometry | null = null;
 
   onMount(editor: Editor) {
     this.setup(editor);
@@ -74,76 +78,50 @@ export class HoleTool implements Extension<HoleToolOptions> {
     this.teardown(editor);
   }
 
-  private getDielineGeometry(editor: Editor): DielineGeometry | null {
-    const dielineTool = editor.getExtension("DielineTool") as DielineTool;
-    if (!dielineTool) return null;
-
-    const geometry = dielineTool.getGeometry(editor);
-    if (!geometry) return null;
-
-    const offset =
-      this.options.constraintTarget === "original"
-        ? 0
-        : dielineTool.options.offset || 0;
-
-    // Apply offset to geometry
-    return {
-      ...geometry,
-      width: Math.max(0, geometry.width + offset * 2),
-      height: Math.max(0, geometry.height + offset * 2),
-      radius: Math.max(0, geometry.radius + offset),
-    };
-  }
-
-  public enforceConstraints(editor: Editor) {
-    const geometry = this.getDielineGeometry(editor);
-    if (!geometry) return;
-
-    // Get all hole markers
-    const objects = editor.canvas
-      .getObjects()
-      .filter((obj: any) => obj.data?.type === "hole-marker");
-
-    let changed = false;
-    // Sort objects by index to maintain order in options.holes
-    objects.sort(
-      (a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0),
-    );
-
-    const newHoles: { x: number; y: number }[] = [];
-
-    objects.forEach((obj: any) => {
-      const currentPos = new Point(obj.left, obj.top);
-      const newPos = this.calculateConstrainedPosition(currentPos, geometry);
-
-      if (currentPos.distanceFrom(newPos) > 0.1) {
-        obj.set({
-          left: newPos.x,
-          top: newPos.y,
-        });
-        obj.setCoords();
-        changed = true;
-      }
-      newHoles.push({ x: obj.left, y: obj.top });
-    });
-
-    if (changed) {
-      this.options.holes = newHoles;
-      editor.canvas.requestRenderAll();
-    }
-  }
-
   private setup(editor: Editor) {
+    // 1. Listen for Dieline Geometry Changes
+    if (!this.handleDielineChange) {
+      this.handleDielineChange = (geometry: DielineGeometry) => {
+        this.currentGeometry = geometry;
+        this.enforceConstraints(editor);
+        // After enforcing constraints (updating markers), we must tell Dieline to update its holes
+        this.syncHolesToDieline(editor);
+      };
+      editor.on("dieline:geometry:change", this.handleDielineChange);
+    }
+
+    // 2. Initial Fetch of Geometry
+    // We use executeCommand to avoid direct dependency on DielineTool instance
+    const geometry = editor.executeCommand("DielineTool.getGeometry");
+    if (geometry) {
+      this.currentGeometry = geometry as DielineGeometry;
+    }
+
+    // 3. Setup Canvas Interaction
     if (!this.handleMoving) {
       this.handleMoving = (e: any) => {
         const target = e.target;
         if (!target || target.data?.type !== "hole-marker") return;
 
-        const geometry = this.getDielineGeometry(editor);
-        if (!geometry) return;
+        if (!this.currentGeometry) return;
+
+        // Calculate effective geometry based on constraint target
+        const effectiveOffset =
+          this.options.constraintTarget === "original"
+            ? 0
+            : this.currentGeometry.offset;
+        const constraintGeometry = {
+          ...this.currentGeometry,
+          width: Math.max(0, this.currentGeometry.width + effectiveOffset * 2),
+          height: Math.max(
+            0,
+            this.currentGeometry.height + effectiveOffset * 2,
+          ),
+          radius: Math.max(0, this.currentGeometry.radius + effectiveOffset),
+        };
 
         const p = new Point(target.left, target.top);
-        const newPos = this.calculateConstrainedPosition(p, geometry);
+        const newPos = this.calculateConstrainedPosition(p, constraintGeometry);
 
         target.set({
           left: newPos.x,
@@ -169,8 +147,8 @@ export class HoleTool implements Extension<HoleToolOptions> {
     if (!opts.holes || opts.holes.length === 0) {
       let defaultPos = { x: editor.canvas.width! / 2, y: 50 };
 
-      const g = this.getDielineGeometry(editor);
-      if (g) {
+      if (this.currentGeometry) {
+        const g = this.currentGeometry;
         // Default to Top-Center of Dieline shape
         const topCenter = { x: g.x, y: g.y - g.height / 2 };
         // Snap to exact shape edge
@@ -186,12 +164,7 @@ export class HoleTool implements Extension<HoleToolOptions> {
 
     this.options = { ...opts };
     this.redraw(editor);
-
-    // Ensure Dieline updates to reflect current holes (fusion effect)
-    const dielineTool = editor.getExtension("DielineTool") as DielineTool;
-    if (dielineTool && dielineTool.updateDieline) {
-      dielineTool.updateDieline(editor);
-    }
+    this.syncHolesToDieline(editor);
   }
 
   private teardown(editor: Editor) {
@@ -203,11 +176,19 @@ export class HoleTool implements Extension<HoleToolOptions> {
       editor.canvas.off("object:modified", this.handleModified);
       this.handleModified = null;
     }
+    if (this.handleDielineChange) {
+      editor.off("dieline:geometry:change", this.handleDielineChange);
+      this.handleDielineChange = null;
+    }
 
     const objects = editor.canvas
       .getObjects()
       .filter((obj: any) => obj.data?.type === "hole-marker");
     objects.forEach((obj) => editor.canvas.remove(obj));
+
+    // Clear holes from Dieline (visual only, state preserved in HoleTool options)
+    // Use try-catch or safe execute to avoid errors if Dieline is already gone/disabled
+    editor.executeCommand("dieline.setHoles", []);
 
     editor.canvas.requestRenderAll();
   }
@@ -215,12 +196,7 @@ export class HoleTool implements Extension<HoleToolOptions> {
   onUpdate(editor: Editor, state: EditorState) {
     this.enforceConstraints(editor);
     this.redraw(editor);
-
-    // Trigger Dieline update
-    const dielineTool = editor.getExtension("DielineTool") as any;
-    if (dielineTool && dielineTool.updateDieline) {
-      dielineTool.updateDieline(editor);
-    }
+    this.syncHolesToDieline(editor);
   }
 
   commands: Record<string, Command> = {
@@ -228,8 +204,8 @@ export class HoleTool implements Extension<HoleToolOptions> {
       execute: (editor: Editor) => {
         let defaultPos = { x: editor.canvas.width! / 2, y: 50 };
 
-        const g = this.getDielineGeometry(editor);
-        if (g) {
+        if (this.currentGeometry) {
+          const g = this.currentGeometry;
           const topCenter = { x: g.x, y: g.y - g.height / 2 };
           defaultPos = getNearestPointOnDieline(topCenter, {
             ...g,
@@ -244,12 +220,7 @@ export class HoleTool implements Extension<HoleToolOptions> {
           holes: [defaultPos],
         };
         this.redraw(editor);
-
-        // Trigger Dieline update
-        const dielineTool = editor.getExtension("DielineTool") as DielineTool;
-        if (dielineTool && dielineTool.updateDieline) {
-          dielineTool.updateDieline(editor);
-        }
+        this.syncHolesToDieline(editor);
 
         return true;
       },
@@ -259,12 +230,7 @@ export class HoleTool implements Extension<HoleToolOptions> {
         if (!this.options.holes) this.options.holes = [];
         this.options.holes.push({ x, y });
         this.redraw(editor);
-
-        // Trigger Dieline update
-        const dielineTool = editor.getExtension("DielineTool") as any;
-        if (dielineTool && dielineTool.updateDieline) {
-          dielineTool.updateDieline(editor);
-        }
+        this.syncHolesToDieline(editor);
 
         return true;
       },
@@ -285,12 +251,7 @@ export class HoleTool implements Extension<HoleToolOptions> {
       execute: (editor: Editor) => {
         this.options.holes = [];
         this.redraw(editor);
-
-        // Trigger Dieline update
-        const dielineTool = editor.getExtension("DielineTool") as any;
-        if (dielineTool && dielineTool.updateDieline) {
-          dielineTool.updateDieline(editor);
-        }
+        this.syncHolesToDieline(editor);
 
         return true;
       },
@@ -301,14 +262,28 @@ export class HoleTool implements Extension<HoleToolOptions> {
     const objects = editor.canvas
       .getObjects()
       .filter((obj: any) => obj.data?.type === "hole-marker");
+
+    // Sort to keep order consistent if needed, though canvas order changes on select
+    // Using simple mapping here
     const holes = objects.map((obj) => ({ x: obj.left!, y: obj.top! }));
     this.options.holes = holes;
 
-    // Trigger Dieline update for real-time fusion effect
-    const dielineTool = editor.getExtension("DielineTool") as any;
-    if (dielineTool && dielineTool.updateDieline) {
-      dielineTool.updateDieline(editor);
-    }
+    this.syncHolesToDieline(editor);
+  }
+
+  private syncHolesToDieline(editor: Editor) {
+    const { holes, innerRadius, outerRadius } = this.options;
+    // Even if holes is empty, we should send it to clear holes in Dieline
+    const currentHoles = holes || [];
+
+    const holeData: HoleData[] = currentHoles.map((h) => ({
+      x: h.x,
+      y: h.y,
+      innerRadius,
+      outerRadius,
+    }));
+
+    editor.executeCommand("DielineTool.setHoles", holeData);
   }
 
   private redraw(editor: Editor) {
@@ -389,6 +364,58 @@ export class HoleTool implements Extension<HoleToolOptions> {
     canvas.requestRenderAll();
   }
 
+  public enforceConstraints(editor: Editor) {
+    const geometry = this.currentGeometry;
+    if (!geometry) return;
+
+    const effectiveOffset =
+      this.options.constraintTarget === "original" ? 0 : geometry.offset;
+    const constraintGeometry = {
+      ...geometry,
+      width: Math.max(0, geometry.width + effectiveOffset * 2),
+      height: Math.max(0, geometry.height + effectiveOffset * 2),
+      radius: Math.max(0, geometry.radius + effectiveOffset),
+    };
+
+    // Get all hole markers
+    const objects = editor.canvas
+      .getObjects()
+      .filter((obj: any) => obj.data?.type === "hole-marker");
+
+    let changed = false;
+    // Sort objects by index to maintain order in options.holes
+    objects.sort(
+      (a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0),
+    );
+
+    const newHoles: { x: number; y: number }[] = [];
+
+    objects.forEach((obj: any) => {
+      const currentPos = new Point(obj.left, obj.top);
+      const newPos = this.calculateConstrainedPosition(
+        currentPos,
+        constraintGeometry,
+      );
+
+      if (currentPos.distanceFrom(newPos) > 0.1) {
+        obj.set({
+          left: newPos.x,
+          top: newPos.y,
+        });
+        obj.setCoords();
+        changed = true;
+      }
+      newHoles.push({ x: obj.left, y: obj.top });
+    });
+
+    if (changed) {
+      this.options.holes = newHoles;
+      editor.canvas.requestRenderAll();
+      // Need to sync changes back to Dieline if constraints moved them
+      this.syncHolesToDieline(editor);
+    }
+  }
+
   private calculateConstrainedPosition(p: Point, g: DielineGeometry): Point {
     // Use Paper.js to get accurate nearest point
     // This handles ellipses, rects, and rounded rects correctly
@@ -408,11 +435,6 @@ export class HoleTool implements Extension<HoleToolOptions> {
     const nearestP = new Point(nearest.x, nearest.y);
     const dist = p.distanceFrom(nearestP);
 
-    // Determine if point is inside or outside
-    // Simple heuristic: distance from center
-    // Or using paper.js contains() if we had the full path object
-    // For convex shapes, center distance works mostly, but let's use the vector direction
-
     // Vector from nearest to current point
     const v = p.subtract(nearestP);
 
@@ -420,24 +442,6 @@ export class HoleTool implements Extension<HoleToolOptions> {
     const center = new Point(g.x, g.y);
     const centerToNearest = nearestP.subtract(center);
 
-    // Dot product to see if they align (outside) or oppose (inside)
-    // If point is exactly on line, dist is 0.
-
-    // However, we want to constrain the point to be within [innerRadius, -outerRadius] distance from the edge.
-    // Actually, usually users want to snap to the edge or stay within a reasonable margin.
-    // The previous logic clamped the distance.
-
-    // Let's implement a simple snap-to-edge if close, otherwise allow free movement but clamp max distance?
-    // Or reproduce the previous "slide along edge" behavior.
-    // Previous behavior: "clampedDist = Math.min(dist, innerRadius); ... Math.max(dist, -outerRadius)"
-    // This implies the hole center can be slightly inside or outside the main shape edge.
-
-    // Let's determine sign of distance
-    // We can use paper.js Shape.contains(point) to check if inside.
-    // But getNearestPointOnDieline returns just coordinates.
-
-    // Optimization: Let's assume for Dieline shapes (convex-ish),
-    // if distance from center > distance of nearest from center, it's outside.
     const distToCenter = p.distanceFrom(center);
     const nearestDistToCenter = nearestP.distanceFrom(center);
 
@@ -455,37 +459,10 @@ export class HoleTool implements Extension<HoleToolOptions> {
     }
 
     // Reconstruct point
-    // If dist is very small, just use nearestP
     if (dist < 0.001) return nearestP;
 
-    // Direction vector normalized
-    const dir = v.scalarDivide(dist);
-
-    // New point = nearest + dir * clampedDist
-    // Note: if inside (signedDist < 0), v points towards center (roughly), dist is positive magnitude.
-    // Wait, v = p - nearest.
-    // If p is inside, p is closer to center. v points Inwards.
-    // If we want clampedDist to be negative, we should probably stick to normal vectors.
-
-    // Let's simplify:
-    // Just place it at nearest point + offset vector.
-    // Offset vector is 'v' scaled to clampedDist.
-
-    // If p is inside, v points in. length is 'dist'.
-    // We want length to be 'clampedDist' (magnitude).
-    // Since clampedDist is negative for inside, we need to be careful with signs.
-
-    // Actually simpler:
-    // We want the result to lie on the line connecting Center -> P -> Nearest? No.
-    // We want it on the line Nearest -> P.
-
-    // Current distance is 'dist'.
-    // Desired distance is abs(clampedDist).
-    // If clampedDist sign matches signedDist sign, we just scale v.
-
+    // We want the result to lie on the line connecting Nearest -> P
     const scale = Math.abs(clampedDist) / (dist || 1);
-
-    // If we are clamping, we just scale the vector from nearest.
     const offset = v.scalarMultiply(scale);
 
     return nearestP.add(offset);

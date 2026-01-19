@@ -1,34 +1,32 @@
-import { Command, Editor, Extension, OptionSchema } from "@pooder/core";
+import { Command, Editor, EditorState, Extension } from "@pooder/core";
 
-export interface MirrorToolOptions {
-  enabled: boolean;
-}
-
-export class MirrorTool implements Extension<MirrorToolOptions> {
+export class MirrorTool implements Extension {
   public name = "MirrorTool";
-  public options: MirrorToolOptions = {
-    enabled: false,
-  };
+  enabled = false;
 
-  public schema: Record<keyof MirrorToolOptions, OptionSchema> = {
-    enabled: {
-      type: "boolean",
-      label: "Mirror View",
-    },
-  };
-
-  onMount(editor: Editor) {
-    if (this.options.enabled) {
-      this.applyMirror(editor, true);
-    }
+  toJSON() {
+    return {
+      enabled: this.enabled,
+    };
   }
 
-  onUpdate(editor: Editor) {
-    this.applyMirror(editor, this.options.enabled);
+  loadFromJSON(json: any) {
+    this.enabled = json.enabled;
+  }
+
+  onEnable(editor: Editor) {
+    this.applyMirror(editor, true);
+  }
+
+  onDisable(editor: Editor) {
+    this.applyMirror(editor, false);
+  }
+
+  onUpdate(editor: Editor, state: EditorState) {
+    this.applyMirror(editor, this.enabled);
   }
 
   onUnmount(editor: Editor) {
-    // Force disable on unmount to restore view
     this.applyMirror(editor, false);
   }
 
@@ -65,17 +63,8 @@ export class MirrorTool implements Extension<MirrorToolOptions> {
   }
 
   commands: Record<string, Command> = {
-    toggleMirror: {
-      execute: (editor: Editor) => {
-        this.options.enabled = !this.options.enabled;
-        this.applyMirror(editor, this.options.enabled);
-        return true;
-      },
-    },
     setMirror: {
       execute: (editor: Editor, enabled: boolean) => {
-        if (this.options.enabled === enabled) return true;
-        this.options.enabled = enabled;
         this.applyMirror(editor, enabled);
         return true;
       },

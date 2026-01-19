@@ -77,7 +77,7 @@ export interface Editor {
   extensions: ExtensionMap;
   commands: CommandMap;
 
-  use(extension: Extension): void;
+  use(extension: Extension, enable?: boolean): void;
   unuse(name: string): void;
   getExtension(name: string): Extension | undefined;
   getExtensions(): Extension[];

@@ -3,7 +3,7 @@ import { Editor, Extension } from "./types";
 export { ExtensionManager, DefaultExtensionManager, ExtensionMap };
 
 interface ExtensionManager {
-  register(extension: Extension): void;
+  register(extension: Extension, enable?: boolean): void;
   unregister(name: string): void;
   enable(name: string): void;
   disable(name: string): void;
@@ -43,7 +43,7 @@ class DefaultExtensionManager implements ExtensionManager {
     }
   }
 
-  register(extension: Extension) {
+  register(extension: Extension, enable: boolean = false) {
     if (this.editor.extensions.has(extension.name)) {
       console.warn(
         `Plugin "${extension.name}" already registered. It will be overwritten.`,
@@ -51,9 +51,6 @@ class DefaultExtensionManager implements ExtensionManager {
     }
 
     try {
-      if (extension.enabled === undefined) {
-        extension.enabled = true;
-      }
       this.editor.extensions.set(extension.name, extension);
       extension.onCreate?.(this.editor);
     } catch (error) {
@@ -63,22 +60,23 @@ class DefaultExtensionManager implements ExtensionManager {
       );
     }
 
-    if (extension.enabled) {
-      this._registerCommands(extension);
-
-      if (this.mounted) {
-        try {
-          extension.onMount?.(this.editor);
-        } catch (error) {
-          console.error(
-            `Error in onMount hook for plugin "${extension.name}":`,
-            error,
-          );
-        }
+    if (this.mounted) {
+      try {
+        this._registerCommands(extension);
+        extension.onMount?.(this.editor);
+      } catch (error) {
+        console.error(
+          `Error in onMount hook for plugin "${extension.name}":`,
+          error,
+        );
       }
-    }
 
-    console.log(`Plugin "${extension.name}" registered successfully`);
+      if (enable) {
+        this.enable(extension.name);
+      }
+
+      console.log(`Plugin "${extension.name}" registered successfully`);
+    }
   }
 
   unregister(name: string) {

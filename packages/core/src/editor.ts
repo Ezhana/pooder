@@ -44,7 +44,9 @@ export class PooderEditor implements Editor {
 
     this.extensionManager = new DefaultExtensionManager(this);
     if (options.extensions && options.extensions.length > 0) {
-      options.extensions.forEach(this.extensionManager.register);
+      options.extensions.forEach((ext) => {
+        this.extensionManager.register(ext);
+      });
     }
     this.extensionManager.mount();
 
@@ -55,12 +57,12 @@ export class PooderEditor implements Editor {
     );
   }
 
-  use(extension: Extension) {
+  use(extension: Extension, enable: boolean = true) {
     if (this.destroyed) {
       throw new Error("Cannot register plugin: Editor is destroyed");
     }
 
-    this.extensionManager.register(extension);
+    this.extensionManager.register(extension, enable);
 
     this.emit("update", this.state);
   }

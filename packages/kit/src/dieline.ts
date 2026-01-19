@@ -4,12 +4,9 @@ import {
   EditorState,
   Extension,
   OptionSchema,
-  Rect,
-  Circle,
-  Ellipse,
-  Path,
   PooderLayer,
   Pattern,
+  Path,
 } from "@pooder/core";
 import {
   generateDielinePath,
@@ -30,6 +27,7 @@ export interface DielineToolOptions {
   insideColor: string;
   outsideColor: string;
   showBleedLines?: boolean;
+  holes: HoleData[];
 }
 
 // Alias for compatibility if needed, or just use DielineToolOptions
@@ -42,6 +40,8 @@ export interface DielineGeometry {
   width: number;
   height: number;
   radius: number;
+  offset: number;
+  borderLength?: number;
 }
 
 export class DielineTool implements Extension<DielineToolOptions> {
@@ -56,6 +56,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
     insideColor: "rgba(0,0,0,0)",
     outsideColor: "#ffffff",
     showBleedLines: true,
+    holes: [],
   };
 
   public schema: Record<keyof DielineToolOptions, OptionSchema> = {
@@ -78,6 +79,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
     },
     insideColor: { type: "color", label: "Inside Color" },
     outsideColor: { type: "color", label: "Outside Color" },
+    holes: { type: "json", label: "Holes" } as any,
   };
 
   onMount(editor: Editor) {
@@ -156,7 +158,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
     return new Pattern({ source: canvas, repetition: "repeat" });
   }
 
-  public updateDieline(editor: Editor) {
+  public updateDieline(editor: Editor, emitEvent: boolean = true) {
     const {
       shape,
       radius,
@@ -167,6 +169,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
       position,
       borderLength,
       showBleedLines,
+      holes,
     } = this.options;
     let { width, height } = this.options;
 
@@ -189,24 +192,6 @@ export class DielineTool implements Extension<DielineToolOptions> {
     // Clear existing objects
     layer.remove(...layer.getObjects());
 
-    // Get Hole Tool and Enforce Constraints
-    const holeTool = editor.getExtension("HoleTool") as any;
-    if (holeTool && typeof holeTool.enforceConstraints === "function") {
-      holeTool.enforceConstraints(editor);
-    }
-
-    // Get Hole Data
-    const holes = holeTool ? holeTool.options.holes || [] : [];
-    const innerRadius = holeTool ? holeTool.options.innerRadius || 15 : 15;
-    const outerRadius = holeTool ? holeTool.options.outerRadius || 25 : 25;
-
-    const holeData: HoleData[] = holes.map((h: any) => ({
-      x: h.x,
-      y: h.y,
-      innerRadius,
-      outerRadius,
-    }));
-
     // 1. Draw Mask (Outside)
     const cutW = Math.max(0, width + offset * 2);
     const cutH = Math.max(0, height + offset * 2);
@@ -222,7 +207,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
       radius: cutR,
       x: cx,
       y: cy,
-      holes: holeData,
+      holes: holes || [],
     });
 
     const mask = new Path(maskPathData, {
@@ -237,12 +222,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
     });
     layer.add(mask);
 
-    // 2. Draw Inside Fill (Dieline Shape itself, merged with holes if needed, or just the shape?)
-    // The user wants "fusion effect" so holes should be part of the dieline visually.
-    // If insideColor is transparent, it doesn't matter much.
-    // If insideColor is opaque, we need to punch holes in it too.
-    // Let's use Paper.js for this too if insideColor is not transparent.
-
+    // 2. Draw Inside Fill (Dieline Shape itself, merged with holes if needed)
     if (
       insideColor &&
       insideColor !== "transparent" &&
@@ -256,7 +236,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
         radius: cutR,
         x: cx,
         y: cy,
-        holes: holeData,
+        holes: holes || [],
       });
 
       const insideObj = new Path(productPathData, {
@@ -280,7 +260,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
           radius,
           x: cx,
           y: cy,
-          holes: holeData,
+          holes: holes || [],
         },
         offset,
       );
@@ -310,7 +290,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
         radius: cutR,
         x: cx,
         y: cy,
-        holes: holeData,
+        holes: holes || [],
       });
 
       const offsetBorderObj = new Path(offsetPathData, {
@@ -328,8 +308,6 @@ export class DielineTool implements Extension<DielineToolOptions> {
 
     // 4. Draw Dieline (Visual Border)
     // This should outline the product shape AND the holes.
-    // Paper.js `generateDielinePath` returns exactly this (Dieline - Holes).
-
     const borderPathData = generateDielinePath({
       shape,
       width: width,
@@ -337,7 +315,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
       radius: radius,
       x: cx,
       y: cy,
-      holes: holeData,
+      holes: holes || [],
     });
 
     const borderObj = new Path(borderPathData, {
@@ -354,6 +332,15 @@ export class DielineTool implements Extension<DielineToolOptions> {
     layer.add(borderObj);
 
     editor.canvas.requestRenderAll();
+
+    // Emit change event so other tools (like HoleTool) can react
+    // Only emit if requested (to avoid loops when updating non-geometry props like holes)
+    if (emitEvent) {
+      const geometry = this.getGeometry(editor);
+      if (geometry) {
+        editor.emit("dieline:geometry:change", geometry);
+      }
+    }
   }
 
   commands: Record<string, Command> = {
@@ -369,14 +356,9 @@ export class DielineTool implements Extension<DielineToolOptions> {
           insideColor: "rgba(0,0,0,0)",
           outsideColor: "#ffffff",
           showBleedLines: true,
+          holes: [],
         };
         this.updateDieline(editor);
-        return true;
-      },
-    },
-    destroy: {
-      execute: (editor: Editor) => {
-        this.destroyLayer(editor);
         return true;
       },
     },
@@ -439,25 +421,36 @@ export class DielineTool implements Extension<DielineToolOptions> {
         },
       },
     },
+    setHoles: {
+        execute: (editor: Editor, holes: HoleData[]) => {
+            // Check if changed?
+            // Deep comparison is expensive, just update
+            this.options.holes = holes;
+            // Suppress event emission to prevent infinite loop (HoleTool listens to change -> sets holes -> change -> ...)
+            this.updateDieline(editor, false);
+            return true;
+        },
+        schema: {
+        holes: {
+          type: "json",
+          label: "Holes",
+          required: true,
+        } as any,
+      },
+    },
+    getGeometry: {
+      execute: (editor: Editor) => {
+        return this.getGeometry(editor);
+      },
+    },
     exportCutImage: {
       execute: (editor: Editor) => {
         // 1. Generate Path Data
-        const { shape, width, height, radius, position } = this.options;
+        const { shape, width, height, radius, position, holes } = this.options;
         const canvasW = editor.canvas.width || 800;
         const canvasH = editor.canvas.height || 600;
         const cx = position?.x ?? canvasW / 2;
         const cy = position?.y ?? canvasH / 2;
-
-        const holeTool = editor.getExtension("HoleTool") as any;
-        const holes = holeTool ? holeTool.options.holes || [] : [];
-        const innerRadius = holeTool ? holeTool.options.innerRadius || 15 : 15;
-        const outerRadius = holeTool ? holeTool.options.outerRadius || 25 : 25;
-        const holeData = holes.map((h: any) => ({
-          x: h.x,
-          y: h.y,
-          innerRadius,
-          outerRadius,
-        }));
 
         const pathData = generateDielinePath({
           shape,
@@ -466,7 +459,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
           radius,
           x: cx,
           y: cy,
-          holes: holeData,
+          holes: holes || [],
         });
 
         // 2. Create Clip Path
@@ -485,6 +478,9 @@ export class DielineTool implements Extension<DielineToolOptions> {
         if (layer) layer.visible = false;
 
         // Hide hole markers
+        // Note: DielineTool should ideally trigger an event for others to hide UI,
+        // but for now keeping this logic here to match previous behavior
+        // while avoiding direct import of HoleTool
         const holeMarkers = editor.canvas
           .getObjects()
           .filter((o: any) => o.data?.type === "hole-marker");
@@ -502,13 +498,6 @@ export class DielineTool implements Extension<DielineToolOptions> {
         editor.canvas.clipPath = clipPath;
 
         const bbox = clipPath.getBoundingRect();
-        // Adjust hole coordinates to be relative to the bounding box
-        const holeDataRelative = holes.map((h: any) => ({
-          x: h.x - bbox.left,
-          y: h.y - bbox.top,
-          innerRadius,
-          outerRadius,
-        }));
 
         const clipPathCorrected = new Path(pathData, {
           absolutePositioned: true,
@@ -552,7 +541,7 @@ export class DielineTool implements Extension<DielineToolOptions> {
   };
 
   public getGeometry(editor: Editor): DielineGeometry | null {
-    const { shape, width, height, radius, position, borderLength } =
+    const { shape, width, height, radius, position, borderLength, offset } =
       this.options;
     const canvasW = editor.canvas.width || 800;
     const canvasH = editor.canvas.height || 600;
@@ -575,6 +564,8 @@ export class DielineTool implements Extension<DielineToolOptions> {
       width: visualWidth,
       height: visualHeight,
       radius,
+      offset,
+      borderLength,
     };
   }
 }
