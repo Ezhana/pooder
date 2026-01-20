@@ -1,221 +1,106 @@
-import { Editor, Extension } from "./types";
+import { Contribution } from "./contribution";
+import EventBus from "./event";
 
-export { ExtensionManager, DefaultExtensionManager, ExtensionMap };
-
-interface ExtensionManager {
-  register(extension: Extension, enable?: boolean): void;
-  unregister(name: string): void;
-  enable(name: string): void;
-  disable(name: string): void;
-  get(name: string): Extension | undefined;
-  has(name: string): boolean;
-  count(): number;
-  list(): Extension[];
-  mount(): void;
-  unmount(): void;
-  update(): void;
-  destroy(): void;
+export { ExtensionRegistry, ExtensionManager };
+export interface ExtensionOptions {
+  [key: string]: any;
 }
-class ExtensionMap extends Map<string, Extension> {}
-class DefaultExtensionManager implements ExtensionManager {
-  private readonly editor: Editor;
-  private mounted: boolean = false;
+export interface OptionSchema {
+  type: "string" | "number" | "boolean" | "color" | "select";
+  options?: string[] | { label: string; value: any }[];
+  min?: number;
+  max?: number;
+  step?: number;
+  label?: string;
+}
+interface ExtensionMetadata {
+  name: string;
+  contributions?: Contribution[];
+}
 
-  constructor(editor: Editor) {
-    this.editor = editor;
+export interface Extension {
+  id: string;
+  metadata?: ExtensionMetadata;
+
+  activate(): void;
+  deactivate(): void;
+}
+
+class ExtensionRegistry extends Map<string, Extension> {}
+class ExtensionManager {
+  private readonly extensionRegistry: ExtensionRegistry;
+
+  constructor(extensionRegistry: ExtensionRegistry) {
+    this.extensionRegistry = extensionRegistry;
   }
 
-  private _registerCommands(extension: Extension) {
-    if (extension.commands) {
-      Object.entries(extension.commands).forEach(([name, command]) => {
-        const commandName = `${extension.name}.${name}`;
-        this.editor.registerCommand(commandName, command);
-      });
-    }
-  }
-
-  private _unregisterCommands(extension: Extension) {
-    if (extension.commands) {
-      Object.keys(extension.commands).forEach((name) => {
-        const commandName = `${extension.name}.${name}`;
-        this.editor.unregisterCommand(commandName);
-      });
-    }
-  }
-
-  register(extension: Extension, enable: boolean = false) {
-    if (this.editor.extensions.has(extension.name)) {
+  register(extension: Extension) {
+    if (this.extensionRegistry.has(extension.id)) {
       console.warn(
-        `Plugin "${extension.name}" already registered. It will be overwritten.`,
+        `Plugin "${extension.id}" already registered. It will be overwritten.`,
       );
     }
 
     try {
-      this.editor.extensions.set(extension.name, extension);
-      extension.onCreate?.(this.editor);
+      this.extensionRegistry.set(extension.id, extension);
+      EventBus.emit("extension:register", extension);
     } catch (error) {
       console.error(
-        `Error in onCreate hook for plugin "${extension.name}":`,
+        `Error in onCreate hook for plugin "${extension.id}":`,
         error,
       );
     }
 
-    if (this.mounted) {
-      try {
-        this._registerCommands(extension);
-        extension.onMount?.(this.editor);
-      } catch (error) {
-        console.error(
-          `Error in onMount hook for plugin "${extension.name}":`,
-          error,
-        );
-      }
-
-      if (enable) {
-        this.enable(extension.name);
-      }
-
-      console.log(`Plugin "${extension.name}" registered successfully`);
+    try {
+      extension.activate();
+    } catch (error) {
+      console.error(
+        `Error in onActivate hook for plugin "${extension.id}":`,
+        error,
+      );
     }
+
+    console.log(`Plugin "${extension.id}" registered successfully`);
   }
 
   unregister(name: string) {
-    const extension = this.editor.extensions.get(name);
+    const extension = this.extensionRegistry.get(name);
     if (!extension) {
       console.warn(`Plugin "${name}" not found.`);
       return;
     }
 
-    if (this.mounted && extension.enabled) {
-      try {
-        extension.onUnmount?.(this.editor);
-      } catch (error) {
-        console.error(`Error in onUnmount hook for plugin "${name}":`, error);
-      }
-    }
-
     try {
-      extension.onDestroy?.(this.editor);
+      extension.deactivate();
     } catch (error) {
-      console.error(`Error in onDestroy hook for plugin "${name}":`, error);
+      console.error(`Error in deactivate for plugin "${name}":`, error);
     }
 
-    this._unregisterCommands(extension);
-
-    this.editor.extensions.delete(name);
+    this.extensionRegistry.delete(name);
     console.log(`Plugin "${name}" unregistered`);
     return true;
   }
 
   enable(name: string) {
-    const extension = this.get(name);
+    const extension = this.extensionRegistry.get(name);
     if (!extension) {
       console.warn(`Plugin "${name}" not found.`);
       return;
-    }
-    if (extension.enabled) return;
-
-    if (this.mounted) {
-      try {
-        extension.onEnable?.(this.editor);
-        extension.enabled = true;
-      } catch (error) {
-        console.error(`Error in onEnable hook for plugin "${name}":`, error);
-      }
     }
   }
 
   disable(name: string) {
-    const extension = this.get(name);
+    const extension = this.extensionRegistry.get(name);
     if (!extension) {
       console.warn(`Plugin "${name}" not found.`);
       return;
     }
-    if (!extension.enabled) return;
-
-    if (this.mounted) {
-      try {
-        extension.onDisable?.(this.editor);
-        extension.enabled = false;
-      } catch (error) {
-        console.error(`Error in onDisable hook for plugin "${name}":`, error);
-      }
-    }
   }
 
-  get(name: string) {
-    return this.editor.extensions.get(name);
-  }
-  has(name: string) {
-    return this.editor.extensions.has(name);
-  }
-  count() {
-    return this.editor.extensions.size;
-  }
-  list() {
-    return Array.from(this.editor.extensions.values());
-  }
-  mount() {
-    if (this.mounted) return;
-
-    this.editor.extensions.forEach((extension) => {
-      if (extension.enabled) {
-        try {
-          console.log(`Mounting plugin "${extension.name}"`);
-          extension.onMount?.(this.editor);
-        } catch (e) {
-          console.error(
-            `Error in onMount hook for plugin "${extension.name}":`,
-            e,
-          );
-        }
-      }
-    });
-    console.log(`Plugins mounted`);
-
-    this.mounted = true;
-  }
-
-  unmount() {
-    if (!this.mounted) return;
-
-    this.editor.extensions.forEach((extension) => {
-      if (extension.enabled) {
-        try {
-          extension.onUnmount?.(this.editor);
-        } catch (e) {
-          console.error(
-            `Error in onUnmount hook for plugin "${extension.name}":`,
-            e,
-          );
-        }
-      }
-    });
-    console.log(`Plugins unmounted`);
-
-    this.mounted = false;
-  }
-
-  update() {
-    const state = this.editor.getState();
-
-    this.editor.extensions.forEach((extension) => {
-      if (extension.enabled) {
-        try {
-          extension.onUpdate?.(this.editor, state);
-        } catch (e) {
-          console.error(
-            `Error in onUpdate hook for plugin "${extension.name}":`,
-            e,
-          );
-        }
-      }
-    });
-  }
+  update() {}
 
   destroy() {
-    const extensionNames = Array.from(this.editor.extensions.keys());
+    const extensionNames = Array.from(this.extensionRegistry.keys());
     extensionNames.forEach((name) => this.unregister(name));
-    this.mounted = false;
   }
 }

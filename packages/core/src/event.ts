@@ -1,12 +1,15 @@
-import { EventHandler } from "./types";
+type EventHandler = (...args: any[]) => void | boolean;
+type EventListenersMap = Map<string, EventListener[]>;
 
-export { EventBus, EventListener };
-
+interface Event {
+  name: string;
+  data: any;
+}
 interface EventListener {
   handler: EventHandler;
   priority: number;
 }
-type EventListenersMap = Map<string, EventListener[]>;
+
 class EventBus {
   private events: EventListenersMap = new Map();
 
@@ -46,3 +49,5 @@ class EventBus {
     return this.events.get(event)?.length ?? 0;
   }
 }
+
+export default new EventBus();

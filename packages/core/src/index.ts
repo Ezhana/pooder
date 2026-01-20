@@ -1,19 +1,5 @@
-export { PooderEditor } from "./editor";
-
-export { PooderCanvas } from "./canvas";
-export { PooderLayer } from "./layer";
-export { PooderObject } from "./obj";
-
-export type {
-  Editor,
-  EditorState,
-  Command,
-  Event,
-  EventHandler,
-  Extension,
-  ExtensionOptions,
-  OptionSchema,
-} from "./types";
+import { ServiceManager, Service, ServiceRegistry } from "./service";
+import { ExtensionManager, ExtensionRegistry } from "./extension";
 
 export {
   FabricImage as Image,
@@ -29,3 +15,19 @@ export {
   filters,
   util,
 } from "fabric";
+
+export class Pooder {
+  services: ServiceRegistry = new ServiceRegistry();
+  extensions: ExtensionRegistry = new ExtensionRegistry();
+
+  private serviceManager: ServiceManager = new ServiceManager(this.services);
+  private extensionManager: ExtensionManager = new ExtensionManager(
+    this.extensions,
+  );
+
+  constructor() {}
+
+  registerService(service: Service) {
+    this.serviceManager.register(service);
+  }
+}

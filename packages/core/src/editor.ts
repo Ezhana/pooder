@@ -1,5 +1,4 @@
-import { Command, Editor, EditorState, EventHandler, Extension } from "./types";
-import { EventBus } from "./event";
+import EventBus from "./event";
 import { CommandManager, CommandMap, DefaultCommandManager } from "./command";
 import {
   DefaultExtensionManager,
@@ -10,13 +9,17 @@ import { PooderCanvas } from "./canvas";
 import { PooderObject } from "./obj";
 import { PooderLayer } from "./layer";
 
-export class PooderEditor implements Editor {
+interface EditorState {
+  width: number;
+  height: number;
+  metadata?: Record<string, any>;
+}
+export class PooderEditor {
   public state: EditorState;
   public canvas: PooderCanvas;
   public extensions: ExtensionMap = new Map();
   public commands: CommandMap = new Map();
 
-  private eventBus: EventBus;
   private commandManager: CommandManager;
   private extensionManager: ExtensionManager;
 
@@ -39,7 +42,6 @@ export class PooderEditor implements Editor {
       height: this.state.height,
       preserveObjectStacking: true,
     });
-    this.eventBus = new EventBus();
     this.commandManager = new DefaultCommandManager(this);
 
     this.extensionManager = new DefaultExtensionManager(this);
@@ -106,13 +108,13 @@ export class PooderEditor implements Editor {
   }
 
   on(event: string, handler: EventHandler, priority?: number): void {
-    this.eventBus.on(event, handler, priority);
+    EventBus.on(event, handler, priority);
   }
   off(event: string, handler: EventHandler): void {
-    this.eventBus.off(event, handler);
+    EventBus.off(event, handler);
   }
   emit(event: string, ...args: any[]): void {
-    this.eventBus.emit(event, ...args);
+    EventBus.emit(event, ...args);
   }
 
   getObjects(): PooderObject[] {
