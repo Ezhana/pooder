@@ -1,6 +1,3 @@
-export interface Disposable {
-  dispose(): void;
-}
 
 export interface CommandArgSchema {}
 

@@ -1,5 +1,5 @@
 import { Contribution, ContributionPoint, ContributionPointIds } from "./index";
-import { Disposable } from "../command";
+import Disposable from "../disposable";
 
 export class ContributionRegistry {
   private points: Map<string, ContributionPoint> = new Map();

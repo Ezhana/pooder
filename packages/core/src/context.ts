@@ -1,8 +1,7 @@
 import EventBus from "./event";
 import { Contribution } from "./contribution";
 import { Service } from "./service";
-
-import { Disposable } from "./command";
+import Disposable from "./disposable";
 
 interface ExtensionContext {
   readonly eventBus: EventBus;

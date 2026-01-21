@@ -1,23 +1,21 @@
 import { Service, ServiceRegistry } from "./service";
 import EventBus from "./event";
 import { ExtensionManager } from "./extension";
-import { Disposable } from "./command";
+import Disposable from "./disposable";
 import {
   Contribution,
   ContributionPoint,
   ContributionPointIds,
   ContributionRegistry,
 } from "./contribution";
-import CommandService from "./services/CommandService";
-import ConfigurationService from "./services/ConfigurationService";
+import {CommandService,ConfigurationService} from "./services"
 import { ExtensionContext } from "./context";
 
 export * from "./extension";
 export * from "./context";
 export * from "./contribution";
 export * from "./service";
-export { default as CommandService } from "./services/CommandService";
-export { default as ConfigurationService } from "./services/ConfigurationService";
+export * from "./services"
 
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();

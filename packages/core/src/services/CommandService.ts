@@ -1,4 +1,5 @@
-import { Command, Disposable } from "../command";
+import { Command } from "../command";
+import Disposable from "../disposable";
 import { Service } from "../service";
 
 export default class CommandService implements Service {

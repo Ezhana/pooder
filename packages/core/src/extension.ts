@@ -1,6 +1,6 @@
 import { ExtensionContext } from "./context";
 import { ContributionPointIds } from "./contribution";
-import { Disposable } from "./command";
+import Disposable from "./disposable";
 import CommandService from "./services/CommandService";
 
 interface ExtensionMetadata {
@@ -63,7 +63,7 @@ class ExtensionManager {
             if (pointId === ContributionPointIds.COMMANDS && item.handler) {
               const commandService =
                 this.context.services.get<CommandService>("CommandService")!;
-              
+
               // Use item.command as the identifier for CommandService
               const commandName = item.command;
               if (commandName) {
