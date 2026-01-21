@@ -1,79 +1,57 @@
 <template>
-  <div class="canvas-area">
-    <div class="canvas-wrapper">
-      <canvas ref="canvasRef"></canvas>
-    </div>
+  <div ref="container" class="pooder-canvas-area">
+    <canvas ref="canvas"></canvas>
   </div>
 </template>
 
-<script lang="ts">
-import {
-  defineComponent,
-  onMounted,
-  onBeforeUnmount,
-  ref,
-  PropType,
-} from "vue";
-import { PooderEditor } from "@pooder/core";
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from "vue";
 
-export default defineComponent({
-  name: "CanvasArea",
-  props: {
-    width: {
-      type: Number,
-      required: true,
-    },
-    height: {
-      type: Number,
-      required: true,
-    },
-  },
-  emits: ["init"],
-  setup(props, { emit }) {
-    const canvasRef = ref<HTMLCanvasElement | null>(null);
-    let editor: PooderEditor | null = null;
+const emit = defineEmits<{
+  (e: "canvas-ready", el: HTMLCanvasElement): void;
+  (e: "resize", width: number, height: number): void;
+}>();
 
-    onMounted(() => {
-      if (canvasRef.value) {
-        // Explicitly set canvas dimensions
-        canvasRef.value.width = props.width;
-        canvasRef.value.height = props.height;
+const container = ref<HTMLDivElement | null>(null);
+const canvas = ref<HTMLCanvasElement | null>(null);
+let resizeObserver: ResizeObserver | null = null;
 
-        editor = new PooderEditor(canvasRef.value, {
-          width: props.width,
-          height: props.height,
-        });
+onMounted(() => {
+  if (container.value && canvas.value) {
+    const { clientWidth, clientHeight } = container.value;
+    canvas.value.width = clientWidth;
+    canvas.value.height = clientHeight;
 
-        emit("init", editor);
+    emit("canvas-ready", canvas.value);
+
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        emit("resize", width, height);
       }
     });
+    resizeObserver.observe(container.value);
+  }
+});
 
-    onBeforeUnmount(() => {
-      if (editor) {
-        editor.destroy();
-      }
-    });
-
-    return {
-      canvasRef,
-    };
-  },
+onUnmounted(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
 });
 </script>
 
 <style scoped>
-.canvas-area {
+.pooder-canvas-area {
   flex: 1;
-  background: #e0e0e0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: auto;
-  padding: 20px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #f5f5f5;
+  position: relative;
 }
 
-.canvas-wrapper {
-  background: white;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+canvas {
+  display: block;
 }
 </style>
