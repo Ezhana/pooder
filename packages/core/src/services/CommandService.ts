@@ -6,31 +6,31 @@ export default class CommandService implements Service {
 
   /**
    * Register a command
-   * @param id Command ID
+   * @param commandId Command Name (ID)
    * @param handler Command handler function
    * @param thisArg The `this` context for the handler
    * @returns Disposable to unregister the command
    */
   registerCommand(
-    id: string,
+    commandId: string,
     handler: (...args: any[]) => any,
     thisArg?: any,
   ): Disposable {
-    if (this.commands.has(id)) {
-      console.warn(`Command "${id}" is already registered. Overwriting.`);
+    if (this.commands.has(commandId)) {
+      console.warn(`Command "${commandId}" is already registered. Overwriting.`);
     }
 
     const command: Command = {
-      id,
+      id: commandId,
       handler: thisArg ? handler.bind(thisArg) : handler,
     };
 
-    this.commands.set(id, command);
+    this.commands.set(commandId, command);
 
     return {
       dispose: () => {
-        if (this.commands.get(id) === command) {
-          this.commands.delete(id);
+        if (this.commands.get(commandId) === command) {
+          this.commands.delete(commandId);
         }
       },
     };
@@ -38,20 +38,20 @@ export default class CommandService implements Service {
 
   /**
    * Execute a command
-   * @param id Command ID
+   * @param commandId Command Name (ID)
    * @param args Arguments to pass to the handler
    * @returns The result of the command handler
    */
-  async executeCommand<T = any>(id: string, ...args: any[]): Promise<T> {
-    const command = this.commands.get(id);
+  async executeCommand<T = any>(commandId: string, ...args: any[]): Promise<T> {
+    const command = this.commands.get(commandId);
     if (!command) {
-      throw new Error(`Command "${id}" not found.`);
+      throw new Error(`Command "${commandId}" not found.`);
     }
 
     try {
       return await command.handler(...args);
     } catch (error) {
-      console.error(`Error executing command "${id}":`, error);
+      console.error(`Error executing command "${commandId}":`, error);
       throw error;
     }
   }
@@ -66,8 +66,8 @@ export default class CommandService implements Service {
   /**
    * Get a specific command
    */
-  getCommand(id: string): Command | undefined {
-    return this.commands.get(id);
+  getCommand(commandId: string): Command | undefined {
+    return this.commands.get(commandId);
   }
 
   dispose() {

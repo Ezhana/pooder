@@ -71,11 +71,16 @@ class ExtensionManager {
             if (pointId === ContributionPointIds.COMMANDS && item.handler) {
               const commandService =
                 this.context.services.get<CommandService>("CommandService")!;
-              const commandDisposable = commandService.registerCommand(
-                contributionId,
-                item.handler,
-              );
-              disposables.push(commandDisposable);
+              
+              // Use item.command as the identifier for CommandService
+              const commandName = item.command;
+              if (commandName) {
+                const commandDisposable = commandService.registerCommand(
+                  commandName,
+                  item.handler,
+                );
+                disposables.push(commandDisposable);
+              }
             }
           });
         }
