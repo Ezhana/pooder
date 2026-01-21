@@ -26,7 +26,7 @@ export class ContributionRegistry {
   /**
    * Register a contribution to a specific point
    */
-  registerContribution<T>(contribution: Contribution<T>): void {
+  register<T>(contribution: Contribution<T>): void {
     const pointId = contribution.pointId;
 
     if (!this.points.has(pointId)) {
@@ -70,7 +70,7 @@ export class ContributionRegistry {
   /**
    * Get all contributions for a given point
    */
-  getContributions<T>(pointId: string): Contribution<T>[] {
+  get<T>(pointId: string): Contribution<T>[] {
     return (this.contributions.get(pointId) || []) as Contribution<T>[];
   }
 
@@ -84,7 +84,7 @@ export class ContributionRegistry {
   /**
    * Unregister a contribution
    */
-  unregisterContribution(pointId: string, contributionId: string): void {
+  unregister(pointId: string, contributionId: string): void {
     const list = this.contributions.get(pointId);
     if (list) {
       const index = list.findIndex((c) => c.id === contributionId);

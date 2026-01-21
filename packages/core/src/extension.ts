@@ -1,4 +1,7 @@
 import { ExtensionContext } from "./context";
+import { ContributionPointIds } from "./contribution";
+import { Disposable } from "./command";
+import CommandService from "./services/CommandService";
 
 interface ExtensionMetadata {
   name: string;
@@ -18,6 +21,7 @@ class ExtensionRegistry extends Map<string, Extension> {}
 class ExtensionManager {
   private readonly context: ExtensionContext;
   private extensionRegistry: ExtensionRegistry = new ExtensionRegistry();
+  private extensionDisposables: Map<string, Disposable[]> = new Map();
 
   constructor(context: ExtensionContext) {
     this.context = context;
@@ -30,18 +34,43 @@ class ExtensionManager {
       );
     }
 
+    // Initialize disposables for this extension
+    this.extensionDisposables.set(extension.id, []);
+    const disposables = this.extensionDisposables.get(extension.id)!;
+
     // Process declarative contributions
     if (extension.contribute) {
       for (const [pointId, items] of Object.entries(extension.contribute())) {
         if (Array.isArray(items)) {
           items.forEach((item) => {
-            this.context.contributionRegistry.registerContribution({
+            const id =
+              item.id ||
+              `${extension.id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`;
+
+            this.context.contributions.register({
               pointId,
-              id:
-                item.id ||
-                `${extension.id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`,
+              id,
               data: item,
             });
+
+            // Track contribution registration to unregister later (if registry supported it, but for now we manually handle what we can)
+            // Note: ContributionRegistry.unregisterContribution is available, so we should use it.
+            disposables.push({
+              dispose: () => {
+                this.context.contributions.unregister(pointId, id);
+              },
+            });
+
+            // Auto-register commands with handlers
+            if (pointId === ContributionPointIds.COMMANDS && item.handler) {
+              const commandService =
+                this.context.services.get<CommandService>("CommandService");
+              const commandDisposable = commandService!.registerCommand(
+                id,
+                item.handler,
+              );
+              disposables.push(commandDisposable);
+            }
           });
         }
       }
@@ -80,6 +109,13 @@ class ExtensionManager {
       extension.deactivate(this.context);
     } catch (error) {
       console.error(`Error in deactivate for plugin "${name}":`, error);
+    }
+
+    // Dispose all resources associated with this extension
+    const disposables = this.extensionDisposables.get(name);
+    if (disposables) {
+      disposables.forEach((d) => d.dispose());
+      this.extensionDisposables.delete(name);
     }
 
     this.extensionRegistry.delete(name);

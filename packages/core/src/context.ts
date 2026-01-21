@@ -4,8 +4,8 @@ import { ServiceRegistry } from "./service";
 
 interface ExtensionContext {
   readonly eventBus: EventBus;
-  readonly contributionRegistry: ContributionRegistry;
-  readonly serviceRegistry: ServiceRegistry;
+  readonly contributions: ContributionRegistry;
+  readonly services: ServiceRegistry;
 }
 
 export { ExtensionContext };

@@ -1,9 +1,9 @@
-interface Service {
+export interface Service {
   init?(): void;
   dispose?(): void;
 }
 
-class ServiceRegistry {
+export class ServiceRegistry {
   private services: Map<string, Service> = new Map();
 
   register<T extends Service>(name: string, service: T): T {
@@ -23,5 +23,3 @@ class ServiceRegistry {
     this.services.delete(serviceName);
   }
 }
-
-export { Service, ServiceRegistry };

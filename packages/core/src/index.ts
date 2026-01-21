@@ -20,20 +20,19 @@ export {
 } from "fabric";
 
 export class Pooder {
-  readonly eventBus: EventBus = new EventBus();
-  readonly services: ServiceRegistry = new ServiceRegistry();
-  readonly contributionRegistry: ContributionRegistry = contributionRegistry;
-  readonly commandService: CommandService;
-  readonly extensionManager: ExtensionManager;
+  public readonly eventBus: EventBus = new EventBus();
+  public readonly services: ServiceRegistry = new ServiceRegistry();
+  public readonly extensions: ExtensionManager;
+
+  public readonly contributions: ContributionRegistry = contributionRegistry;
 
   constructor() {
-    this.commandService = new CommandService();
-    this.registerService(this.commandService);
+    this.registerService(new CommandService());
 
-    this.extensionManager = new ExtensionManager({
+    this.extensions = new ExtensionManager({
       eventBus: this.eventBus,
-      contributionRegistry: this.contributionRegistry,
-      serviceRegistry: this.services,
+      contributions: this.contributions,
+      services: this.services,
     });
   }
 
@@ -71,10 +70,3 @@ export class Pooder {
     return true;
   }
 }
-
-const p = new Pooder();
-const svc = new CommandService();
-p.registerService(svc);
-const cs = p.services.get<CommandService>("CommandService");
-console.log(cs);
-console.log(p);
