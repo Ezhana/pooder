@@ -18,7 +18,9 @@ interface ImageToolOptions {
   top?: number;
 }
 export class ImageTool implements Extension {
-  name = "ImageTool";
+  metadata = {
+    name: "ImageTool",
+  };
   private _loadingUrl: string | null = null;
   private _options: ImageToolOptions = {
     url: "",
@@ -120,7 +122,7 @@ export class ImageTool implements Extension {
             height?: number,
             angle?: number,
             left?: number,
-            top?: number
+            top?: number,
           ) => {
             if (
               this._options.url === url &&
@@ -175,10 +177,7 @@ export class ImageTool implements Extension {
       return;
     }
 
-    const userImage = this.canvasService.getObject(
-      "user-image",
-      "user"
-    ) as any;
+    const userImage = this.canvasService.getObject("user-image", "user") as any;
 
     if (this._loadingUrl === url) return;
 
@@ -239,7 +238,7 @@ export class ImageTool implements Extension {
 
         const existingImage = this.canvasService!.getObject(
           "user-image",
-          "user"
+          "user",
         ) as any;
 
         if (existingImage) {
