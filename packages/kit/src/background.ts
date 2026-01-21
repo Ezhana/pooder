@@ -1,83 +1,140 @@
 import {
-  Command,
-  Editor,
-  EditorState,
   Extension,
-  Image,
-  OptionSchema,
-  PooderLayer,
-  Rect,
+  ExtensionContext,
+  ContributionPointIds,
+  CommandContribution,
+  ConfigurationContribution,
 } from "@pooder/core";
+import { Rect, FabricImage as Image } from "fabric";
+import CanvasService from "./CanvasService";
 
 interface BackgroundToolOptions {
   color: string;
   url: string;
 }
-export class BackgroundTool implements Extension<BackgroundToolOptions> {
-  public name = "BackgroundTool";
-  public options: BackgroundToolOptions = {
+
+export class BackgroundTool implements Extension {
+  public metadata = { name: "BackgroundTool" };
+  
+  private _options: BackgroundToolOptions = {
     color: "",
     url: "",
   };
-  public schema: Record<keyof BackgroundToolOptions, OptionSchema> = {
-    color: {
-      type: "color",
-      label: "Background Color",
-    },
-    url: {
-      type: "string",
-      label: "Image URL",
-    },
-  };
 
-  private initLayer(editor: Editor) {
-    let backgroundLayer = editor.getLayer("background");
+  private canvasService?: CanvasService;
+
+  activate(context: ExtensionContext) {
+    this.canvasService = context.services.get<CanvasService>("CanvasService");
+    if (!this.canvasService) {
+      console.warn("CanvasService not found for BackgroundTool");
+      return;
+    }
+
+    this.initLayer();
+    this.updateBackground();
+  }
+
+  deactivate(context: ExtensionContext) {
+    if (this.canvasService) {
+      const layer = this.canvasService.getLayer("background");
+      if (layer) {
+        this.canvasService.canvas.remove(layer);
+      }
+      this.canvasService = undefined;
+    }
+  }
+
+  contribute() {
+    return {
+      [ContributionPointIds.CONFIGURATIONS]: [
+        {
+          id: "background.color",
+          type: "color",
+          label: "Background Color",
+          default: "",
+        },
+        {
+          id: "background.url",
+          type: "string",
+          label: "Image URL",
+          default: "",
+        },
+      ] as ConfigurationContribution[],
+      [ContributionPointIds.COMMANDS]: [
+        {
+          command: "reset",
+          title: "Reset Background",
+          handler: () => {
+            this.updateBackground();
+            return true;
+          },
+        },
+        {
+          command: "clear",
+          title: "Clear Background",
+          handler: () => {
+            this._options = {
+              color: "transparent",
+              url: "",
+            };
+            this.updateBackground();
+            return true;
+          },
+        },
+        {
+          command: "setBackgroundColor",
+          title: "Set Background Color",
+          handler: (color: string) => {
+            if (this._options.color === color) return true;
+            this._options.color = color;
+            this.updateBackground();
+            return true;
+          },
+        },
+        {
+          command: "setBackgroundImage",
+          title: "Set Background Image",
+          handler: (url: string) => {
+            if (this._options.url === url) return true;
+            this._options.url = url;
+            this.updateBackground();
+            return true;
+          },
+        },
+      ] as CommandContribution[],
+    };
+  }
+
+  private initLayer() {
+    if (!this.canvasService) return;
+    let backgroundLayer = this.canvasService.getLayer("background");
     if (!backgroundLayer) {
-      backgroundLayer = new PooderLayer([], {
-        width: editor.canvas.width,
-        height: editor.canvas.height,
+      backgroundLayer = this.canvasService.createLayer("background", {
+        width: this.canvasService.canvas.width,
+        height: this.canvasService.canvas.height,
         selectable: false,
         evented: false,
-        data: {
-          id: "background",
-        },
       });
-
-      editor.canvas.add(backgroundLayer);
-      editor.canvas.sendObjectToBack(backgroundLayer);
-    }
-  }
-  onMount(editor: Editor) {
-    this.initLayer(editor);
-    this.updateBackground(editor, this.options);
-  }
-
-  onUnmount(editor: Editor) {
-    const layer = editor.getLayer("background");
-    if (layer) {
-      editor.canvas.remove(layer);
+      this.canvasService.canvas.sendObjectToBack(backgroundLayer);
     }
   }
 
-  onUpdate(editor: Editor, state: EditorState) {
-    this.updateBackground(editor, this.options);
-  }
-
-  private async updateBackground(
-    editor: Editor,
-    options: BackgroundToolOptions,
-  ) {
-    const layer = editor.getLayer("background");
+  private async updateBackground() {
+    if (!this.canvasService) return;
+    const layer = this.canvasService.getLayer("background");
     if (!layer) {
       console.warn("[BackgroundTool] Background layer not found");
       return;
     }
 
-    const { color, url } = options;
-    const width = editor.state.width;
-    const height = editor.state.height;
+    const { color, url } = this._options;
+    const width = this.canvasService.canvas.width || 800;
+    const height = this.canvasService.canvas.height || 600;
 
-    let rect = editor.getObject("background-color-rect", "background");
+    let rect = this.canvasService.getObject(
+      "background-color-rect",
+      "background",
+    ) as Rect;
     if (rect) {
       rect.set({
         fill: color,
@@ -97,7 +154,10 @@ export class BackgroundTool implements Extension<BackgroundToolOptions> {
       layer.sendObjectToBack(rect);
     }
 
-    let img = editor.getObject("background-image", "background") as Image;
+    let img = this.canvasService.getObject(
+      "background-image",
+      "background",
+    ) as Image;
     try {
       if (img) {
         if (img.getSrc() !== url) {
@@ -126,58 +186,9 @@ export class BackgroundTool implements Extension<BackgroundToolOptions> {
           layer.add(img);
         }
       }
-      editor.canvas.requestRenderAll();
+      this.canvasService.requestRenderAll();
     } catch (e) {
       console.error("[BackgroundTool] Failed to load image", e);
     }
   }
-
-  commands: Record<string, Command> = {
-    reset: {
-      execute: (editor: Editor) => {
-        this.updateBackground(editor, this.options);
-        return true;
-      },
-    },
-    clear: {
-      execute: (editor: Editor) => {
-        this.options = {
-          color: "transparent",
-          url: "",
-        };
-        this.updateBackground(editor, this.options);
-        return true;
-      },
-    },
-    setBackgroundColor: {
-      execute: (editor: Editor, color: string) => {
-        if (this.options.color === color) return true;
-        this.options.color = color;
-        this.updateBackground(editor, this.options);
-        return true;
-      },
-      schema: {
-        color: {
-          type: "string", // Should be 'color' if supported by CommandArgSchema, but using 'string' for now as per previous plan
-          label: "Background Color",
-          required: true,
-        },
-      },
-    },
-    setBackgroundImage: {
-      execute: (editor: Editor, url: string) => {
-        if (this.options.url === url) return true;
-        this.options.url = url;
-        this.updateBackground(editor, this.options);
-        return true;
-      },
-      schema: {
-        url: {
-          type: "string",
-          label: "Image URL",
-          required: true,
-        },
-      },
-    },
-  };
 }

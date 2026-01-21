@@ -1,56 +1,109 @@
 import {
-  Command,
-  Editor,
-  EditorState,
-  EventHandler,
   Extension,
-  OptionSchema,
-  Image,
-  filters,
-  PooderObject,
-  PooderLayer,
+  ExtensionContext,
+  ContributionPointIds,
+  CommandContribution,
+  ConfigurationContribution,
 } from "@pooder/core";
+import { FabricImage as Image, filters } from "fabric";
+import CanvasService from "./CanvasService";
 
 interface WhiteInkToolOptions {
   customMask: string;
   opacity: number;
   enableClip: boolean;
 }
-export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
-  public name = "WhiteInkTool";
-  public options: WhiteInkToolOptions = {
+
+export class WhiteInkTool implements Extension {
+  public metadata = { name: "WhiteInkTool" };
+  
+  private _options: WhiteInkToolOptions = {
     customMask: "",
     opacity: 1,
     enableClip: false,
   };
 
-  public schema: Record<keyof WhiteInkToolOptions, OptionSchema> = {
-    customMask: { type: "string", label: "Custom Mask URL" },
-    opacity: { type: "number", min: 0, max: 1, step: 0.01, label: "Opacity" },
-    enableClip: { type: "boolean", label: "Enable Clip" },
-  };
+  private canvasService?: CanvasService;
+  private syncHandler: ((e: any) => void) | undefined;
 
-  private syncHandler: EventHandler | undefined;
+  activate(context: ExtensionContext) {
+    this.canvasService = context.services.get<CanvasService>("CanvasService");
+    if (!this.canvasService) {
+      console.warn("CanvasService not found for WhiteInkTool");
+      return;
+    }
 
-  onMount(editor: Editor) {
-    this.setup(editor);
-    this.updateWhiteInk(editor, this.options);
+    this.setup();
+    this.updateWhiteInk();
   }
 
-  onUnmount(editor: Editor) {
-    this.teardown(editor);
+  deactivate(context: ExtensionContext) {
+    this.teardown();
+    this.canvasService = undefined;
   }
 
-  onDestroy(editor: Editor) {
-    this.teardown(editor);
+  contribute() {
+    return {
+      [ContributionPointIds.CONFIGURATIONS]: [
+        {
+          id: "whiteInk.customMask",
+          type: "string",
+          label: "Custom Mask URL",
+          default: "",
+        },
+        {
+          id: "whiteInk.opacity",
+          type: "number",
+          label: "Opacity",
+          min: 0,
+          max: 1,
+          step: 0.01,
+          default: 1,
+        },
+        {
+          id: "whiteInk.enableClip",
+          type: "boolean",
+          label: "Enable Clip",
+          default: false,
+        },
+      ] as ConfigurationContribution[],
+      [ContributionPointIds.COMMANDS]: [
+        {
+          command: "setWhiteInkImage",
+          title: "Set White Ink Image",
+          handler: (
+            customMask: string,
+            opacity: number,
+            enableClip: boolean = true
+          ) => {
+            if (
+              this._options.customMask === customMask &&
+              this._options.opacity === opacity &&
+              this._options.enableClip === enableClip
+            )
+              return true;
+
+            this._options.customMask = customMask;
+            this._options.opacity = opacity;
+            this._options.enableClip = enableClip;
+
+            this.updateWhiteInk();
+            return true;
+          },
+        },
+      ] as CommandContribution[],
+    };
   }
 
-  private setup(editor: Editor) {
-    let userLayer = editor.getLayer("user");
+  private setup() {
+    if (!this.canvasService) return;
+    const canvas = this.canvasService.canvas;
+
+    let userLayer = this.canvasService.getLayer("user");
     if (!userLayer) {
-      userLayer = new PooderLayer([], {
-        width: editor.state.width,
-        height: editor.state.height,
+      userLayer = this.canvasService.createLayer("user", {
+        width: canvas.width,
+        height: canvas.height,
         left: 0,
         top: 0,
         originX: "left",
@@ -59,114 +112,68 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
         evented: true,
         subTargetCheck: true,
         interactive: true,
-        data: {
-          id: "user",
-        },
       });
-      editor.canvas.add(userLayer);
+      canvas.add(userLayer);
     }
 
     if (!this.syncHandler) {
       this.syncHandler = (e: any) => {
         const target = e.target;
         if (target && target.data?.id === "user-image") {
-          this.syncWithUserImage(editor);
+          this.syncWithUserImage();
         }
       };
 
-      editor.canvas.on("object:moving", this.syncHandler);
-      editor.canvas.on("object:scaling", this.syncHandler);
-      editor.canvas.on("object:rotating", this.syncHandler);
-      editor.canvas.on("object:modified", this.syncHandler);
+      canvas.on("object:moving", this.syncHandler);
+      canvas.on("object:scaling", this.syncHandler);
+      canvas.on("object:rotating", this.syncHandler);
+      canvas.on("object:modified", this.syncHandler);
     }
   }
 
-  private teardown(editor: Editor) {
+  private teardown() {
+    if (!this.canvasService) return;
+    const canvas = this.canvasService.canvas;
+
     if (this.syncHandler) {
-      editor.canvas.off("object:moving", this.syncHandler);
-      editor.canvas.off("object:scaling", this.syncHandler);
-      editor.canvas.off("object:rotating", this.syncHandler);
-      editor.canvas.off("object:modified", this.syncHandler);
+      canvas.off("object:moving", this.syncHandler);
+      canvas.off("object:scaling", this.syncHandler);
+      canvas.off("object:rotating", this.syncHandler);
+      canvas.off("object:modified", this.syncHandler);
       this.syncHandler = undefined;
     }
 
-    const layer = editor.getLayer("user");
+    const layer = this.canvasService.getLayer("user");
     if (layer) {
-      const whiteInk = editor.getObject("white-ink", "user");
+      const whiteInk = this.canvasService.getObject("white-ink", "user");
       if (whiteInk) {
         layer.remove(whiteInk);
       }
     }
 
-    const userImage = editor.getObject("user-image", "user") as any;
+    const userImage = this.canvasService.getObject(
+      "user-image",
+      "user"
+    ) as any;
     if (userImage && userImage.clipPath) {
       userImage.set({ clipPath: undefined });
     }
 
-    editor.canvas.requestRenderAll();
+    this.canvasService.requestRenderAll();
   }
 
-  onUpdate(editor: Editor, state: EditorState) {
-    this.updateWhiteInk(editor, this.options);
-  }
+  private updateWhiteInk() {
+    if (!this.canvasService) return;
+    const { customMask, opacity, enableClip } = this._options;
 
-  commands: Record<string, Command> = {
-    setWhiteInkImage: {
-      execute: (
-        editor: Editor,
-        customMask: string,
-        opacity: number,
-        enableClip: boolean = true,
-      ) => {
-        if (
-          this.options.customMask === customMask &&
-          this.options.opacity === opacity &&
-          this.options.enableClip === enableClip
-        )
-          return true;
-
-        this.options.customMask = customMask;
-        this.options.opacity = opacity;
-        this.options.enableClip = enableClip;
-
-        this.updateWhiteInk(editor, this.options);
-
-        return true;
-      },
-      schema: {
-        customMask: {
-          type: "string",
-          label: "Custom Mask URL",
-          required: true,
-        },
-        opacity: {
-          type: "number",
-          label: "Opacity",
-          min: 0,
-          max: 1,
-          required: true,
-        },
-        enableClip: {
-          type: "boolean",
-          label: "Enable Clip",
-          default: true,
-          required: false,
-        },
-      },
-    },
-  };
-
-  private updateWhiteInk(editor: Editor, opts: WhiteInkToolOptions) {
-    const { customMask, opacity, enableClip } = opts;
-
-    const layer = editor.getLayer("user");
+    const layer = this.canvasService.getLayer("user");
     if (!layer) {
       console.warn("[WhiteInkTool] User layer not found");
       return;
     }
 
-    const whiteInk = editor.getObject("white-ink", "user") as any;
-    const userImage = editor.getObject("user-image", "user") as any;
+    const whiteInk = this.canvasService.getObject("white-ink", "user") as any;
+    const userImage = this.canvasService.getObject("user-image", "user") as any;
 
     if (!customMask) {
       if (whiteInk) {
@@ -175,7 +182,7 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
       if (userImage && userImage.clipPath) {
         userImage.set({ clipPath: undefined });
       }
-      editor.canvas.requestRenderAll();
+      this.canvasService.requestRenderAll();
       return;
     }
 
@@ -184,54 +191,49 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
       const currentSrc = whiteInk.getSrc?.() || whiteInk._element?.src;
       if (currentSrc !== customMask) {
         this.loadWhiteInk(
-          editor,
           layer,
           customMask,
           opacity,
           enableClip,
-          whiteInk,
+          whiteInk
         );
       } else {
         if (whiteInk.opacity !== opacity) {
           whiteInk.set({ opacity });
-          editor.canvas.requestRenderAll();
+          this.canvasService.requestRenderAll();
         }
       }
     } else {
-      this.loadWhiteInk(editor, layer, customMask, opacity, enableClip);
+      this.loadWhiteInk(layer, customMask, opacity, enableClip);
     }
 
     // Handle Clip Path Toggle
     if (userImage) {
       if (enableClip) {
-        // If enabled but missing, or mask changed (handled by re-load above, but good to ensure), apply it
-        // We check if clipPath is present. Ideally we should check if it matches current mask,
-        // but re-applying is safe.
         if (!userImage.clipPath) {
-          this.applyClipPath(editor, customMask);
+          this.applyClipPath(customMask);
         }
       } else {
-        // If disabled but present, remove it
         if (userImage.clipPath) {
           userImage.set({ clipPath: undefined });
-          editor.canvas.requestRenderAll();
+          this.canvasService.requestRenderAll();
         }
       }
     }
   }
 
   private loadWhiteInk(
-    editor: Editor,
-    layer: PooderLayer,
+    layer: any,
     url: string,
     opacity: number,
     enableClip: boolean,
-    oldImage?: any,
+    oldImage?: any
   ) {
+    if (!this.canvasService) return;
+    
     Image.fromURL(url, { crossOrigin: "anonymous" })
       .then((image) => {
         if (oldImage) {
-          // Remove old image but don't copy properties yet, we'll sync with user-image
           layer.remove(oldImage);
         }
 
@@ -239,7 +241,7 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
           new filters.BlendColor({
             color: "#FFFFFF",
             mode: "add",
-          }),
+          })
         );
         image.applyFilters();
 
@@ -256,7 +258,7 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
         layer.add(image);
 
         // Ensure white-ink is behind user-image
-        const userImage = editor.getObject("user-image", "user");
+        const userImage = this.canvasService!.getObject("user-image", "user");
         if (userImage) {
           // Re-adding moves it to the top of the stack
           layer.remove(userImage);
@@ -265,29 +267,32 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
 
         // Apply clip path to user-image if enabled
         if (enableClip) {
-          this.applyClipPath(editor, url);
+          this.applyClipPath(url);
         } else if (userImage) {
           userImage.set({ clipPath: undefined });
         }
 
         // Sync position immediately
-        this.syncWithUserImage(editor);
+        this.syncWithUserImage();
 
-        editor.canvas.requestRenderAll();
+        this.canvasService!.requestRenderAll();
       })
       .catch((err) => {
         console.error("Failed to load white ink mask", url, err);
       });
   }
 
-  private applyClipPath(editor: Editor, url: string) {
-    const userImage = editor.getObject("user-image", "user") as any;
+  private applyClipPath(url: string) {
+    if (!this.canvasService) return;
+    const userImage = this.canvasService.getObject(
+      "user-image",
+      "user"
+    ) as any;
     if (!userImage) return;
 
     Image.fromURL(url, { crossOrigin: "anonymous" })
       .then((maskImage) => {
         // Configure clipPath
-        // It needs to be relative to the object center
         maskImage.set({
           originX: "center",
           originY: "center",
@@ -299,16 +304,17 @@ export class WhiteInkTool implements Extension<WhiteInkToolOptions> {
         });
 
         userImage.set({ clipPath: maskImage });
-        editor.canvas.requestRenderAll();
+        this.canvasService!.requestRenderAll();
       })
       .catch((err) => {
         console.error("Failed to load clip path", url, err);
       });
   }
 
-  private syncWithUserImage(editor: Editor) {
-    const userImage = editor.getObject("user-image", "user");
-    const whiteInk = editor.getObject("white-ink", "user");
+  private syncWithUserImage() {
+    if (!this.canvasService) return;
+    const userImage = this.canvasService.getObject("user-image", "user");
+    const whiteInk = this.canvasService.getObject("white-ink", "user");
 
     if (userImage && whiteInk) {
       whiteInk.set({

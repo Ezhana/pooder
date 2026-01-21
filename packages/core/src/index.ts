@@ -11,20 +11,10 @@ import {
 import CommandService from "./services/CommandService";
 import { ExtensionContext } from "./context";
 
-export {
-  FabricImage as Image,
-  Ellipse,
-  Rect,
-  Circle,
-  Line,
-  Text,
-  Group,
-  Path,
-  Point,
-  Pattern,
-  filters,
-  util,
-} from "fabric";
+export * from "./extension";
+export * from "./context";
+export * from "./contribution";
+export * from "./service";
 
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();
@@ -76,6 +66,11 @@ export class Pooder {
     this.registerContributionPoint({
       id: ContributionPointIds.VIEWS,
       description: "Contribution point for UI views",
+    });
+
+    this.registerContributionPoint({
+      id: ContributionPointIds.CONFIGURATIONS,
+      description: "Contribution point for configurations",
     });
   }
 

@@ -1,37 +1,72 @@
-import { Command, Editor, EditorState, Extension } from "@pooder/core";
+import {
+  Extension,
+  ExtensionContext,
+  ContributionPointIds,
+  CommandContribution,
+  ConfigurationContribution,
+} from "@pooder/core";
+import CanvasService from "./CanvasService";
 
 export class MirrorTool implements Extension {
-  public name = "MirrorTool";
-  enabled = false;
+  public metadata = { name: "MirrorTool" };
+  private _enabled = false;
+
+  private canvasService?: CanvasService;
 
   toJSON() {
     return {
-      enabled: this.enabled,
+      enabled: this._enabled,
     };
   }
 
   loadFromJSON(json: any) {
-    this.enabled = json.enabled;
+    this._enabled = json.enabled;
   }
 
-  onEnable(editor: Editor) {
-    this.applyMirror(editor, true);
+  activate(context: ExtensionContext) {
+    this.canvasService = context.services.get<CanvasService>("CanvasService");
+    if (!this.canvasService) {
+      console.warn("CanvasService not found for MirrorTool");
+      return;
+    }
+
+    // Initialize with current state (if enabled was persisted)
+    if (this._enabled) {
+      this.applyMirror(true);
+    }
   }
 
-  onDisable(editor: Editor) {
-    this.applyMirror(editor, false);
+  deactivate(context: ExtensionContext) {
+    this.applyMirror(false);
+    this.canvasService = undefined;
   }
 
-  onUpdate(editor: Editor, state: EditorState) {
-    this.applyMirror(editor, this.enabled);
+  contribute() {
+    return {
+      [ContributionPointIds.CONFIGURATIONS]: [
+        {
+          id: "mirror.enabled",
+          type: "boolean",
+          label: "Enable Mirror",
+          default: false,
+        },
+      ] as ConfigurationContribution[],
+      [ContributionPointIds.COMMANDS]: [
+        {
+          command: "setMirror",
+          title: "Set Mirror",
+          handler: (enabled: boolean) => {
+            this.applyMirror(enabled);
+            return true;
+          },
+        },
+      ] as CommandContribution[],
+    };
   }
 
-  onUnmount(editor: Editor) {
-    this.applyMirror(editor, false);
-  }
-
-  private applyMirror(editor: Editor, enabled: boolean) {
-    const canvas = editor.canvas;
+  private applyMirror(enabled: boolean) {
+    if (!this.canvasService) return;
+    const canvas = this.canvasService.canvas;
     if (!canvas) return;
 
     const width = canvas.width || 800;
@@ -52,6 +87,7 @@ export class MirrorTool implements Extension {
 
       canvas.setViewportTransform(vpt as any);
       canvas.requestRenderAll();
+      this._enabled = true;
     } else if (!enabled && isFlipped) {
       // Restore
       vpt[0] = -vpt[0]; // Unflip scale
@@ -59,22 +95,7 @@ export class MirrorTool implements Extension {
 
       canvas.setViewportTransform(vpt as any);
       canvas.requestRenderAll();
+      this._enabled = false;
     }
   }
-
-  commands: Record<string, Command> = {
-    setMirror: {
-      execute: (editor: Editor, enabled: boolean) => {
-        this.applyMirror(editor, enabled);
-        return true;
-      },
-      schema: {
-        enabled: {
-          type: "boolean",
-          label: "Enabled",
-          required: true,
-        },
-      },
-    },
-  };
 }

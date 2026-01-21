@@ -1,14 +1,12 @@
 import {
-  Command,
-  Editor,
-  EditorState,
   Extension,
-  Image,
-  OptionSchema,
-  PooderLayer,
-  util,
-  Point,
+  ExtensionContext,
+  ContributionPointIds,
+  CommandContribution,
+  ConfigurationContribution,
 } from "@pooder/core";
+import { FabricImage as Image, Point, util } from "fabric";
+import CanvasService from "./CanvasService";
 
 interface ImageToolOptions {
   url: string;
@@ -19,84 +17,141 @@ interface ImageToolOptions {
   left?: number;
   top?: number;
 }
-export class ImageTool implements Extension<ImageToolOptions> {
+export class ImageTool implements Extension {
   name = "ImageTool";
   private _loadingUrl: string | null = null;
-  options: ImageToolOptions = {
+  private _options: ImageToolOptions = {
     url: "",
     opacity: 1,
   };
 
-  public schema: Record<keyof ImageToolOptions, OptionSchema> = {
-    url: {
-      type: "string",
-      label: "Image URL",
-    },
-    opacity: {
-      type: "number",
-      min: 0,
-      max: 1,
-      step: 0.1,
-      label: "Opacity",
-    },
-    width: {
-      type: "number",
-      label: "Width",
-      min: 0,
-      max: 5000,
-    },
-    height: {
-      type: "number",
-      label: "Height",
-      min: 0,
-      max: 5000,
-    },
-    angle: {
-      type: "number",
-      label: "Rotation",
-      min: 0,
-      max: 360,
-    },
-    left: {
-      type: "number",
-      label: "Left",
-      min: 0,
-      max: 1000,
-    },
-    top: {
-      type: "number",
-      label: "Top",
-      min: 0,
-      max: 1000,
-    },
-  };
+  private canvasService?: CanvasService;
+  private context?: ExtensionContext;
 
-  onMount(editor: Editor) {
-    this.ensureLayer(editor);
-    this.updateImage(editor, this.options);
+  activate(context: ExtensionContext) {
+    this.context = context;
+    this.canvasService = context.services.get<CanvasService>("CanvasService");
+    if (!this.canvasService) {
+      console.warn("CanvasService not found for ImageTool");
+      return;
+    }
+
+    this.ensureLayer();
+    this.updateImage();
   }
 
-  onUnmount(editor: Editor) {
-    const layer = editor.getLayer("user");
-    if (layer) {
-      const userImage = editor.getObject("user-image", "user");
-      if (userImage) {
-        layer.remove(userImage);
-        editor.canvas.requestRenderAll();
+  deactivate(context: ExtensionContext) {
+    if (this.canvasService) {
+      const layer = this.canvasService.getLayer("user");
+      if (layer) {
+        const userImage = this.canvasService.getObject("user-image", "user");
+        if (userImage) {
+          layer.remove(userImage);
+          this.canvasService.requestRenderAll();
+        }
       }
+      this.canvasService = undefined;
+      this.context = undefined;
     }
   }
 
-  onUpdate(editor: Editor, state: EditorState) {
-    this.updateImage(editor, this.options);
+  contribute() {
+    return {
+      [ContributionPointIds.CONFIGURATIONS]: [
+        {
+          id: "image.url",
+          type: "string",
+          label: "Image URL",
+          default: "",
+        },
+        {
+          id: "image.opacity",
+          type: "number",
+          label: "Opacity",
+          min: 0,
+          max: 1,
+          step: 0.1,
+          default: 1,
+        },
+        {
+          id: "image.width",
+          type: "number",
+          label: "Width",
+          min: 0,
+          max: 5000,
+        },
+        {
+          id: "image.height",
+          type: "number",
+          label: "Height",
+          min: 0,
+          max: 5000,
+        },
+        {
+          id: "image.angle",
+          type: "number",
+          label: "Rotation",
+          min: 0,
+          max: 360,
+        },
+        {
+          id: "image.left",
+          type: "number",
+          label: "Left",
+          min: 0,
+          max: 1000,
+        },
+        {
+          id: "image.top",
+          type: "number",
+          label: "Top",
+          min: 0,
+          max: 1000,
+        },
+      ] as ConfigurationContribution[],
+      [ContributionPointIds.COMMANDS]: [
+        {
+          command: "setUserImage",
+          title: "Set User Image",
+          handler: (
+            url: string,
+            opacity: number,
+            width?: number,
+            height?: number,
+            angle?: number,
+            left?: number,
+            top?: number
+          ) => {
+            if (
+              this._options.url === url &&
+              this._options.opacity === opacity &&
+              this._options.width === width &&
+              this._options.height === height &&
+              this._options.angle === angle &&
+              this._options.left === left &&
+              this._options.top === top
+            )
+              return true;
+
+            this._options = { url, opacity, width, height, angle, left, top };
+
+            // Direct update
+            this.updateImage();
+
+            return true;
+          },
+        },
+      ] as CommandContribution[],
+    };
   }
 
-  private ensureLayer(editor: Editor) {
-    let userLayer = editor.getLayer("user");
+  private ensureLayer() {
+    if (!this.canvasService) return;
+    let userLayer = this.canvasService.getLayer("user");
     if (!userLayer) {
-      userLayer = new PooderLayer([], {
-        width: editor.state.width,
-        height: editor.state.height,
+      userLayer = this.canvasService.createLayer("user", {
+        width: this.canvasService.canvas.width,
+        height: this.canvasService.canvas.height,
         left: 0,
         top: 0,
         originX: "left",
@@ -105,24 +160,25 @@ export class ImageTool implements Extension<ImageToolOptions> {
         evented: true,
         subTargetCheck: true,
         interactive: true,
-        data: {
-          id: "user",
-        },
       });
-      editor.canvas.add(userLayer);
+      this.canvasService.canvas.add(userLayer);
     }
   }
 
-  private updateImage(editor: Editor, opts: ImageToolOptions) {
-    let { url, opacity, width, height, angle, left, top } = opts;
+  private updateImage() {
+    if (!this.canvasService) return;
+    let { url, opacity, width, height, angle, left, top } = this._options;
 
-    const layer = editor.getLayer("user");
+    const layer = this.canvasService.getLayer("user");
     if (!layer) {
       console.warn("[ImageTool] User layer not found");
       return;
     }
 
-    const userImage = editor.getObject("user-image", "user") as any;
+    const userImage = this.canvasService.getObject(
+      "user-image",
+      "user"
+    ) as any;
 
     if (this._loadingUrl === url) return;
 
@@ -130,11 +186,13 @@ export class ImageTool implements Extension<ImageToolOptions> {
       const currentSrc = userImage.getSrc?.() || userImage._element?.src;
 
       if (currentSrc !== url) {
-        this.loadImage(editor, layer, opts);
+        this.loadImage(layer);
       } else {
         const updates: any = {};
-        const centerX = editor.state.width / 2;
-        const centerY = editor.state.height / 2;
+        const canvasW = this.canvasService.canvas.width || 800;
+        const canvasH = this.canvasService.canvas.height || 600;
+        const centerX = canvasW / 2;
+        const centerY = canvasH / 2;
 
         if (userImage.opacity !== opacity) updates.opacity = opacity;
         if (angle !== undefined && userImage.angle !== angle)
@@ -158,20 +216,17 @@ export class ImageTool implements Extension<ImageToolOptions> {
 
         if (Object.keys(updates).length > 0) {
           userImage.set(updates);
-          editor.canvas.requestRenderAll();
+          this.canvasService.requestRenderAll();
         }
       }
     } else {
-      this.loadImage(editor, layer, opts);
+      this.loadImage(layer);
     }
   }
 
-  private loadImage(
-    editor: Editor,
-    layer: PooderLayer,
-    opts: ImageToolOptions,
-  ) {
-    const { url } = opts;
+  private loadImage(layer: any) {
+    if (!this.canvasService) return;
+    const { url } = this._options;
     this._loadingUrl = url;
 
     Image.fromURL(url)
@@ -179,10 +234,13 @@ export class ImageTool implements Extension<ImageToolOptions> {
         if (this._loadingUrl !== url) return;
         this._loadingUrl = null;
 
-        const currentOpts = this.options;
+        const currentOpts = this._options;
         const { opacity, width, height, angle, left, top } = currentOpts;
 
-        const existingImage = editor.getObject("user-image", "user") as any;
+        const existingImage = this.canvasService!.getObject(
+          "user-image",
+          "user"
+        ) as any;
 
         if (existingImage) {
           const defaultLeft = existingImage.left;
@@ -226,79 +284,29 @@ export class ImageTool implements Extension<ImageToolOptions> {
         layer.add(image);
 
         // Bind events to keep options in sync
-        image.on("modified", (e) => {
+        image.on("modified", (e: any) => {
           const matrix = image.calcTransformMatrix();
           const globalPoint = util.transformPoint(new Point(0, 0), matrix);
 
-          this.options.left = globalPoint.x;
-          this.options.top = globalPoint.y;
-          this.options.angle = e.target.angle;
+          this._options.left = globalPoint.x;
+          this._options.top = globalPoint.y;
+          this._options.angle = e.target.angle;
 
           if (image.width)
-            this.options.width = e.target.width * e.target.scaleX;
+            this._options.width = e.target.width * e.target.scaleX;
           if (image.height)
-            this.options.height = e.target.height * e.target.scaleY;
+            this._options.height = e.target.height * e.target.scaleY;
 
-          editor.emit("update");
+          if (this.context) {
+            this.context.eventBus.emit("update");
+          }
         });
 
-        editor.canvas.requestRenderAll();
+        this.canvasService!.requestRenderAll();
       })
       .catch((err) => {
         if (this._loadingUrl === url) this._loadingUrl = null;
         console.error("Failed to load image", url, err);
       });
   }
-
-  commands: Record<string, Command> = {
-    setUserImage: {
-      execute: (
-        editor: Editor,
-        url: string,
-        opacity: number,
-        width?: number,
-        height?: number,
-        angle?: number,
-        left?: number,
-        top?: number,
-      ) => {
-        if (
-          this.options.url === url &&
-          this.options.opacity === opacity &&
-          this.options.width === width &&
-          this.options.height === height &&
-          this.options.angle === angle &&
-          this.options.left === left &&
-          this.options.top === top
-        )
-          return true;
-
-        this.options = { url, opacity, width, height, angle, left, top };
-
-        // Direct update
-        this.updateImage(editor, this.options);
-
-        return true;
-      },
-      schema: {
-        url: {
-          type: "string",
-          label: "Image URL",
-          required: true,
-        },
-        opacity: {
-          type: "number",
-          label: "Opacity",
-          min: 0,
-          max: 1,
-          required: true,
-        },
-        width: { type: "number", label: "Width" },
-        height: { type: "number", label: "Height" },
-        angle: { type: "number", label: "Angle" },
-        left: { type: "number", label: "Left" },
-        top: { type: "number", label: "Top" },
-      },
-    },
-  };
 }

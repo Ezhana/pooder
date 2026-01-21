@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@pooder/core": "workspace:*",
-    "paper": "^0.12.18"
+    "paper": "^0.12.18",
+    "fabric": "^7.0.0"
   }
 }

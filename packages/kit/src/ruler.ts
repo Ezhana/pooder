@@ -1,16 +1,14 @@
 import {
-  Command,
-  Editor,
-  EditorState,
   Extension,
-  OptionSchema,
-  PooderLayer,
-  Rect,
-  Line,
-  Text,
+  ExtensionContext,
+  ContributionPointIds,
+  CommandContribution,
+  ConfigurationContribution,
 } from "@pooder/core";
+import { Rect, Line, Text } from "fabric";
+import CanvasService from "./CanvasService";
 
-export interface RulerToolOptions {
+interface RulerToolOptions {
   unit: "px" | "mm" | "cm" | "in";
   thickness: number;
   backgroundColor: string;
@@ -19,9 +17,10 @@ export interface RulerToolOptions {
   fontSize: number;
 }
 
-export class RulerTool implements Extension<RulerToolOptions> {
-  public name = "RulerTool";
-  public options: RulerToolOptions = {
+export class RulerTool implements Extension {
+  public metadata = { name: "RulerTool" };
+  
+  private _options: RulerToolOptions = {
     unit: "px",
     thickness: 20,
     backgroundColor: "#f0f0f0",
@@ -30,82 +29,137 @@ export class RulerTool implements Extension<RulerToolOptions> {
     fontSize: 10,
   };
 
-  public schema: Record<keyof RulerToolOptions, OptionSchema> = {
-    unit: {
-      type: "select",
-      options: ["px", "mm", "cm", "in"],
-      label: "Unit",
-    },
-    thickness: { type: "number", min: 10, max: 100, label: "Thickness" },
-    backgroundColor: { type: "color", label: "Background Color" },
-    textColor: { type: "color", label: "Text Color" },
-    lineColor: { type: "color", label: "Line Color" },
-    fontSize: { type: "number", min: 8, max: 24, label: "Font Size" },
-  };
+  private canvasService?: CanvasService;
 
-  onMount(editor: Editor) {
-    this.createLayer(editor);
-    this.updateRuler(editor);
+  activate(context: ExtensionContext) {
+    this.canvasService = context.services.get<CanvasService>("CanvasService");
+    if (!this.canvasService) {
+      console.warn("CanvasService not found for RulerTool");
+      return;
+    }
+
+    this.createLayer();
+    this.updateRuler();
   }
 
-  onUnmount(editor: Editor) {
-    this.destroyLayer(editor);
+  deactivate(context: ExtensionContext) {
+    this.destroyLayer();
+    this.canvasService = undefined;
   }
 
-  onUpdate(editor: Editor, state: EditorState) {
-    this.updateRuler(editor);
+  contribute() {
+    return {
+      [ContributionPointIds.CONFIGURATIONS]: [
+        {
+          id: "ruler.unit",
+          type: "select",
+          label: "Unit",
+          options: ["px", "mm", "cm", "in"],
+          default: "px",
+        },
+        {
+          id: "ruler.thickness",
+          type: "number",
+          label: "Thickness",
+          min: 10,
+          max: 100,
+          default: 20,
+        },
+        {
+          id: "ruler.backgroundColor",
+          type: "color",
+          label: "Background Color",
+          default: "#f0f0f0",
+        },
+        {
+          id: "ruler.textColor",
+          type: "color",
+          label: "Text Color",
+          default: "#333333",
+        },
+        {
+          id: "ruler.lineColor",
+          type: "color",
+          label: "Line Color",
+          default: "#999999",
+        },
+        {
+          id: "ruler.fontSize",
+          type: "number",
+          label: "Font Size",
+          min: 8,
+          max: 24,
+          default: 10,
+        },
+      ] as ConfigurationContribution[],
+      [ContributionPointIds.COMMANDS]: [
+        {
+          command: "setUnit",
+          title: "Set Ruler Unit",
+          handler: (unit: "px" | "mm" | "cm" | "in") => {
+            if (this._options.unit === unit) return true;
+            this._options.unit = unit;
+            this.updateRuler();
+            return true;
+          },
+        },
+        {
+          command: "setTheme",
+          title: "Set Ruler Theme",
+          handler: (theme: Partial<RulerToolOptions>) => {
+            const newOptions = { ...this._options, ...theme };
+            if (JSON.stringify(newOptions) === JSON.stringify(this._options))
+              return true;
+
+            this._options = newOptions;
+            this.updateRuler();
+            return true;
+          },
+        },
+      ] as CommandContribution[],
+    };
   }
 
-  onDestroy(editor: Editor) {
-    this.destroyLayer(editor);
+  private getLayer() {
+    return this.canvasService?.getLayer("ruler-overlay");
   }
 
-  private getLayer(editor: Editor) {
-    return editor.canvas
-      .getObjects()
-      .find((obj: any) => obj.data?.id === "ruler-overlay") as
-      | PooderLayer
-      | undefined;
-  }
+  private createLayer() {
+    if (!this.canvasService) return;
+    
+    const canvas = this.canvasService.canvas;
+    const width = canvas.width || 800;
+    const height = canvas.height || 600;
 
-  private createLayer(editor: Editor) {
-    let layer = this.getLayer(editor);
-
-    if (!layer) {
-      const width = editor.canvas.width || 800;
-      const height = editor.canvas.height || 600;
-
-      layer = new PooderLayer([], {
+    const layer = this.canvasService.createLayer("ruler-overlay", {
         width,
         height,
         selectable: false,
         evented: false,
-        data: { id: "ruler-overlay" },
-      } as any);
-
-      editor.canvas.add(layer);
-    }
-
-    editor.canvas.bringObjectToFront(layer);
+    });
+    
+    canvas.bringObjectToFront(layer);
   }
 
-  private destroyLayer(editor: Editor) {
-    const layer = this.getLayer(editor);
+  private destroyLayer() {
+    if (!this.canvasService) return;
+    const layer = this.getLayer();
     if (layer) {
-      editor.canvas.remove(layer);
+      this.canvasService.canvas.remove(layer);
     }
   }
 
-  private updateRuler(editor: Editor) {
-    const layer = this.getLayer(editor);
+  private updateRuler() {
+    if (!this.canvasService) return;
+    const layer = this.getLayer();
     if (!layer) return;
 
     layer.remove(...layer.getObjects());
 
     const { thickness, backgroundColor, lineColor, textColor, fontSize } =
-      this.options;
-    const width = editor.canvas.width || 800;
-    const height = editor.canvas.height || 600;
+      this._options;
+    const width = this.canvasService.canvas.width || 800;
+    const height = this.canvasService.canvas.height || 600;
 
     // Backgrounds
     const topBg = new Rect({
@@ -140,7 +194,9 @@ export class RulerTool implements Extension<RulerToolOptions> {
       evented: false,
     });
 
-    layer.add(topBg, leftBg, cornerBg);
+    layer.add(topBg);
+    layer.add(leftBg);
+    layer.add(cornerBg);
 
     // Drawing Constants (Pixel based for now)
     const step = 100; // Major tick
@@ -212,44 +268,7 @@ export class RulerTool implements Extension<RulerToolOptions> {
     }
 
     // Always bring ruler to front
-    editor.canvas.bringObjectToFront(layer);
-    editor.canvas.requestRenderAll();
+    this.canvasService.canvas.bringObjectToFront(layer);
+    this.canvasService.canvas.requestRenderAll();
   }
-
-  commands: Record<string, Command> = {
-    setUnit: {
-      execute: (editor: Editor, unit: "px" | "mm" | "cm" | "in") => {
-        if (this.options.unit === unit) return true;
-        this.options.unit = unit;
-        this.updateRuler(editor);
-        return true;
-      },
-      schema: {
-        unit: {
-          type: "string",
-          label: "Unit",
-          options: ["px", "mm", "cm", "in"],
-          required: true,
-        },
-      },
-    },
-    setTheme: {
-      execute: (editor: Editor, theme: Partial<RulerToolOptions>) => {
-        const newOptions = { ...this.options, ...theme };
-        if (JSON.stringify(newOptions) === JSON.stringify(this.options))
-          return true;
-
-        this.options = newOptions;
-        this.updateRuler(editor);
-        return true;
-      },
-      schema: {
-        theme: {
-          type: "object",
-          label: "Theme",
-          required: true,
-        },
-      },
-    },
-  };
 }

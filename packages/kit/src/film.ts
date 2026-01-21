@@ -1,66 +1,100 @@
 import {
-  Command,
-  Editor,
-  EditorState,
   Extension,
-  Image,
-  OptionSchema,
-  PooderLayer,
+  ExtensionContext,
+  ContributionPointIds,
+  CommandContribution,
+  ConfigurationContribution,
 } from "@pooder/core";
+import { FabricImage as Image } from "fabric";
+import CanvasService from "./CanvasService";
 
 interface FilmToolOptions {
   url: string;
   opacity: number;
 }
 
-export class FilmTool implements Extension<FilmToolOptions> {
-  public name = "FilmTool";
-  public options: FilmToolOptions = {
+export class FilmTool implements Extension {
+  public metadata = { name: "FilmTool" };
+  
+  private _options: FilmToolOptions = {
     url: "",
     opacity: 0.5,
   };
 
-  public schema: Record<keyof FilmToolOptions, OptionSchema> = {
-    url: {
-      type: "string",
-      label: "Film Image URL",
-    },
-    opacity: {
-      type: "number",
-      min: 0,
-      max: 1,
-      step: 0.1,
-      label: "Opacity",
-    },
-  };
+  private canvasService?: CanvasService;
 
-  onMount(editor: Editor) {
-    this.initLayer(editor);
-    this.updateFilm(editor, this.options);
+  activate(context: ExtensionContext) {
+    this.canvasService = context.services.get<CanvasService>("CanvasService");
+    if (!this.canvasService) {
+      console.warn("CanvasService not found for FilmTool");
+      return;
+    }
+
+    this.initLayer();
+    this.updateFilm();
   }
 
-  onUnmount(editor: Editor) {
-    const layer = editor.getLayer("overlay");
-    if (layer) {
-      const img = editor.getObject("film-image", "overlay");
-      if (img) {
-        layer.remove(img);
-        editor.canvas.requestRenderAll();
+  deactivate(context: ExtensionContext) {
+    if (this.canvasService) {
+      const layer = this.canvasService.getLayer("overlay");
+      if (layer) {
+        const img = this.canvasService.getObject("film-image", "overlay");
+        if (img) {
+          layer.remove(img);
+          this.canvasService.requestRenderAll();
+        }
       }
+      this.canvasService = undefined;
     }
   }
 
-  onUpdate(editor: Editor, state: EditorState) {
-    this.updateFilm(editor, this.options);
+  contribute() {
+    return {
+      [ContributionPointIds.CONFIGURATIONS]: [
+        {
+          id: "film.url",
+          type: "string",
+          label: "Film Image URL",
+          default: "",
+        },
+        {
+          id: "film.opacity",
+          type: "number",
+          label: "Opacity",
+          min: 0,
+          max: 1,
+          step: 0.1,
+          default: 0.5,
+        },
+      ] as ConfigurationContribution[],
+      [ContributionPointIds.COMMANDS]: [
+        {
+          command: "setFilmImage",
+          title: "Set Film Image",
+          handler: (url: string, opacity: number) => {
+            if (this._options.url === url && this._options.opacity === opacity)
+              return true;
+
+            this._options.url = url;
+            this._options.opacity = opacity;
+
+            this.updateFilm();
+
+            return true;
+          },
+        },
+      ] as CommandContribution[],
+    };
   }
 
-  private initLayer(editor: Editor) {
-    let overlayLayer = editor.getLayer("overlay");
+  private initLayer() {
+    if (!this.canvasService) return;
+    let overlayLayer = this.canvasService.getLayer("overlay");
     if (!overlayLayer) {
-      const width = editor.state.width;
-      const height = editor.state.height;
+      const width = this.canvasService.canvas.width || 800;
+      const height = this.canvasService.canvas.height || 600;
 
-      const layer = new PooderLayer([], {
+      const layer = this.canvasService.createLayer("overlay", {
         width,
         height,
         left: 0,
@@ -71,38 +105,38 @@ export class FilmTool implements Extension<FilmToolOptions> {
         evented: false,
         subTargetCheck: false,
         interactive: false,
-        data: {
-          id: "overlay",
-        },
       });
 
-      editor.canvas.add(layer);
-      editor.canvas.bringObjectToFront(layer);
+      this.canvasService.canvas.bringObjectToFront(layer);
     }
   }
 
-  private async updateFilm(editor: Editor, options: FilmToolOptions) {
-    const layer = editor.getLayer("overlay");
+  private async updateFilm() {
+    if (!this.canvasService) return;
+    const layer = this.canvasService.getLayer("overlay");
     if (!layer) {
       console.warn("[FilmTool] Overlay layer not found");
       return;
     }
 
-    const { url, opacity } = options;
+    const { url, opacity } = this._options;
 
     if (!url) {
-      const img = editor.getObject("film-image", "overlay");
+      const img = this.canvasService.getObject("film-image", "overlay");
       if (img) {
         layer.remove(img);
-        editor.canvas.requestRenderAll();
+        this.canvasService.requestRenderAll();
       }
       return;
     }
 
-    const width = editor.state.width;
-    const height = editor.state.height;
+    const width = this.canvasService.canvas.width || 800;
+    const height = this.canvasService.canvas.height || 600;
 
-    let img = editor.getObject("film-image", "overlay") as Image;
+    let img = this.canvasService.getObject(
+      "film-image",
+      "overlay",
+    ) as Image;
     try {
       if (img) {
         if (img.getSrc() !== url) {
@@ -125,39 +159,9 @@ export class FilmTool implements Extension<FilmToolOptions> {
         });
         layer.add(img);
       }
-      editor.canvas.requestRenderAll();
+      this.canvasService.requestRenderAll();
     } catch (error) {
       console.error("[FilmTool] Failed to load film image", url, error);
     }
   }
-
-  commands: Record<string, Command> = {
-    setFilmImage: {
-      execute: (editor: Editor, url: string, opacity: number) => {
-        if (this.options.url === url && this.options.opacity === opacity)
-          return true;
-
-        this.options.url = url;
-        this.options.opacity = opacity;
-
-        this.updateFilm(editor, this.options);
-
-        return true;
-      },
-      schema: {
-        url: {
-          type: "string",
-          label: "Image URL",
-          required: true,
-        },
-        opacity: {
-          type: "number",
-          label: "Opacity",
-          min: 0,
-          max: 1,
-          required: true,
-        },
-      },
-    },
-  };
 }

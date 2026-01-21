@@ -35,10 +35,26 @@ export interface ViewContribution {
   priority?: number;
 }
 
+/**
+ * Configuration Contribution Data Definition
+ */
+export interface ConfigurationContribution {
+  id: string;
+  type: "string" | "number" | "boolean" | "color" | "select" | "json";
+  label: string;
+  default?: any;
+  description?: string;
+  options?: string[]; // For select type
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
 // Built-in Contribution Point IDs
 export const ContributionPointIds = {
   CONTRIBUTIONS: "contribution.point.contributions",
   COMMANDS: "contribution.point.commands",
   TOOLS: "contribution.point.tools",
   VIEWS: "contribution.point.views",
+  CONFIGURATIONS: "contribution.point.configurations",
 };
