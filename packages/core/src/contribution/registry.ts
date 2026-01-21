@@ -1,8 +1,4 @@
-import {
-  Contribution,
-  ContributionPoint,
-  ContributionPointIds,
-} from "./points";
+import { Contribution, ContributionPoint, ContributionPointIds } from "./index";
 
 export class ContributionRegistry {
   private points: Map<string, ContributionPoint> = new Map();

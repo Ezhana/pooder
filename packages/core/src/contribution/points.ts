@@ -46,15 +46,6 @@ export interface ViewContribution {
   priority?: number;
 }
 
-/**
- * Generic Contribution Wrapper
- */
-export interface Contribution<T = any> {
-  pointId: string;
-  id: string;
-  data: T;
-}
-
 // Built-in Contribution Point IDs
 export const ContributionPointIds = {
   CONTRIBUTIONS: "contribution.point.contributions",
