@@ -52,20 +52,12 @@ class ExtensionManager {
       for (const [pointId, items] of Object.entries(extension.contribute())) {
         if (Array.isArray(items)) {
           items.forEach((item) => {
-            const contributionId =
-              item.id ||
-              `${id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`;
-
-            this.context.contributions.register(pointId, contributionId, {
+            const disposable = this.context.contributions.register(pointId, {
               data: item,
             });
 
             // Track contribution registration to unregister later
-            disposables.push({
-              dispose: () => {
-                this.context.contributions.unregister(pointId, contributionId);
-              },
-            });
+            disposables.push(disposable);
 
             // Auto-register commands with handlers
             if (pointId === ContributionPointIds.COMMANDS && item.handler) {

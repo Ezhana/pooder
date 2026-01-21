@@ -1,6 +1,7 @@
 import { Service, ServiceRegistry } from "./service";
 import EventBus from "./event";
 import { ExtensionManager } from "./extension";
+import { Disposable } from "./command";
 import {
   Contribution,
   ContributionPoint,
@@ -48,10 +49,8 @@ export class Pooder {
       },
       contributions: {
         get: <T>(pointId: string) => this.getContributions<T>(pointId),
-        register: <T>(pointId: string, id: string, contribution: Contribution<T>) =>
-          this.registerContribution(pointId, id, contribution),
-        unregister: (pointId: string, contributionId: string) =>
-          this.unregisterContribution(pointId, contributionId),
+        register: <T>(pointId: string, contribution: Contribution<T>) =>
+          this.registerContribution(pointId, contribution),
       },
     };
 
@@ -129,19 +128,14 @@ export class Pooder {
 
   registerContribution<T>(
     pointId: string,
-    id: string,
     contribution: Contribution<T>,
-  ): void {
-    this.contributions.register(pointId, id, contribution);
-    this.eventBus.emit("contribution:register", { ...contribution, id, pointId });
+  ): Disposable {
+    const disposable = this.contributions.register(pointId, contribution);
+    this.eventBus.emit("contribution:register", { ...contribution, pointId });
+    return disposable;
   }
 
   getContributions<T>(pointId: string): Contribution<T>[] {
     return this.contributions.get<T>(pointId);
-  }
-
-  unregisterContribution(pointId: string, contributionId: string): void {
-    this.contributions.unregister(pointId, contributionId);
-    this.eventBus.emit("contribution:unregister", { pointId, contributionId });
   }
 }

@@ -2,6 +2,8 @@ import EventBus from "./event";
 import { Contribution } from "./contribution";
 import { Service } from "./service";
 
+import { Disposable } from "./command";
+
 interface ExtensionContext {
   readonly eventBus: EventBus;
   readonly services: {
@@ -9,8 +11,7 @@ interface ExtensionContext {
   };
   readonly contributions: {
     get<T>(pointId: string): Contribution<T>[];
-    register<T>(pointId: string, id: string, contribution: Contribution<T>): void;
-    unregister<T>(pointId: string, id: string): void;
+    register<T>(pointId: string, contribution: Contribution<T>): Disposable;
   };
 }
 

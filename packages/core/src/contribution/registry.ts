@@ -1,4 +1,5 @@
 import { Contribution, ContributionPoint, ContributionPointIds } from "./index";
+import { Disposable } from "../command";
 
 interface RegisteredContribution<T = any> extends Contribution<T> {
   id: string;
@@ -8,6 +9,7 @@ interface RegisteredContribution<T = any> extends Contribution<T> {
 export class ContributionRegistry {
   private points: Map<string, ContributionPoint> = new Map();
   private contributions: Map<string, RegisteredContribution[]> = new Map();
+  private contributionsById: Map<string, RegisteredContribution> = new Map();
 
   /**
    * Register a new contribution point
@@ -25,14 +27,43 @@ export class ContributionRegistry {
   }
 
   /**
-   * Register a contribution to a specific point
+   * Generate a deterministic ID for a contribution
    */
-  register<T>(pointId: string, id: string, contribution: Contribution<T>): void {
+  private generateId<T>(pointId: string, contribution: Contribution<T>): string {
+    const data = contribution.data as any;
+    // Strategy: Use metadata name, or data name/id/command, or fallback to random
+    const name =
+      contribution.metadata?.name ||
+      data?.name ||
+      data?.id ||
+      data?.command;
+
+    if (name) {
+      return `${pointId}.${name}`;
+    }
+
+    // Fallback only if no identifier is found (though we prefer deterministic)
+    return `${pointId}.${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /**
+   * Register a contribution to a specific point
+   * @returns Disposable to unregister the contribution
+   */
+  register<T>(pointId: string, contribution: Contribution<T>): Disposable {
+    const id = this.generateId(pointId, contribution);
+
+    if (this.contributionsById.has(id)) {
+      console.warn(`Contribution with ID "${id}" is already registered. Overwriting.`);
+      // We could choose to throw, or overwrite. Let's overwrite for now but warn.
+      // If we overwrite, we should probably remove the old one from the list first to avoid duplicates.
+      this.unregister(pointId, id);
+    }
+
     if (!this.points.has(pointId)) {
       console.warn(
         `Contribution point ${pointId} does not exist. The contribution ${id} will be queued but may not be valid.`,
       );
-      // Optionally we could allow "lazy" registration, but for now let's just warn and init the array
       if (!this.contributions.has(pointId)) {
         this.contributions.set(pointId, []);
       }
@@ -45,19 +76,18 @@ export class ContributionRegistry {
           console.error(
             `Contribution ${id} failed validation for point ${pointId}.`,
           );
-          return;
+          return { dispose: () => {} };
         }
       } catch (e) {
         console.error(
           `Validation error for contribution ${id}:`,
           e,
         );
-        return;
+        return { dispose: () => {} };
       }
     }
 
     const list = this.contributions.get(pointId)!;
-    // Check for duplicates if needed, or allow multiple
     
     const registered: RegisteredContribution<T> = {
       ...contribution,
@@ -66,11 +96,18 @@ export class ContributionRegistry {
     };
 
     list.push(registered);
+    this.contributionsById.set(id, registered);
 
     // Auto-register if this is a contribution point contribution
     if (pointId === ContributionPointIds.CONTRIBUTIONS) {
       this.registerPoint(contribution.data as ContributionPoint);
     }
+
+    return {
+      dispose: () => {
+        this.unregister(pointId, id);
+      }
+    };
   }
 
   /**
@@ -78,6 +115,13 @@ export class ContributionRegistry {
    */
   get<T>(pointId: string): Contribution<T>[] {
     return (this.contributions.get(pointId) || []) as Contribution<T>[];
+  }
+
+  /**
+   * Get a specific contribution by ID
+   */
+  getById<T>(id: string): Contribution<T> | undefined {
+    return this.contributionsById.get(id) as Contribution<T> | undefined;
   }
 
   /**
@@ -90,7 +134,7 @@ export class ContributionRegistry {
   /**
    * Unregister a contribution
    */
-  unregister(pointId: string, contributionId: string): void {
+  private unregister(pointId: string, contributionId: string): void {
     const list = this.contributions.get(pointId);
     if (list) {
       const index = list.findIndex((c) => c.id === contributionId);
@@ -98,5 +142,6 @@ export class ContributionRegistry {
         list.splice(index, 1);
       }
     }
+    this.contributionsById.delete(contributionId);
   }
 }
