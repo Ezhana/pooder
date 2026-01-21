@@ -7,7 +7,6 @@ import {
   ContributionPointIds,
   ContributionRegistry,
 } from "./contribution";
-import CanvasService from "./services/CanvasService";
 import CommandService from "./services/CommandService";
 import { ExtensionContext } from "./context";
 
@@ -50,7 +49,7 @@ export class Pooder {
       contributions: {
         get: <T>(pointId: string) => this.getContributions<T>(pointId),
         register: <T>(pointId: string, contribution: Contribution<T>) =>
-          this.registerContribution(contribution),
+          this.registerContribution(pointId, contribution),
         unregister: (pointId: string, contributionId: string) =>
           this.unregisterContribution(pointId, contributionId),
       },
@@ -128,8 +127,11 @@ export class Pooder {
     this.eventBus.emit("point:register", point);
   }
 
-  registerContribution<T>(contribution: Contribution<T>): void {
-    this.contributions.register(contribution);
+  registerContribution<T>(
+    pointId: string,
+    contribution: Contribution<T>,
+  ): void {
+    this.contributions.register(pointId, contribution);
     this.eventBus.emit("contribution:register", contribution);
   }
 

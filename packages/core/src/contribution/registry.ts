@@ -26,9 +26,7 @@ export class ContributionRegistry {
   /**
    * Register a contribution to a specific point
    */
-  register<T>(contribution: Contribution<T>): void {
-    const pointId = contribution.pointId;
-
+  register<T>(pointId: string, contribution: Contribution<T>): void {
     if (!this.points.has(pointId)) {
       console.warn(
         `Contribution point ${pointId} does not exist. The contribution ${contribution.id} will be queued but may not be valid.`,
