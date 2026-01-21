@@ -1,22 +1,36 @@
-interface ContributionSchema {
-  [key: string]: any;
-}
+export * from "./points";
+export * from "./registry";
 
-interface ContributionPoint {
-  id: string;
-  schema: ContributionSchema;
-  description?: string;
-}
+import { ContributionRegistry } from "./registry";
+import {
+  ContributionPointIds,
+  CommandContribution,
+  ToolContribution,
+  ViewContribution,
+  ContributionPoint,
+} from "./points";
 
-interface Contribution {
-  id: string;
-  pointId: string;
-  data: any;
-  metadata?: any;
-}
+const registry = new ContributionRegistry();
 
-interface ContributionContext {
-  [key: string]: any;
-}
+// Initialize default contribution points
+registry.registerPoint<ContributionPoint>({
+  id: ContributionPointIds.CONTRIBUTIONS,
+  description: "Contribution point for contribution points",
+});
 
-export { Contribution, ContributionPoint };
+registry.registerPoint<CommandContribution>({
+  id: ContributionPointIds.COMMANDS,
+  description: "Contribution point for commands",
+});
+
+registry.registerPoint<ToolContribution>({
+  id: ContributionPointIds.TOOLS,
+  description: "Contribution point for tools",
+});
+
+registry.registerPoint<ViewContribution>({
+  id: ContributionPointIds.VIEWS,
+  description: "Contribution point for UI views",
+});
+
+export const contributionRegistry = registry;

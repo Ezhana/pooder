@@ -1,5 +1,4 @@
 interface Service {
-  name: string;
   init?(): void;
   dispose?(): void;
 }

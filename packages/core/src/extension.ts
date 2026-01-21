@@ -10,7 +10,7 @@ interface Extension {
 
   activate(context: ExtensionContext): void;
   deactivate(context: ExtensionContext): void;
-  contribute(): void;
+  contribute?(): Record<string, any[]>;
 }
 
 class ExtensionRegistry extends Map<string, Extension> {}
@@ -28,6 +28,23 @@ class ExtensionManager {
       console.warn(
         `Plugin "${extension.id}" already registered. It will be overwritten.`,
       );
+    }
+
+    // Process declarative contributions
+    if (extension.contribute) {
+      for (const [pointId, items] of Object.entries(extension.contribute())) {
+        if (Array.isArray(items)) {
+          items.forEach((item) => {
+            this.context.contributionRegistry.registerContribution({
+              pointId,
+              id:
+                item.id ||
+                `${extension.id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`,
+              data: item,
+            });
+          });
+        }
+      }
     }
 
     try {

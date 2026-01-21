@@ -1,6 +1,8 @@
 import { Service, ServiceRegistry } from "./service";
 import EventBus from "./event";
 import { ExtensionManager } from "./extension";
+import { ContributionRegistry, contributionRegistry } from "./contribution";
+import CanvasService from "./CanvasService";
 
 export {
   FabricImage as Image,
@@ -20,14 +22,18 @@ export {
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();
   readonly services: ServiceRegistry = new ServiceRegistry();
+  readonly contributionRegistry: ContributionRegistry = contributionRegistry;
   readonly extensionManager: ExtensionManager;
 
   constructor() {
-    this.extensionManager = new ExtensionManager(this);
+    this.extensionManager = new ExtensionManager({
+      eventBus: this.eventBus,
+      contributionRegistry: this.contributionRegistry,
+    });
   }
 
   registerService(service: Service) {
-    const serviceId = service.name;
+    const serviceId = service.constructor.name;
 
     try {
       service?.init?.();
@@ -42,7 +48,7 @@ export class Pooder {
   }
 
   unregisterService(service: Service) {
-    const serviceId = service.name;
+    const serviceId = service.constructor.name;
     if (!this.services.has(serviceId)) {
       console.warn(`Service ${serviceId} is not registered.`);
       return true;
@@ -60,3 +66,8 @@ export class Pooder {
     return true;
   }
 }
+
+const p = new Pooder();
+const canvasService = new CanvasService();
+p.registerService(canvasService);
+console.log(p);
