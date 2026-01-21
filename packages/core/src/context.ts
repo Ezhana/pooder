@@ -1,11 +1,17 @@
 import EventBus from "./event";
-import { ContributionRegistry } from "./contribution";
-import { ServiceRegistry } from "./service";
+import { Contribution } from "./contribution";
+import { Service } from "./service";
 
 interface ExtensionContext {
   readonly eventBus: EventBus;
-  readonly contributions: ContributionRegistry;
-  readonly services: ServiceRegistry;
+  readonly services: {
+    get<T extends Service>(serviceName: string): T | undefined;
+  };
+  readonly contributions: {
+    get<T>(pointId: string): Contribution<T>[];
+    register<T>(pointId: string, contribution: Contribution<T>): void;
+    unregister<T>(pointId: string, id: string): void;
+  };
 }
 
 export { ExtensionContext };

@@ -1,6 +1,6 @@
 import { Pooder } from "./index";
 import { fullExtension } from "./test-extension-full";
-import { ContributionPointIds } from "./contribution/points";
+import { ContributionPointIds } from "./contribution";
 import CommandService from "./services/CommandService";
 
 async function runTest() {
@@ -9,8 +9,8 @@ async function runTest() {
 
   // Register the full extension
   console.log("Registering extension...");
-  app.extensions.register(fullExtension);
-  const commandService = app.services.get<CommandService>("CommandService")!;
+  app.extensionManager.register(fullExtension);
+  const commandService = app.getService<CommandService>("CommandService")!;
 
   // 1. Verify Command Contributions
   console.log("\n--- Verifying Commands ---");
@@ -47,21 +47,21 @@ async function runTest() {
   // 2. Verify Registry Entries
   console.log("\n--- Verifying Contribution Registry ---");
 
-  const commands = app.contributions.get(ContributionPointIds.COMMANDS);
+  const commands = app.getContributions(ContributionPointIds.COMMANDS);
   console.log(
     `Commands registered: ${commands.length}` === "Commands registered: 2"
       ? "✅ PASS (2 commands found)"
       : `❌ FAIL (${commands.length} commands found)`,
   );
 
-  const tools = app.contributions.get(ContributionPointIds.TOOLS);
+  const tools = app.getContributions(ContributionPointIds.TOOLS);
   console.log(
     `Tools registered: ${tools.length}` === "Tools registered: 1"
       ? "✅ PASS (1 tool found)"
       : `❌ FAIL (${tools.length} tools found)`,
   );
 
-  const views = app.contributions.get(ContributionPointIds.VIEWS);
+  const views = app.getContributions(ContributionPointIds.VIEWS);
   console.log(
     `Views registered: ${views.length}` === "Views registered: 1"
       ? "✅ PASS (1 view found)"
@@ -70,9 +70,9 @@ async function runTest() {
 
   // 3. Unregister and Verify Cleanup
   console.log("\n--- Verifying Unregistration/Cleanup ---");
-  app.extensions.unregister(fullExtension.id);
+  app.extensionManager.unregister(fullExtension.id);
 
-  const commandsAfter = app.contributions.get(ContributionPointIds.COMMANDS);
+  const commandsAfter = app.getContributions(ContributionPointIds.COMMANDS);
   console.log(
     `Commands after unregister: ${commandsAfter.length}` ===
       "Commands after unregister: 0"
@@ -91,8 +91,6 @@ async function runTest() {
   );
 
   console.log("\nTest Completed.");
-
-  console.log(app);
 }
 
 runTest().catch(console.error);

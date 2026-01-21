@@ -1,5 +1,5 @@
 import { ExtensionContext } from "./context";
-import { ContributionPointIds } from "./contribution";
+import { ContributionPointIds } from "./contribution/points";
 import { Disposable } from "./command";
 import CommandService from "./services/CommandService";
 
@@ -47,14 +47,13 @@ class ExtensionManager {
               item.id ||
               `${extension.id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`;
 
-            this.context.contributions.register({
+            this.context.contributions.register(pointId, {
               pointId,
               id,
               data: item,
             });
 
-            // Track contribution registration to unregister later (if registry supported it, but for now we manually handle what we can)
-            // Note: ContributionRegistry.unregisterContribution is available, so we should use it.
+            // Track contribution registration to unregister later
             disposables.push({
               dispose: () => {
                 this.context.contributions.unregister(pointId, id);
@@ -64,8 +63,8 @@ class ExtensionManager {
             // Auto-register commands with handlers
             if (pointId === ContributionPointIds.COMMANDS && item.handler) {
               const commandService =
-                this.context.services.get<CommandService>("CommandService");
-              const commandDisposable = commandService!.registerCommand(
+                this.context.services.get<CommandService>("CommandService")!;
+              const commandDisposable = commandService.registerCommand(
                 id,
                 item.handler,
               );
