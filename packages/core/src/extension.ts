@@ -8,7 +8,6 @@ interface ExtensionMetadata {
 }
 
 interface Extension {
-  id: string;
   metadata?: ExtensionMetadata;
 
   activate(context: ExtensionContext): void;
@@ -28,35 +27,45 @@ class ExtensionManager {
   }
 
   register(extension: Extension) {
-    if (this.extensionRegistry.has(extension.id)) {
+    let id: string;
+    if (extension.metadata?.name) {
+      id = extension.metadata.name.toLowerCase().replace(/\s+/g, "-");
+    } else {
+      id = `anonymous-extension-${Math.random().toString(36).substr(2, 9)}`;
       console.warn(
-        `Plugin "${extension.id}" already registered. It will be overwritten.`,
+        `Plugin registered without metadata.name. Assigned random ID: "${id}". This is not recommended for persistence.`,
+      );
+    }
+
+    if (this.extensionRegistry.has(id)) {
+      console.warn(
+        `Plugin "${id}" already registered. It will be overwritten.`,
       );
     }
 
     // Initialize disposables for this extension
-    this.extensionDisposables.set(extension.id, []);
-    const disposables = this.extensionDisposables.get(extension.id)!;
+    this.extensionDisposables.set(id, []);
+    const disposables = this.extensionDisposables.get(id)!;
 
     // Process declarative contributions
     if (extension.contribute) {
       for (const [pointId, items] of Object.entries(extension.contribute())) {
         if (Array.isArray(items)) {
           items.forEach((item) => {
-            const id =
+            const contributionId =
               item.id ||
-              `${extension.id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`;
+              `${id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`;
 
             this.context.contributions.register(pointId, {
               pointId,
-              id,
+              id: contributionId,
               data: item,
             });
 
             // Track contribution registration to unregister later
             disposables.push({
               dispose: () => {
-                this.context.contributions.unregister(pointId, id);
+                this.context.contributions.unregister(pointId, contributionId);
               },
             });
 
@@ -65,7 +74,7 @@ class ExtensionManager {
               const commandService =
                 this.context.services.get<CommandService>("CommandService")!;
               const commandDisposable = commandService.registerCommand(
-                id,
+                contributionId,
                 item.handler,
               );
               disposables.push(commandDisposable);
@@ -76,11 +85,11 @@ class ExtensionManager {
     }
 
     try {
-      this.extensionRegistry.set(extension.id, extension);
+      this.extensionRegistry.set(id, extension);
       this.context.eventBus.emit("extension:register", extension);
     } catch (error) {
       console.error(
-        `Error in onCreate hook for plugin "${extension.id}":`,
+        `Error in onCreate hook for plugin "${id}":`,
         error,
       );
     }
@@ -89,12 +98,12 @@ class ExtensionManager {
       extension.activate(this.context);
     } catch (error) {
       console.error(
-        `Error in onActivate hook for plugin "${extension.id}":`,
+        `Error in onActivate hook for plugin "${id}":`,
         error,
       );
     }
 
-    console.log(`Plugin "${extension.id}" registered successfully`);
+    console.log(`Plugin "${id}" registered successfully`);
   }
 
   unregister(name: string) {

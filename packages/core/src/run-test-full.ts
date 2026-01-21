@@ -70,7 +70,9 @@ async function runTest() {
 
   // 3. Unregister and Verify Cleanup
   console.log("\n--- Verifying Unregistration/Cleanup ---");
-  app.extensionManager.unregister(fullExtension.id);
+  // The ID is now generated from the name "Full Feature Test Extension"
+  const extensionId = "full-feature-test-extension"; 
+  app.extensionManager.unregister(extensionId);
 
   const commandsAfter = app.getContributions(ContributionPointIds.COMMANDS);
   console.log(
