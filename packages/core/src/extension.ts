@@ -1,5 +1,5 @@
 import { ExtensionContext } from "./context";
-import { ContributionPointIds } from "./contribution/points";
+import { ContributionPointIds } from "./contribution";
 import { Disposable } from "./command";
 import CommandService from "./services/CommandService";
 
@@ -56,9 +56,7 @@ class ExtensionManager {
               item.id ||
               `${id}.${pointId}.${Math.random().toString(36).substr(2, 9)}`;
 
-            this.context.contributions.register(pointId, {
-              pointId,
-              id: contributionId,
+            this.context.contributions.register(pointId, contributionId, {
               data: item,
             });
 
@@ -88,19 +86,13 @@ class ExtensionManager {
       this.extensionRegistry.set(id, extension);
       this.context.eventBus.emit("extension:register", extension);
     } catch (error) {
-      console.error(
-        `Error in onCreate hook for plugin "${id}":`,
-        error,
-      );
+      console.error(`Error in onCreate hook for plugin "${id}":`, error);
     }
 
     try {
       extension.activate(this.context);
     } catch (error) {
-      console.error(
-        `Error in onActivate hook for plugin "${id}":`,
-        error,
-      );
+      console.error(`Error in onActivate hook for plugin "${id}":`, error);
     }
 
     console.log(`Plugin "${id}" registered successfully`);

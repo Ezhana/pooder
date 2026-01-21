@@ -9,7 +9,7 @@ interface ExtensionContext {
   };
   readonly contributions: {
     get<T>(pointId: string): Contribution<T>[];
-    register<T>(pointId: string, contribution: Contribution<T>): void;
+    register<T>(pointId: string, id: string, contribution: Contribution<T>): void;
     unregister<T>(pointId: string, id: string): void;
   };
 }

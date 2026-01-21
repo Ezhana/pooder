@@ -48,8 +48,8 @@ export class Pooder {
       },
       contributions: {
         get: <T>(pointId: string) => this.getContributions<T>(pointId),
-        register: <T>(pointId: string, contribution: Contribution<T>) =>
-          this.registerContribution(pointId, contribution),
+        register: <T>(pointId: string, id: string, contribution: Contribution<T>) =>
+          this.registerContribution(pointId, id, contribution),
         unregister: (pointId: string, contributionId: string) =>
           this.unregisterContribution(pointId, contributionId),
       },
@@ -129,10 +129,11 @@ export class Pooder {
 
   registerContribution<T>(
     pointId: string,
+    id: string,
     contribution: Contribution<T>,
   ): void {
-    this.contributions.register(pointId, contribution);
-    this.eventBus.emit("contribution:register", contribution);
+    this.contributions.register(pointId, id, contribution);
+    this.eventBus.emit("contribution:register", { ...contribution, id, pointId });
   }
 
   getContributions<T>(pointId: string): Contribution<T>[] {
