@@ -9,12 +9,15 @@ import {
   ContributionRegistry,
 } from "./contribution";
 import CommandService from "./services/CommandService";
+import ConfigurationService from "./services/ConfigurationService";
 import { ExtensionContext } from "./context";
 
 export * from "./extension";
 export * from "./context";
 export * from "./contribution";
 export * from "./service";
+export { default as CommandService } from "./services/CommandService";
+export { default as ConfigurationService } from "./services/ConfigurationService";
 
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();
@@ -30,6 +33,9 @@ export class Pooder {
     const commandService = new CommandService();
     this.registerService(commandService);
 
+    const configurationService = new ConfigurationService();
+    this.registerService(configurationService);
+
     // Create a restricted context for extensions
     const context: ExtensionContext = {
       eventBus: this.eventBus,
@@ -39,8 +45,23 @@ export class Pooder {
       },
       contributions: {
         get: <T>(pointId: string) => this.getContributions<T>(pointId),
-        register: <T>(pointId: string, contribution: Contribution<T>) =>
-          this.registerContribution(pointId, contribution),
+        register: <T>(pointId: string, contribution: Contribution<T>) => {
+          // If registering configurations, update ConfigurationService defaults
+          if (pointId === ContributionPointIds.CONFIGURATIONS) {
+            const configService = this.getService<ConfigurationService>(
+              "ConfigurationService",
+            );
+            if (configService) {
+              // contribution.data is ConfigurationContribution (or array of them?)
+              // Based on RulerTool, it seems contribution.data is an array or single item?
+              // RulerTool: [ContributionPointIds.CONFIGURATIONS]: [ ... ]
+              // ExtensionManager: items.forEach(item => register(pointId, { data: item }))
+              // So here 'contribution.data' is a single ConfigurationContribution object.
+              configService.initializeDefaults([contribution.data as any]);
+            }
+          }
+          return this.registerContribution(pointId, contribution);
+        },
       },
     };
 
@@ -118,7 +139,7 @@ export class Pooder {
 
   registerContributionPoint<T>(point: ContributionPoint<T>): void {
     this.contributions.registerPoint(point);
-    this.eventBus.emit("point:register", point);
+    this.eventBus.emit("contribution:point:register", point);
   }
 
   registerContribution<T>(

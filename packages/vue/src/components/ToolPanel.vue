@@ -1,10 +1,17 @@
 <template>
   <div class="pooder-tool-panel">
-    <h3>Tools</h3>
-    <div class="tool-list">
-      <div v-for="cmd in commands" :key="cmd.command" class="tool-item">
-        <button @click="executeCommand(cmd)">{{ cmd.title }}</button>
+    <div class="panel-section">
+      <h3>Tools</h3>
+      <div class="tool-list">
+        <div v-for="cmd in commands" :key="cmd.command" class="tool-item">
+          <button @click="executeCommand(cmd)">{{ cmd.title }}</button>
+        </div>
       </div>
+    </div>
+
+    <div class="panel-section">
+      <h3>Configuration</h3>
+      <ConfigurationPanel />
     </div>
   </div>
 </template>
@@ -16,7 +23,8 @@ import {
   ContributionPointIds,
   CommandContribution,
 } from "@pooder/core";
-import CommandService from "@pooder/core/src/services/CommandService"; // Direct import or via type
+import CommandService from "@pooder/core/src/services/CommandService";
+import ConfigurationPanel from "./ConfigurationPanel.vue";
 
 const pooder = inject<Pooder>("pooder");
 const commands = ref<CommandContribution[]>([]);
@@ -61,11 +69,15 @@ onUnmounted(() => {
   width: 250px;
   background: #fff;
   border-right: 1px solid #ddd;
-  padding: 10px;
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow-y: auto;
+}
+
+.panel-section {
+  padding: 10px;
+  border-bottom: 1px solid #eee;
 }
 
 h3 {

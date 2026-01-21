@@ -38,6 +38,28 @@ export class RulerTool implements Extension {
       return;
     }
 
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+        // Load initial config
+        this._options.unit = configService.get("ruler.unit", this._options.unit);
+        this._options.thickness = configService.get("ruler.thickness", this._options.thickness);
+        this._options.backgroundColor = configService.get("ruler.backgroundColor", this._options.backgroundColor);
+        this._options.textColor = configService.get("ruler.textColor", this._options.textColor);
+        this._options.lineColor = configService.get("ruler.lineColor", this._options.lineColor);
+        this._options.fontSize = configService.get("ruler.fontSize", this._options.fontSize);
+
+        // Listen for changes
+        configService.onAnyChange((e: { key: string; value: any }) => {
+            if (e.key.startsWith("ruler.")) {
+                const prop = e.key.split(".")[1] as keyof RulerToolOptions;
+                if (prop && prop in this._options) {
+                    (this._options as any)[prop] = e.value;
+                    this.updateRuler();
+                }
+            }
+        });
+    }
+
     this.createLayer();
     this.updateRuler();
   }
