@@ -28,18 +28,35 @@ export class Pooder {
 
   registerService(service: Service) {
     const serviceId = service.name;
+
+    try {
+      service?.init?.();
+    } catch (e) {
+      console.error(`Error initializing service ${serviceId}:`, e);
+      return false;
+    }
+
     this.services.set(serviceId, service);
     this.eventBus.emit("service:register", service);
+    return true;
   }
 
   unregisterService(service: Service) {
     const serviceId = service.name;
     if (!this.services.has(serviceId)) {
       console.warn(`Service ${serviceId} is not registered.`);
-      return;
+      return true;
+    }
+
+    try {
+      service?.dispose?.();
+    } catch (e) {
+      console.error(`Error disposing service ${serviceId}:`, e);
+      return false;
     }
 
     this.services.delete(serviceId);
     this.eventBus.emit("service:unregister", service);
+    return true;
   }
 }

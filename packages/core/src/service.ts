@@ -1,7 +1,7 @@
 interface Service {
   name: string;
-  init(): void;
-  dispose(): void;
+  init?(): void;
+  dispose?(): void;
 }
 
 class ServiceRegistry extends Map<string, Service> {}
