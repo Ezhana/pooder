@@ -1,5 +1,6 @@
-import { ServiceManager, Service, ServiceRegistry } from "./service";
-import { ExtensionManager, ExtensionRegistry } from "./extension";
+import { Service, ServiceRegistry } from "./service";
+import EventBus from "./event";
+import { ExtensionManager } from "./extension";
 
 export {
   FabricImage as Image,
@@ -17,17 +18,28 @@ export {
 } from "fabric";
 
 export class Pooder {
-  services: ServiceRegistry = new ServiceRegistry();
-  extensions: ExtensionRegistry = new ExtensionRegistry();
+  readonly eventBus: EventBus = new EventBus();
+  readonly services: ServiceRegistry = new ServiceRegistry();
+  readonly extensionManager: ExtensionManager;
 
-  private serviceManager: ServiceManager = new ServiceManager(this.services);
-  private extensionManager: ExtensionManager = new ExtensionManager(
-    this.extensions,
-  );
-
-  constructor() {}
+  constructor() {
+    this.extensionManager = new ExtensionManager(this);
+  }
 
   registerService(service: Service) {
-    this.serviceManager.register(service);
+    const serviceId = service.name;
+    this.services.set(serviceId, service);
+    this.eventBus.emit("service:register", service);
+  }
+
+  unregisterService(service: Service) {
+    const serviceId = service.name;
+    if (!this.services.has(serviceId)) {
+      console.warn(`Service ${serviceId} is not registered.`);
+      return;
+    }
+
+    this.services.delete(serviceId);
+    this.eventBus.emit("service:unregister", service);
   }
 }

@@ -1,37 +1,26 @@
-import { Contribution } from "./contribution";
-import EventBus from "./event";
+import { ExtensionContext } from "./context";
 
-export { ExtensionRegistry, ExtensionManager };
-export interface ExtensionOptions {
-  [key: string]: any;
-}
-export interface OptionSchema {
-  type: "string" | "number" | "boolean" | "color" | "select";
-  options?: string[] | { label: string; value: any }[];
-  min?: number;
-  max?: number;
-  step?: number;
-  label?: string;
-}
 interface ExtensionMetadata {
   name: string;
-  contributions?: Contribution[];
 }
 
-export interface Extension {
+interface Extension {
   id: string;
   metadata?: ExtensionMetadata;
 
-  activate(): void;
-  deactivate(): void;
+  activate(context: ExtensionContext): void;
+  deactivate(context: ExtensionContext): void;
+  contribute(): void;
 }
 
 class ExtensionRegistry extends Map<string, Extension> {}
-class ExtensionManager {
-  private readonly extensionRegistry: ExtensionRegistry;
 
-  constructor(extensionRegistry: ExtensionRegistry) {
-    this.extensionRegistry = extensionRegistry;
+class ExtensionManager {
+  private readonly context: ExtensionContext;
+  private extensionRegistry: ExtensionRegistry = new ExtensionRegistry();
+
+  constructor(context: ExtensionContext) {
+    this.context = context;
   }
 
   register(extension: Extension) {
@@ -43,7 +32,7 @@ class ExtensionManager {
 
     try {
       this.extensionRegistry.set(extension.id, extension);
-      EventBus.emit("extension:register", extension);
+      this.context.eventBus.emit("extension:register", extension);
     } catch (error) {
       console.error(
         `Error in onCreate hook for plugin "${extension.id}":`,
@@ -52,7 +41,7 @@ class ExtensionManager {
     }
 
     try {
-      extension.activate();
+      extension.activate(this.context);
     } catch (error) {
       console.error(
         `Error in onActivate hook for plugin "${extension.id}":`,
@@ -71,7 +60,7 @@ class ExtensionManager {
     }
 
     try {
-      extension.deactivate();
+      extension.deactivate(this.context);
     } catch (error) {
       console.error(`Error in deactivate for plugin "${name}":`, error);
     }
@@ -104,3 +93,5 @@ class ExtensionManager {
     extensionNames.forEach((name) => this.unregister(name));
   }
 }
+
+export { Extension, ExtensionMetadata, ExtensionRegistry, ExtensionManager };
