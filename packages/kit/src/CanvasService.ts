@@ -24,9 +24,9 @@ export default class CanvasService implements Service {
    * We assume layers are Groups directly on the canvas with a data.id property.
    */
   getLayer(id: string): Group | undefined {
-    return this.canvas
-      .getObjects()
-      .find((obj: any) => obj.data?.id === id) as Group | undefined;
+    return this.canvas.getObjects().find((obj: any) => obj.data?.id === id) as
+      | Group
+      | undefined;
   }
 
   /**
@@ -58,8 +58,8 @@ export default class CanvasService implements Service {
     }
     return this.canvas.getObjects().find((obj: any) => obj.data?.id === id);
   }
-  
+
   requestRenderAll() {
-      this.canvas.requestRenderAll();
+    this.canvas.requestRenderAll();
   }
 }

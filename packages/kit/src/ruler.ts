@@ -18,8 +18,12 @@ interface RulerToolOptions {
 }
 
 export class RulerTool implements Extension {
-  public metadata = { name: "RulerTool" };
-  
+  id = "pooder.kit.ruler";
+
+  public metadata = {
+    name: "RulerTool",
+  };
+
   private _options: RulerToolOptions = {
     unit: "px",
     thickness: 20,
@@ -40,24 +44,39 @@ export class RulerTool implements Extension {
 
     const configService = context.services.get<any>("ConfigurationService");
     if (configService) {
-        // Load initial config
-        this._options.unit = configService.get("ruler.unit", this._options.unit);
-        this._options.thickness = configService.get("ruler.thickness", this._options.thickness);
-        this._options.backgroundColor = configService.get("ruler.backgroundColor", this._options.backgroundColor);
-        this._options.textColor = configService.get("ruler.textColor", this._options.textColor);
-        this._options.lineColor = configService.get("ruler.lineColor", this._options.lineColor);
-        this._options.fontSize = configService.get("ruler.fontSize", this._options.fontSize);
+      // Load initial config
+      this._options.unit = configService.get("ruler.unit", this._options.unit);
+      this._options.thickness = configService.get(
+        "ruler.thickness",
+        this._options.thickness,
+      );
+      this._options.backgroundColor = configService.get(
+        "ruler.backgroundColor",
+        this._options.backgroundColor,
+      );
+      this._options.textColor = configService.get(
+        "ruler.textColor",
+        this._options.textColor,
+      );
+      this._options.lineColor = configService.get(
+        "ruler.lineColor",
+        this._options.lineColor,
+      );
+      this._options.fontSize = configService.get(
+        "ruler.fontSize",
+        this._options.fontSize,
+      );
 
-        // Listen for changes
-        configService.onAnyChange((e: { key: string; value: any }) => {
-            if (e.key.startsWith("ruler.")) {
-                const prop = e.key.split(".")[1] as keyof RulerToolOptions;
-                if (prop && prop in this._options) {
-                    (this._options as any)[prop] = e.value;
-                    this.updateRuler();
-                }
-            }
-        });
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("ruler.")) {
+          const prop = e.key.split(".")[1] as keyof RulerToolOptions;
+          if (prop && prop in this._options) {
+            (this._options as any)[prop] = e.value;
+            this.updateRuler();
+          }
+        }
+      });
     }
 
     this.createLayer();
@@ -148,18 +167,18 @@ export class RulerTool implements Extension {
 
   private createLayer() {
     if (!this.canvasService) return;
-    
+
     const canvas = this.canvasService.canvas;
     const width = canvas.width || 800;
     const height = canvas.height || 600;
 
     const layer = this.canvasService.createLayer("ruler-overlay", {
-        width,
-        height,
-        selectable: false,
-        evented: false,
+      width,
+      height,
+      selectable: false,
+      evented: false,
     });
-    
+
     canvas.bringObjectToFront(layer);
   }
 

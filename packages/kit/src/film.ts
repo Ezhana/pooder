@@ -14,8 +14,12 @@ interface FilmToolOptions {
 }
 
 export class FilmTool implements Extension {
-  public metadata = { name: "FilmTool" };
-  
+  id = "pooder.kit.film";
+
+  public metadata = {
+    name: "FilmTool",
+  };
+
   private _options: FilmToolOptions = {
     url: "",
     opacity: 0.5,
@@ -133,10 +137,7 @@ export class FilmTool implements Extension {
     const width = this.canvasService.canvas.width || 800;
     const height = this.canvasService.canvas.height || 600;
 
-    let img = this.canvasService.getObject(
-      "film-image",
-      "overlay",
-    ) as Image;
+    let img = this.canvasService.getObject("film-image", "overlay") as Image;
     try {
       if (img) {
         if (img.getSrc() !== url) {

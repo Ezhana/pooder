@@ -1,8 +1,8 @@
 import { ExtensionContext } from "./context";
-import {Contribution, ContributionPointIds} from "./contribution";
+import { Contribution, ContributionPointIds } from "./contribution";
 import Disposable from "./disposable";
 import CommandService from "./services/CommandService";
-import {ConfigurationService} from "./services";
+import { ConfigurationService } from "./services";
 
 interface ExtensionMetadata {
   name: string;
@@ -44,22 +44,25 @@ class ExtensionManager {
       for (const [pointId, items] of Object.entries(extension.contribute())) {
         if (Array.isArray(items)) {
           items.forEach((item) => {
-            const contribution:Contribution={
+            const contribution: Contribution = {
               id: item.id,
               metadata: {
                 extensionId: extension.id,
                 ...item?.metadata,
               },
               data: item,
-            }
-            const disposable = this.context.contributions.register(pointId, contribution);
+            };
+            const disposable = this.context.contributions.register(
+              pointId,
+              contribution,
+            );
 
             // Track contribution registration to unregister later
             disposables.push(disposable);
 
-            const dispose=this.collectContribution(pointId, contribution);
-            if(dispose){
-              disposables.push(dispose)
+            const dispose = this.collectContribution(pointId, contribution);
+            if (dispose) {
+              disposables.push(dispose);
             }
           });
         }
@@ -70,34 +73,37 @@ class ExtensionManager {
       this.extensionRegistry.set(extension.id, extension);
       this.context.eventBus.emit("extension:register", extension);
     } catch (error) {
-      console.error(`Error in onCreate hook for plugin "${extension.id}":`, error);
+      console.error(
+        `Error in onCreate hook for plugin "${extension.id}":`,
+        error,
+      );
     }
 
     try {
       extension.activate(this.context);
     } catch (error) {
-      console.error(`Error in onActivate hook for plugin "${extension.id}":`, error);
+      console.error(
+        `Error in onActivate hook for plugin "${extension.id}":`,
+        error,
+      );
     }
 
     console.log(`Plugin "${extension.id}" registered successfully`);
   }
 
-  collectContribution(pointId:string, item: any):Disposable | undefined {
+  collectContribution(pointId: string, item: any): Disposable | undefined {
     // If registering configurations, update ConfigurationService defaults
     if (pointId === ContributionPointIds.CONFIGURATIONS) {
       const configService = this.context.services.get<ConfigurationService>(
-          "ConfigurationService",
+        "ConfigurationService",
       );
-      configService?.initializeDefaults([item])
+      configService?.initializeDefaults([item]);
     }
     if (pointId === ContributionPointIds.COMMANDS && item.data.handler) {
       const commandService =
-          this.context.services.get<CommandService>("CommandService")!;
+        this.context.services.get<CommandService>("CommandService")!;
 
-      return commandService.registerCommand(
-            item.id,
-            item.data.handler,
-      );
+      return commandService.registerCommand(item.id, item.data.handler);
     }
   }
 

@@ -19,8 +19,12 @@ interface HoleToolOptions {
 }
 
 export class HoleTool implements Extension {
-  public metadata = { name: "HoleTool" };
-  
+  id = "pooder.kit.hole";
+
+  public metadata = {
+    name: "HoleTool",
+  };
+
   private _options: HoleToolOptions = {
     innerRadius: 15,
     outerRadius: 25,
@@ -165,7 +169,7 @@ export class HoleTool implements Extension {
       };
       this.context.eventBus.on(
         "dieline:geometry:change",
-        this.handleDielineChange
+        this.handleDielineChange,
       );
     }
 
@@ -178,17 +182,17 @@ export class HoleTool implements Extension {
       try {
         const geometry = commandService.executeCommand("getGeometry");
         if (geometry) {
-          // If executeCommand returns a promise, await it? 
+          // If executeCommand returns a promise, await it?
           // CommandService.executeCommand is async in previous definition.
           // But here we are in sync setup.
           // Let's assume we can handle the promise if needed, or if it returns value directly (if not async).
           // Checking CommandService implementation: executeCommand IS async.
           Promise.resolve(geometry).then((g) => {
-             if (g) {
-                this.currentGeometry = g as DielineGeometry;
-                // Re-run setup logic dependent on geometry
-                this.initializeHoles();
-             }
+            if (g) {
+              this.currentGeometry = g as DielineGeometry;
+              // Re-run setup logic dependent on geometry
+              this.initializeHoles();
+            }
           });
         }
       } catch (e) {
@@ -214,7 +218,7 @@ export class HoleTool implements Extension {
           width: Math.max(0, this.currentGeometry.width + effectiveOffset * 2),
           height: Math.max(
             0,
-            this.currentGeometry.height + effectiveOffset * 2
+            this.currentGeometry.height + effectiveOffset * 2,
           ),
           radius: Math.max(0, this.currentGeometry.radius + effectiveOffset),
         };
@@ -286,7 +290,7 @@ export class HoleTool implements Extension {
     if (this.handleDielineChange && this.context) {
       this.context.eventBus.off(
         "dieline:geometry:change",
-        this.handleDielineChange
+        this.handleDielineChange,
       );
       this.handleDielineChange = null;
     }
@@ -298,12 +302,12 @@ export class HoleTool implements Extension {
 
     // Clear holes from Dieline (visual only, state preserved in HoleTool options)
     if (this.context) {
-        const commandService = this.context.services.get<any>("CommandService");
-        if (commandService) {
-            try {
-                commandService.executeCommand("setHoles", []);
-            } catch(e) {}
-        }
+      const commandService = this.context.services.get<any>("CommandService");
+      if (commandService) {
+        try {
+          commandService.executeCommand("setHoles", []);
+        } catch (e) {}
+      }
     }
 
     this.canvasService.requestRenderAll();
@@ -333,12 +337,12 @@ export class HoleTool implements Extension {
     }));
 
     if (this.context) {
-        const commandService = this.context.services.get<any>("CommandService");
-        if (commandService) {
-            try {
-                commandService.executeCommand("setHoles", holeData);
-            } catch (e) {}
-        }
+      const commandService = this.context.services.get<any>("CommandService");
+      if (commandService) {
+        try {
+          commandService.executeCommand("setHoles", holeData);
+        } catch (e) {}
+      }
     }
   }
 

@@ -3,10 +3,10 @@ import Disposable from "../disposable";
 
 export class ContributionRegistry {
   private points: Map<string, ContributionPoint> = new Map();
-  private contributions={
-    byId: new Map<string,Contribution>(),
-    byPointId: new Map<string,Contribution[]>()
-  }
+  private contributions = {
+    byId: new Map<string, Contribution>(),
+    byPointId: new Map<string, Contribution[]>(),
+  };
 
   /**
    * Register a new contribution point
@@ -56,7 +56,10 @@ export class ContributionRegistry {
           return { dispose: () => {} };
         }
       } catch (e) {
-        console.error(`Validation error for contribution ${contribution.id}:`, e);
+        console.error(
+          `Validation error for contribution ${contribution.id}:`,
+          e,
+        );
         return { dispose: () => {} };
       }
     }

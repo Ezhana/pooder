@@ -1,3 +1,3 @@
 export default interface Disposable {
-    dispose(): void;
+  dispose(): void;
 }

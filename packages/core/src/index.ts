@@ -8,14 +8,14 @@ import {
   ContributionPointIds,
   ContributionRegistry,
 } from "./contribution";
-import {CommandService,ConfigurationService} from "./services"
+import { CommandService, ConfigurationService } from "./services";
 import { ExtensionContext } from "./context";
 
 export * from "./extension";
 export * from "./context";
 export * from "./contribution";
 export * from "./service";
-export * from "./services"
+export * from "./services";
 
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();
@@ -44,8 +44,7 @@ export class Pooder {
       contributions: {
         get: <T>(pointId: string) => this.getContributions<T>(pointId),
         register: <T>(pointId: string, contribution: Contribution<T>) =>
-           this.registerContribution(pointId, contribution)
-        ,
+          this.registerContribution(pointId, contribution),
       },
     };
 

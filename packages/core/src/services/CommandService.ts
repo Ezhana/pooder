@@ -18,7 +18,9 @@ export default class CommandService implements Service {
     thisArg?: any,
   ): Disposable {
     if (this.commands.has(commandId)) {
-      console.warn(`Command "${commandId}" is already registered. Overwriting.`);
+      console.warn(
+        `Command "${commandId}" is already registered. Overwriting.`,
+      );
     }
 
     const command: Command = {

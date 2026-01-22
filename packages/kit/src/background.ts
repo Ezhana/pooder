@@ -14,8 +14,11 @@ interface BackgroundToolOptions {
 }
 
 export class BackgroundTool implements Extension {
-  public metadata = { name: "BackgroundTool" };
-  
+  id = "pooder.kit.background";
+  public metadata = {
+    name: "BackgroundTool",
+  };
+
   private _options: BackgroundToolOptions = {
     color: "",
     url: "",

@@ -41,8 +41,11 @@ export interface DielineGeometry {
 }
 
 export class DielineTool implements Extension {
-  public metadata = { name: "DielineTool" };
-  
+  id = "pooder.kit.dieline";
+  public metadata = {
+    name: "DielineTool",
+  };
+
   private _options: DielineToolOptions = {
     shape: "rect",
     width: 300,
@@ -190,7 +193,10 @@ export class DielineTool implements Extension {
           command: "setDimensions",
           title: "Set Dimensions",
           handler: (width: number, height: number) => {
-            if (this._options.width === width && this._options.height === height)
+            if (
+              this._options.width === width &&
+              this._options.height === height
+            )
               return true;
             this._options.width = width;
             this._options.height = height;
@@ -402,7 +408,7 @@ export class DielineTool implements Extension {
           y: cy,
           holes: holes || [],
         },
-        offset
+        offset,
       );
 
       // Use solid red for hatch lines to match dieline, background is transparent
@@ -516,7 +522,7 @@ export class DielineTool implements Extension {
   public exportCutImage() {
     if (!this.canvasService) return null;
     const canvas = this.canvasService.canvas;
-    
+
     // 1. Generate Path Data
     const { shape, width, height, radius, position, holes } = this._options;
     const canvasW = canvas.width || 800;

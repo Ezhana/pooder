@@ -15,8 +15,12 @@ interface WhiteInkToolOptions {
 }
 
 export class WhiteInkTool implements Extension {
-  public metadata = { name: "WhiteInkTool" };
-  
+  id = "pooder.kit.white-ink";
+
+  public metadata = {
+    name: "WhiteInkTool",
+  };
+
   private _options: WhiteInkToolOptions = {
     customMask: "",
     opacity: 1,
@@ -74,7 +78,7 @@ export class WhiteInkTool implements Extension {
           handler: (
             customMask: string,
             opacity: number,
-            enableClip: boolean = true
+            enableClip: boolean = true,
           ) => {
             if (
               this._options.customMask === customMask &&
@@ -151,10 +155,7 @@ export class WhiteInkTool implements Extension {
       }
     }
 
-    const userImage = this.canvasService.getObject(
-      "user-image",
-      "user"
-    ) as any;
+    const userImage = this.canvasService.getObject("user-image", "user") as any;
     if (userImage && userImage.clipPath) {
       userImage.set({ clipPath: undefined });
     }
@@ -190,13 +191,7 @@ export class WhiteInkTool implements Extension {
     if (whiteInk) {
       const currentSrc = whiteInk.getSrc?.() || whiteInk._element?.src;
       if (currentSrc !== customMask) {
-        this.loadWhiteInk(
-          layer,
-          customMask,
-          opacity,
-          enableClip,
-          whiteInk
-        );
+        this.loadWhiteInk(layer, customMask, opacity, enableClip, whiteInk);
       } else {
         if (whiteInk.opacity !== opacity) {
           whiteInk.set({ opacity });
@@ -227,10 +222,10 @@ export class WhiteInkTool implements Extension {
     url: string,
     opacity: number,
     enableClip: boolean,
-    oldImage?: any
+    oldImage?: any,
   ) {
     if (!this.canvasService) return;
-    
+
     Image.fromURL(url, { crossOrigin: "anonymous" })
       .then((image) => {
         if (oldImage) {
@@ -241,7 +236,7 @@ export class WhiteInkTool implements Extension {
           new filters.BlendColor({
             color: "#FFFFFF",
             mode: "add",
-          })
+          }),
         );
         image.applyFilters();
 
@@ -284,10 +279,7 @@ export class WhiteInkTool implements Extension {
 
   private applyClipPath(url: string) {
     if (!this.canvasService) return;
-    const userImage = this.canvasService.getObject(
-      "user-image",
-      "user"
-    ) as any;
+    const userImage = this.canvasService.getObject("user-image", "user") as any;
     if (!userImage) return;
 
     Image.fromURL(url, { crossOrigin: "anonymous" })

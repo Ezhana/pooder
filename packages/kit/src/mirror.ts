@@ -8,7 +8,11 @@ import {
 import CanvasService from "./CanvasService";
 
 export class MirrorTool implements Extension {
-  public metadata = { name: "MirrorTool" };
+  id = "pooder.kit.mirror";
+
+  public metadata = {
+    name: "MirrorTool",
+  };
   private _enabled = false;
 
   private canvasService?: CanvasService;

@@ -18,6 +18,8 @@ interface ImageToolOptions {
   top?: number;
 }
 export class ImageTool implements Extension {
+  id = "pooder.kit.image";
+
   metadata = {
     name: "ImageTool",
   };
