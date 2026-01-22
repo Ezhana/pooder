@@ -141,7 +141,7 @@ export class DielineTool implements Extension {
           id: "dieline.shape",
           type: "select",
           label: "Shape",
-          options: ["rect", "circle", "ellipse"],
+          options: ["rect", "circle", "ellipse", "custom"],
           default: "rect",
         },
         {
