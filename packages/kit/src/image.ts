@@ -208,7 +208,28 @@ export class ImageTool implements Extension {
         subTargetCheck: true,
         interactive: true,
       });
-      this.canvasService.canvas.add(userLayer);
+
+      // CanvasService.createLayer already adds it to the canvas (at the top).
+      // Now we adjust its position if needed.
+
+      // Try to insert below dieline-overlay
+      const dielineLayer = this.canvasService.getLayer("dieline-overlay");
+      if (dielineLayer) {
+        const index = this.canvasService.canvas
+          .getObjects()
+          .indexOf(dielineLayer);
+        // If dieline is at 0, move user to 0 (dieline shifts to 1)
+        if (index >= 0) {
+          this.canvasService.canvas.moveObjectTo(userLayer, index);
+        }
+      } else {
+        // Ensure background is behind
+        const bgLayer = this.canvasService.getLayer("background");
+        if (bgLayer) {
+          this.canvasService.canvas.sendObjectToBack(bgLayer);
+        }
+      }
+      this.canvasService.requestRenderAll();
     }
   }
 

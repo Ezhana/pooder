@@ -35,15 +35,19 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
     new RulerTool(),
     new DielineTool(),
     new FilmTool(),
-    new HoleTool(),
     new ImageTool(),
     new WhiteInkTool(),
     new MirrorTool(),
+    new HoleTool(),
   ];
 
   tools.forEach((tool) => {
     pooder.extensionManager.register(tool);
   });
+
+  const svc=pooder.getService<CanvasService>("CanvasService")
+
+  console.log(svc!.canvas.getObjects())
 };
 
 onUnmounted(() => {

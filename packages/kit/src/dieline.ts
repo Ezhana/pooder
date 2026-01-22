@@ -310,6 +310,15 @@ export class DielineTool implements Extension {
     });
 
     this.canvasService.canvas.bringObjectToFront(layer);
+
+    // Ensure above user layer
+    const userLayer = this.canvasService.getLayer("user");
+    if (userLayer) {
+      const userIndex = this.canvasService.canvas
+        .getObjects()
+        .indexOf(userLayer);
+      this.canvasService.canvas.moveObjectTo(layer, userIndex + 1);
+    }
   }
 
   private destroyLayer() {
@@ -518,6 +527,27 @@ export class DielineTool implements Extension {
     });
 
     layer.add(borderObj);
+
+    // Enforce z-index: Dieline > User
+    const userLayer = this.canvasService.getLayer("user");
+    if (layer && userLayer) {
+      const layerIndex = this.canvasService.canvas.getObjects().indexOf(layer);
+      const userIndex = this.canvasService.canvas
+        .getObjects()
+        .indexOf(userLayer);
+      if (layerIndex < userIndex) {
+        this.canvasService.canvas.moveObjectTo(layer, userIndex + 1);
+      }
+    } else {
+      // If no user layer, just bring to front (safe default)
+      this.canvasService.canvas.bringObjectToFront(layer);
+    }
+
+    // Ensure Ruler is above Dieline if it exists
+    const rulerLayer = this.canvasService.getLayer("ruler-overlay");
+    if (rulerLayer) {
+      this.canvasService.canvas.bringObjectToFront(rulerLayer);
+    }
 
     layer.dirty = true;
     this.canvasService.requestRenderAll();
