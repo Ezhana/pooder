@@ -8,13 +8,14 @@ export interface HoleData {
 }
 
 export interface GeometryOptions {
-  shape: "rect" | "circle" | "ellipse";
+  shape: "rect" | "circle" | "ellipse" | "custom";
   width: number;
   height: number;
   radius: number;
   x: number;
   y: number;
   holes: Array<HoleData>;
+  pathData?: string;
 }
 
 export interface MaskGeometryOptions extends GeometryOptions {
@@ -32,10 +33,10 @@ function ensurePaper(width: number, height: number) {
 }
 
 /**
- * Creates the base dieline shape (Rect/Circle/Ellipse)
+ * Creates the base dieline shape (Rect/Circle/Ellipse/Custom)
  */
 function createBaseShape(options: GeometryOptions): paper.PathItem {
-  const { shape, width, height, radius, x, y } = options;
+  const { shape, width, height, radius, x, y, pathData } = options;
   const center = new paper.Point(x, y);
 
   if (shape === "rect") {
@@ -50,11 +51,27 @@ function createBaseShape(options: GeometryOptions): paper.PathItem {
       center: center,
       radius: Math.max(0, r),
     });
-  } else {
-    // ellipse
+  } else if (shape === "ellipse") {
     return new paper.Path.Ellipse({
       center: center,
       radius: [Math.max(0, width / 2), Math.max(0, height / 2)],
+    });
+  } else if (shape === "custom" && pathData) {
+    const path = new paper.Path(pathData);
+    // Align center
+    path.position = center;
+    // Scale to match width/height if needed?
+    // For now, assume pathData is correct size, but we might want to support resizing.
+    // If width/height are provided and different from bounds, we could scale.
+    if (width > 0 && height > 0 && path.bounds.width > 0 && path.bounds.height > 0) {
+        path.scale(width / path.bounds.width, height / path.bounds.height);
+    }
+    return path;
+  } else {
+    // Fallback
+    return new paper.Path.Rectangle({
+      point: [x - width / 2, y - height / 2],
+      size: [Math.max(0, width), Math.max(0, height)],
     });
   }
 }

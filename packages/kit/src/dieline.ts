@@ -7,6 +7,7 @@ import {
 } from "@pooder/core";
 import { Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
+import { ImageTracer } from "./tracer";
 import {
   generateDielinePath,
   generateMaskPath,
@@ -15,7 +16,7 @@ import {
 } from "./geometry";
 
 export interface DielineGeometry {
-  shape: "rect" | "circle" | "ellipse";
+  shape: "rect" | "circle" | "ellipse" | "custom";
   x: number;
   y: number;
   width: number;
@@ -23,6 +24,7 @@ export interface DielineGeometry {
   radius: number;
   offset: number;
   borderLength?: number;
+  pathData?: string;
 }
 
 export class DielineTool implements Extension {
@@ -31,7 +33,7 @@ export class DielineTool implements Extension {
     name: "DielineTool",
   };
 
-  private shape: "rect" | "circle" | "ellipse" = "rect";
+  private shape: "rect" | "circle" | "ellipse" | "custom" = "rect";
   private width: number = 300;
   private height: number = 300;
   private radius: number = 0;
@@ -43,13 +45,14 @@ export class DielineTool implements Extension {
   private holes: HoleData[] = [];
   private position?: { x: number; y: number };
   private borderLength?: number;
+  private pathData?: string;
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
 
   constructor(
     options?: Partial<{
-      shape: "rect" | "circle" | "ellipse";
+      shape: "rect" | "circle" | "ellipse" | "custom";
       width: number;
       height: number;
       radius: number;
@@ -61,6 +64,7 @@ export class DielineTool implements Extension {
       outsideColor: string;
       showBleedLines: boolean;
       holes: HoleData[];
+      pathData: string;
     }>,
   ) {
     if (options) {
@@ -102,6 +106,7 @@ export class DielineTool implements Extension {
         this.showBleedLines,
       );
       this.holes = configService.get("dieline.holes", this.holes);
+      this.pathData = configService.get("dieline.pathData", this.pathData);
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
@@ -121,6 +126,7 @@ export class DielineTool implements Extension {
     this.createLayer();
     this.updateDieline();
   }
+
 
   deactivate(context: ExtensionContext) {
     this.destroyLayer();
@@ -231,6 +237,7 @@ export class DielineTool implements Extension {
             this.outsideColor = "#ffffff";
             this.showBleedLines = true;
             this.holes = [];
+            this.pathData = undefined;
             this.updateDieline();
             return true;
           },
@@ -249,7 +256,7 @@ export class DielineTool implements Extension {
         {
           command: "setShape",
           title: "Set Shape",
-          handler: (shape: "rect" | "circle" | "ellipse") => {
+          handler: (shape: "rect" | "circle" | "ellipse" | "custom") => {
             if (this.shape === shape) return true;
             this.shape = shape;
             this.updateDieline();
@@ -287,6 +294,26 @@ export class DielineTool implements Extension {
           title: "Export Cut Image",
           handler: () => {
             return this.exportCutImage();
+          },
+        },
+        {
+          command: "detectEdge",
+          title: "Detect Edge from Image",
+          handler: async (imageUrl: string, options?: any) => {
+            try {
+              const pathData = await ImageTracer.trace(imageUrl, options);
+              this.shape = "custom";
+              this.pathData = pathData;
+              // Reset dimensions to match path bounds?
+              // Ideally ImageTracer returns bounds too, but for now we rely on Geometry.createBaseShape logic
+              // or we should update width/height here if we want them to be meaningful.
+              // But since we don't have bounds from trace yet, we just update.
+              this.updateDieline();
+              return pathData;
+            } catch (e) {
+              console.error("Edge detection failed", e);
+              throw e;
+            }
           },
         },
       ] as CommandContribution[],
@@ -405,6 +432,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       holes: holes || [],
+      pathData: this.pathData,
     });
 
     const mask = new Path(maskPathData, {
@@ -434,6 +462,7 @@ export class DielineTool implements Extension {
         x: cx,
         y: cy,
         holes: holes || [],
+        pathData: this.pathData,
       });
 
       const insideObj = new Path(productPathData, {
@@ -458,6 +487,7 @@ export class DielineTool implements Extension {
           x: cx,
           y: cy,
           holes: holes || [],
+          pathData: this.pathData,
         },
         offset,
       );
@@ -488,6 +518,7 @@ export class DielineTool implements Extension {
         x: cx,
         y: cy,
         holes: holes || [],
+        pathData: this.pathData,
       });
 
       const offsetBorderObj = new Path(offsetPathData, {
@@ -513,6 +544,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       holes: holes || [],
+      pathData: this.pathData,
     });
 
     const borderObj = new Path(borderPathData, {
@@ -589,6 +621,7 @@ export class DielineTool implements Extension {
       radius,
       offset,
       borderLength,
+      pathData: this.pathData,
     };
   }
 
@@ -611,6 +644,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       holes: holes || [],
+      pathData: this.pathData,
     });
 
     // 2. Create Clip Path
