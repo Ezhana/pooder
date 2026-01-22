@@ -10,14 +10,6 @@ import CanvasService from "./CanvasService";
 import { DielineGeometry } from "./dieline";
 import { getNearestPointOnDieline, HoleData } from "./geometry";
 
-interface HoleToolOptions {
-  innerRadius: number;
-  outerRadius: number;
-  style: "solid" | "dashed";
-  holes?: Array<{ x: number; y: number }>;
-  constraintTarget?: "original" | "bleed";
-}
-
 export class HoleTool implements Extension {
   id = "pooder.kit.hole";
 
@@ -25,13 +17,11 @@ export class HoleTool implements Extension {
     name: "HoleTool",
   };
 
-  private _options: HoleToolOptions = {
-    innerRadius: 15,
-    outerRadius: 25,
-    style: "solid",
-    holes: [],
-    constraintTarget: "bleed",
-  };
+  private innerRadius: number = 15;
+  private outerRadius: number = 25;
+  private style: "solid" | "dashed" = "solid";
+  private holes: Array<{ x: number; y: number }> = [];
+  private constraintTarget: "original" | "bleed" = "bleed";
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
@@ -44,6 +34,20 @@ export class HoleTool implements Extension {
   // Cache geometry to enforce constraints during drag
   private currentGeometry: DielineGeometry | null = null;
 
+  constructor(
+    options?: Partial<{
+      innerRadius: number;
+      outerRadius: number;
+      style: "solid" | "dashed";
+      holes: Array<{ x: number; y: number }>;
+      constraintTarget: "original" | "bleed";
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
+
   activate(context: ExtensionContext) {
     this.context = context;
     this.canvasService = context.services.get<CanvasService>("CanvasService");
@@ -51,6 +55,31 @@ export class HoleTool implements Extension {
     if (!this.canvasService) {
       console.warn("CanvasService not found for HoleTool");
       return;
+    }
+
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+      // Load initial config
+      this.innerRadius = configService.get("hole.innerRadius", this.innerRadius);
+      this.outerRadius = configService.get("hole.outerRadius", this.outerRadius);
+      this.style = configService.get("hole.style", this.style);
+      this.constraintTarget = configService.get(
+        "hole.constraintTarget",
+        this.constraintTarget,
+      );
+      this.holes = configService.get("hole.holes", this.holes);
+
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("hole.")) {
+          const prop = e.key.split(".")[1];
+          if (prop && prop in this) {
+            (this as any)[prop] = e.value;
+            this.redraw();
+            this.syncHolesToDieline();
+          }
+        }
+      });
     }
 
     this.setup();
@@ -119,12 +148,11 @@ export class HoleTool implements Extension {
               } as any);
             }
 
-            this._options = {
-              innerRadius: 15,
-              outerRadius: 25,
-              style: "solid",
-              holes: [defaultPos],
-            };
+            this.innerRadius = 15;
+            this.outerRadius = 25;
+            this.style = "solid";
+            this.holes = [defaultPos];
+
             this.redraw();
             this.syncHolesToDieline();
             return true;
@@ -134,8 +162,8 @@ export class HoleTool implements Extension {
           command: "addHole",
           title: "Add Hole",
           handler: (x: number, y: number) => {
-            if (!this._options.holes) this._options.holes = [];
-            this._options.holes.push({ x, y });
+            if (!this.holes) this.holes = [];
+            this.holes.push({ x, y });
             this.redraw();
             this.syncHolesToDieline();
             return true;
@@ -145,7 +173,7 @@ export class HoleTool implements Extension {
           command: "clearHoles",
           title: "Clear Holes",
           handler: () => {
-            this._options.holes = [];
+            this.holes = [];
             this.redraw();
             this.syncHolesToDieline();
             return true;
@@ -210,7 +238,7 @@ export class HoleTool implements Extension {
 
         // Calculate effective geometry based on constraint target
         const effectiveOffset =
-          this._options.constraintTarget === "original"
+          this.constraintTarget === "original"
             ? 0
             : this.currentGeometry.offset;
         const constraintGeometry = {
@@ -250,9 +278,8 @@ export class HoleTool implements Extension {
 
   private initializeHoles() {
     if (!this.canvasService) return;
-    const opts = this._options;
     // Default hole if none exist
-    if (!opts.holes || opts.holes.length === 0) {
+    if (!this.holes || this.holes.length === 0) {
       let defaultPos = { x: this.canvasService.canvas.width! / 2, y: 50 };
 
       if (this.currentGeometry) {
@@ -267,10 +294,9 @@ export class HoleTool implements Extension {
         defaultPos = snapped;
       }
 
-      opts.holes = [defaultPos];
+      this.holes = [defaultPos];
     }
 
-    this._options = { ...opts };
     this.redraw();
     this.syncHolesToDieline();
   }
@@ -320,13 +346,13 @@ export class HoleTool implements Extension {
       .filter((obj: any) => obj.data?.type === "hole-marker");
 
     const holes = objects.map((obj) => ({ x: obj.left!, y: obj.top! }));
-    this._options.holes = holes;
+    this.holes = holes;
 
     this.syncHolesToDieline();
   }
 
   private syncHolesToDieline() {
-    const { holes, innerRadius, outerRadius } = this._options;
+    const { holes, innerRadius, outerRadius } = this;
     const currentHoles = holes || [];
 
     const holeData: HoleData[] = currentHoles.map((h) => ({
@@ -356,7 +382,7 @@ export class HoleTool implements Extension {
       .filter((obj: any) => obj.data?.type === "hole-marker");
     existing.forEach((obj) => canvas.remove(obj));
 
-    const { innerRadius, outerRadius, style, holes } = this._options;
+    const { innerRadius, outerRadius, style, holes } = this;
 
     if (!holes || holes.length === 0) {
       this.canvasService.requestRenderAll();
@@ -430,7 +456,7 @@ export class HoleTool implements Extension {
     if (!geometry || !this.canvasService) return;
 
     const effectiveOffset =
-      this._options.constraintTarget === "original" ? 0 : geometry.offset;
+      this.constraintTarget === "original" ? 0 : geometry.offset;
     const constraintGeometry = {
       ...geometry,
       width: Math.max(0, geometry.width + effectiveOffset * 2),
@@ -470,7 +496,7 @@ export class HoleTool implements Extension {
     });
 
     if (changed) {
-      this._options.holes = newHoles;
+      this.holes = newHoles;
       this.canvasService.requestRenderAll();
       // Need to sync changes back to Dieline if constraints moved them
       this.syncHolesToDieline();
@@ -514,9 +540,9 @@ export class HoleTool implements Extension {
     // Clamp distance
     let clampedDist = signedDist;
     if (signedDist > 0) {
-      clampedDist = Math.min(signedDist, this._options.innerRadius);
+      clampedDist = Math.min(signedDist, this.innerRadius);
     } else {
-      clampedDist = Math.max(signedDist, -this._options.outerRadius);
+      clampedDist = Math.max(signedDist, -this.outerRadius);
     }
 
     // Reconstruct point

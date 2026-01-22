@@ -8,11 +8,6 @@ import {
 import { FabricImage as Image } from "fabric";
 import CanvasService from "./CanvasService";
 
-interface FilmToolOptions {
-  url: string;
-  opacity: number;
-}
-
 export class FilmTool implements Extension {
   id = "pooder.kit.film";
 
@@ -20,18 +15,48 @@ export class FilmTool implements Extension {
     name: "FilmTool",
   };
 
-  private _options: FilmToolOptions = {
-    url: "",
-    opacity: 0.5,
-  };
+  private url: string = "";
+  private opacity: number = 0.5;
 
   private canvasService?: CanvasService;
+
+  constructor(
+    options?: Partial<{
+      url: string;
+      opacity: number;
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
 
   activate(context: ExtensionContext) {
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
       console.warn("CanvasService not found for FilmTool");
       return;
+    }
+
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+      // Load initial config
+      this.url = configService.get("film.url", this.url);
+      this.opacity = configService.get("film.opacity", this.opacity);
+
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("film.")) {
+          const prop = e.key.split(".")[1];
+          console.log(
+            `[FilmTool] Config change detected: ${e.key} -> ${e.value}`,
+          );
+          if (prop && prop in this) {
+            (this as any)[prop] = e.value;
+            this.updateFilm();
+          }
+        }
+      });
     }
 
     this.initLayer();
@@ -76,11 +101,10 @@ export class FilmTool implements Extension {
           command: "setFilmImage",
           title: "Set Film Image",
           handler: (url: string, opacity: number) => {
-            if (this._options.url === url && this._options.opacity === opacity)
-              return true;
+            if (this.url === url && this.opacity === opacity) return true;
 
-            this._options.url = url;
-            this._options.opacity = opacity;
+            this.url = url;
+            this.opacity = opacity;
 
             this.updateFilm();
 
@@ -123,7 +147,8 @@ export class FilmTool implements Extension {
       return;
     }
 
-    const { url, opacity } = this._options;
+    const { url, opacity } = this;
+
 
     if (!url) {
       const img = this.canvasService.getObject("film-image", "overlay");
@@ -164,5 +189,7 @@ export class FilmTool implements Extension {
     } catch (error) {
       console.error("[FilmTool] Failed to load film image", url, error);
     }
+    layer.dirty = true;
+    this.canvasService.requestRenderAll();
   }
 }

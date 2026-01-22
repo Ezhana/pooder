@@ -8,29 +8,61 @@ import {
 import { Rect, FabricImage as Image } from "fabric";
 import CanvasService from "./CanvasService";
 
-interface BackgroundToolOptions {
-  color: string;
-  url: string;
-}
-
 export class BackgroundTool implements Extension {
   id = "pooder.kit.background";
   public metadata = {
     name: "BackgroundTool",
   };
 
-  private _options: BackgroundToolOptions = {
-    color: "",
-    url: "",
-  };
+  private color: string = "";
+  private url: string = "";
 
   private canvasService?: CanvasService;
+
+  constructor(
+    options?: Partial<{
+      color: string;
+      url: string;
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
 
   activate(context: ExtensionContext) {
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
       console.warn("CanvasService not found for BackgroundTool");
       return;
+    }
+
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+      // Load initial config
+      this.color = configService.get("background.color", this.color);
+      this.url = configService.get("background.url", this.url);
+
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("background.")) {
+          const prop = e.key.split(".")[1];
+          console.log(
+            `[BackgroundTool] Config change detected: ${e.key} -> ${e.value}, prop: ${prop}`,
+          );
+          if (prop && prop in this) {
+            console.log(
+              `[BackgroundTool] Updating option ${prop} to ${e.value}`,
+            );
+            (this as any)[prop] = e.value;
+            this.updateBackground();
+          } else {
+            console.warn(
+              `[BackgroundTool] Property ${prop} not found in options`,
+            );
+          }
+        }
+      });
     }
 
     this.initLayer();
@@ -76,10 +108,8 @@ export class BackgroundTool implements Extension {
           command: "clear",
           title: "Clear Background",
           handler: () => {
-            this._options = {
-              color: "transparent",
-              url: "",
-            };
+            this.color = "transparent";
+            this.url = "";
             this.updateBackground();
             return true;
           },
@@ -88,8 +118,8 @@ export class BackgroundTool implements Extension {
           command: "setBackgroundColor",
           title: "Set Background Color",
           handler: (color: string) => {
-            if (this._options.color === color) return true;
-            this._options.color = color;
+            if (this.color === color) return true;
+            this.color = color;
             this.updateBackground();
             return true;
           },
@@ -98,8 +128,8 @@ export class BackgroundTool implements Extension {
           command: "setBackgroundImage",
           title: "Set Background Image",
           handler: (url: string) => {
-            if (this._options.url === url) return true;
-            this._options.url = url;
+            if (this.url === url) return true;
+            this.url = url;
             this.updateBackground();
             return true;
           },
@@ -130,7 +160,8 @@ export class BackgroundTool implements Extension {
       return;
     }
 
-    const { color, url } = this._options;
+    const { color, url } = this;
+
     const width = this.canvasService.canvas.width || 800;
     const height = this.canvasService.canvas.height || 600;
 
@@ -193,5 +224,7 @@ export class BackgroundTool implements Extension {
     } catch (e) {
       console.error("[BackgroundTool] Failed to load image", e);
     }
+    layer.dirty = true;
+    this.canvasService.requestRenderAll();
   }
 }

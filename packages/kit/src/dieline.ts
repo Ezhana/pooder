@@ -14,21 +14,6 @@ import {
   HoleData,
 } from "./geometry";
 
-interface DielineToolOptions {
-  shape: "rect" | "circle" | "ellipse";
-  width: number;
-  height: number;
-  radius: number; // corner radius for rect
-  position?: { x: number; y: number };
-  borderLength?: number;
-  offset: number;
-  style: "solid" | "dashed";
-  insideColor: string;
-  outsideColor: string;
-  showBleedLines?: boolean;
-  holes: HoleData[];
-}
-
 export interface DielineGeometry {
   shape: "rect" | "circle" | "ellipse";
   x: number;
@@ -46,21 +31,42 @@ export class DielineTool implements Extension {
     name: "DielineTool",
   };
 
-  private _options: DielineToolOptions = {
-    shape: "rect",
-    width: 300,
-    height: 300,
-    radius: 0,
-    offset: 0,
-    style: "solid",
-    insideColor: "rgba(0,0,0,0)",
-    outsideColor: "#ffffff",
-    showBleedLines: true,
-    holes: [],
-  };
+  private shape: "rect" | "circle" | "ellipse" = "rect";
+  private width: number = 300;
+  private height: number = 300;
+  private radius: number = 0;
+  private offset: number = 0;
+  private style: "solid" | "dashed" = "solid";
+  private insideColor: string = "rgba(0,0,0,0)";
+  private outsideColor: string = "#ffffff";
+  private showBleedLines: boolean = true;
+  private holes: HoleData[] = [];
+  private position?: { x: number; y: number };
+  private borderLength?: number;
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
+
+  constructor(
+    options?: Partial<{
+      shape: "rect" | "circle" | "ellipse";
+      width: number;
+      height: number;
+      radius: number;
+      position: { x: number; y: number };
+      borderLength: number;
+      offset: number;
+      style: "solid" | "dashed";
+      insideColor: string;
+      outsideColor: string;
+      showBleedLines: boolean;
+      holes: HoleData[];
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -68,6 +74,48 @@ export class DielineTool implements Extension {
     if (!this.canvasService) {
       console.warn("CanvasService not found for DielineTool");
       return;
+    }
+
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+      // Load initial config
+      this.shape = configService.get("dieline.shape", this.shape);
+      this.width = configService.get("dieline.width", this.width);
+      this.height = configService.get("dieline.height", this.height);
+      this.radius = configService.get("dieline.radius", this.radius);
+      this.borderLength = configService.get(
+        "dieline.borderLength",
+        this.borderLength,
+      );
+      this.offset = configService.get("dieline.offset", this.offset);
+      this.style = configService.get("dieline.style", this.style);
+      this.insideColor = configService.get(
+        "dieline.insideColor",
+        this.insideColor,
+      );
+      this.outsideColor = configService.get(
+        "dieline.outsideColor",
+        this.outsideColor,
+      );
+      this.showBleedLines = configService.get(
+        "dieline.showBleedLines",
+        this.showBleedLines,
+      );
+      this.holes = configService.get("dieline.holes", this.holes);
+
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("dieline.")) {
+          const prop = e.key.split(".")[1];
+          console.log(
+            `[DielineTool] Config change detected: ${e.key} -> ${e.value}`,
+          );
+          if (prop && prop in this) {
+            (this as any)[prop] = e.value;
+            this.updateDieline();
+          }
+        }
+      });
     }
 
     this.createLayer();
@@ -173,18 +221,16 @@ export class DielineTool implements Extension {
           command: "reset",
           title: "Reset Dieline",
           handler: () => {
-            this._options = {
-              shape: "rect",
-              width: 300,
-              height: 300,
-              radius: 0,
-              offset: 0,
-              style: "solid",
-              insideColor: "rgba(0,0,0,0)",
-              outsideColor: "#ffffff",
-              showBleedLines: true,
-              holes: [],
-            };
+            this.shape = "rect";
+            this.width = 300;
+            this.height = 300;
+            this.radius = 0;
+            this.offset = 0;
+            this.style = "solid";
+            this.insideColor = "rgba(0,0,0,0)";
+            this.outsideColor = "#ffffff";
+            this.showBleedLines = true;
+            this.holes = [];
             this.updateDieline();
             return true;
           },
@@ -193,13 +239,9 @@ export class DielineTool implements Extension {
           command: "setDimensions",
           title: "Set Dimensions",
           handler: (width: number, height: number) => {
-            if (
-              this._options.width === width &&
-              this._options.height === height
-            )
-              return true;
-            this._options.width = width;
-            this._options.height = height;
+            if (this.width === width && this.height === height) return true;
+            this.width = width;
+            this.height = height;
             this.updateDieline();
             return true;
           },
@@ -208,8 +250,8 @@ export class DielineTool implements Extension {
           command: "setShape",
           title: "Set Shape",
           handler: (shape: "rect" | "circle" | "ellipse") => {
-            if (this._options.shape === shape) return true;
-            this._options.shape = shape;
+            if (this.shape === shape) return true;
+            this.shape = shape;
             this.updateDieline();
             return true;
           },
@@ -218,8 +260,8 @@ export class DielineTool implements Extension {
           command: "setBleed",
           title: "Set Bleed",
           handler: (bleed: number) => {
-            if (this._options.offset === bleed) return true;
-            this._options.offset = bleed;
+            if (this.offset === bleed) return true;
+            this.offset = bleed;
             this.updateDieline();
             return true;
           },
@@ -228,7 +270,7 @@ export class DielineTool implements Extension {
           command: "setHoles",
           title: "Set Holes",
           handler: (holes: HoleData[]) => {
-            this._options.holes = holes;
+            this.holes = holes;
             this.updateDieline(false);
             return true;
           },
@@ -319,8 +361,8 @@ export class DielineTool implements Extension {
       borderLength,
       showBleedLines,
       holes,
-    } = this._options;
-    let { width, height } = this._options;
+    } = this;
+    let { width, height } = this;
 
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
@@ -477,6 +519,7 @@ export class DielineTool implements Extension {
 
     layer.add(borderObj);
 
+    layer.dirty = true;
     this.canvasService.requestRenderAll();
 
     // Emit change event so other tools (like HoleTool) can react
@@ -492,7 +535,7 @@ export class DielineTool implements Extension {
   public getGeometry(): DielineGeometry | null {
     if (!this.canvasService) return null;
     const { shape, width, height, radius, position, borderLength, offset } =
-      this._options;
+      this;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
@@ -524,7 +567,7 @@ export class DielineTool implements Extension {
     const canvas = this.canvasService.canvas;
 
     // 1. Generate Path Data
-    const { shape, width, height, radius, position, holes } = this._options;
+    const { shape, width, height, radius, position, holes } = this;
     const canvasW = canvas.width || 800;
     const canvasH = canvas.height || 600;
     const cx = position?.x ?? canvasW / 2;

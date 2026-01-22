@@ -13,18 +13,28 @@ export class MirrorTool implements Extension {
   public metadata = {
     name: "MirrorTool",
   };
-  private _enabled = false;
+  private enabled = false;
 
   private canvasService?: CanvasService;
 
+  constructor(
+    options?: Partial<{
+      enabled: boolean;
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
+
   toJSON() {
     return {
-      enabled: this._enabled,
+      enabled: this.enabled,
     };
   }
 
   loadFromJSON(json: any) {
-    this._enabled = json.enabled;
+    this.enabled = json.enabled;
   }
 
   activate(context: ExtensionContext) {
@@ -34,8 +44,21 @@ export class MirrorTool implements Extension {
       return;
     }
 
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+      // Load initial config
+      this.enabled = configService.get("mirror.enabled", this.enabled);
+
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key === "mirror.enabled") {
+          this.applyMirror(e.value);
+        }
+      });
+    }
+
     // Initialize with current state (if enabled was persisted)
-    if (this._enabled) {
+    if (this.enabled) {
       this.applyMirror(true);
     }
   }
@@ -91,7 +114,7 @@ export class MirrorTool implements Extension {
 
       canvas.setViewportTransform(vpt as any);
       canvas.requestRenderAll();
-      this._enabled = true;
+      this.enabled = true;
     } else if (!enabled && isFlipped) {
       // Restore
       vpt[0] = -vpt[0]; // Unflip scale
@@ -99,7 +122,7 @@ export class MirrorTool implements Extension {
 
       canvas.setViewportTransform(vpt as any);
       canvas.requestRenderAll();
-      this._enabled = false;
+      this.enabled = false;
     }
   }
 }

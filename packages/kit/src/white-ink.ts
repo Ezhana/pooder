@@ -8,12 +8,6 @@ import {
 import { FabricImage as Image, filters } from "fabric";
 import CanvasService from "./CanvasService";
 
-interface WhiteInkToolOptions {
-  customMask: string;
-  opacity: number;
-  enableClip: boolean;
-}
-
 export class WhiteInkTool implements Extension {
   id = "pooder.kit.white-ink";
 
@@ -21,20 +15,59 @@ export class WhiteInkTool implements Extension {
     name: "WhiteInkTool",
   };
 
-  private _options: WhiteInkToolOptions = {
-    customMask: "",
-    opacity: 1,
-    enableClip: false,
-  };
+  private customMask: string = "";
+  private opacity: number = 1;
+  private enableClip: boolean = false;
 
   private canvasService?: CanvasService;
   private syncHandler: ((e: any) => void) | undefined;
+  private _loadingUrl: string | null = null;
+
+  constructor(
+    options?: Partial<{
+      customMask: string;
+      opacity: number;
+      enableClip: boolean;
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
 
   activate(context: ExtensionContext) {
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
       console.warn("CanvasService not found for WhiteInkTool");
       return;
+    }
+
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+      // Load initial config
+      this.customMask = configService.get(
+        "whiteInk.customMask",
+        this.customMask,
+      );
+      this.opacity = configService.get("whiteInk.opacity", this.opacity);
+      this.enableClip = configService.get(
+        "whiteInk.enableClip",
+        this.enableClip,
+      );
+
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("whiteInk.")) {
+          const prop = e.key.split(".")[1];
+          console.log(
+            `[WhiteInkTool] Config change detected: ${e.key} -> ${e.value}`,
+          );
+          if (prop && prop in this) {
+            (this as any)[prop] = e.value;
+            this.updateWhiteInk();
+          }
+        }
+      });
     }
 
     this.setup();
@@ -81,15 +114,15 @@ export class WhiteInkTool implements Extension {
             enableClip: boolean = true,
           ) => {
             if (
-              this._options.customMask === customMask &&
-              this._options.opacity === opacity &&
-              this._options.enableClip === enableClip
+              this.customMask === customMask &&
+              this.opacity === opacity &&
+              this.enableClip === enableClip
             )
               return true;
 
-            this._options.customMask = customMask;
-            this._options.opacity = opacity;
-            this._options.enableClip = enableClip;
+            this.customMask = customMask;
+            this.opacity = opacity;
+            this.enableClip = enableClip;
 
             this.updateWhiteInk();
             return true;
@@ -165,7 +198,7 @@ export class WhiteInkTool implements Extension {
 
   private updateWhiteInk() {
     if (!this.canvasService) return;
-    const { customMask, opacity, enableClip } = this._options;
+    const { customMask, opacity, enableClip } = this;
 
     const layer = this.canvasService.getLayer("user");
     if (!layer) {
@@ -183,6 +216,7 @@ export class WhiteInkTool implements Extension {
       if (userImage && userImage.clipPath) {
         userImage.set({ clipPath: undefined });
       }
+      layer.dirty = true;
       this.canvasService.requestRenderAll();
       return;
     }
@@ -195,6 +229,7 @@ export class WhiteInkTool implements Extension {
       } else {
         if (whiteInk.opacity !== opacity) {
           whiteInk.set({ opacity });
+          layer.dirty = true;
           this.canvasService.requestRenderAll();
         }
       }
@@ -211,6 +246,7 @@ export class WhiteInkTool implements Extension {
       } else {
         if (userImage.clipPath) {
           userImage.set({ clipPath: undefined });
+          layer.dirty = true;
           this.canvasService.requestRenderAll();
         }
       }
@@ -226,8 +262,14 @@ export class WhiteInkTool implements Extension {
   ) {
     if (!this.canvasService) return;
 
+    if (this._loadingUrl === url) return;
+    this._loadingUrl = url;
+
     Image.fromURL(url, { crossOrigin: "anonymous" })
       .then((image) => {
+        if (this._loadingUrl !== url) return;
+        this._loadingUrl = null;
+
         if (oldImage) {
           layer.remove(oldImage);
         }
@@ -270,10 +312,12 @@ export class WhiteInkTool implements Extension {
         // Sync position immediately
         this.syncWithUserImage();
 
+        layer.dirty = true;
         this.canvasService!.requestRenderAll();
       })
       .catch((err) => {
         console.error("Failed to load white ink mask", url, err);
+        this._loadingUrl = null;
       });
   }
 
@@ -296,6 +340,8 @@ export class WhiteInkTool implements Extension {
         });
 
         userImage.set({ clipPath: maskImage });
+        const layer = this.canvasService!.getLayer("user");
+        if (layer) layer.dirty = true;
         this.canvasService!.requestRenderAll();
       })
       .catch((err) => {

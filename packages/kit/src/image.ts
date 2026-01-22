@@ -8,15 +8,6 @@ import {
 import { FabricImage as Image, Point, util } from "fabric";
 import CanvasService from "./CanvasService";
 
-interface ImageToolOptions {
-  url: string;
-  opacity: number;
-  width?: number;
-  height?: number;
-  angle?: number;
-  left?: number;
-  top?: number;
-}
 export class ImageTool implements Extension {
   id = "pooder.kit.image";
 
@@ -24,13 +15,33 @@ export class ImageTool implements Extension {
     name: "ImageTool",
   };
   private _loadingUrl: string | null = null;
-  private _options: ImageToolOptions = {
-    url: "",
-    opacity: 1,
-  };
+
+  private url: string = "";
+  private opacity: number = 1;
+  private width?: number;
+  private height?: number;
+  private angle?: number;
+  private left?: number;
+  private top?: number;
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
+
+  constructor(
+    options?: Partial<{
+      url: string;
+      opacity: number;
+      width: number;
+      height: number;
+      angle: number;
+      left: number;
+      top: number;
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -38,6 +49,32 @@ export class ImageTool implements Extension {
     if (!this.canvasService) {
       console.warn("CanvasService not found for ImageTool");
       return;
+    }
+
+    const configService = context.services.get<any>("ConfigurationService");
+    if (configService) {
+      // Load initial config
+      this.url = configService.get("image.url", this.url);
+      this.opacity = configService.get("image.opacity", this.opacity);
+      this.width = configService.get("image.width", this.width);
+      this.height = configService.get("image.height", this.height);
+      this.angle = configService.get("image.angle", this.angle);
+      this.left = configService.get("image.left", this.left);
+      this.top = configService.get("image.top", this.top);
+
+      // Listen for changes
+      configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("image.")) {
+          const prop = e.key.split(".")[1];
+          console.log(
+            `[ImageTool] Config change detected: ${e.key} -> ${e.value}`,
+          );
+          if (prop && prop in this) {
+            (this as any)[prop] = e.value;
+            this.updateImage();
+          }
+        }
+      });
     }
 
     this.ensureLayer();
@@ -127,17 +164,23 @@ export class ImageTool implements Extension {
             top?: number,
           ) => {
             if (
-              this._options.url === url &&
-              this._options.opacity === opacity &&
-              this._options.width === width &&
-              this._options.height === height &&
-              this._options.angle === angle &&
-              this._options.left === left &&
-              this._options.top === top
+              this.url === url &&
+              this.opacity === opacity &&
+              this.width === width &&
+              this.height === height &&
+              this.angle === angle &&
+              this.left === left &&
+              this.top === top
             )
               return true;
 
-            this._options = { url, opacity, width, height, angle, left, top };
+            this.url = url;
+            this.opacity = opacity;
+            this.width = width;
+            this.height = height;
+            this.angle = angle;
+            this.left = left;
+            this.top = top;
 
             // Direct update
             this.updateImage();
@@ -171,7 +214,7 @@ export class ImageTool implements Extension {
 
   private updateImage() {
     if (!this.canvasService) return;
-    let { url, opacity, width, height, angle, left, top } = this._options;
+    let { url, opacity, width, height, angle, left, top } = this;
 
     const layer = this.canvasService.getLayer("user");
     if (!layer) {
@@ -217,6 +260,7 @@ export class ImageTool implements Extension {
 
         if (Object.keys(updates).length > 0) {
           userImage.set(updates);
+          layer.dirty = true;
           this.canvasService.requestRenderAll();
         }
       }
@@ -227,7 +271,7 @@ export class ImageTool implements Extension {
 
   private loadImage(layer: any) {
     if (!this.canvasService) return;
-    const { url } = this._options;
+    const { url } = this;
     this._loadingUrl = url;
 
     Image.fromURL(url)
@@ -235,8 +279,7 @@ export class ImageTool implements Extension {
         if (this._loadingUrl !== url) return;
         this._loadingUrl = null;
 
-        const currentOpts = this._options;
-        const { opacity, width, height, angle, left, top } = currentOpts;
+        const { opacity, width, height, angle, left, top } = this;
 
         const existingImage = this.canvasService!.getObject(
           "user-image",
@@ -289,20 +332,21 @@ export class ImageTool implements Extension {
           const matrix = image.calcTransformMatrix();
           const globalPoint = util.transformPoint(new Point(0, 0), matrix);
 
-          this._options.left = globalPoint.x;
-          this._options.top = globalPoint.y;
-          this._options.angle = e.target.angle;
+          this.left = globalPoint.x;
+          this.top = globalPoint.y;
+          this.angle = e.target.angle;
 
           if (image.width)
-            this._options.width = e.target.width * e.target.scaleX;
+            this.width = e.target.width * e.target.scaleX;
           if (image.height)
-            this._options.height = e.target.height * e.target.scaleY;
+            this.height = e.target.height * e.target.scaleY;
 
           if (this.context) {
             this.context.eventBus.emit("update");
           }
         });
 
+        layer.dirty = true;
         this.canvasService!.requestRenderAll();
       })
       .catch((err) => {

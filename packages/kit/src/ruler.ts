@@ -8,15 +8,6 @@ import {
 import { Rect, Line, Text } from "fabric";
 import CanvasService from "./CanvasService";
 
-interface RulerToolOptions {
-  unit: "px" | "mm" | "cm" | "in";
-  thickness: number;
-  backgroundColor: string;
-  textColor: string;
-  lineColor: string;
-  fontSize: number;
-}
-
 export class RulerTool implements Extension {
   id = "pooder.kit.ruler";
 
@@ -24,16 +15,29 @@ export class RulerTool implements Extension {
     name: "RulerTool",
   };
 
-  private _options: RulerToolOptions = {
-    unit: "px",
-    thickness: 20,
-    backgroundColor: "#f0f0f0",
-    textColor: "#333333",
-    lineColor: "#999999",
-    fontSize: 10,
-  };
+  private unit: "px" | "mm" | "cm" | "in" = "px";
+  private thickness: number = 20;
+  private backgroundColor: string = "#f0f0f0";
+  private textColor: string = "#333333";
+  private lineColor: string = "#999999";
+  private fontSize: number = 10;
 
   private canvasService?: CanvasService;
+
+  constructor(
+    options?: Partial<{
+      unit: "px" | "mm" | "cm" | "in";
+      thickness: number;
+      backgroundColor: string;
+      textColor: string;
+      lineColor: string;
+      fontSize: number;
+    }>,
+  ) {
+    if (options) {
+      Object.assign(this, options);
+    }
+  }
 
   activate(context: ExtensionContext) {
     this.canvasService = context.services.get<CanvasService>("CanvasService");
@@ -45,34 +49,22 @@ export class RulerTool implements Extension {
     const configService = context.services.get<any>("ConfigurationService");
     if (configService) {
       // Load initial config
-      this._options.unit = configService.get("ruler.unit", this._options.unit);
-      this._options.thickness = configService.get(
-        "ruler.thickness",
-        this._options.thickness,
-      );
-      this._options.backgroundColor = configService.get(
+      this.unit = configService.get("ruler.unit", this.unit);
+      this.thickness = configService.get("ruler.thickness", this.thickness);
+      this.backgroundColor = configService.get(
         "ruler.backgroundColor",
-        this._options.backgroundColor,
+        this.backgroundColor,
       );
-      this._options.textColor = configService.get(
-        "ruler.textColor",
-        this._options.textColor,
-      );
-      this._options.lineColor = configService.get(
-        "ruler.lineColor",
-        this._options.lineColor,
-      );
-      this._options.fontSize = configService.get(
-        "ruler.fontSize",
-        this._options.fontSize,
-      );
+      this.textColor = configService.get("ruler.textColor", this.textColor);
+      this.lineColor = configService.get("ruler.lineColor", this.lineColor);
+      this.fontSize = configService.get("ruler.fontSize", this.fontSize);
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (e.key.startsWith("ruler.")) {
-          const prop = e.key.split(".")[1] as keyof RulerToolOptions;
-          if (prop && prop in this._options) {
-            (this._options as any)[prop] = e.value;
+          const prop = e.key.split(".")[1];
+          if (prop && prop in this) {
+            (this as any)[prop] = e.value;
             this.updateRuler();
           }
         }
@@ -138,8 +130,8 @@ export class RulerTool implements Extension {
           command: "setUnit",
           title: "Set Ruler Unit",
           handler: (unit: "px" | "mm" | "cm" | "in") => {
-            if (this._options.unit === unit) return true;
-            this._options.unit = unit;
+            if (this.unit === unit) return true;
+            this.unit = unit;
             this.updateRuler();
             return true;
           },
@@ -147,12 +139,27 @@ export class RulerTool implements Extension {
         {
           command: "setTheme",
           title: "Set Ruler Theme",
-          handler: (theme: Partial<RulerToolOptions>) => {
-            const newOptions = { ...this._options, ...theme };
-            if (JSON.stringify(newOptions) === JSON.stringify(this._options))
+          handler: (
+            theme: Partial<{
+              backgroundColor: string;
+              textColor: string;
+              lineColor: string;
+              fontSize: number;
+              thickness: number;
+            }>,
+          ) => {
+            const oldState = {
+              backgroundColor: this.backgroundColor,
+              textColor: this.textColor,
+              lineColor: this.lineColor,
+              fontSize: this.fontSize,
+              thickness: this.thickness,
+            };
+            const newState = { ...oldState, ...theme };
+            if (JSON.stringify(newState) === JSON.stringify(oldState))
               return true;
 
-            this._options = newOptions;
+            Object.assign(this, newState);
             this.updateRuler();
             return true;
           },
@@ -197,10 +204,10 @@ export class RulerTool implements Extension {
 
     layer.remove(...layer.getObjects());
 
-    const { thickness, backgroundColor, lineColor, textColor, fontSize } =
-      this._options;
+    const { thickness, backgroundColor, lineColor, textColor, fontSize } = this;
     const width = this.canvasService.canvas.width || 800;
     const height = this.canvasService.canvas.height || 600;
+
 
     // Backgrounds
     const topBg = new Rect({
