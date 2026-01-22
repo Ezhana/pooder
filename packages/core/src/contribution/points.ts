@@ -8,6 +8,7 @@ export interface ContributionPoint<T = any> {
  * Command Contribution Data Definition
  */
 export interface CommandContribution {
+  id: string;
   command: string;
   title: string;
   handler?: (...args: any[]) => any;
@@ -17,6 +18,7 @@ export interface CommandContribution {
  * Tool Contribution Data Definition
  */
 export interface ToolContribution {
+  id: string;
   name: string;
   description: string;
   parameters?: Record<string, any>; // JSON Schema for parameters
@@ -27,6 +29,7 @@ export interface ToolContribution {
  * View Contribution Data Definition
  */
 export interface ViewContribution {
+  id: string;
   name: string;
   type: "sidebar" | "panel" | "editor" | "dialog" | "status-bar";
   component: any; // The component implementation (e.g., React component or generic render function)

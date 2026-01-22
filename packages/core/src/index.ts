@@ -43,23 +43,9 @@ export class Pooder {
       },
       contributions: {
         get: <T>(pointId: string) => this.getContributions<T>(pointId),
-        register: <T>(pointId: string, contribution: Contribution<T>) => {
-          // If registering configurations, update ConfigurationService defaults
-          if (pointId === ContributionPointIds.CONFIGURATIONS) {
-            const configService = this.getService<ConfigurationService>(
-              "ConfigurationService",
-            );
-            if (configService) {
-              // contribution.data is ConfigurationContribution (or array of them?)
-              // Based on RulerTool, it seems contribution.data is an array or single item?
-              // RulerTool: [ContributionPointIds.CONFIGURATIONS]: [ ... ]
-              // ExtensionManager: items.forEach(item => register(pointId, { data: item }))
-              // So here 'contribution.data' is a single ConfigurationContribution object.
-              configService.initializeDefaults([contribution.data as any]);
-            }
-          }
-          return this.registerContribution(pointId, contribution);
-        },
+        register: <T>(pointId: string, contribution: Contribution<T>) =>
+           this.registerContribution(pointId, contribution)
+        ,
       },
     };
 

@@ -1,7 +1,8 @@
 import { ExtensionContext } from "./context";
-import { ContributionPointIds } from "./contribution";
+import {Contribution, ContributionPointIds} from "./contribution";
 import Disposable from "./disposable";
 import CommandService from "./services/CommandService";
+import {ConfigurationService} from "./services";
 
 interface ExtensionMetadata {
   name: string;
@@ -9,7 +10,7 @@ interface ExtensionMetadata {
 
 interface Extension {
   id: string;
-  metadata?: ExtensionMetadata;
+  metadata?: Partial<ExtensionMetadata>;
 
   activate(context: ExtensionContext): void;
   deactivate(context: ExtensionContext): void;
@@ -43,28 +44,22 @@ class ExtensionManager {
       for (const [pointId, items] of Object.entries(extension.contribute())) {
         if (Array.isArray(items)) {
           items.forEach((item) => {
-            const disposable = this.context.contributions.register(pointId, {
-              id: item.command,// FIXIT
+            const contribution:Contribution={
+              id: item.id,
+              metadata: {
+                extensionId: extension.id,
+                ...item?.metadata,
+              },
               data: item,
-            });
+            }
+            const disposable = this.context.contributions.register(pointId, contribution);
 
             // Track contribution registration to unregister later
             disposables.push(disposable);
 
-            // Auto-register commands with handlers
-            if (pointId === ContributionPointIds.COMMANDS && item.handler) {
-              const commandService =
-                this.context.services.get<CommandService>("CommandService")!;
-
-              // Use item.command as the identifier for CommandService
-              const commandName = item.command;
-              if (commandName) {
-                const commandDisposable = commandService.registerCommand(
-                  commandName,
-                  item.handler,
-                );
-                disposables.push(commandDisposable);
-              }
+            const dispose=this.collectContribution(pointId, contribution);
+            if(dispose){
+              disposables.push(dispose)
             }
           });
         }
@@ -85,6 +80,25 @@ class ExtensionManager {
     }
 
     console.log(`Plugin "${extension.id}" registered successfully`);
+  }
+
+  collectContribution(pointId:string, item: any):Disposable | undefined {
+    // If registering configurations, update ConfigurationService defaults
+    if (pointId === ContributionPointIds.CONFIGURATIONS) {
+      const configService = this.context.services.get<ConfigurationService>(
+          "ConfigurationService",
+      );
+      configService?.initializeDefaults([item])
+    }
+    if (pointId === ContributionPointIds.COMMANDS && item.data.handler) {
+      const commandService =
+          this.context.services.get<CommandService>("CommandService")!;
+
+      return commandService.registerCommand(
+            item.id,
+            item.data.handler,
+      );
+    }
   }
 
   unregister(name: string) {
