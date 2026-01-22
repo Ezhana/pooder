@@ -43,9 +43,14 @@ class ExtensionManager {
     if (extension.contribute) {
       for (const [pointId, items] of Object.entries(extension.contribute())) {
         if (Array.isArray(items)) {
-          items.forEach((item) => {
+          items.forEach((item, index) => {
+            const contributionId =
+              item.id ||
+              (item.command
+                ? item.command
+                : `${extension.id}.${pointId}.${index}`);
             const contribution: Contribution = {
-              id: item.id,
+              id: contributionId,
               metadata: {
                 extensionId: extension.id,
                 ...item?.metadata,
