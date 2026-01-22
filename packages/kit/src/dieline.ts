@@ -12,6 +12,7 @@ import {
   generateDielinePath,
   generateMaskPath,
   generateBleedZonePath,
+  getPathBounds,
   HoleData,
 } from "./geometry";
 
@@ -301,13 +302,38 @@ export class DielineTool implements Extension {
           title: "Detect Edge from Image",
           handler: async (imageUrl: string, options?: any) => {
             try {
+              // Pass current dimensions if we want to scale immediately?
+              // But wait, the user said "It should be scaled according to width and height".
+              // If the user already set width/height on the tool, we should respect it?
+              // Or should we set width/height based on the image aspect ratio?
+              // Usually for a new trace, we might want to respect the IMAGE aspect ratio but fit into current width/height?
+              // Or just replace width/height with image dimensions?
+              // Let's assume we want to keep the current "box" size but fit the shape inside?
+              // Or if options has width/height use that.
+              
+              // Let's first trace to get the natural shape (and its aspect ratio)
+              // Then we can decide how to update this.width/this.height.
+              
               const pathData = await ImageTracer.trace(imageUrl, options);
+              
+              // We need to set width/height from the path bounds to avoid distortion
+              const bounds = getPathBounds(pathData);
+              
+              // If we want to scale the path to specific dimensions, we can do it via ImageTracer options.scaleToWidth/Height
+              // But here we got the raw path.
+              // Let's update the TOOL's dimensions to match the detected shape's aspect ratio,
+              // while keeping the size reasonable (e.g. max dimension 300 or current size).
+              
+              // If current tool size is default 300x300, we might want to resize tool to match image ratio.
+              const currentMax = Math.max(this.width, this.height);
+              const scale = currentMax / Math.max(bounds.width, bounds.height);
+              
+              this.width = bounds.width * scale;
+              this.height = bounds.height * scale;
+              
               this.shape = "custom";
               this.pathData = pathData;
-              // Reset dimensions to match path bounds?
-              // Ideally ImageTracer returns bounds too, but for now we rely on Geometry.createBaseShape logic
-              // or we should update width/height here if we want them to be meaningful.
-              // But since we don't have bounds from trace yet, we just update.
+              
               this.updateDieline();
               return pathData;
             } catch (e) {

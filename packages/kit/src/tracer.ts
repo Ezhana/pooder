@@ -21,6 +21,8 @@ export class ImageTracer {
       threshold?: number; // 0-255, default 128
       simplifyTolerance?: number; // default 1.0
       scale?: number; // Scale factor for the processing canvas, default 1.0 (or smaller for speed)
+      scaleToWidth?: number;
+      scaleToHeight?: number;
     } = {}
   ): Promise<string> {
     const img = await this.loadImage(imageUrl);
@@ -40,10 +42,16 @@ export class ImageTracer {
     // 2. Trace contours using Marching Squares
     const points = this.marchingSquares(imageData, options.threshold ?? 10);
 
+    // 2.1 Scale points if target size is provided
+    let finalPoints = points;
+    if (options.scaleToWidth && options.scaleToHeight && points.length > 0) {
+        finalPoints = this.scalePoints(points, options.scaleToWidth, options.scaleToHeight);
+    }
+
     // 3. Simplify path
     const simplifiedPoints = this.douglasPeucker(
-      points,
-      options.simplifyTolerance ?? 1.5
+      finalPoints,
+      options.simplifyTolerance ?? 0.5
     );
 
     // 4. Convert to SVG Path
@@ -61,9 +69,8 @@ export class ImageTracer {
   }
 
   /**
-   * Marching Squares Algorithm
-   * Expects imageData. Returns an ordered array of Points forming the perimeter.
-   * Note: This implementation finds the *largest* outer contour.
+   * Moore-Neighbor Tracing Algorithm
+   * More robust for irregular shapes than simple Marching Squares walker.
    */
   private static marchingSquares(
     imageData: ImageData,
@@ -73,20 +80,54 @@ export class ImageTracer {
     const height = imageData.height;
     const data = imageData.data;
 
-    // Helper to check if a pixel is "solid"
-    // We treat alpha > threshold as solid.
-    // Can be adjusted to check RGB for white background if needed.
+    // Use Luminance for solid check if Alpha is fully opaque
+    // Or check Alpha first, then Luminance?
+    // Let's assume:
+    // If pixel is transparent (Alpha <= threshold), it's empty.
+    // If pixel is opaque (Alpha > threshold):
+    //    If it's white (Luminance > some_high_value), it's empty (background).
+    //    Else it's solid.
+    // This supports black shapes on white background (JPG).
+    
+    // Luminance = 0.299*R + 0.587*G + 0.114*B
+    // We treat "Dark" as solid? Or "Light" as solid?
+    // Usually "Content" is non-white on white background.
+    // Let's add a `luminanceThreshold` option?
+    // For now, let's hardcode a heuristic:
+    // If R,G,B are all > 240, treat as background (white).
+    
     const isSolid = (x: number, y: number): boolean => {
       if (x < 0 || x >= width || y < 0 || y >= height) return false;
       const index = (y * width + x) * 4;
-      return data[index + 3] > alphaThreshold; // Check Alpha
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      const a = data[index + 3];
+      
+      if (a <= alphaThreshold) return false;
+      
+      // Check for White Background (approx)
+      // If average > 240, treat as empty
+      if (r > 240 && g > 240 && b > 240) return false;
+      
+      return true;
     };
 
-    // 1. Find a starting point (first solid pixel)
+    // 1. Find Starting Pixel (Scanline)
+    // We want the *largest* contour ideally, or the first one.
+    // For now, let's just find the first one.
+    // To support holes, we would need to keep scanning.
+    // But Moore Tracing follows a single contour.
+    
     let startX = -1;
     let startY = -1;
     
-    // Scan logic: find the first non-transparent pixel
+    // Gaussian Blur Simulation (Box Blur) to reduce noise?
+    // Or just simple neighbor check?
+    // Let's implement a simple noise filter in isSolid? No, isSolid is per pixel.
+    // Let's preprocess data? Too slow in JS?
+    // Let's just rely on threshold.
+    
     searchLoop: for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         if (isSolid(x, y)) {
@@ -97,122 +138,115 @@ export class ImageTracer {
       }
     }
 
-    if (startX === -1) return []; // Empty image
+    if (startX === -1) return [];
 
-    // Adjust start point to be on the grid edge for Marching Squares
-    // We actually walk on the *edges* between pixels.
-    // Coordinate system: 0..width, 0..height (grid lines)
-    
-    // A simpler approach for single outer contour:
-    // Use the Moore-Neighbor tracing or standard Marching Squares.
-    // Here we use a standard Marching Squares implementation on the scalar field.
-    
     const points: Point[] = [];
-    let x = startX;
-    let y = startY;
     
-    // Move to the boundary. If (x,y) is solid, we check left.
-    // If we just found the first solid pixel scanning from left, (x-1, y) is empty.
-    // So we are on a boundary.
-    // Let's step back one unit left to start "outside"
-    x = x - 1; 
-    // Now (x,y) is empty, (x+1, y) is solid.
+    // Moore-Neighbor Tracing
+    // We enter from the Left (since we scan Left->Right), so "backtrack" is Left.
+    // B = (startX - 1, startY)
+    // P = (startX, startY)
     
-    // Direction: 0=Up, 1=Right, 2=Down, 3=Left
-    let stepX = 0;
-    let stepY = 0;
-    let prevX = x;
-    let prevY = y;
+    let cx = startX;
+    let cy = startY;
     
-    // We need a robust walker. 
-    // State is determined by 4 corners around the current point (x,y)
-    // TL(x,y) TR(x+1,y)
-    // BL(x,y+1) BR(x+1,y+1)
+    // Start backtrack direction: Left (since we found it scanning from left)
+    // Directions: 0=Up, 1=UpRight, 2=Right, 3=DownRight, 4=Down, 5=DownLeft, 6=Left, 7=UpLeft
+    // Offsets for 8 neighbors starting from Up (0,-1) clockwise
+    const neighbors = [
+        {x: 0, y: -1}, {x: 1, y: -1}, {x: 1, y: 0}, {x: 1, y: 1}, 
+        {x: 0, y: 1}, {x: -1, y: 1}, {x: -1, y: 0}, {x: -1, y: -1}
+    ];
     
-    // Let's iterate until we close the loop.
-    // Max iterations to prevent infinite loop
-    const MAX_STEPS = width * height * 2;
+    // Backtrack is Left -> Index 6.
+    let backtrack = 6; 
+    
+    const maxSteps = width * height * 3;
     let steps = 0;
-
-    // Start slightly offset to align with grid
-    // For Marching Squares, we iterate through cells.
-    // Let's find the first cell that has a mix of solid/empty.
-    // The previous scan found a solid pixel at (startX, startY).
-    // The cell at (startX-1, startY-1) has BR as solid.
     
-    let cx = startX - 1;
-    let cy = startY - 1;
-    
-    const initialCX = cx;
-    const initialCY = cy;
-    
-    // Direction we entered the start cell from (for termination check)
-    // Not strictly needed if we check coordinates.
-
     do {
-        // Get state of the 4 corners of the cell at (cx, cy)
-        // 1 2
-        // 8 4
-        // val = TL + 2*TR + 4*BR + 8*BL (binary weighting)
+        points.push({x: cx, y: cy});
         
-        const tl = isSolid(cx, cy) ? 1 : 0;
-        const tr = isSolid(cx + 1, cy) ? 1 : 0;
-        const br = isSolid(cx + 1, cy + 1) ? 1 : 0;
-        const bl = isSolid(cx, cy + 1) ? 1 : 0;
+        // Search for next solid neighbor in clockwise order, starting from backtrack
+        let found = false;
         
-        const state = tl * 1 + tr * 2 + br * 4 + bl * 8;
-
-        // Add point. For simplicity, we use the midpoint of the cell edges.
-        // Or simpler: just the grid corners.
-        // Let's use midpoints for smoother look (marching squares standard).
-        // Coordinates are relative to pixel centers.
+        // We check 8 neighbors.
+        // Moore algorithm says: start from backtrack, go clockwise until you find a black pixel.
+        // The backtrack for the NEXT step will be the neighbor BEFORE the one we found.
         
-        // However, for dieline, we usually want tight fit.
-        // Let's map state to next step and a contour point.
-        
-        // Lookup table for direction:
-        // dx, dy
-        let dx = 0;
-        let dy = 0;
-        
-        // Basic Marching Squares States for "External Contour" (Counter-Clockwise usually)
-        // We want to keep "Solid" on our Right (or Left).
-        // Let's keep Solid on Right.
-        
-        switch (state) {
-            case 0: dx = 1; dy = 0; break; // Void, shouldn't happen if we track correctly
-            case 1: dx = 0; dy = -1; points.push({x: cx, y: cy + 0.5}); break; // TL
-            case 2: dx = 1; dy = 0; points.push({x: cx + 0.5, y: cy}); break; // TR
-            case 3: dx = 1; dy = 0; points.push({x: cx, y: cy + 0.5}); break; // TL + TR -> Solid Top -> Move Right
-            case 4: dx = 0; dy = 1; points.push({x: cx + 1, y: cy + 0.5}); break; // BR
-            case 5: dx = 0; dy = -1; points.push({x: cx, y: cy + 0.5}); points.push({x: cx + 1, y: cy + 0.5}); break; // TL + BR (Saddle) - ambiguous, pick one
-            case 6: dx = 0; dy = 1; points.push({x: cx + 0.5, y: cy}); break; // TR + BR -> Solid Right -> Move Down
-            case 7: dx = 0; dy = 1; points.push({x: cx, y: cy + 0.5}); break; 
-            case 8: dx = -1; dy = 0; points.push({x: cx + 0.5, y: cy + 1}); break; // BL
-            case 9: dx = 0; dy = -1; points.push({x: cx + 0.5, y: cy + 1}); break; // TL + BL -> Solid Left -> Move Up
-            case 10: dx = -1; dy = 0; points.push({x: cx + 0.5, y: cy}); points.push({x: cx + 0.5, y: cy + 1}); break; // TR + BL (Saddle)
-            case 11: dx = 0; dy = -1; points.push({x: cx + 0.5, y: cy + 1}); break;
-            case 12: dx = -1; dy = 0; points.push({x: cx + 1, y: cy + 0.5}); break; // BR + BL -> Solid Bottom -> Move Left
-            case 13: dx = -1; dy = 0; points.push({x: cx + 1, y: cy + 0.5}); break;
-            case 14: dx = 0; dy = 1; points.push({x: cx + 0.5, y: cy}); break;
-            case 15: dx = 1; dy = 0; break; // All solid (internal), shouldn't happen on edge
+        for (let i = 0; i < 8; i++) {
+            // Index in neighbors array. Start from backtrack direction.
+            // Actually Moore algorithm typically starts from (backtrack + 1) % 8 ? 
+            // Let's standard: Start searching clockwise from the pixel entered from.
+            
+            const idx = (backtrack + 1 + i) % 8; 
+            const nx = cx + neighbors[idx].x;
+            const ny = cy + neighbors[idx].y;
+            
+            if (isSolid(nx, ny)) {
+                // Found next pixel P
+                cx = nx;
+                cy = ny;
+                // New backtrack is the neighbor pointing back to current P from previous P?
+                // No, backtrack is the empty neighbor immediately counter-clockwise from the new P.
+                // In our loop, it's the previous index (idx - 1).
+                backtrack = (idx + 4) % 8; // Actually, backtrack direction relative to New P is opposite?
+                // Let's strictly follow Moore:
+                // Entering P from direction D. Start scan from D-1 (or D+something).
+                // Let's use the property:
+                // We entered P from `idx`. The previous check `idx-1` was empty.
+                // So for the next step, we can start checking from `idx-3` (approx 90 deg back) or `idx-2`.
+                // Standard Moore: Backtrack = neighbor index that was empty previously.
+                // Here, `idx` is the direction FROM old P TO new P.
+                // The direction FROM new P TO old P is `(idx + 4) % 8`.
+                // We want to start scanning around new P.
+                // We start scanning from the neighbor that is "Left" of the incoming edge.
+                
+                // Let's simplify: Start scanning from (EntryDirection + 5) % 8 ?
+                // EntryDirection is (idx). Backwards is (idx+4).
+                // We want to start from the white pixel we just passed.
+                // That was `(idx - 1)`.
+                // Direction FROM old P to (idx-1) is neighbors[idx-1].
+                // We want direction FROM new P to that same white pixel? No.
+                
+                // Working Heuristic:
+                // Next search starts from (current_incoming_direction + 4 + 1) ? 
+                // Let's set backtrack to point to the neighbor we entered from, then rotate CCW?
+                // Let's use: start search from `(idx + 5) % 8`.
+                // Why? idx is direction 0..7. Back is idx+4. +1 is clockwise.
+                // We want counter-clockwise.
+                
+                backtrack = (idx + 4 + 1) % 8; // Start searching from neighbor "after" the one we came from (CCW)?
+                // Wait, loop above is Clockwise.
+                // To trace outer boundary counter-clockwise, we scan neighbors counter-clockwise?
+                // Or trace outer boundary clockwise, scan neighbors clockwise.
+                
+                // Let's trace Clockwise.
+                // Scan neighbors Clockwise.
+                // Start scan from (IncomingDirection + 5) % 8. (Backwards + 1 CW).
+                backtrack = (idx + 4 + 1) % 8; // Backwards + 1 step CW.
+                
+                // But wait, if we are tracing an 1-pixel line, we turn around (backtrack).
+                // Let's try `(idx + 5) % 8` if neighbors are ordered CW.
+                // neighbors[0] is Up. [2] is Right.
+                // If we move Right (idx=2). Back is Left (6).
+                // We want to check UpLeft (7), Up (0), UpRight (1)...
+                // So start from 7? That is 6+1. 
+                // So `(idx + 4 + 1) % 8` seems correct.
+                
+                found = true;
+                break;
+            }
         }
         
-        // If we get stuck (case 0 or 15 inside loop), force move
-        if (dx === 0 && dy === 0) {
-            // If 15, we are inside, move right to find edge? 
-            // If 0, we are outside, move left?
-            // This simple state machine assumes we are ON the boundary.
-            // Let's use a simpler Moore-Neighbor tracing if this feels fragile.
-            // But let's try to recover.
-             break;
+        if (!found) {
+            // Isolated pixel
+            break;
         }
-
-        cx += dx;
-        cy += dy;
+        
         steps++;
-
-    } while ((cx !== initialCX || cy !== initialCY) && steps < MAX_STEPS);
+        
+    } while ((cx !== startX || cy !== startY) && steps < maxSteps);
 
     return points;
   }
@@ -239,6 +273,9 @@ export class ImageTracer {
     }
 
     if (maxSqDist > sqTolerance) {
+      // Check if closed loop?
+      // If closed loop, we shouldn't simplify start/end connection too much?
+      // Douglas-Peucker works on segments.
       const left = this.douglasPeucker(points.slice(0, index + 1), tolerance);
       const right = this.douglasPeucker(points.slice(index), tolerance);
       return left.slice(0, left.length - 1).concat(right);
@@ -268,6 +305,42 @@ export class ImageTracer {
     dy = p.y - y;
 
     return dx * dx + dy * dy;
+  }
+
+  private static scalePoints(points: Point[], targetWidth: number, targetHeight: number): Point[] {
+    if (points.length === 0) return points;
+    
+    // Find bounds
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+    }
+    
+    const srcW = maxX - minX;
+    const srcH = maxY - minY;
+    
+    if (srcW === 0 || srcH === 0) return points;
+    
+    const scaleX = targetWidth / srcW;
+    const scaleY = targetHeight / srcH;
+    
+    // Scale and center? Or just scale?
+    // User usually wants to fit the shape into the box.
+    // Let's just scale and align top-left to 0,0 for now, or center it?
+    // Dieline usually expects centered shape?
+    // geometry.ts createBaseShape aligns path.position = center.
+    // So the path data coordinates should probably be relative to 0,0 or centered.
+    // Paper.js Path(pathData) creates path in original coordinates.
+    // If we return points in 0..targetWidth, 0..targetHeight, paper will create it there.
+    // geometry.ts will then center it.
+    
+    return points.map(p => ({
+        x: (p.x - minX) * scaleX,
+        y: (p.y - minY) * scaleY
+    }));
   }
 
   private static pointsToSVG(points: Point[]): string {
