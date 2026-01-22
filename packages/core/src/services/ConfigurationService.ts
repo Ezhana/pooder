@@ -60,6 +60,13 @@ export default class ConfigurationService implements Service {
    */
   initializeDefaults(contributions: ConfigurationContribution[]) {
     contributions.forEach((contrib) => {
+      if (!contrib.id) {
+        console.warn(
+          "Configuration contribution missing 'id'. Skipping default initialization.",
+          contrib,
+        );
+        return;
+      }
       if (!this.configValues.has(contrib.id) && contrib.default !== undefined) {
         this.configValues.set(contrib.id, contrib.default);
       }

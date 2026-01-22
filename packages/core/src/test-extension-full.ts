@@ -9,6 +9,7 @@ import { Extension } from "./extension";
 import CommandService from "./services/CommandService";
 
 export const fullExtension: Extension = {
+  id: "full-feature-test-extension",
   metadata: {
     name: "Full Feature Test Extension",
   },

@@ -8,6 +8,7 @@ interface ExtensionMetadata {
 }
 
 interface Extension {
+  id: string;
   metadata?: ExtensionMetadata;
 
   activate(context: ExtensionContext): void;
@@ -27,25 +28,15 @@ class ExtensionManager {
   }
 
   register(extension: Extension) {
-    let id: string;
-    if (extension.metadata?.name) {
-      id = extension.metadata.name.toLowerCase().replace(/\s+/g, "-");
-    } else {
-      id = `anonymous-extension-${Math.random().toString(36).substr(2, 9)}`;
+    if (this.extensionRegistry.has(extension.id)) {
       console.warn(
-        `Plugin registered without metadata.name. Assigned random ID: "${id}". This is not recommended for persistence.`,
-      );
-    }
-
-    if (this.extensionRegistry.has(id)) {
-      console.warn(
-        `Plugin "${id}" already registered. It will be overwritten.`,
+        `Plugin "${extension.id}" already registered. It will be overwritten.`,
       );
     }
 
     // Initialize disposables for this extension
-    this.extensionDisposables.set(id, []);
-    const disposables = this.extensionDisposables.get(id)!;
+    this.extensionDisposables.set(extension.id, []);
+    const disposables = this.extensionDisposables.get(extension.id)!;
 
     // Process declarative contributions
     if (extension.contribute) {
@@ -53,6 +44,7 @@ class ExtensionManager {
         if (Array.isArray(items)) {
           items.forEach((item) => {
             const disposable = this.context.contributions.register(pointId, {
+              id: item.command,// FIXIT
               data: item,
             });
 
@@ -80,19 +72,19 @@ class ExtensionManager {
     }
 
     try {
-      this.extensionRegistry.set(id, extension);
+      this.extensionRegistry.set(extension.id, extension);
       this.context.eventBus.emit("extension:register", extension);
     } catch (error) {
-      console.error(`Error in onCreate hook for plugin "${id}":`, error);
+      console.error(`Error in onCreate hook for plugin "${extension.id}":`, error);
     }
 
     try {
       extension.activate(this.context);
     } catch (error) {
-      console.error(`Error in onActivate hook for plugin "${id}":`, error);
+      console.error(`Error in onActivate hook for plugin "${extension.id}":`, error);
     }
 
-    console.log(`Plugin "${id}" registered successfully`);
+    console.log(`Plugin "${extension.id}" registered successfully`);
   }
 
   unregister(name: string) {
