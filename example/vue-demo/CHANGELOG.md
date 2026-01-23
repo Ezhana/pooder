@@ -1,5 +1,16 @@
 # vue-demo
 
+## 1.0.0
+
+### Major Changes
+
+- Architecture upgrade
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/vue@3.0.0
+
 ## 0.1.0
 
 ### Minor Changes

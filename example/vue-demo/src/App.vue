@@ -13,6 +13,7 @@ const handleImport = () => {
       "dieline.width": 400,
       "dieline.height": 400,
       "dieline.offset": 20,
+      "dieline.holes": [],
     });
   }
 };
