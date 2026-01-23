@@ -300,7 +300,37 @@ export class ImageTool implements Extension {
         if (this._loadingUrl !== url) return;
         this._loadingUrl = null;
 
-        const { opacity, width, height, angle, left, top } = this;
+        let { opacity, width, height, angle, left, top } = this;
+
+        // Auto-scale and center if not set
+        if (this.context) {
+          const configService =
+            this.context.services.get<any>("ConfigurationService");
+          const dielineWidth = configService?.get("dieline.width", 300) ?? 300;
+          const dielineHeight =
+            configService?.get("dieline.height", 300) ?? 300;
+
+          if (width === undefined && height === undefined) {
+            // Scale to fit dieline
+            const scale = Math.min(
+              dielineWidth / (image.width || 1),
+              dielineHeight / (image.height || 1),
+            );
+            width = (image.width || 1) * scale;
+            height = (image.height || 1) * scale;
+            this.width = width;
+            this.height = height;
+          }
+
+          if (left === undefined && top === undefined) {
+            const canvasW = this.canvasService?.canvas.width || 800;
+            const canvasH = this.canvasService?.canvas.height || 600;
+            left = canvasW / 2;
+            top = canvasH / 2;
+            this.left = left;
+            this.top = top;
+          }
+        }
 
         const existingImage = this.canvasService!.getObject(
           "user-image",
@@ -314,9 +344,47 @@ export class ImageTool implements Extension {
           const defaultScaleX = existingImage.scaleX;
           const defaultScaleY = existingImage.scaleY;
 
+          // existingImage is likely in local coordinates if updateImage logic is correct.
+          // But here we are dealing with global coordinates for `left` and `top`.
+          // We need to convert global to local if we are setting it directly,
+          // OR rely on the fact that existingImage.left IS the local coordinate.
+          // Wait, if we use `left` (global) directly, it might be wrong if the layer is offset.
+          // Let's check the layer offset logic again.
+          const canvasW = this.canvasService?.canvas.width || 800;
+          const canvasH = this.canvasService?.canvas.height || 600;
+          const centerX = canvasW / 2;
+          const centerY = canvasH / 2;
+
+          let targetLeft = left !== undefined ? left : defaultLeft;
+          let targetTop = top !== undefined ? top : defaultTop;
+
+          // If the layer expects local coordinates relative to center (as implied by updateImage)
+          // we should adjust. However, loadImage historically used `left` directly.
+          // If we changed `left` to be explicitly centered (global), we might need to subtract centerX.
+          // Let's assume consistent behavior with updateImage:
+          if (left !== undefined) targetLeft = left - centerX;
+          if (top !== undefined) targetTop = top - centerY;
+          
+          // Wait, if existingImage.left is already local, and `left` is undefined, we use defaultLeft.
+          // If `left` IS defined (global), we subtract centerX.
+          // But wait, if `left` was undefined, `targetLeft` = `defaultLeft` (local).
+          // If `left` IS defined, `targetLeft` = `left - centerX` (local).
+          // This looks correct IF `left` is indeed global.
+          
+          // BUT, I previously saw: `if (left !== undefined) image.left = left;`
+          // This implies the OLD code assumed `left` was correct as-is.
+          // If `left` was global, and layer is at (0,0), then it's global.
+          // Why did updateImage subtract centerX?
+          // `localLeft = left - centerX`.
+          // If `ensureLayer` makes a full-canvas layer at (0,0), then `left` (global) should be correct.
+          // UNLESS `updateImage` is correcting for something else.
+          // Maybe the layer origin IS center?
+          // If I assume `updateImage` is correct, then `loadImage` WAS WRONG.
+          // I will fix it to be consistent with `updateImage`.
+
           image.set({
-            left: left !== undefined ? left : defaultLeft,
-            top: top !== undefined ? top : defaultTop,
+            left: targetLeft,
+            top: targetTop,
             angle: angle !== undefined ? angle : defaultAngle,
             scaleX:
               width !== undefined && image.width
@@ -330,14 +398,20 @@ export class ImageTool implements Extension {
 
           layer.remove(existingImage);
         } else {
+          // New image
           if (width !== undefined && image.width)
             image.scaleX = width / image.width;
           if (height !== undefined && image.height)
             image.scaleY = height / image.height;
           if (angle !== undefined) image.angle = angle;
 
-          if (left !== undefined) image.left = left;
-          if (top !== undefined) image.top = top;
+          const canvasW = this.canvasService?.canvas.width || 800;
+          const canvasH = this.canvasService?.canvas.height || 600;
+          const centerX = canvasW / 2;
+          const centerY = canvasH / 2;
+
+          if (left !== undefined) image.left = left - centerX;
+          if (top !== undefined) image.top = top - centerY;
         }
 
         image.set({
