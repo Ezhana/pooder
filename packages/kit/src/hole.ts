@@ -58,11 +58,19 @@ export class HoleTool implements Extension {
       return;
     }
 
-    const configService = context.services.get<ConfigurationService>("ConfigurationService");
+    const configService = context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
     if (configService) {
       // Load initial config
-      this.innerRadius = configService.get("hole.innerRadius", this.innerRadius);
-      this.outerRadius = configService.get("hole.outerRadius", this.outerRadius);
+      this.innerRadius = configService.get(
+        "hole.innerRadius",
+        this.innerRadius,
+      );
+      this.outerRadius = configService.get(
+        "hole.outerRadius",
+        this.outerRadius,
+      );
       this.style = configService.get("hole.style", this.style);
       this.constraintTarget = configService.get(
         "hole.constraintTarget",
@@ -456,8 +464,10 @@ export class HoleTool implements Extension {
   public enforceConstraints() {
     const geometry = this.currentGeometry;
     if (!geometry || !this.canvasService) {
-        console.log("[HoleTool] Skipping enforceConstraints: No geometry or canvas service");
-        return;
+      console.log(
+        "[HoleTool] Skipping enforceConstraints: No geometry or canvas service",
+      );
+      return;
     }
 
     const effectiveOffset =
@@ -474,7 +484,9 @@ export class HoleTool implements Extension {
       .getObjects()
       .filter((obj: any) => obj.data?.type === "hole-marker");
 
-    console.log(`[HoleTool] Enforcing constraints on ${objects.length} markers`);
+    console.log(
+      `[HoleTool] Enforcing constraints on ${objects.length} markers`,
+    );
 
     let changed = false;
     // Sort objects by index to maintain order in options.holes
@@ -492,7 +504,9 @@ export class HoleTool implements Extension {
       );
 
       if (currentPos.distanceFrom(newPos) > 0.1) {
-        console.log(`[HoleTool] Moving hole from (${currentPos.x}, ${currentPos.y}) to (${newPos.x}, ${newPos.y})`);
+        console.log(
+          `[HoleTool] Moving hole from (${currentPos.x}, ${currentPos.y}) to (${newPos.x}, ${newPos.y})`,
+        );
         obj.set({
           left: newPos.x,
           top: newPos.y,

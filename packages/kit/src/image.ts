@@ -267,16 +267,21 @@ export class ImageTool implements Extension {
         if (angle !== undefined && userImage.angle !== angle)
           updates.angle = angle;
 
-          if (userImage.originX !== 'center') {
-              userImage.set({ originX: 'center', originY: 'center', left: userImage.left + (userImage.width * userImage.scaleX)/2, top: userImage.top + (userImage.height * userImage.scaleY)/2 });
-          }
+        if (userImage.originX !== "center") {
+          userImage.set({
+            originX: "center",
+            originY: "center",
+            left: userImage.left + (userImage.width * userImage.scaleX) / 2,
+            top: userImage.top + (userImage.height * userImage.scaleY) / 2,
+          });
+        }
 
-          if (left !== undefined) {
-            const globalLeft = Coordinate.toAbsolute(left, canvasW);
-            const localLeft = globalLeft - centerX;
-            if (Math.abs(userImage.left - localLeft) > 1)
-              updates.left = localLeft;
-          }
+        if (left !== undefined) {
+          const globalLeft = Coordinate.toAbsolute(left, canvasW);
+          const localLeft = globalLeft - centerX;
+          if (Math.abs(userImage.left - localLeft) > 1)
+            updates.left = localLeft;
+        }
 
         if (top !== undefined) {
           const globalTop = Coordinate.toAbsolute(top, canvasH);
@@ -315,17 +320,24 @@ export class ImageTool implements Extension {
 
         // Auto-scale and center if not set
         if (this.context) {
-          const configService =
-            this.context.services.get<ConfigurationService>("ConfigurationService")!;
+          const configService = this.context.services.get<ConfigurationService>(
+            "ConfigurationService",
+          )!;
           const dielineWidth = configService.get("dieline.width");
           const dielineHeight = configService.get("dieline.height");
 
-          console.log("[ImageTool] Dieline config debug:", {
-            widthVal: dielineWidth,
-            heightVal: dielineHeight,
-            // Debug: dump all keys to see what is available
-            allKeys: Array.from((configService as any).configValues?.keys() || []),
-          },configService);
+          console.log(
+            "[ImageTool] Dieline config debug:",
+            {
+              widthVal: dielineWidth,
+              heightVal: dielineHeight,
+              // Debug: dump all keys to see what is available
+              allKeys: Array.from(
+                (configService as any).configValues?.keys() || [],
+              ),
+            },
+            configService,
+          );
 
           if (width === undefined && height === undefined) {
             // Scale to fit dieline
@@ -340,17 +352,17 @@ export class ImageTool implements Extension {
           }
 
           if (left === undefined && top === undefined) {
-             // Default to Dieline Position if available, otherwise Center (0.5)
-             const dielinePos = configService?.get("dieline.position");
-             if (dielinePos) {
-                 this.left = dielinePos.x;
-                 this.top = dielinePos.y;
-             } else {
-                 this.left = 0.5;
-                 this.top = 0.5;
-             }
-             left = this.left;
-             top = this.top;
+            // Default to Dieline Position if available, otherwise Center (0.5)
+            const dielinePos = configService?.get("dieline.position");
+            if (dielinePos) {
+              this.left = dielinePos.x;
+              this.top = dielinePos.y;
+            } else {
+              this.left = 0.5;
+              this.top = 0.5;
+            }
+            left = this.left;
+            top = this.top;
           }
         }
 
@@ -375,23 +387,35 @@ export class ImageTool implements Extension {
           let targetTop = top !== undefined ? top : defaultTop;
 
           // Log for debugging
-          const configService = this.context?.services.get<any>("ConfigurationService");
+          const configService = this.context?.services.get<any>(
+            "ConfigurationService",
+          );
           console.log("[ImageTool] Loading EXISTING image...", {
-             canvasW, canvasH, centerX, centerY,
-             incomingLeft: left, incomingTop: top,
-             dielinePos: configService?.get("dieline.position"),
-             existingImage: !!existingImage
+            canvasW,
+            canvasH,
+            centerX,
+            centerY,
+            incomingLeft: left,
+            incomingTop: top,
+            dielinePos: configService?.get("dieline.position"),
+            existingImage: !!existingImage,
           });
 
           if (left !== undefined) {
-             const globalLeft = Coordinate.toAbsolute(left, canvasW);
-             targetLeft = globalLeft; // Layer is absolute, do not subtract center
-             console.log("[ImageTool] Calculated targetLeft", { globalLeft, targetLeft });
+            const globalLeft = Coordinate.toAbsolute(left, canvasW);
+            targetLeft = globalLeft; // Layer is absolute, do not subtract center
+            console.log("[ImageTool] Calculated targetLeft", {
+              globalLeft,
+              targetLeft,
+            });
           }
           if (top !== undefined) {
-             const globalTop = Coordinate.toAbsolute(top, canvasH);
-             targetTop = globalTop; // Layer is absolute, do not subtract center
-             console.log("[ImageTool] Calculated targetTop", { globalTop, targetTop });
+            const globalTop = Coordinate.toAbsolute(top, canvasH);
+            targetTop = globalTop; // Layer is absolute, do not subtract center
+            console.log("[ImageTool] Calculated targetTop", {
+              globalTop,
+              targetTop,
+            });
           }
 
           image.set({
@@ -430,15 +454,15 @@ export class ImageTool implements Extension {
           const centerY = canvasH / 2;
 
           if (left !== undefined) {
-             image.left = Coordinate.toAbsolute(left, canvasW); // Layer is absolute
+            image.left = Coordinate.toAbsolute(left, canvasW); // Layer is absolute
           } else {
-             image.left = centerX; // Default to center of canvas
+            image.left = centerX; // Default to center of canvas
           }
 
           if (top !== undefined) {
-             image.top = Coordinate.toAbsolute(top, canvasH); // Layer is absolute
+            image.top = Coordinate.toAbsolute(top, canvasH); // Layer is absolute
           } else {
-             image.top = centerY; // Default to center of canvas
+            image.top = centerY; // Default to center of canvas
           }
         }
 
@@ -461,10 +485,8 @@ export class ImageTool implements Extension {
           this.top = Coordinate.toNormalized(globalPoint.y, canvasH);
           this.angle = e.target.angle;
 
-          if (image.width)
-            this.width = e.target.width * e.target.scaleX;
-          if (image.height)
-            this.height = e.target.height * e.target.scaleY;
+          if (image.width) this.width = e.target.width * e.target.scaleX;
+          if (image.height) this.height = e.target.height * e.target.scaleY;
 
           if (this.context) {
             this.context.eventBus.emit("update");

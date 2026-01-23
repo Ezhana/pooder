@@ -1,6 +1,10 @@
 <template>
   <div class="configuration-panel">
-    <div v-for="group in configurations" :key="group.extensionId" class="config-group">
+    <div
+      v-for="group in configurations"
+      :key="group.extensionId"
+      class="config-group"
+    >
       <h3 class="group-title">{{ group.extensionId }}</h3>
       <div v-for="config in group.items" :key="config.id" class="config-item">
         <label :for="config.id">{{ config.label || config.id }}</label>
@@ -11,7 +15,8 @@
           :id="config.id"
           :value="values[config.id]"
           @change="
-            (e) => updateConfig(config.id, (e.target as HTMLSelectElement).value)
+            (e) =>
+              updateConfig(config.id, (e.target as HTMLSelectElement).value)
           "
         >
           <option v-for="opt in config.options" :key="opt" :value="opt">
@@ -55,7 +60,8 @@
           :id="config.id"
           :checked="values[config.id]"
           @change="
-            (e) => updateConfig(config.id, (e.target as HTMLInputElement).checked)
+            (e) =>
+              updateConfig(config.id, (e.target as HTMLInputElement).checked)
           "
         />
 

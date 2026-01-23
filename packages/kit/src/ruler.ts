@@ -212,7 +212,6 @@ export class RulerTool implements Extension {
     const width = this.canvasService.canvas.width || 800;
     const height = this.canvasService.canvas.height || 600;
 
-
     // Backgrounds
     const topBg = new Rect({
       left: 0,

@@ -100,7 +100,10 @@ function createBaseShape(options: GeometryOptions): paper.PathItem {
  * 3. Convert stroke to path (paper.js has path.expand())
  * 4. Union original + expanded (for positive offset) or Subtract (for negative).
  */
-function createOffsetShape(options: GeometryOptions, offset: number): paper.PathItem {
+function createOffsetShape(
+  options: GeometryOptions,
+  offset: number,
+): paper.PathItem {
   const { shape, width, height, radius, x, y, pathData } = options;
   const center = new paper.Point(x, y);
 
@@ -132,51 +135,53 @@ function createOffsetShape(options: GeometryOptions, offset: number): paper.Path
     // Assuming modern paper.js
     let expanded: paper.Item;
     try {
-        // @ts-ignore
-        expanded = stroker.expand({ stroke: true, fill: false, insert: false });
+      // @ts-ignore
+      expanded = stroker.expand({ stroke: true, fill: false, insert: false });
     } catch (e) {
-        // Fallback if expand fails or not present
-        stroker.remove();
-        // Fallback to scaling (imperfect)
-        const scaleX = (original.bounds.width + offset * 2) / original.bounds.width;
-        const scaleY = (original.bounds.height + offset * 2) / original.bounds.height;
-        original.scale(scaleX, scaleY);
-        return original;
+      // Fallback if expand fails or not present
+      stroker.remove();
+      // Fallback to scaling (imperfect)
+      const scaleX =
+        (original.bounds.width + offset * 2) / original.bounds.width;
+      const scaleY =
+        (original.bounds.height + offset * 2) / original.bounds.height;
+      original.scale(scaleX, scaleY);
+      return original;
     }
-    
+
     stroker.remove();
 
     // The expanded stroke is a "ring".
     // For positive offset: Union(Original, Ring)
     // For negative offset: Subtract(Original, Ring) ? No, that makes a hole.
     // For negative offset: We want the "inner" boundary of the ring.
-    
+
     // Actually, expand() returns a Group or Path.
     // If it's a closed path, the ring has an outer and inner boundary.
-    
+
     let result: paper.PathItem;
 
     if (offset > 0) {
-        // @ts-ignore
-        result = original.unite(expanded);
+      // @ts-ignore
+      result = original.unite(expanded);
     } else {
-        // For negative offset (shrink), we want the original MINUS the stroke?
-        // No, the stroke is centered on the line.
-        // So the inner edge of the stroke is at -offset.
-        // We want the area INSIDE the inner edge.
-        // That is Original SUBTRACT the Ring? 
-        // Yes, if we subtract the ring, we lose the border area.
-        // @ts-ignore
-        result = original.subtract(expanded);
+      // For negative offset (shrink), we want the original MINUS the stroke?
+      // No, the stroke is centered on the line.
+      // So the inner edge of the stroke is at -offset.
+      // We want the area INSIDE the inner edge.
+      // That is Original SUBTRACT the Ring?
+      // Yes, if we subtract the ring, we lose the border area.
+      // @ts-ignore
+      result = original.subtract(expanded);
     }
 
     // Cleanup
     original.remove();
     expanded.remove();
-    
+
     return result;
   }
-  
+
   return createBaseShape(options);
 }
 
@@ -328,71 +333,69 @@ export function generateBleedZonePath(
   // Usually, bleed is only for the outer cut. Holes are internal cuts.
   // Internal cuts usually also have bleed if they are die-cut, but maybe different direction?
   // For simplicity, let's assume we offset the FINAL shape (including holes).
-  
+
   // Actually, getDielineShape calls createBaseShape.
   // Let's modify generateBleedZonePath to use createOffsetShape logic if possible,
   // OR just perform offset on the final shape result.
-  
+
   // The previous logic was: create base shape with adjusted width/height/radius.
   // This works for Rect/Circle.
   // For Custom, we need createOffsetShape.
-  
-  let shapeOffset: paper.PathItem;
-  
-  if (options.shape === 'custom') {
-      // For custom shape, we offset the base shape first, then apply holes?
-      // Or offset the final result?
-      // Bleed is usually "outside" the cut line.
-      // If we have a donut, bleed is outside the outer circle AND inside the inner circle?
-      // Or just outside the outer?
-      // Let's assume bleed expands the solid area.
-      
-      // So we take the final shape (Original) and expand it.
-      // We can use the same Stroke Expansion trick on the final shape.
-      
-      // Since shapeOriginal is already the final shape (Base - Holes),
-      // we can try to offset it directly.
-      
-      const stroker = shapeOriginal.clone() as paper.Path;
-      stroker.strokeColor = new paper.Color("black");
-      stroker.strokeWidth = Math.abs(offset) * 2;
-      stroker.strokeJoin = "round";
-      stroker.strokeCap = "round";
-      
-      let expanded: paper.Item;
-      try {
-        // @ts-ignore
-        expanded = stroker.expand({ stroke: true, fill: false, insert: false });
-      } catch(e) {
-          // Fallback
-          stroker.remove();
-          shapeOffset = shapeOriginal.clone();
-           // scaling fallback...
-          return shapeOffset.pathData; // Fail gracefully
-      }
-      stroker.remove();
-      
-      if (offset > 0) {
-        // @ts-ignore
-        shapeOffset = shapeOriginal.unite(expanded);
-      } else {
-        // @ts-ignore
-        shapeOffset = shapeOriginal.subtract(expanded);
-      }
-      expanded.remove();
-      
-  } else {
-      // Legacy logic for standard shapes (still valid and fast)
-      // Adjust dimensions for offset
-      const offsetOptions: GeometryOptions = {
-        ...options,
-        width: Math.max(0, options.width + offset * 2),
-        height: Math.max(0, options.height + offset * 2),
-        radius: options.radius === 0 ? 0 : Math.max(0, options.radius + offset),
-      };
-      shapeOffset = getDielineShape(offsetOptions);
-  }
 
+  let shapeOffset: paper.PathItem;
+
+  if (options.shape === "custom") {
+    // For custom shape, we offset the base shape first, then apply holes?
+    // Or offset the final result?
+    // Bleed is usually "outside" the cut line.
+    // If we have a donut, bleed is outside the outer circle AND inside the inner circle?
+    // Or just outside the outer?
+    // Let's assume bleed expands the solid area.
+
+    // So we take the final shape (Original) and expand it.
+    // We can use the same Stroke Expansion trick on the final shape.
+
+    // Since shapeOriginal is already the final shape (Base - Holes),
+    // we can try to offset it directly.
+
+    const stroker = shapeOriginal.clone() as paper.Path;
+    stroker.strokeColor = new paper.Color("black");
+    stroker.strokeWidth = Math.abs(offset) * 2;
+    stroker.strokeJoin = "round";
+    stroker.strokeCap = "round";
+
+    let expanded: paper.Item;
+    try {
+      // @ts-ignore
+      expanded = stroker.expand({ stroke: true, fill: false, insert: false });
+    } catch (e) {
+      // Fallback
+      stroker.remove();
+      shapeOffset = shapeOriginal.clone();
+      // scaling fallback...
+      return shapeOffset.pathData; // Fail gracefully
+    }
+    stroker.remove();
+
+    if (offset > 0) {
+      // @ts-ignore
+      shapeOffset = shapeOriginal.unite(expanded);
+    } else {
+      // @ts-ignore
+      shapeOffset = shapeOriginal.subtract(expanded);
+    }
+    expanded.remove();
+  } else {
+    // Legacy logic for standard shapes (still valid and fast)
+    // Adjust dimensions for offset
+    const offsetOptions: GeometryOptions = {
+      ...options,
+      width: Math.max(0, options.width + offset * 2),
+      height: Math.max(0, options.height + offset * 2),
+      radius: options.radius === 0 ? 0 : Math.max(0, options.radius + offset),
+    };
+    shapeOffset = getDielineShape(offsetOptions);
+  }
 
   // 3. Calculate Difference
   let bleedZone: paper.PathItem;
@@ -434,7 +437,10 @@ export function getNearestPointOnDieline(
   return result;
 }
 
-export function getPathBounds(pathData: string): { width: number; height: number } {
+export function getPathBounds(pathData: string): {
+  width: number;
+  height: number;
+} {
   const path = new paper.Path();
   path.pathData = pathData;
   const bounds = path.bounds;

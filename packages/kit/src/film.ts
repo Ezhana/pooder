@@ -149,7 +149,6 @@ export class FilmTool implements Extension {
 
     const { url, opacity } = this;
 
-
     if (!url) {
       const img = this.canvasService.getObject("film-image", "overlay");
       if (img) {

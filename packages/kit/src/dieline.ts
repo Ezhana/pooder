@@ -131,7 +131,6 @@ export class DielineTool implements Extension {
     this.updateDieline();
   }
 
-
   deactivate(context: ExtensionContext) {
     this.destroyLayer();
     this.canvasService = undefined;
