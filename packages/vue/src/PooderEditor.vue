@@ -1,7 +1,7 @@
 <template>
   <div class="pooder-editor">
     <!--    <ToolPanel />-->
-    <CanvasArea @canvas-ready="onCanvasReady" />
+    <CanvasArea @canvas-ready="onCanvasReady" @resize="onResize" />
     <!--    <div>-->
     <!--      <button-->
     <!--        @click="-->
@@ -92,6 +92,13 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
   //   cfgSvc.update("dieline.pathData", r);
   // })
   // console.log(cvsSvc!.canvas.getObjects());
+};
+
+const onResize = (width: number, height: number) => {
+  const canvasService = pooder.getService<CanvasService>("CanvasService");
+  if (canvasService) {
+    canvasService.canvas.setDimensions({ width, height });
+  }
 };
 
 onUnmounted(() => {
