@@ -36,8 +36,8 @@ export class DielineTool implements Extension {
   };
 
   private shape: "rect" | "circle" | "ellipse" | "custom" = "rect";
-  private width: number = 300;
-  private height: number = 300;
+  private width: number = 500;
+  private height: number = 500;
   private radius: number = 0;
   private offset: number = 0;
   private style: "solid" | "dashed" = "solid";
@@ -146,7 +146,7 @@ export class DielineTool implements Extension {
           type: "select",
           label: "Shape",
           options: ["rect", "circle", "ellipse", "custom"],
-          default: "rect",
+          default: this.shape,
         },
         {
           id: "dieline.width",
@@ -154,7 +154,7 @@ export class DielineTool implements Extension {
           label: "Width",
           min: 10,
           max: 2000,
-          default: 300,
+          default: this.width,
         },
         {
           id: "dieline.height",
@@ -162,7 +162,7 @@ export class DielineTool implements Extension {
           label: "Height",
           min: 10,
           max: 2000,
-          default: 300,
+          default: this.height,
         },
         {
           id: "dieline.radius",
@@ -170,13 +170,13 @@ export class DielineTool implements Extension {
           label: "Corner Radius",
           min: 0,
           max: 500,
-          default: 0,
+          default: this.radius,
         },
         {
           id: "dieline.position",
           type: "json",
           label: "Position (Normalized)",
-          default: { x: 0.5, y: 0.5 },
+          default: this.position,
         },
         {
           id: "dieline.borderLength",
@@ -184,7 +184,7 @@ export class DielineTool implements Extension {
           label: "Margin",
           min: 0,
           max: 500,
-          default: 0,
+          default: this.borderLength,
         },
         {
           id: "dieline.offset",
@@ -192,38 +192,38 @@ export class DielineTool implements Extension {
           label: "Bleed Offset",
           min: -100,
           max: 100,
-          default: 0,
+          default: this.offset,
         },
         {
           id: "dieline.showBleedLines",
           type: "boolean",
           label: "Show Bleed Lines",
-          default: true,
+          default: this.showBleedLines,
         },
         {
           id: "dieline.style",
           type: "select",
           label: "Line Style",
           options: ["solid", "dashed"],
-          default: "solid",
+          default: this.style,
         },
         {
           id: "dieline.insideColor",
           type: "color",
           label: "Inside Color",
-          default: "rgba(0,0,0,0)",
+          default: this.insideColor,
         },
         {
           id: "dieline.outsideColor",
           type: "color",
           label: "Outside Color",
-          default: "#ffffff",
+          default: this.outsideColor,
         },
         {
           id: "dieline.holes",
           type: "json",
           label: "Holes",
-          default: [],
+          default: this.holes,
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
@@ -313,30 +313,30 @@ export class DielineTool implements Extension {
               // Or just replace width/height with image dimensions?
               // Let's assume we want to keep the current "box" size but fit the shape inside?
               // Or if options has width/height use that.
-              
+
               // Let's first trace to get the natural shape (and its aspect ratio)
               // Then we can decide how to update this.width/this.height.
-              
+
               const pathData = await ImageTracer.trace(imageUrl, options);
-              
+
               // We need to set width/height from the path bounds to avoid distortion
               const bounds = getPathBounds(pathData);
-              
+
               // If we want to scale the path to specific dimensions, we can do it via ImageTracer options.scaleToWidth/Height
               // But here we got the raw path.
               // Let's update the TOOL's dimensions to match the detected shape's aspect ratio,
               // while keeping the size reasonable (e.g. max dimension 300 or current size).
-              
+
               // If current tool size is default 300x300, we might want to resize tool to match image ratio.
               const currentMax = Math.max(this.width, this.height);
               const scale = currentMax / Math.max(bounds.width, bounds.height);
-              
+
               this.width = bounds.width * scale;
               this.height = bounds.height * scale;
-              
+
               this.shape = "custom";
               this.pathData = pathData;
-              
+
               this.updateDieline();
               return pathData;
             } catch (e) {

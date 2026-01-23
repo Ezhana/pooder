@@ -46,6 +46,8 @@ onUnmounted(() => {
   flex: 1;
   width: 100%;
   height: 100%;
+  min-height: 650px;
+  min-width: 650px;
   overflow: hidden;
   background: #f5f5f5;
   position: relative;
