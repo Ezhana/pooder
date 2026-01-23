@@ -8,6 +8,7 @@ import {
 import { Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
 import { ImageTracer } from "./tracer";
+import { Coordinate } from "./coordinate";
 import {
   generateDielinePath,
   generateMaskPath,
@@ -44,6 +45,7 @@ export class DielineTool implements Extension {
   private outsideColor: string = "#ffffff";
   private showBleedLines: boolean = true;
   private holes: HoleData[] = [];
+  // Position is stored as normalized coordinates (0-1)
   private position?: { x: number; y: number };
   private borderLength?: number;
   private pathData?: string;
@@ -57,6 +59,7 @@ export class DielineTool implements Extension {
       width: number;
       height: number;
       radius: number;
+      // Position is normalized (0-1)
       position: { x: number; y: number };
       borderLength: number;
       offset: number;
@@ -171,9 +174,9 @@ export class DielineTool implements Extension {
         },
         {
           id: "dieline.position",
-          type: "string", // Simplified for now, complex object usually handled by custom UI
-          label: "Position",
-          default: "",
+          type: "json",
+          label: "Position (Normalized)",
+          default: { x: 0.5, y: 0.5 },
         },
         {
           id: "dieline.borderLength",
@@ -436,11 +439,26 @@ export class DielineTool implements Extension {
     }
 
     // Handle Position
-    const cx = position?.x ?? canvasW / 2;
-    const cy = position?.y ?? canvasH / 2;
+    // this.position is normalized (0-1). Default to center (0.5, 0.5).
+    const normalizedPos = position ?? { x: 0.5, y: 0.5 };
+    const cx = Coordinate.toAbsolute(normalizedPos.x, canvasW);
+    const cy = Coordinate.toAbsolute(normalizedPos.y, canvasH);
 
     // Clear existing objects
     layer.remove(...layer.getObjects());
+
+    // Denormalize Holes for Geometry Generation
+    const absoluteHoles = (holes || []).map((h) => {
+      const p = Coordinate.denormalizePoint(
+        { x: h.x, y: h.y },
+        { width: canvasW, height: canvasH },
+      );
+      return {
+        ...h,
+        x: p.x,
+        y: p.y,
+      };
+    });
 
     // 1. Draw Mask (Outside)
     const cutW = Math.max(0, width + offset * 2);
@@ -457,7 +475,7 @@ export class DielineTool implements Extension {
       radius: cutR,
       x: cx,
       y: cy,
-      holes: holes || [],
+      holes: absoluteHoles,
       pathData: this.pathData,
     });
 
@@ -487,7 +505,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        holes: holes || [],
+        holes: absoluteHoles,
         pathData: this.pathData,
       });
 
@@ -512,7 +530,7 @@ export class DielineTool implements Extension {
           radius,
           x: cx,
           y: cy,
-          holes: holes || [],
+          holes: absoluteHoles,
           pathData: this.pathData,
         },
         offset,
@@ -543,7 +561,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        holes: holes || [],
+        holes: absoluteHoles,
         pathData: this.pathData,
       });
 
@@ -635,8 +653,8 @@ export class DielineTool implements Extension {
       visualHeight = Math.max(0, canvasH - borderLength * 2);
     }
 
-    const cx = position?.x ?? canvasW / 2;
-    const cy = position?.y ?? canvasH / 2;
+    const cx = Coordinate.toAbsolute(position?.x ?? 0.5, canvasW);
+    const cy = Coordinate.toAbsolute(position?.y ?? 0.5, canvasH);
 
     return {
       shape,
@@ -659,8 +677,21 @@ export class DielineTool implements Extension {
     const { shape, width, height, radius, position, holes } = this;
     const canvasW = canvas.width || 800;
     const canvasH = canvas.height || 600;
-    const cx = position?.x ?? canvasW / 2;
-    const cy = position?.y ?? canvasH / 2;
+    const cx = Coordinate.toAbsolute(position?.x ?? 0.5, canvasW);
+    const cy = Coordinate.toAbsolute(position?.y ?? 0.5, canvasH);
+
+    // Denormalize Holes for Export
+    const absoluteHoles = (holes || []).map((h) => {
+      const p = Coordinate.denormalizePoint(
+        { x: h.x, y: h.y },
+        { width: canvasW, height: canvasH },
+      );
+      return {
+        ...h,
+        x: p.x,
+        y: p.y,
+      };
+    });
 
     const pathData = generateDielinePath({
       shape,
@@ -669,7 +700,7 @@ export class DielineTool implements Extension {
       radius,
       x: cx,
       y: cy,
-      holes: holes || [],
+      holes: absoluteHoles,
       pathData: this.pathData,
     });
 

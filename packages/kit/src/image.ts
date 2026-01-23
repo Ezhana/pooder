@@ -1,12 +1,13 @@
 import {
-  Extension,
-  ExtensionContext,
-  ContributionPointIds,
   CommandContribution,
   ConfigurationContribution,
+  ContributionPointIds,
+  Extension,
+  ExtensionContext
 } from "@pooder/core";
 import { FabricImage as Image, Point, util } from "fabric";
 import CanvasService from "./CanvasService";
+import { Coordinate } from "./coordinate";
 
 export class ImageTool implements Extension {
   id = "pooder.kit.image";
@@ -138,16 +139,16 @@ export class ImageTool implements Extension {
         {
           id: "image.left",
           type: "number",
-          label: "Left",
+          label: "Left (Normalized)",
           min: 0,
-          max: 1000,
+          max: 1,
         },
         {
           id: "image.top",
           type: "number",
-          label: "Top",
+          label: "Top (Normalized)",
           min: 0,
-          max: 1000,
+          max: 1,
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
@@ -209,9 +210,6 @@ export class ImageTool implements Extension {
         interactive: true,
       });
 
-      // CanvasService.createLayer already adds it to the canvas (at the top).
-      // Now we adjust its position if needed.
-
       // Try to insert below dieline-overlay
       const dielineLayer = this.canvasService.getLayer("dieline-overlay");
       if (dielineLayer) {
@@ -263,14 +261,20 @@ export class ImageTool implements Extension {
         if (angle !== undefined && userImage.angle !== angle)
           updates.angle = angle;
 
-        if (left !== undefined) {
-          const localLeft = left - centerX;
-          if (Math.abs(userImage.left - localLeft) > 1)
-            updates.left = localLeft;
-        }
+          if (userImage.originX !== 'center') {
+              userImage.set({ originX: 'center', originY: 'center', left: userImage.left + (userImage.width * userImage.scaleX)/2, top: userImage.top + (userImage.height * userImage.scaleY)/2 });
+          }
+
+          if (left !== undefined) {
+            const globalLeft = Coordinate.toAbsolute(left, canvasW);
+            const localLeft = globalLeft - centerX;
+            if (Math.abs(userImage.left - localLeft) > 1)
+              updates.left = localLeft;
+          }
 
         if (top !== undefined) {
-          const localTop = top - centerY;
+          const globalTop = Coordinate.toAbsolute(top, canvasH);
+          const localTop = globalTop - centerY;
           if (Math.abs(userImage.top - localTop) > 1) updates.top = localTop;
         }
 
@@ -293,9 +297,10 @@ export class ImageTool implements Extension {
   private loadImage(layer: any) {
     if (!this.canvasService) return;
     const { url } = this;
+    if (!url) return; // Don't load if empty
     this._loadingUrl = url;
 
-    Image.fromURL(url)
+    Image.fromURL(url, { crossOrigin: "anonymous" })
       .then((image) => {
         if (this._loadingUrl !== url) return;
         this._loadingUrl = null;
@@ -323,12 +328,17 @@ export class ImageTool implements Extension {
           }
 
           if (left === undefined && top === undefined) {
-            const canvasW = this.canvasService?.canvas.width || 800;
-            const canvasH = this.canvasService?.canvas.height || 600;
-            left = canvasW / 2;
-            top = canvasH / 2;
-            this.left = left;
-            this.top = top;
+             // Default to Dieline Position if available, otherwise Center (0.5)
+             const dielinePos = configService?.get("dieline.position");
+             if (dielinePos) {
+                 this.left = dielinePos.x;
+                 this.top = dielinePos.y;
+             } else {
+                 this.left = 0.5;
+                 this.top = 0.5;
+             }
+             left = this.left;
+             top = this.top;
           }
         }
 
@@ -344,12 +354,6 @@ export class ImageTool implements Extension {
           const defaultScaleX = existingImage.scaleX;
           const defaultScaleY = existingImage.scaleY;
 
-          // existingImage is likely in local coordinates if updateImage logic is correct.
-          // But here we are dealing with global coordinates for `left` and `top`.
-          // We need to convert global to local if we are setting it directly,
-          // OR rely on the fact that existingImage.left IS the local coordinate.
-          // Wait, if we use `left` (global) directly, it might be wrong if the layer is offset.
-          // Let's check the layer offset logic again.
           const canvasW = this.canvasService?.canvas.width || 800;
           const canvasH = this.canvasService?.canvas.height || 600;
           const centerX = canvasW / 2;
@@ -358,31 +362,29 @@ export class ImageTool implements Extension {
           let targetLeft = left !== undefined ? left : defaultLeft;
           let targetTop = top !== undefined ? top : defaultTop;
 
-          // If the layer expects local coordinates relative to center (as implied by updateImage)
-          // we should adjust. However, loadImage historically used `left` directly.
-          // If we changed `left` to be explicitly centered (global), we might need to subtract centerX.
-          // Let's assume consistent behavior with updateImage:
-          if (left !== undefined) targetLeft = left - centerX;
-          if (top !== undefined) targetTop = top - centerY;
-          
-          // Wait, if existingImage.left is already local, and `left` is undefined, we use defaultLeft.
-          // If `left` IS defined (global), we subtract centerX.
-          // But wait, if `left` was undefined, `targetLeft` = `defaultLeft` (local).
-          // If `left` IS defined, `targetLeft` = `left - centerX` (local).
-          // This looks correct IF `left` is indeed global.
-          
-          // BUT, I previously saw: `if (left !== undefined) image.left = left;`
-          // This implies the OLD code assumed `left` was correct as-is.
-          // If `left` was global, and layer is at (0,0), then it's global.
-          // Why did updateImage subtract centerX?
-          // `localLeft = left - centerX`.
-          // If `ensureLayer` makes a full-canvas layer at (0,0), then `left` (global) should be correct.
-          // UNLESS `updateImage` is correcting for something else.
-          // Maybe the layer origin IS center?
-          // If I assume `updateImage` is correct, then `loadImage` WAS WRONG.
-          // I will fix it to be consistent with `updateImage`.
+          // Log for debugging
+          const configService = this.context?.services.get<any>("ConfigurationService");
+          console.log("[ImageTool] Loading EXISTING image...", {
+             canvasW, canvasH, centerX, centerY,
+             incomingLeft: left, incomingTop: top,
+             dielinePos: configService?.get("dieline.position"),
+             existingImage: !!existingImage
+          });
+
+          if (left !== undefined) {
+             const globalLeft = Coordinate.toAbsolute(left, canvasW);
+             targetLeft = globalLeft; // Layer is absolute, do not subtract center
+             console.log("[ImageTool] Calculated targetLeft", { globalLeft, targetLeft });
+          }
+          if (top !== undefined) {
+             const globalTop = Coordinate.toAbsolute(top, canvasH);
+             targetTop = globalTop; // Layer is absolute, do not subtract center
+             console.log("[ImageTool] Calculated targetTop", { globalTop, targetTop });
+          }
 
           image.set({
+            originX: "center", // Use center origin for easier positioning
+            originY: "center",
             left: targetLeft,
             top: targetTop,
             angle: angle !== undefined ? angle : defaultAngle,
@@ -399,6 +401,11 @@ export class ImageTool implements Extension {
           layer.remove(existingImage);
         } else {
           // New image
+          image.set({
+            originX: "center",
+            originY: "center",
+          });
+
           if (width !== undefined && image.width)
             image.scaleX = width / image.width;
           if (height !== undefined && image.height)
@@ -410,8 +417,17 @@ export class ImageTool implements Extension {
           const centerX = canvasW / 2;
           const centerY = canvasH / 2;
 
-          if (left !== undefined) image.left = left - centerX;
-          if (top !== undefined) image.top = top - centerY;
+          if (left !== undefined) {
+             image.left = Coordinate.toAbsolute(left, canvasW); // Layer is absolute
+          } else {
+             image.left = centerX; // Default to center of canvas
+          }
+
+          if (top !== undefined) {
+             image.top = Coordinate.toAbsolute(top, canvasH); // Layer is absolute
+          } else {
+             image.top = centerY; // Default to center of canvas
+          }
         }
 
         image.set({
@@ -426,9 +442,11 @@ export class ImageTool implements Extension {
         image.on("modified", (e: any) => {
           const matrix = image.calcTransformMatrix();
           const globalPoint = util.transformPoint(new Point(0, 0), matrix);
+          const canvasW = this.canvasService?.canvas.width || 800;
+          const canvasH = this.canvasService?.canvas.height || 600;
 
-          this.left = globalPoint.x;
-          this.top = globalPoint.y;
+          this.left = Coordinate.toNormalized(globalPoint.x, canvasW);
+          this.top = Coordinate.toNormalized(globalPoint.y, canvasH);
           this.angle = e.target.angle;
 
           if (image.width)
