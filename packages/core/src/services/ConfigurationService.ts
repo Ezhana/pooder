@@ -55,6 +55,33 @@ export default class ConfigurationService implements Service {
   }
 
   /**
+   * Export current configuration state as a JSON-serializable object.
+   * Useful for saving configuration templates.
+   */
+  export(): Record<string, any> {
+    const exportData: Record<string, any> = {};
+    for (const [key, value] of this.configValues) {
+      exportData[key] = value;
+    }
+    return exportData;
+  }
+
+  /**
+   * Import configuration from a JSON object.
+   * This will merge the provided configuration with the current state,
+   * overwriting existing keys and triggering change events.
+   */
+  import(data: Record<string, any>): void {
+    if (!data || typeof data !== "object") {
+      console.warn("ConfigurationService: Import data must be an object.");
+      return;
+    }
+    Object.entries(data).forEach(([key, value]) => {
+      this.update(key, value);
+    });
+  }
+
+  /**
    * Initialize configuration with defaults from contributions.
    * This should be called when a contribution is registered.
    */

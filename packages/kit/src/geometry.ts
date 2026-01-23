@@ -206,13 +206,9 @@ function getDielineShape(options: GeometryOptions): paper.PathItem {
         radius: hole.outerRadius,
       });
 
-      // Check intersection with main body
-      // Only add lug if it intersects (or is contained in) the main shape
-      // This prevents floating islands when bleed shrinks
-      if (!mainShape.intersects(lug) && !mainShape.contains(lug.position)) {
-        lug.remove();
-        return; // Skip this lug
-      }
+      // REMOVED: Intersects check. We want to process all holes defined in config.
+      // If a hole is completely outside, it might form an island, but that's better than missing it.
+      // Users can remove the hole if they don't want it.
 
       // Create Cut (Inner Radius)
       const cut = new paper.Path.Circle({
@@ -224,39 +220,58 @@ function getDielineShape(options: GeometryOptions): paper.PathItem {
       if (!lugsPath) {
         lugsPath = lug;
       } else {
-        const temp = lugsPath.unite(lug);
-        lugsPath.remove();
-        lug.remove();
-        lugsPath = temp;
+        try {
+          const temp = lugsPath.unite(lug);
+          lugsPath.remove();
+          lug.remove();
+          lugsPath = temp;
+        } catch (e) {
+          console.error("Geometry: Failed to unite lug", e);
+          // Keep previous lugsPath, ignore this one to prevent crash
+          lug.remove();
+        }
       }
 
       // Union Cuts
       if (!cutsPath) {
         cutsPath = cut;
       } else {
-        const temp = cutsPath.unite(cut);
-        cutsPath.remove();
-        cut.remove();
-        cutsPath = temp;
+        try {
+          const temp = cutsPath.unite(cut);
+          cutsPath.remove();
+          cut.remove();
+          cutsPath = temp;
+        } catch (e) {
+          console.error("Geometry: Failed to unite cut", e);
+          cut.remove();
+        }
       }
     });
 
     // 2. Add Lugs to Main Shape (Union) - Additive Fusion
     if (lugsPath) {
-      const temp = mainShape.unite(lugsPath);
-      mainShape.remove();
-      // @ts-ignore
-      lugsPath.remove();
-      mainShape = temp;
+      try {
+        const temp = mainShape.unite(lugsPath);
+        mainShape.remove();
+        // @ts-ignore
+        lugsPath.remove();
+        mainShape = temp;
+      } catch (e) {
+        console.error("Geometry: Failed to unite lugsPath to mainShape", e);
+      }
     }
 
     // 3. Subtract Cuts from Main Shape (Difference)
     if (cutsPath) {
-      const temp = mainShape.subtract(cutsPath);
-      mainShape.remove();
-      // @ts-ignore
-      cutsPath.remove();
-      mainShape = temp;
+      try {
+        const temp = mainShape.subtract(cutsPath);
+        mainShape.remove();
+        // @ts-ignore
+        cutsPath.remove();
+        mainShape = temp;
+      } catch (e) {
+        console.error("Geometry: Failed to subtract cutsPath from mainShape", e);
+      }
     }
   }
 

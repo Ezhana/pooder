@@ -579,6 +579,8 @@ export class DielineTool implements Extension {
 
     // 4. Draw Dieline (Visual Border)
     // This should outline the product shape AND the holes.
+    // NOTE: We need to use absoluteHoles (denormalized) here, NOT holes (normalized 0-1)
+    // generateDielinePath expects holes to be in absolute coordinates (matching width/height scale)
     const borderPathData = generateDielinePath({
       shape,
       width: width,
@@ -586,7 +588,7 @@ export class DielineTool implements Extension {
       radius: radius,
       x: cx,
       y: cy,
-      holes: holes || [],
+      holes: absoluteHoles, // FIX: Use absoluteHoles instead of holes
       pathData: this.pathData,
     });
 

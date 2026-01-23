@@ -10,6 +10,7 @@ import { Circle, Group, Point } from "fabric";
 import CanvasService from "./CanvasService";
 import { DielineGeometry } from "./dieline";
 import { getNearestPointOnDieline, HoleData } from "./geometry";
+import { Coordinate } from "./coordinate";
 
 export class HoleTool implements Extension {
   id = "pooder.kit.hole";
@@ -26,6 +27,7 @@ export class HoleTool implements Extension {
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
+  private isUpdatingConfig = false;
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
@@ -76,16 +78,46 @@ export class HoleTool implements Extension {
         "hole.constraintTarget",
         this.constraintTarget,
       );
-      this.holes = configService.get("hole.holes", this.holes);
+
+      // Load holes from dieline.holes (SSOT)
+      const dielineHoles = configService.get("dieline.holes", []);
+      if (this.canvasService) {
+        const { width, height } = this.canvasService.canvas;
+        this.holes = dielineHoles.map((h: any) => {
+          const p = Coordinate.denormalizePoint(h, {
+            width: width || 800,
+            height: height || 600,
+          });
+          return { x: p.x, y: p.y };
+        });
+      }
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
+        if (this.isUpdatingConfig) return;
+
         if (e.key.startsWith("hole.")) {
           const prop = e.key.split(".")[1];
           if (prop && prop in this) {
             (this as any)[prop] = e.value;
             this.redraw();
+            // Allow syncHolesToDieline to run to update dieline.holes
             this.syncHolesToDieline();
+          }
+        }
+        // Listen for dieline.holes changes (e.g. from undo/redo or other sources)
+        if (e.key === "dieline.holes") {
+          const holes = e.value || [];
+          if (this.canvasService) {
+            const { width, height } = this.canvasService.canvas;
+            this.holes = holes.map((h: any) => {
+              const p = Coordinate.denormalizePoint(h, {
+                width: width || 800,
+                height: height || 600,
+              });
+              return { x: p.x, y: p.y };
+            });
+            this.redraw();
           }
         }
       });
@@ -132,12 +164,6 @@ export class HoleTool implements Extension {
           label: "Constraint Target",
           options: ["original", "bleed"],
           default: "bleed",
-        },
-        {
-          id: "hole.holes",
-          type: "json",
-          label: "Holes",
-          default: [],
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
@@ -200,9 +226,11 @@ export class HoleTool implements Extension {
     if (!this.handleDielineChange) {
       this.handleDielineChange = (geometry: DielineGeometry) => {
         this.currentGeometry = geometry;
-        this.enforceConstraints();
-        // After enforcing constraints (updating markers), we must tell Dieline to update its holes
-        this.syncHolesToDieline();
+        const changed = this.enforceConstraints();
+        // Only sync if constraints actually moved something
+        if (changed) {
+          this.syncHolesToDieline();
+        }
       };
       this.context.eventBus.on(
         "dieline:geometry:change",
@@ -362,22 +390,33 @@ export class HoleTool implements Extension {
   }
 
   private syncHolesToDieline() {
+    if (!this.context || !this.canvasService) return;
+
     const { holes, innerRadius, outerRadius } = this;
     const currentHoles = holes || [];
+    const width = this.canvasService.canvas.width || 800;
+    const height = this.canvasService.canvas.height || 600;
 
-    const holeData: HoleData[] = currentHoles.map((h) => ({
-      x: h.x,
-      y: h.y,
-      innerRadius,
-      outerRadius,
-    }));
+    const configService = this.context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
 
-    if (this.context) {
-      const commandService = this.context.services.get<any>("CommandService");
-      if (commandService) {
-        try {
-          commandService.executeCommand("setHoles", holeData);
-        } catch (e) {}
+    if (configService) {
+      this.isUpdatingConfig = true;
+      try {
+        // Update dieline.holes (Normalized coordinates)
+        const normalizedHoles = currentHoles.map((h) => {
+          const p = Coordinate.normalizePoint(h, { width, height });
+          return {
+            x: p.x,
+            y: p.y,
+            innerRadius,
+            outerRadius,
+          };
+        });
+        configService.update("dieline.holes", normalizedHoles);
+      } finally {
+        this.isUpdatingConfig = false;
       }
     }
   }
@@ -455,19 +494,29 @@ export class HoleTool implements Extension {
       });
 
       canvas.add(holeGroup);
+      
+      // Ensure hole markers are always on top of Dieline layer
+      // Dieline layer uses bringObjectToFront, so we must be aggressive
+      // But we can't control when Dieline updates.
+      // Ideally, HoleTool should use a dedicated overlay layer above Dieline.
+      // For now, let's just bring to front.
       canvas.bringObjectToFront(holeGroup);
     });
+
+    // Also bring all existing markers to front to be safe
+    const markers = canvas.getObjects().filter((o: any) => o.data?.type === "hole-marker");
+    markers.forEach(m => canvas.bringObjectToFront(m));
 
     this.canvasService.requestRenderAll();
   }
 
-  public enforceConstraints() {
+  public enforceConstraints(): boolean {
     const geometry = this.currentGeometry;
     if (!geometry || !this.canvasService) {
       console.log(
         "[HoleTool] Skipping enforceConstraints: No geometry or canvas service",
       );
-      return;
+      return false;
     }
 
     const effectiveOffset =
@@ -520,9 +569,10 @@ export class HoleTool implements Extension {
     if (changed) {
       this.holes = newHoles;
       this.canvasService.requestRenderAll();
-      // Need to sync changes back to Dieline if constraints moved them
-      this.syncHolesToDieline();
+      // We return true instead of syncing directly to avoid recursion
+      return true;
     }
+    return false;
   }
 
   private calculateConstrainedPosition(p: Point, g: DielineGeometry): Point {
