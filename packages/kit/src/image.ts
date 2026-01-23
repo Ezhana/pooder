@@ -1,9 +1,10 @@
 import {
   CommandContribution,
   ConfigurationContribution,
+  ConfigurationService,
   ContributionPointIds,
   Extension,
-  ExtensionContext
+  ExtensionContext,
 } from "@pooder/core";
 import { FabricImage as Image, Point, util } from "fabric";
 import CanvasService from "./CanvasService";
@@ -104,7 +105,7 @@ export class ImageTool implements Extension {
           id: "image.url",
           type: "string",
           label: "Image URL",
-          default: "",
+          default: this.url,
         },
         {
           id: "image.opacity",
@@ -113,7 +114,7 @@ export class ImageTool implements Extension {
           min: 0,
           max: 1,
           step: 0.1,
-          default: 1,
+          default: this.opacity,
         },
         {
           id: "image.width",
@@ -121,6 +122,7 @@ export class ImageTool implements Extension {
           label: "Width",
           min: 0,
           max: 5000,
+          default: this.width,
         },
         {
           id: "image.height",
@@ -128,6 +130,7 @@ export class ImageTool implements Extension {
           label: "Height",
           min: 0,
           max: 5000,
+          default: this.height,
         },
         {
           id: "image.angle",
@@ -135,6 +138,7 @@ export class ImageTool implements Extension {
           label: "Rotation",
           min: 0,
           max: 360,
+          default: this.angle,
         },
         {
           id: "image.left",
@@ -142,6 +146,7 @@ export class ImageTool implements Extension {
           label: "Left (Normalized)",
           min: 0,
           max: 1,
+          default: this.left,
         },
         {
           id: "image.top",
@@ -149,6 +154,7 @@ export class ImageTool implements Extension {
           label: "Top (Normalized)",
           min: 0,
           max: 1,
+          default: this.top,
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
@@ -310,10 +316,16 @@ export class ImageTool implements Extension {
         // Auto-scale and center if not set
         if (this.context) {
           const configService =
-            this.context.services.get<any>("ConfigurationService");
-          const dielineWidth = configService?.get("dieline.width", 300) ?? 300;
-          const dielineHeight =
-            configService?.get("dieline.height", 300) ?? 300;
+            this.context.services.get<ConfigurationService>("ConfigurationService")!;
+          const dielineWidth = configService.get("dieline.width");
+          const dielineHeight = configService.get("dieline.height");
+
+          console.log("[ImageTool] Dieline config debug:", {
+            widthVal: dielineWidth,
+            heightVal: dielineHeight,
+            // Debug: dump all keys to see what is available
+            allKeys: Array.from((configService as any).configValues?.keys() || []),
+          },configService);
 
           if (width === undefined && height === undefined) {
             // Scale to fit dieline

@@ -4,6 +4,7 @@ import {
   ContributionPointIds,
   CommandContribution,
   ConfigurationContribution,
+  ConfigurationService,
 } from "@pooder/core";
 import { Circle, Group, Point } from "fabric";
 import CanvasService from "./CanvasService";
@@ -57,7 +58,7 @@ export class HoleTool implements Extension {
       return;
     }
 
-    const configService = context.services.get<any>("ConfigurationService");
+    const configService = context.services.get<ConfigurationService>("ConfigurationService");
     if (configService) {
       // Load initial config
       this.innerRadius = configService.get("hole.innerRadius", this.innerRadius);
@@ -219,6 +220,7 @@ export class HoleTool implements Extension {
             if (g) {
               this.currentGeometry = g as DielineGeometry;
               // Re-run setup logic dependent on geometry
+              this.enforceConstraints();
               this.initializeHoles();
             }
           });
@@ -453,7 +455,10 @@ export class HoleTool implements Extension {
 
   public enforceConstraints() {
     const geometry = this.currentGeometry;
-    if (!geometry || !this.canvasService) return;
+    if (!geometry || !this.canvasService) {
+        console.log("[HoleTool] Skipping enforceConstraints: No geometry or canvas service");
+        return;
+    }
 
     const effectiveOffset =
       this.constraintTarget === "original" ? 0 : geometry.offset;
@@ -468,6 +473,8 @@ export class HoleTool implements Extension {
     const objects = this.canvasService.canvas
       .getObjects()
       .filter((obj: any) => obj.data?.type === "hole-marker");
+
+    console.log(`[HoleTool] Enforcing constraints on ${objects.length} markers`);
 
     let changed = false;
     // Sort objects by index to maintain order in options.holes
@@ -485,6 +492,7 @@ export class HoleTool implements Extension {
       );
 
       if (currentPos.distanceFrom(newPos) > 0.1) {
+        console.log(`[HoleTool] Moving hole from (${currentPos.x}, ${currentPos.y}) to (${newPos.x}, ${newPos.y})`);
         obj.set({
           left: newPos.x,
           top: newPos.y,

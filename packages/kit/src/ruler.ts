@@ -184,6 +184,10 @@ export class RulerTool implements Extension {
       height,
       selectable: false,
       evented: false,
+      left: 0,
+      top: 0,
+      originX: "left",
+      originY: "top",
     });
 
     canvas.bringObjectToFront(layer);

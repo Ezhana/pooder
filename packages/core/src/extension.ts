@@ -102,7 +102,7 @@ class ExtensionManager {
       const configService = this.context.services.get<ConfigurationService>(
         "ConfigurationService",
       );
-      configService?.initializeDefaults([item]);
+      configService?.initializeDefaults([item.data]);
     }
     if (pointId === ContributionPointIds.COMMANDS && item.data.handler) {
       const commandService =
