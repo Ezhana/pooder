@@ -39,15 +39,29 @@ const cvsSvc = pooder.getService<CanvasService>("CanvasService")!;
 const cmdSvc = pooder.getService<CommandService>("CommandService")!;
 const cfgSvc = pooder.getService<ConfigurationService>("ConfigurationService")!;
 
-function handleImport() {
-  const json = {
-    "dieline.shape": "circle",
-    "dieline.offset": 50,
-    "dieline.showBleedLines": true,
-    "dieline.holes": [],
-  };
-  cfgSvc.import(json);
-}
+const importConfig = (config: Record<string, any>) => {
+  cfgSvc.import(config);
+};
+
+const exportConfig = () => {
+  return cfgSvc.export();
+};
+
+const generateCutImage = async () => {
+  return await cmdSvc.executeCommand("exportCutImage");
+};
+
+const setUserImage = async (url: string) => {
+  return await cmdSvc.executeCommand("setUserImage", url, 1);
+};
+
+defineExpose({
+  importConfig,
+  exportConfig,
+  generateCutImage,
+  setUserImage,
+});
+
 const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
   const canvasService = new CanvasService(canvasEl);
 
