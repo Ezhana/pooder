@@ -65,7 +65,7 @@ defineExpose({
 const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
   const canvasService = new CanvasService(canvasEl);
 
-  pooder.registerService(canvasService);
+  pooder.registerService(canvasService, "CanvasService");
 
   const tools = [
     new BackgroundTool(),

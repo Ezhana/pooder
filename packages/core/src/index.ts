@@ -29,10 +29,10 @@ export class Pooder {
     this.initDefaultContributionPoints();
 
     const commandService = new CommandService();
-    this.registerService(commandService);
+    this.registerService(commandService, "CommandService");
 
     const configurationService = new ConfigurationService();
-    this.registerService(configurationService);
+    this.registerService(configurationService, "ConfigurationService");
 
     // Create a restricted context for extensions
     const context: ExtensionContext = {
@@ -80,8 +80,8 @@ export class Pooder {
 
   // --- Service Management ---
 
-  registerService(service: Service) {
-    const serviceId = service.constructor.name;
+  registerService(service: Service, id?: string) {
+    const serviceId = id || service.constructor.name;
 
     try {
       service?.init?.();
@@ -95,8 +95,8 @@ export class Pooder {
     return true;
   }
 
-  unregisterService(service: Service) {
-    const serviceId = service.constructor.name;
+  unregisterService(service: Service, id?: string) {
+    const serviceId = id || service.constructor.name;
     if (!this.services.has(serviceId)) {
       console.warn(`Service ${serviceId} is not registered.`);
       return true;
