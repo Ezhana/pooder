@@ -1,10 +1,98 @@
 import paper from "paper";
 
+export type PositionAnchor =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "center-left"
+  | "center"
+  | "center-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
+
 export interface HoleData {
-  x: number;
-  y: number;
+  x?: number;
+  y?: number;
+  anchor?: PositionAnchor;
+  offsetX?: number;
+  offsetY?: number;
   innerRadius: number;
   outerRadius: number;
+}
+
+export function resolveHolePosition(
+  hole: HoleData,
+  geometry: { x: number; y: number; width: number; height: number },
+  canvasSize: { width: number; height: number }
+): { x: number; y: number } {
+  if (hole.anchor) {
+    const { x, y, width, height } = geometry;
+    let bx = x; // center x
+    let by = y; // center y
+
+    // Calculate anchor base position based on shape bounds
+    // Note: geometry.x/y is the CENTER of the shape
+    const left = x - width / 2;
+    const right = x + width / 2;
+    const top = y - height / 2;
+    const bottom = y + height / 2;
+
+    switch (hole.anchor) {
+      case "top-left":
+        bx = left;
+        by = top;
+        break;
+      case "top-center":
+        bx = x;
+        by = top;
+        break;
+      case "top-right":
+        bx = right;
+        by = top;
+        break;
+      case "center-left":
+        bx = left;
+        by = y;
+        break;
+      case "center":
+        bx = x;
+        by = y;
+        break;
+      case "center-right":
+        bx = right;
+        by = y;
+        break;
+      case "bottom-left":
+        bx = left;
+        by = bottom;
+        break;
+      case "bottom-center":
+        bx = x;
+        by = bottom;
+        break;
+      case "bottom-right":
+        bx = right;
+        by = bottom;
+        break;
+    }
+
+    return {
+      x: bx + (hole.offsetX || 0),
+      y: by + (hole.offsetY || 0),
+    };
+  } else if (hole.x !== undefined && hole.y !== undefined) {
+    // Legacy / Direct coordinates (Normalized)
+    // We assume x/y are normalized to canvas size if no anchor is present
+    // Or should we support absolute?
+    // Current system uses normalized.
+    // Coordinate.denormalizePoint logic:
+    return {
+      x: hole.x * canvasSize.width,
+      y: hole.y * canvasSize.height,
+    };
+  }
+  return { x: 0, y: 0 };
 }
 
 export interface GeometryOptions {

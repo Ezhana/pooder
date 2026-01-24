@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 3.1.0
+
+### Minor Changes
+
+- feat: anchor position
+
 ## 3.0.1
 
 ### Patch Changes

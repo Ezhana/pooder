@@ -9,7 +9,11 @@ import {
 import { Circle, Group, Point } from "fabric";
 import CanvasService from "./CanvasService";
 import { DielineGeometry } from "./dieline";
-import { getNearestPointOnDieline, HoleData } from "./geometry";
+import {
+  getNearestPointOnDieline,
+  HoleData,
+  resolveHolePosition,
+} from "./geometry";
 import { Coordinate } from "./coordinate";
 
 export class HoleTool implements Extension {
@@ -19,10 +23,7 @@ export class HoleTool implements Extension {
     name: "HoleTool",
   };
 
-  private innerRadius: number = 15;
-  private outerRadius: number = 25;
-  private style: "solid" | "dashed" = "solid";
-  private holes: Array<{ x: number; y: number }> = [];
+  private holes: HoleData[] = [];
   private constraintTarget: "original" | "bleed" = "bleed";
 
   private canvasService?: CanvasService;
@@ -39,12 +40,9 @@ export class HoleTool implements Extension {
 
   constructor(
     options?: Partial<{
-      innerRadius: number;
-      outerRadius: number;
-      style: "solid" | "dashed";
-      holes: Array<{ x: number; y: number }>;
+      holes: HoleData[];
       constraintTarget: "original" | "bleed";
-    }>,
+    }>
   ) {
     if (options) {
       Object.assign(this, options);
@@ -61,64 +59,31 @@ export class HoleTool implements Extension {
     }
 
     const configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+      "ConfigurationService"
     );
     if (configService) {
       // Load initial config
-      this.innerRadius = configService.get(
-        "hole.innerRadius",
-        this.innerRadius,
-      );
-      this.outerRadius = configService.get(
-        "hole.outerRadius",
-        this.outerRadius,
-      );
-      this.style = configService.get("hole.style", this.style);
       this.constraintTarget = configService.get(
         "hole.constraintTarget",
-        this.constraintTarget,
+        this.constraintTarget
       );
 
       // Load holes from dieline.holes (SSOT)
-      const dielineHoles = configService.get("dieline.holes", []);
-      if (this.canvasService) {
-        const { width, height } = this.canvasService.canvas;
-        this.holes = dielineHoles.map((h: any) => {
-          const p = Coordinate.denormalizePoint(h, {
-            width: width || 800,
-            height: height || 600,
-          });
-          return { x: p.x, y: p.y };
-        });
-      }
-
+      this.holes = configService.get("dieline.holes", []);
+      
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
 
-        if (e.key.startsWith("hole.")) {
-          const prop = e.key.split(".")[1];
-          if (prop && prop in this) {
-            (this as any)[prop] = e.value;
-            this.redraw();
-            // Allow syncHolesToDieline to run to update dieline.holes
-            this.syncHolesToDieline();
-          }
+        if (e.key === "hole.constraintTarget") {
+          this.constraintTarget = e.value;
+          this.enforceConstraints();
         }
+
         // Listen for dieline.holes changes (e.g. from undo/redo or other sources)
         if (e.key === "dieline.holes") {
-          const holes = e.value || [];
-          if (this.canvasService) {
-            const { width, height } = this.canvasService.canvas;
-            this.holes = holes.map((h: any) => {
-              const p = Coordinate.denormalizePoint(h, {
-                width: width || 800,
-                height: height || 600,
-              });
-              return { x: p.x, y: p.y };
-            });
-            this.redraw();
-          }
+          this.holes = e.value || [];
+          this.redraw();
         }
       });
     }
@@ -135,29 +100,6 @@ export class HoleTool implements Extension {
   contribute() {
     return {
       [ContributionPointIds.CONFIGURATIONS]: [
-        {
-          id: "hole.innerRadius",
-          type: "number",
-          label: "Inner Radius",
-          min: 1,
-          max: 100,
-          default: 15,
-        },
-        {
-          id: "hole.outerRadius",
-          type: "number",
-          label: "Outer Radius",
-          min: 1,
-          max: 100,
-          default: 25,
-        },
-        {
-          id: "hole.style",
-          type: "select",
-          label: "Line Style",
-          options: ["solid", "dashed"],
-          default: "solid",
-        },
         {
           id: "hole.constraintTarget",
           type: "select",
@@ -183,13 +125,25 @@ export class HoleTool implements Extension {
               } as any);
             }
 
-            this.innerRadius = 15;
-            this.outerRadius = 25;
-            this.style = "solid";
-            this.holes = [defaultPos];
+            const { width, height } = this.canvasService.canvas;
+            const normalizedHole = Coordinate.normalizePoint(defaultPos, {
+              width: width || 800,
+              height: height || 600,
+            });
 
-            this.redraw();
-            this.syncHolesToDieline();
+            const configService = this.context?.services.get<ConfigurationService>(
+              "ConfigurationService"
+            );
+            if (configService) {
+              configService.update("dieline.holes", [
+                {
+                  x: normalizedHole.x,
+                  y: normalizedHole.y,
+                  innerRadius: 15,
+                  outerRadius: 25,
+                },
+              ]);
+            }
             return true;
           },
         },
@@ -197,10 +151,33 @@ export class HoleTool implements Extension {
           command: "addHole",
           title: "Add Hole",
           handler: (x: number, y: number) => {
-            if (!this.holes) this.holes = [];
-            this.holes.push({ x, y });
-            this.redraw();
-            this.syncHolesToDieline();
+            if (!this.canvasService) return false;
+            const { width, height } = this.canvasService.canvas;
+            
+            const normalizedHole = Coordinate.normalizePoint(
+              { x, y },
+              { width: width || 800, height: height || 600 }
+            );
+
+            const configService = this.context?.services.get<ConfigurationService>(
+              "ConfigurationService"
+            );
+            
+            if (configService) {
+              const currentHoles = configService.get("dieline.holes", []) as HoleData[];
+              // Use last hole's radii or default
+              const lastHole = currentHoles[currentHoles.length - 1];
+              const innerRadius = lastHole?.innerRadius ?? 15;
+              const outerRadius = lastHole?.outerRadius ?? 25;
+
+              const newHole = {
+                  x: normalizedHole.x,
+                  y: normalizedHole.y,
+                  innerRadius,
+                  outerRadius,
+              };
+              configService.update("dieline.holes", [...currentHoles, newHole]);
+            }
             return true;
           },
         },
@@ -208,9 +185,12 @@ export class HoleTool implements Extension {
           command: "clearHoles",
           title: "Clear Holes",
           handler: () => {
-            this.holes = [];
-            this.redraw();
-            this.syncHolesToDieline();
+            const configService = this.context?.services.get<ConfigurationService>(
+              "ConfigurationService"
+            );
+            if (configService) {
+              configService.update("dieline.holes", []);
+            }
             return true;
           },
         },
@@ -274,6 +254,9 @@ export class HoleTool implements Extension {
 
         if (!this.currentGeometry) return;
 
+        const index = target.data?.index ?? -1;
+        const holeData = this.holes[index];
+
         // Calculate effective geometry based on constraint target
         const effectiveOffset =
           this.constraintTarget === "original"
@@ -284,13 +267,18 @@ export class HoleTool implements Extension {
           width: Math.max(0, this.currentGeometry.width + effectiveOffset * 2),
           height: Math.max(
             0,
-            this.currentGeometry.height + effectiveOffset * 2,
+            this.currentGeometry.height + effectiveOffset * 2
           ),
           radius: Math.max(0, this.currentGeometry.radius + effectiveOffset),
         };
 
         const p = new Point(target.left, target.top);
-        const newPos = this.calculateConstrainedPosition(p, constraintGeometry);
+        const newPos = this.calculateConstrainedPosition(
+          p,
+          constraintGeometry,
+          holeData?.innerRadius ?? 15,
+          holeData?.outerRadius ?? 25
+        );
 
         target.set({
           left: newPos.x,
@@ -316,25 +304,6 @@ export class HoleTool implements Extension {
 
   private initializeHoles() {
     if (!this.canvasService) return;
-    // Default hole if none exist
-    if (!this.holes || this.holes.length === 0) {
-      let defaultPos = { x: this.canvasService.canvas.width! / 2, y: 50 };
-
-      if (this.currentGeometry) {
-        const g = this.currentGeometry;
-        // Default to Top-Center of Dieline shape
-        const topCenter = { x: g.x, y: g.y - g.height / 2 };
-        // Snap to exact shape edge
-        const snapped = getNearestPointOnDieline(topCenter, {
-          ...g,
-          holes: [],
-        } as any);
-        defaultPos = snapped;
-      }
-
-      this.holes = [defaultPos];
-    }
-
     this.redraw();
     this.syncHolesToDieline();
   }
@@ -383,38 +352,110 @@ export class HoleTool implements Extension {
       .getObjects()
       .filter((obj: any) => obj.data?.type === "hole-marker");
 
-    const holes = objects.map((obj) => ({ x: obj.left!, y: obj.top! }));
-    this.holes = holes;
+    // Sort objects by index
+    objects.sort(
+      (a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0)
+    );
 
+    // Update holes based on canvas positions
+    // We need to preserve original hole properties (radii, anchor)
+    // If a hole has an anchor, we update offsetX/Y instead of x/y
+    const newHoles = objects.map((obj, i) => {
+      const original = this.holes[i];
+      const newAbsX = obj.left!;
+      const newAbsY = obj.top!;
+
+      if (original && original.anchor && this.currentGeometry) {
+        // Reverse calculate offset from anchor
+        const { x, y, width, height } = this.currentGeometry;
+        let bx = x;
+        let by = y;
+        const left = x - width / 2;
+        const right = x + width / 2;
+        const top = y - height / 2;
+        const bottom = y + height / 2;
+
+        switch (original.anchor) {
+          case "top-left":
+            bx = left;
+            by = top;
+            break;
+          case "top-center":
+            bx = x;
+            by = top;
+            break;
+          case "top-right":
+            bx = right;
+            by = top;
+            break;
+          case "center-left":
+            bx = left;
+            by = y;
+            break;
+          case "center":
+            bx = x;
+            by = y;
+            break;
+          case "center-right":
+            bx = right;
+            by = y;
+            break;
+          case "bottom-left":
+            bx = left;
+            by = bottom;
+            break;
+          case "bottom-center":
+            bx = x;
+            by = bottom;
+            break;
+          case "bottom-right":
+            bx = right;
+            by = bottom;
+            break;
+        }
+        
+        return {
+          ...original,
+          offsetX: newAbsX - bx,
+          offsetY: newAbsY - by,
+          // Clear direct coordinates if we use anchor
+          x: undefined,
+          y: undefined,
+        };
+      }
+
+      // If no anchor, use normalized coordinates
+      const { width, height } = this.canvasService!.canvas;
+      const p = Coordinate.normalizePoint(
+        { x: newAbsX, y: newAbsY },
+        { width: width || 800, height: height || 600 }
+      );
+      
+      return {
+        ...original,
+        x: p.x,
+        y: p.y,
+        // Ensure radii are preserved
+        innerRadius: original?.innerRadius ?? 15,
+        outerRadius: original?.outerRadius ?? 25,
+      };
+    });
+
+    this.holes = newHoles;
     this.syncHolesToDieline();
   }
 
   private syncHolesToDieline() {
     if (!this.context || !this.canvasService) return;
 
-    const { holes, innerRadius, outerRadius } = this;
-    const currentHoles = holes || [];
-    const width = this.canvasService.canvas.width || 800;
-    const height = this.canvasService.canvas.height || 600;
-
     const configService = this.context.services.get<ConfigurationService>(
-      "ConfigurationService",
+      "ConfigurationService"
     );
 
     if (configService) {
       this.isUpdatingConfig = true;
       try {
-        // Update dieline.holes (Normalized coordinates)
-        const normalizedHoles = currentHoles.map((h) => {
-          const p = Coordinate.normalizePoint(h, { width, height });
-          return {
-            x: p.x,
-            y: p.y,
-            innerRadius,
-            outerRadius,
-          };
-        });
-        configService.update("dieline.holes", normalizedHoles);
+        configService.update("dieline.holes", this.holes);
       } finally {
         this.isUpdatingConfig = false;
       }
@@ -424,6 +465,7 @@ export class HoleTool implements Extension {
   private redraw() {
     if (!this.canvasService) return;
     const canvas = this.canvasService.canvas;
+    const { width, height } = canvas;
 
     // Remove existing holes
     const existing = canvas
@@ -431,16 +473,31 @@ export class HoleTool implements Extension {
       .filter((obj: any) => obj.data?.type === "hole-marker");
     existing.forEach((obj) => canvas.remove(obj));
 
-    const { innerRadius, outerRadius, style, holes } = this;
+    const holes = this.holes;
 
     if (!holes || holes.length === 0) {
       this.canvasService.requestRenderAll();
       return;
     }
 
+    // Resolve geometry if needed for anchors
+    const geometry = this.currentGeometry || {
+      x: (width || 800) / 2,
+      y: (height || 600) / 2,
+      width: width || 800,
+      height: height || 600,
+    };
+
     holes.forEach((hole, index) => {
+      // Resolve position
+      const pos = resolveHolePosition(
+        hole,
+        geometry,
+        { width: width || 800, height: height || 600 }
+      );
+
       const innerCircle = new Circle({
-        radius: innerRadius,
+        radius: hole.innerRadius,
         fill: "transparent",
         stroke: "red",
         strokeWidth: 2,
@@ -449,18 +506,18 @@ export class HoleTool implements Extension {
       });
 
       const outerCircle = new Circle({
-        radius: outerRadius,
+        radius: hole.outerRadius,
         fill: "transparent",
         stroke: "#666",
         strokeWidth: 1,
-        strokeDashArray: style === "dashed" ? [5, 5] : undefined,
+        strokeDashArray: [5, 5],
         originX: "center",
         originY: "center",
       });
 
       const holeGroup = new Group([outerCircle, innerCircle], {
-        left: hole.x,
-        top: hole.y,
+        left: pos.x,
+        top: pos.y,
         originX: "center",
         originY: "center",
         selectable: true,
@@ -494,12 +551,6 @@ export class HoleTool implements Extension {
       });
 
       canvas.add(holeGroup);
-      
-      // Ensure hole markers are always on top of Dieline layer
-      // Dieline layer uses bringObjectToFront, so we must be aggressive
-      // But we can't control when Dieline updates.
-      // Ideally, HoleTool should use a dedicated overlay layer above Dieline.
-      // For now, let's just bring to front.
       canvas.bringObjectToFront(holeGroup);
     });
 
@@ -513,9 +564,6 @@ export class HoleTool implements Extension {
   public enforceConstraints(): boolean {
     const geometry = this.currentGeometry;
     if (!geometry || !this.canvasService) {
-      console.log(
-        "[HoleTool] Skipping enforceConstraints: No geometry or canvas service",
-      );
       return false;
     }
 
@@ -533,29 +581,27 @@ export class HoleTool implements Extension {
       .getObjects()
       .filter((obj: any) => obj.data?.type === "hole-marker");
 
-    console.log(
-      `[HoleTool] Enforcing constraints on ${objects.length} markers`,
-    );
-
     let changed = false;
     // Sort objects by index to maintain order in options.holes
     objects.sort(
-      (a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0),
+      (a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0)
     );
 
-    const newHoles: { x: number; y: number }[] = [];
+    const newHoles: HoleData[] = [];
 
-    objects.forEach((obj: any) => {
+    objects.forEach((obj: any, i: number) => {
       const currentPos = new Point(obj.left, obj.top);
+      // We need to pass the hole's radii to calculateConstrainedPosition
+      const holeData = this.holes[i];
+      
       const newPos = this.calculateConstrainedPosition(
         currentPos,
         constraintGeometry,
+        holeData?.innerRadius ?? 15,
+        holeData?.outerRadius ?? 25
       );
 
       if (currentPos.distanceFrom(newPos) > 0.1) {
-        console.log(
-          `[HoleTool] Moving hole from (${currentPos.x}, ${currentPos.y}) to (${newPos.x}, ${newPos.y})`,
-        );
         obj.set({
           left: newPos.x,
           top: newPos.y,
@@ -563,23 +609,28 @@ export class HoleTool implements Extension {
         obj.setCoords();
         changed = true;
       }
-      newHoles.push({ x: obj.left, y: obj.top });
+      
+      // Update data logic is handled in syncHolesFromCanvas which is called on modified
+      // But here we are modifying programmatically.
+      // We should probably just let the visual update happen, and then sync?
+      // Or just push to newHoles list to verify change?
     });
 
     if (changed) {
-      this.holes = newHoles;
-      this.canvasService.requestRenderAll();
-      // We return true instead of syncing directly to avoid recursion
+      // If we moved things programmatically, we should update the state
+      this.syncHolesFromCanvas();
       return true;
     }
     return false;
   }
 
-  private calculateConstrainedPosition(p: Point, g: DielineGeometry): Point {
+  private calculateConstrainedPosition(
+    p: Point, 
+    g: DielineGeometry, 
+    innerRadius: number, 
+    outerRadius: number
+  ): Point {
     // Use Paper.js to get accurate nearest point
-    // This handles ellipses, rects, and rounded rects correctly
-
-    // Convert to holes format for geometry options
     const options = {
       ...g,
       holes: [], // We don't need holes for boundary calculation
@@ -599,7 +650,6 @@ export class HoleTool implements Extension {
 
     // Vector from center to nearest point (approximate normal for convex shapes)
     const center = new Point(g.x, g.y);
-    const centerToNearest = nearestP.subtract(center);
 
     const distToCenter = p.distanceFrom(center);
     const nearestDistToCenter = nearestP.distanceFrom(center);
@@ -612,9 +662,9 @@ export class HoleTool implements Extension {
     // Clamp distance
     let clampedDist = signedDist;
     if (signedDist > 0) {
-      clampedDist = Math.min(signedDist, this.innerRadius);
+      clampedDist = Math.min(signedDist, innerRadius);
     } else {
-      clampedDist = Math.max(signedDist, -this.outerRadius);
+      clampedDist = Math.max(signedDist, -outerRadius);
     }
 
     // Reconstruct point

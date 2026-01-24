@@ -15,6 +15,7 @@ import {
   generateBleedZonePath,
   getPathBounds,
   HoleData,
+  resolveHolePosition,
 } from "./geometry";
 
 export interface DielineGeometry {
@@ -227,65 +228,6 @@ export class DielineTool implements Extension {
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
         {
-          command: "reset",
-          title: "Reset Dieline",
-          handler: () => {
-            this.shape = "rect";
-            this.width = 300;
-            this.height = 300;
-            this.radius = 0;
-            this.offset = 0;
-            this.style = "solid";
-            this.insideColor = "rgba(0,0,0,0)";
-            this.outsideColor = "#ffffff";
-            this.showBleedLines = true;
-            this.holes = [];
-            this.pathData = undefined;
-            this.updateDieline();
-            return true;
-          },
-        },
-        {
-          command: "setDimensions",
-          title: "Set Dimensions",
-          handler: (width: number, height: number) => {
-            if (this.width === width && this.height === height) return true;
-            this.width = width;
-            this.height = height;
-            this.updateDieline();
-            return true;
-          },
-        },
-        {
-          command: "setShape",
-          title: "Set Shape",
-          handler: (shape: "rect" | "circle" | "ellipse" | "custom") => {
-            if (this.shape === shape) return true;
-            this.shape = shape;
-            this.updateDieline();
-            return true;
-          },
-        },
-        {
-          command: "setBleed",
-          title: "Set Bleed",
-          handler: (bleed: number) => {
-            if (this.offset === bleed) return true;
-            this.offset = bleed;
-            this.updateDieline();
-            return true;
-          },
-        },
-        {
-          command: "setHoles",
-          title: "Set Holes",
-          handler: (holes: HoleData[]) => {
-            this.holes = holes;
-            this.updateDieline(false);
-            return true;
-          },
-        },
-        {
           command: "getGeometry",
           title: "Get Geometry",
           handler: () => {
@@ -304,39 +246,24 @@ export class DielineTool implements Extension {
           title: "Detect Edge from Image",
           handler: async (imageUrl: string, options?: any) => {
             try {
-              // Pass current dimensions if we want to scale immediately?
-              // But wait, the user said "It should be scaled according to width and height".
-              // If the user already set width/height on the tool, we should respect it?
-              // Or should we set width/height based on the image aspect ratio?
-              // Usually for a new trace, we might want to respect the IMAGE aspect ratio but fit into current width/height?
-              // Or just replace width/height with image dimensions?
-              // Let's assume we want to keep the current "box" size but fit the shape inside?
-              // Or if options has width/height use that.
-
-              // Let's first trace to get the natural shape (and its aspect ratio)
-              // Then we can decide how to update this.width/this.height.
-
               const pathData = await ImageTracer.trace(imageUrl, options);
-
-              // We need to set width/height from the path bounds to avoid distortion
               const bounds = getPathBounds(pathData);
 
-              // If we want to scale the path to specific dimensions, we can do it via ImageTracer options.scaleToWidth/Height
-              // But here we got the raw path.
-              // Let's update the TOOL's dimensions to match the detected shape's aspect ratio,
-              // while keeping the size reasonable (e.g. max dimension 300 or current size).
-
-              // If current tool size is default 300x300, we might want to resize tool to match image ratio.
               const currentMax = Math.max(this.width, this.height);
               const scale = currentMax / Math.max(bounds.width, bounds.height);
 
-              this.width = bounds.width * scale;
-              this.height = bounds.height * scale;
+              const newWidth = bounds.width * scale;
+              const newHeight = bounds.height * scale;
 
-              this.shape = "custom";
-              this.pathData = pathData;
+              const configService =
+                this.context?.services.get<any>("ConfigurationService");
+              if (configService) {
+                configService.update("dieline.width", newWidth);
+                configService.update("dieline.height", newHeight);
+                configService.update("dieline.shape", "custom");
+                configService.update("dieline.pathData", pathData);
+              }
 
-              this.updateDieline();
               return pathData;
             } catch (e) {
               console.error("Edge detection failed", e);
@@ -431,31 +358,38 @@ export class DielineTool implements Extension {
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
-    // Handle borderLength (Margin)
+    let visualWidth = width;
+    let visualHeight = height;
+
     if (borderLength && borderLength > 0) {
-      width = Math.max(0, canvasW - borderLength * 2);
-      height = Math.max(0, canvasH - borderLength * 2);
+      visualWidth = Math.max(0, canvasW - borderLength * 2);
+      visualHeight = Math.max(0, canvasH - borderLength * 2);
     }
 
-    // Handle Position
-    // this.position is normalized (0-1). Default to center (0.5, 0.5).
-    const normalizedPos = position ?? { x: 0.5, y: 0.5 };
-    const cx = Coordinate.toAbsolute(normalizedPos.x, canvasW);
-    const cy = Coordinate.toAbsolute(normalizedPos.y, canvasH);
+    const cx = Coordinate.toAbsolute(position?.x ?? 0.5, canvasW);
+    const cy = Coordinate.toAbsolute(position?.y ?? 0.5, canvasH);
 
     // Clear existing objects
     layer.remove(...layer.getObjects());
 
-    // Denormalize Holes for Geometry Generation
+    // Resolve Holes for Geometry Generation
+    const geometryForHoles = {
+      x: cx,
+      y: cy,
+      width: visualWidth,
+      height: visualHeight,
+    };
+
     const absoluteHoles = (holes || []).map((h) => {
-      const p = Coordinate.denormalizePoint(
-        { x: h.x, y: h.y },
-        { width: canvasW, height: canvasH },
+      const pos = resolveHolePosition(
+        h,
+        geometryForHoles,
+        { width: canvasW, height: canvasH }
       );
       return {
         ...h,
-        x: p.x,
-        y: p.y,
+        x: pos.x,
+        y: pos.y,
       };
     });
 
@@ -683,14 +617,15 @@ export class DielineTool implements Extension {
 
     // Denormalize Holes for Export
     const absoluteHoles = (holes || []).map((h) => {
-      const p = Coordinate.denormalizePoint(
-        { x: h.x, y: h.y },
-        { width: canvasW, height: canvasH },
+      const pos = resolveHolePosition(
+        h,
+        { x: cx, y: cy, width, height },
+        { width: canvasW, height: canvasH }
       );
       return {
         ...h,
-        x: p.x,
-        y: p.y,
+        x: pos.x,
+        y: pos.y,
       };
     });
 
