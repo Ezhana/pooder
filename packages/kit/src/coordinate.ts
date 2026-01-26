@@ -84,4 +84,23 @@ export class Coordinate {
       y: this.toAbsolute(point.y, size.height),
     };
   }
+
+  static convertUnit(value: number, from: Unit, to: Unit): number {
+    if (from === to) return value;
+    
+    // Base unit: mm
+    const toMM: Record<Unit, number> = {
+      px: 0.264583, // 1px = 0.264583mm (96 DPI)
+      mm: 1,
+      cm: 10,
+      in: 25.4
+    };
+
+    const mmValue = value * (from === 'px' ? toMM.px : toMM[from] || 1);
+    
+    if (to === 'px') {
+        return mmValue / toMM.px;
+    }
+    return mmValue / (toMM[to] || 1);
+  }
 }

@@ -51,7 +51,7 @@ export class DielineTool implements Extension {
   private holes: HoleData[] = [];
   // Position is stored as normalized coordinates (0-1)
   private position?: { x: number; y: number };
-  private padding: number | string = 40;
+  private padding: number | string = 140;
   private pathData?: string;
 
   private canvasService?: CanvasService;
@@ -419,18 +419,19 @@ export class DielineTool implements Extension {
         width: canvasW,
         height: canvasH,
       });
+      // Convert hole radii (assumed mm) to current unit then to pixels via scale
+      // scale is px/unit.
+      // visual = radius_mm * convert(1, 'mm', unit) * scale
+      // Note: Coordinate.convertUnit(val, 'mm', unit) returns value in 'unit'.
+      const unitScale = Coordinate.convertUnit(1, "mm", unit);
+
       return {
         ...h,
         x: pos.x,
         y: pos.y,
-        // Scale hole radii if they are in physical units?
-        // Currently holes config doesn't specify unit, assumed same as dieline?
-        // Usually hole radius is small (e.g. 5mm).
-        // If we assume hole radius is also in 'unit', we need to scale it.
-        // But HoleData structure is simple.
-        // Let's assume HoleData radii are in the same UNIT as the Dieline.
-        innerRadius: h.innerRadius * scale,
-        outerRadius: h.outerRadius * scale,
+        // Scale hole radii: mm -> current unit -> pixels
+        innerRadius: h.innerRadius * unitScale * scale,
+        outerRadius: h.outerRadius * unitScale * scale,
         offsetX: (h.offsetX || 0) * scale,
         offsetY: (h.offsetY || 0) * scale,
       };
@@ -655,8 +656,8 @@ export class DielineTool implements Extension {
   public async exportCutImage() {
     if (!this.canvasService) return null;
     const userLayer = this.canvasService.getLayer("user");
-    
-    // Even if no user images, we might want to export the shape? 
+
+    // Even if no user images, we might want to export the shape?
     // But usually "Cut Image" implies the printed content.
     // If empty, maybe just return null or empty string.
     if (!userLayer) return null;
@@ -711,20 +712,20 @@ export class DielineTool implements Extension {
     // 2. Prepare for Export
     // Clone the layer to not affect the stage
     const clonedLayer = await userLayer.clone();
-    
+
     // Create Clip Path
-    // Note: In Fabric, clipPath is relative to the object center usually, 
-    // but for a Group that is full-canvas (left=0, top=0), absolute coordinates should work 
+    // Note: In Fabric, clipPath is relative to the object center usually,
+    // but for a Group that is full-canvas (left=0, top=0), absolute coordinates should work
     // if we configure it correctly.
     // However, Fabric's clipPath handling can be tricky with Groups.
     // Safest bet: Position the clipPath absolutely and ensuring group is absolute.
-    
+
     const clipPath = new Path(pathData, {
-        originX: 'left',
-        originY: 'top',
-        left: 0, 
-        top: 0,
-        absolutePositioned: true // Important for groups
+      originX: "left",
+      originY: "top",
+      left: 0,
+      top: 0,
+      absolutePositioned: true, // Important for groups
     });
 
     clonedLayer.clipPath = clipPath;
@@ -735,12 +736,12 @@ export class DielineTool implements Extension {
 
     // 4. Export
     const dataUrl = clonedLayer.toDataURL({
-        format: 'png',
-        multiplier: 2, // Better quality
-        left: bounds.left,
-        top: bounds.top,
-        width: bounds.width,
-        height: bounds.height
+      format: "png",
+      multiplier: 2, // Better quality
+      left: bounds.left,
+      top: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
     });
 
     return dataUrl;

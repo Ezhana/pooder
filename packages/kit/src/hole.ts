@@ -152,12 +152,22 @@ export class HoleTool implements Extension {
           title: "Add Hole",
           handler: (x: number, y: number) => {
             if (!this.canvasService) return false;
-            const { width, height } = this.canvasService.canvas;
             
-            const normalizedHole = Coordinate.normalizePoint(
-              { x, y },
-              { width: width || 800, height: height || 600 }
-            );
+            // Normalize relative to Dieline Geometry if available
+            let normalizedX = 0.5;
+            let normalizedY = 0.5;
+
+            if (this.currentGeometry) {
+                const { x: gx, y: gy, width: gw, height: gh } = this.currentGeometry;
+                const left = gx - gw / 2;
+                const top = gy - gh / 2;
+                normalizedX = gw > 0 ? (x - left) / gw : 0.5;
+                normalizedY = gh > 0 ? (y - top) / gh : 0.5;
+            } else {
+                 const { width, height } = this.canvasService.canvas;
+                 normalizedX = Coordinate.toNormalized(x, width || 800);
+                 normalizedY = Coordinate.toNormalized(y, height || 600);
+            }
 
             const configService = this.context?.services.get<ConfigurationService>(
               "ConfigurationService"
@@ -171,8 +181,8 @@ export class HoleTool implements Extension {
               const outerRadius = lastHole?.outerRadius ?? 25;
 
               const newHole = {
-                  x: normalizedHole.x,
-                  y: normalizedHole.y,
+                  x: normalizedX,
+                  y: normalizedY,
                   innerRadius,
                   outerRadius,
               };
@@ -428,17 +438,28 @@ export class HoleTool implements Extension {
         };
       }
 
-      // If no anchor, use normalized coordinates
-      const { width, height } = this.canvasService!.canvas;
-      const p = Coordinate.normalizePoint(
-        { x: newAbsX, y: newAbsY },
-        { width: width || 800, height: height || 600 }
-      );
+      // If no anchor, use normalized coordinates relative to Dieline Geometry
+      // normalized = (absolute - (center - width/2)) / width
+      let normalizedX = 0.5;
+      let normalizedY = 0.5;
+
+      if (this.currentGeometry) {
+        const { x, y, width, height } = this.currentGeometry;
+        const left = x - width / 2;
+        const top = y - height / 2;
+        normalizedX = width > 0 ? (newAbsX - left) / width : 0.5;
+        normalizedY = height > 0 ? (newAbsY - top) / height : 0.5;
+      } else {
+        // Fallback to Canvas normalization if no geometry (should rare)
+        const { width, height } = this.canvasService!.canvas;
+        normalizedX = Coordinate.toNormalized(newAbsX, width || 800);
+        normalizedY = Coordinate.toNormalized(newAbsY, height || 600);
+      }
       
       return {
         ...original,
-        x: p.x,
-        y: p.y,
+        x: normalizedX,
+        y: normalizedY,
         // Ensure radii are preserved
         innerRadius: original?.innerRadius ?? 15,
         outerRadius: original?.outerRadius ?? 25,
@@ -504,8 +525,11 @@ export class HoleTool implements Extension {
       // Apply Scale to Radii for Rendering
       // If scale is missing (legacy geometry), default to 1
       const scale = geometry.scale || 1;
-      const visualInnerRadius = hole.innerRadius * scale;
-      const visualOuterRadius = hole.outerRadius * scale;
+      const unit = geometry.unit || "mm";
+      const unitScale = Coordinate.convertUnit(1, 'mm', unit);
+
+      const visualInnerRadius = hole.innerRadius * unitScale * scale;
+      const visualOuterRadius = hole.outerRadius * unitScale * scale;
 
       const innerCircle = new Circle({
         radius: visualInnerRadius,
@@ -608,8 +632,11 @@ export class HoleTool implements Extension {
     // Scale radii for constraint calculation (since geometry is in pixels)
     // Geometry scale is needed.
     const scale = geometry.scale || 1;
-    const innerR = (holeData?.innerRadius ?? 15) * scale;
-    const outerR = (holeData?.outerRadius ?? 25) * scale;
+    const unit = geometry.unit || "mm";
+    const unitScale = Coordinate.convertUnit(1, 'mm', unit);
+    
+    const innerR = (holeData?.innerRadius ?? 15) * unitScale * scale;
+    const outerR = (holeData?.outerRadius ?? 25) * unitScale * scale;
 
     const newPos = this.calculateConstrainedPosition(
       currentPos,

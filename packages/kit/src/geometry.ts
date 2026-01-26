@@ -82,14 +82,13 @@ export function resolveHolePosition(
       y: by + (hole.offsetY || 0),
     };
   } else if (hole.x !== undefined && hole.y !== undefined) {
-    // Legacy / Direct coordinates (Normalized)
-    // We assume x/y are normalized to canvas size if no anchor is present
-    // Or should we support absolute?
-    // Current system uses normalized.
-    // Coordinate.denormalizePoint logic:
+    // Legacy / Direct coordinates (Normalized relative to Dieline Geometry)
+    // Formula: absolute = normalized * width + (center - width/2)
+    // This handles padding correctly.
+    const { x, width, y, height } = geometry;
     return {
-      x: hole.x * canvasSize.width,
-      y: hole.y * canvasSize.height,
+      x: hole.x * width + (x - width / 2),
+      y: hole.y * height + (y - height / 2),
     };
   }
   return { x: 0, y: 0 };
