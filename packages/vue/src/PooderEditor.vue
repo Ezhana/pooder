@@ -1,18 +1,18 @@
 <template>
   <div class="pooder-editor">
-    <!--    <ToolPanel />-->
+    <ToolPanel />
     <CanvasArea @canvas-ready="onCanvasReady" @resize="onResize" />
-    <!--    <div>-->
-    <!--      <button-->
-    <!--        @click="-->
-    <!--          console.log(cfgSvc.export());-->
-    <!--          console.log(JSON.stringify(cfgSvc.export()));-->
-    <!--        "-->
-    <!--      >-->
-    <!--        export-->
-    <!--      </button>-->
-    <!--      <button @click="handleImport">import</button>-->
-    <!--    </div>-->
+    <div>
+      <button
+        @click="
+          console.log(cfgSvc.export());
+          console.log(JSON.stringify(cfgSvc.export()));
+        "
+      >
+        export
+      </button>
+      <!--          <button @click="handleImport">import</button>-->
+    </div>
   </div>
 </template>
 
@@ -69,11 +69,11 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
 
   const tools = [
     new BackgroundTool(),
-    new RulerTool(),
+    new MirrorTool(),
     // new FilmTool(),
     // new WhiteInkTool(),
-    new MirrorTool(),
     new DielineTool(),
+    new RulerTool(),
     new ImageTool(),
     new HoleTool(),
   ];

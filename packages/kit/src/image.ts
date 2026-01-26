@@ -280,13 +280,12 @@ export class ImageTool implements Extension {
         if (configService) {
           const dielineWidth = configService.get("dieline.width") || 500;
           const dielineHeight = configService.get("dieline.height") || 500;
-          const borderLength = configService.get("dieline.borderLength") || 0;
           const padding = configService.get("dieline.padding") || 40;
           
           const layout = Coordinate.calculateLayout(
              { width: canvasW, height: canvasH },
              { width: dielineWidth, height: dielineHeight },
-             borderLength + padding
+             padding
           );
           layoutScale = layout.scale;
           layoutOffsetX = layout.offsetX;
@@ -369,13 +368,12 @@ export class ImageTool implements Extension {
           )!;
           dielinePhysicalWidth = configService.get("dieline.width") || 500;
           dielinePhysicalHeight = configService.get("dieline.height") || 500;
-          const borderLength = configService.get("dieline.borderLength") || 0;
           const padding = configService.get("dieline.padding") || 40;
           
           const layout = Coordinate.calculateLayout(
              { width: canvasW, height: canvasH },
              { width: dielinePhysicalWidth, height: dielinePhysicalHeight },
-             borderLength + padding
+             padding
           );
           layoutScale = layout.scale;
           layoutOffsetX = layout.offsetX;

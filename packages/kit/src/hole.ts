@@ -365,6 +365,9 @@ export class HoleTool implements Extension {
       const newAbsX = obj.left!;
       const newAbsY = obj.top!;
 
+      // Get current scale to denormalize offsets
+      const scale = this.currentGeometry?.scale || 1;
+
       if (original && original.anchor && this.currentGeometry) {
         // Reverse calculate offset from anchor
         const { x, y, width, height } = this.currentGeometry;
@@ -416,8 +419,9 @@ export class HoleTool implements Extension {
         
         return {
           ...original,
-          offsetX: newAbsX - bx,
-          offsetY: newAbsY - by,
+          // Denormalize offset back to physical units
+          offsetX: (newAbsX - bx) / scale,
+          offsetY: (newAbsY - by) / scale,
           // Clear direct coordinates if we use anchor
           x: undefined,
           y: undefined,
@@ -486,7 +490,8 @@ export class HoleTool implements Extension {
       y: (height || 600) / 2,
       width: width || 800,
       height: height || 600,
-    };
+      scale: 1, // Default scale if no geometry loaded
+    } as any;
 
     holes.forEach((hole, index) => {
       // Resolve position
@@ -496,8 +501,14 @@ export class HoleTool implements Extension {
         { width: width || 800, height: height || 600 }
       );
 
+      // Apply Scale to Radii for Rendering
+      // If scale is missing (legacy geometry), default to 1
+      const scale = geometry.scale || 1;
+      const visualInnerRadius = hole.innerRadius * scale;
+      const visualOuterRadius = hole.outerRadius * scale;
+
       const innerCircle = new Circle({
-        radius: hole.innerRadius,
+        radius: visualInnerRadius,
         fill: "transparent",
         stroke: "red",
         strokeWidth: 2,
@@ -506,7 +517,7 @@ export class HoleTool implements Extension {
       });
 
       const outerCircle = new Circle({
-        radius: hole.outerRadius,
+        radius: visualOuterRadius,
         fill: "transparent",
         stroke: "#666",
         strokeWidth: 1,
@@ -592,14 +603,20 @@ export class HoleTool implements Extension {
     objects.forEach((obj: any, i: number) => {
       const currentPos = new Point(obj.left, obj.top);
       // We need to pass the hole's radii to calculateConstrainedPosition
-      const holeData = this.holes[i];
-      
-      const newPos = this.calculateConstrainedPosition(
-        currentPos,
-        constraintGeometry,
-        holeData?.innerRadius ?? 15,
-        holeData?.outerRadius ?? 25
-      );
+    const holeData = this.holes[i];
+    
+    // Scale radii for constraint calculation (since geometry is in pixels)
+    // Geometry scale is needed.
+    const scale = geometry.scale || 1;
+    const innerR = (holeData?.innerRadius ?? 15) * scale;
+    const outerR = (holeData?.outerRadius ?? 25) * scale;
+
+    const newPos = this.calculateConstrainedPosition(
+      currentPos,
+      constraintGeometry,
+      innerR,
+      outerR
+    );
 
       if (currentPos.distanceFrom(newPos) > 0.1) {
         obj.set({

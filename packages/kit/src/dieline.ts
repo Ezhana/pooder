@@ -28,6 +28,7 @@ export interface DielineGeometry {
   radius: number;
   offset: number;
   borderLength?: number;
+  scale?: number;
   pathData?: string;
 }
 
@@ -50,8 +51,7 @@ export class DielineTool implements Extension {
   private holes: HoleData[] = [];
   // Position is stored as normalized coordinates (0-1)
   private position?: { x: number; y: number };
-  private borderLength?: number;
-  private padding: number = 140;
+  private padding: number = 40;
   private pathData?: string;
 
   private canvasService?: CanvasService;
@@ -66,7 +66,7 @@ export class DielineTool implements Extension {
       radius: number;
       // Position is normalized (0-1)
       position: { x: number; y: number };
-      borderLength: number;
+      padding: number;
       offset: number;
       style: "solid" | "dashed";
       insideColor: string;
@@ -97,10 +97,6 @@ export class DielineTool implements Extension {
       this.width = configService.get("dieline.width", this.width);
       this.height = configService.get("dieline.height", this.height);
       this.radius = configService.get("dieline.radius", this.radius);
-      this.borderLength = configService.get(
-        "dieline.borderLength",
-        this.borderLength,
-      );
       this.padding = configService.get("dieline.padding", this.padding);
       this.offset = configService.get("dieline.offset", this.offset);
       this.style = configService.get("dieline.style", this.style);
@@ -189,15 +185,7 @@ export class DielineTool implements Extension {
           id: "dieline.position",
           type: "json",
           label: "Position (Normalized)",
-          default: this.position,
-        },
-        {
-          id: "dieline.borderLength",
-          type: "number",
-          label: "Margin",
-          min: 0,
-          max: 500,
-          default: this.borderLength,
+          default: this.radius,
         },
         {
           id: "dieline.padding",
@@ -372,7 +360,6 @@ export class DielineTool implements Extension {
       insideColor,
       outsideColor,
       position,
-      borderLength,
       showBleedLines,
       holes,
     } = this;
@@ -386,7 +373,7 @@ export class DielineTool implements Extension {
     const layout = Coordinate.calculateLayout(
       { width: canvasW, height: canvasH },
       { width, height },
-      (borderLength || 0) + (this.padding || 0),
+      this.padding || 0,
     );
 
     const scale = layout.scale;
@@ -615,23 +602,14 @@ export class DielineTool implements Extension {
 
   public getGeometry(): DielineGeometry | null {
     if (!this.canvasService) return null;
-    const {
-      unit,
-      shape,
-      width,
-      height,
-      radius,
-      position,
-      borderLength,
-      offset,
-    } = this;
+    const { unit, shape, width, height, radius, position, offset } = this;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
     const layout = Coordinate.calculateLayout(
       { width: canvasW, height: canvasH },
       { width, height },
-      (borderLength || 0) + (this.padding || 0),
+      this.padding || 0,
     );
 
     const scale = layout.scale;
@@ -650,9 +628,10 @@ export class DielineTool implements Extension {
       height: visualHeight,
       radius: radius * scale,
       offset: offset * scale,
-      borderLength,
+      // Pass scale to help other tools (like HoleTool) convert units
+      scale,
       pathData: this.pathData,
-    };
+    } as DielineGeometry;
   }
 
   public exportCutImage() {
@@ -660,15 +639,14 @@ export class DielineTool implements Extension {
     const canvas = this.canvasService.canvas;
 
     // 1. Generate Path Data
-    const { shape, width, height, radius, position, holes, borderLength } =
-      this;
+    const { shape, width, height, radius, position, holes } = this;
     const canvasW = canvas.width || 800;
     const canvasH = canvas.height || 600;
 
     const layout = Coordinate.calculateLayout(
       { width: canvasW, height: canvasH },
       { width, height },
-      (borderLength || 0) + (this.padding || 0),
+      this.padding || 0,
     );
     const scale = layout.scale;
     const cx = layout.offsetX + layout.width / 2;
@@ -706,76 +684,6 @@ export class DielineTool implements Extension {
       pathData: this.pathData,
     });
 
-    // 2. Create Clip Path
-    // @ts-ignore
-    const clipPath = new Path(pathData, {
-      left: 0,
-      top: 0,
-      originX: "left",
-      originY: "top",
-      absolutePositioned: true,
-    });
-
-    // 3. Hide UI Layers
-    const layer = this.getLayer();
-    const wasVisible = layer?.visible ?? true;
-    if (layer) layer.visible = false;
-
-    // Hide hole markers
-    const holeMarkers = canvas
-      .getObjects()
-      .filter((o: any) => o.data?.type === "hole-marker");
-    holeMarkers.forEach((o) => (o.visible = false));
-
-    // Hide Ruler Overlay
-    const rulerLayer = canvas
-      .getObjects()
-      .find((obj: any) => obj.data?.id === "ruler-overlay");
-    const rulerWasVisible = rulerLayer?.visible ?? true;
-    if (rulerLayer) rulerLayer.visible = false;
-
-    // 4. Apply Clip & Export
-    const originalClip = canvas.clipPath;
-    canvas.clipPath = clipPath;
-
-    const bbox = clipPath.getBoundingRect();
-
-    const clipPathCorrected = new Path(pathData, {
-      absolutePositioned: true,
-      left: 0,
-      top: 0,
-    });
-
-    const tempPath = new Path(pathData);
-    const tempBounds = tempPath.getBoundingRect();
-
-    clipPathCorrected.set({
-      left: tempBounds.left,
-      top: tempBounds.top,
-      originX: "left",
-      originY: "top",
-    });
-
-    // 4. Apply Clip & Export
-    canvas.clipPath = clipPathCorrected;
-
-    const exportBbox = clipPathCorrected.getBoundingRect();
-    const dataURL = canvas.toDataURL({
-      format: "png",
-      multiplier: 2,
-      left: exportBbox.left,
-      top: exportBbox.top,
-      width: exportBbox.width,
-      height: exportBbox.height,
-    });
-
-    // 5. Restore
-    canvas.clipPath = originalClip;
-    if (layer) layer.visible = wasVisible;
-    if (rulerLayer) rulerLayer.visible = rulerWasVisible;
-    holeMarkers.forEach((o) => (o.visible = true));
-    canvas.requestRenderAll();
-
-    return dataURL;
+    return pathData;
   }
 }

@@ -28,7 +28,6 @@ export class RulerTool implements Extension {
   private dielineWidth: number = 500;
   private dielineHeight: number = 500;
   private dielineUnit: Unit = "mm";
-  private borderLength: number = 0;
   private dielinePadding: number = 40;
   private dielineOffset: number = 0;
 
@@ -77,10 +76,6 @@ export class RulerTool implements Extension {
         "dieline.height",
         this.dielineHeight,
       );
-      this.borderLength = configService.get(
-        "dieline.borderLength",
-        this.borderLength,
-      );
       this.dielinePadding = configService.get(
         "dieline.padding",
         this.dielinePadding,
@@ -103,7 +98,6 @@ export class RulerTool implements Extension {
           if (e.key === "dieline.unit") this.dielineUnit = e.value;
           if (e.key === "dieline.width") this.dielineWidth = e.value;
           if (e.key === "dieline.height") this.dielineHeight = e.value;
-          if (e.key === "dieline.borderLength") this.borderLength = e.value;
           if (e.key === "dieline.padding") this.dielinePadding = e.value;
           if (e.key === "dieline.offset") this.dielineOffset = e.value;
           shouldUpdate = true;
@@ -331,7 +325,7 @@ export class RulerTool implements Extension {
     const layout = Coordinate.calculateLayout(
       { width, height },
       { width: this.dielineWidth, height: this.dielineHeight },
-      (this.borderLength || 0) + (this.dielinePadding || 0),
+      this.dielinePadding || 0,
     );
 
     const scale = layout.scale;
