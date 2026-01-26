@@ -61,7 +61,7 @@ export class RulerTool implements Extension {
       // Load initial config
       this.unit = configService.get("ruler.unit", this.unit);
       this.thickness = configService.get("ruler.thickness", this.thickness);
-      this.thickness = configService.get("ruler.gap", this.gap);
+      this.gap = configService.get("ruler.gap", this.gap);
       this.backgroundColor = configService.get(
         "ruler.backgroundColor",
         this.backgroundColor,
@@ -262,12 +262,13 @@ export class RulerTool implements Extension {
   ): Group {
     const line = new Line([x1, y1, x2, y2], {
       stroke: color,
-      strokeWidth: 1,
+      strokeWidth: this.thickness / 20, // Scale stroke width relative to thickness (default 1)
       selectable: false,
       evented: false,
     });
 
-    const arrowSize = 6;
+    // Arrow size proportional to thickness
+    const arrowSize = Math.max(4, this.thickness * 0.3);
     const angle = Math.atan2(y2 - y1, x2 - x1);
 
     // End Arrow (at x2, y2)
@@ -354,7 +355,7 @@ export class RulerTool implements Extension {
 
     // Pixel expansion based on effective offset
     const expandPixels = effectiveOffset * scale;
-    // Use thickness as the gap distance from the object
+    // Use gap configuration
     const gap = this.gap || 15;
 
     // New Bounding Box for Ruler
