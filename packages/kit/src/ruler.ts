@@ -16,7 +16,6 @@ export class RulerTool implements Extension {
     name: "RulerTool",
   };
 
-  private unit: Unit = "mm";
   private thickness: number = 20;
   private gap: number = 15;
   private backgroundColor: string = "#f0f0f0";
@@ -28,14 +27,13 @@ export class RulerTool implements Extension {
   private dielineWidth: number = 500;
   private dielineHeight: number = 500;
   private dielineUnit: Unit = "mm";
-  private dielinePadding: number = 40;
+  private dielinePadding: number | string = 40;
   private dielineOffset: number = 0;
 
   private canvasService?: CanvasService;
 
   constructor(
     options?: Partial<{
-      unit: Unit;
       thickness: number;
       backgroundColor: string;
       textColor: string;
@@ -58,7 +56,6 @@ export class RulerTool implements Extension {
     const configService = context.services.get<any>("ConfigurationService");
     if (configService) {
       // Load initial config
-      this.unit = configService.get("ruler.unit", this.unit);
       this.thickness = configService.get("ruler.thickness", this.thickness);
       this.gap = configService.get("ruler.gap", this.gap);
       this.backgroundColor = configService.get(
@@ -122,13 +119,6 @@ export class RulerTool implements Extension {
     return {
       [ContributionPointIds.CONFIGURATIONS]: [
         {
-          id: "ruler.unit",
-          type: "select",
-          label: "Unit",
-          options: ["px", "mm", "cm", "in"],
-          default: "px",
-        },
-        {
           id: "ruler.thickness",
           type: "number",
           label: "Thickness",
@@ -172,16 +162,6 @@ export class RulerTool implements Extension {
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
-        {
-          command: "setUnit",
-          title: "Set Ruler Unit",
-          handler: (unit: "px" | "mm" | "cm" | "in") => {
-            if (this.unit === unit) return true;
-            this.unit = unit;
-            this.updateRuler();
-            return true;
-          },
-        },
         {
           command: "setTheme",
           title: "Set Ruler Theme",
@@ -309,6 +289,23 @@ export class RulerTool implements Extension {
     });
   }
 
+  private resolvePadding(
+    containerWidth: number,
+    containerHeight: number,
+  ): number {
+    if (typeof this.dielinePadding === "number") {
+      return this.dielinePadding;
+    }
+    if (typeof this.dielinePadding === "string") {
+      if (this.dielinePadding.endsWith("%")) {
+        const percent = parseFloat(this.dielinePadding) / 100;
+        return Math.min(containerWidth, containerHeight) * percent;
+      }
+      return parseFloat(this.dielinePadding) || 0;
+    }
+    return 0;
+  }
+
   private updateRuler() {
     if (!this.canvasService) return;
     const layer = this.getLayer();
@@ -322,10 +319,11 @@ export class RulerTool implements Extension {
 
     // Calculate Layout using Dieline properties
     // Add padding to match DielineTool
+    const paddingPx = this.resolvePadding(width, height);
     const layout = Coordinate.calculateLayout(
       { width, height },
       { width: this.dielineWidth, height: this.dielineHeight },
-      this.dielinePadding || 0,
+      paddingPx,
     );
 
     const scale = layout.scale;

@@ -51,7 +51,7 @@ export class DielineTool implements Extension {
   private holes: HoleData[] = [];
   // Position is stored as normalized coordinates (0-1)
   private position?: { x: number; y: number };
-  private padding: number = 40;
+  private padding: number | string = 40;
   private pathData?: string;
 
   private canvasService?: CanvasService;
@@ -66,7 +66,7 @@ export class DielineTool implements Extension {
       radius: number;
       // Position is normalized (0-1)
       position: { x: number; y: number };
-      padding: number;
+      padding: number | string;
       offset: number;
       style: "solid" | "dashed";
       insideColor: string;
@@ -189,10 +189,9 @@ export class DielineTool implements Extension {
         },
         {
           id: "dieline.padding",
-          type: "number",
+          type: "select",
           label: "View Padding",
-          min: 0,
-          max: 200,
+          options: [0, 10, 20, 40, 60, 100, "2%", "5%", "10%", "15%", "20%"],
           default: this.padding,
         },
         {
@@ -346,6 +345,23 @@ export class DielineTool implements Extension {
     return new Pattern({ source: canvas, repetition: "repeat" });
   }
 
+  private resolvePadding(
+    containerWidth: number,
+    containerHeight: number,
+  ): number {
+    if (typeof this.padding === "number") {
+      return this.padding;
+    }
+    if (typeof this.padding === "string") {
+      if (this.padding.endsWith("%")) {
+        const percent = parseFloat(this.padding) / 100;
+        return Math.min(containerWidth, containerHeight) * percent;
+      }
+      return parseFloat(this.padding) || 0;
+    }
+    return 0;
+  }
+
   public updateDieline(emitEvent: boolean = true) {
     if (!this.canvasService) return;
     const layer = this.getLayer();
@@ -370,10 +386,11 @@ export class DielineTool implements Extension {
 
     // Calculate Layout based on Physical Dimensions and Canvas Size
     // Add padding to avoid edge hugging
+    const paddingPx = this.resolvePadding(canvasW, canvasH);
     const layout = Coordinate.calculateLayout(
       { width: canvasW, height: canvasH },
       { width, height },
-      this.padding || 0,
+      paddingPx,
     );
 
     const scale = layout.scale;
@@ -606,10 +623,11 @@ export class DielineTool implements Extension {
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
+    const paddingPx = this.resolvePadding(canvasW, canvasH);
     const layout = Coordinate.calculateLayout(
       { width: canvasW, height: canvasH },
       { width, height },
-      this.padding || 0,
+      paddingPx,
     );
 
     const scale = layout.scale;
@@ -643,10 +661,11 @@ export class DielineTool implements Extension {
     const canvasW = canvas.width || 800;
     const canvasH = canvas.height || 600;
 
+    const paddingPx = this.resolvePadding(canvasW, canvasH);
     const layout = Coordinate.calculateLayout(
       { width: canvasW, height: canvasH },
       { width, height },
-      this.padding || 0,
+      paddingPx,
     );
     const scale = layout.scale;
     const cx = layout.offsetX + layout.width / 2;
