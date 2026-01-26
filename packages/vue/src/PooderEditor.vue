@@ -1,18 +1,18 @@
 <template>
   <div class="pooder-editor">
-    <ToolPanel />
+    <!--    <ToolPanel />-->
     <CanvasArea @canvas-ready="onCanvasReady" @resize="onResize" />
-    <div>
-      <button
-        @click="
-          console.log(cfgSvc.export());
-          console.log(JSON.stringify(cfgSvc.export()));
-        "
-      >
-        export
-      </button>
-      <!--          <button @click="handleImport">import</button>-->
-    </div>
+    <!--    <div>-->
+    <!--      <button-->
+    <!--        @click="-->
+    <!--          console.log(cfgSvc.export());-->
+    <!--          console.log(JSON.stringify(cfgSvc.export()));-->
+    <!--        "-->
+    <!--      >-->
+    <!--        export-->
+    <!--      </button>-->
+    <!--      &lt;!&ndash;          <button @click="handleImport">import</button>&ndash;&gt;-->
+    <!--    </div>-->
   </div>
 </template>
 
@@ -51,15 +51,15 @@ const generateCutImage = async () => {
   return await cmdSvc.executeCommand("exportCutImage");
 };
 
-const setUserImage = async (url: string) => {
-  return await cmdSvc.executeCommand("setUserImage", url, 1);
+const addImage = async (url: string, options?: any) => {
+  return await cmdSvc.executeCommand("addImage", url, options);
 };
 
 defineExpose({
   importConfig,
   exportConfig,
   generateCutImage,
-  setUserImage,
+  addImage,
 });
 
 const onCanvasReady = (canvasEl: HTMLCanvasElement) => {

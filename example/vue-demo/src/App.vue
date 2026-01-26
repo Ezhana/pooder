@@ -50,7 +50,7 @@ const handleFileChange = (event: Event) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const url = e.target?.result as string;
-      editorRef.value.setUserImage(url);
+      editorRef.value.addImage(url);
     };
     reader.readAsDataURL(file);
   }
