@@ -55,8 +55,9 @@ export class ImageTool implements Extension {
         if (e.key === "image.items") {
           this.items = e.value || [];
           shouldUpdate = true;
-        } else if (e.key.startsWith("dieline.")) {
+        } else if (e.key.startsWith("dieline.") && e.key !== "dieline.holes") {
           // Dieline changes affect image layout/scale
+          // Ignore dieline.holes as they don't affect layout and can cause jitter
           shouldUpdate = true;
         }
 

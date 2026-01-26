@@ -1,6 +1,6 @@
 <template>
   <div class="pooder-editor">
-    <ToolPanel />
+    <!--    <ToolPanel />-->
     <CanvasArea @canvas-ready="onCanvasReady" @resize="onResize" />
     <!--    <div>-->
     <!--      <button-->

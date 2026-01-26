@@ -652,14 +652,19 @@ export class DielineTool implements Extension {
     } as DielineGeometry;
   }
 
-  public exportCutImage() {
+  public async exportCutImage() {
     if (!this.canvasService) return null;
-    const canvas = this.canvasService.canvas;
+    const userLayer = this.canvasService.getLayer("user");
+    
+    // Even if no user images, we might want to export the shape? 
+    // But usually "Cut Image" implies the printed content.
+    // If empty, maybe just return null or empty string.
+    if (!userLayer) return null;
 
     // 1. Generate Path Data
     const { shape, width, height, radius, position, holes } = this;
-    const canvasW = canvas.width || 800;
-    const canvasH = canvas.height || 600;
+    const canvasW = this.canvasService.canvas.width || 800;
+    const canvasH = this.canvasService.canvas.height || 600;
 
     const paddingPx = this.resolvePadding(canvasW, canvasH);
     const layout = Coordinate.calculateLayout(
@@ -703,6 +708,41 @@ export class DielineTool implements Extension {
       pathData: this.pathData,
     });
 
-    return pathData;
+    // 2. Prepare for Export
+    // Clone the layer to not affect the stage
+    const clonedLayer = await userLayer.clone();
+    
+    // Create Clip Path
+    // Note: In Fabric, clipPath is relative to the object center usually, 
+    // but for a Group that is full-canvas (left=0, top=0), absolute coordinates should work 
+    // if we configure it correctly.
+    // However, Fabric's clipPath handling can be tricky with Groups.
+    // Safest bet: Position the clipPath absolutely and ensuring group is absolute.
+    
+    const clipPath = new Path(pathData, {
+        originX: 'left',
+        originY: 'top',
+        left: 0, 
+        top: 0,
+        absolutePositioned: true // Important for groups
+    });
+
+    clonedLayer.clipPath = clipPath;
+
+    // 3. Calculate Crop Area (The Dieline Bounds)
+    // We want to export only the area covered by the dieline
+    const bounds = clipPath.getBoundingRect();
+
+    // 4. Export
+    const dataUrl = clonedLayer.toDataURL({
+        format: 'png',
+        multiplier: 2, // Better quality
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height
+    });
+
+    return dataUrl;
   }
 }
