@@ -65,6 +65,24 @@
           "
         />
 
+        <!-- Array/JSON Input -->
+        <textarea
+          v-else-if="config.type === 'array' || config.type === 'json'"
+          :id="config.id"
+          :value="JSON.stringify(values[config.id], null, 2)"
+          @change="
+            (e) => {
+              try {
+                const val = JSON.parse((e.target as HTMLTextAreaElement).value);
+                updateConfig(config.id, val);
+              } catch (err) {
+                console.error('Invalid JSON', err);
+              }
+            }
+          "
+          rows="5"
+        ></textarea>
+
         <!-- String/Default Input -->
         <input
           v-else
@@ -216,11 +234,17 @@ label {
 
 input[type="text"],
 input[type="number"],
-select {
+select,
+textarea {
   padding: 6px;
   border: 1px solid #ccc;
   border-radius: 4px;
   font-size: 14px;
+  font-family: monospace;
+}
+
+textarea {
+  resize: vertical;
 }
 
 input[type="color"] {

@@ -8,7 +8,7 @@ import {
 import { Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
 import { ImageTracer } from "./tracer";
-import { Coordinate } from "./coordinate";
+import { Coordinate, Unit } from "./coordinate";
 import {
   generateDielinePath,
   generateMaskPath,
@@ -20,6 +20,7 @@ import {
 
 export interface DielineGeometry {
   shape: "rect" | "circle" | "ellipse" | "custom";
+  unit: Unit;
   x: number;
   y: number;
   width: number;
@@ -36,6 +37,7 @@ export class DielineTool implements Extension {
     name: "DielineTool",
   };
 
+  private unit: Unit = "mm";
   private shape: "rect" | "circle" | "ellipse" | "custom" = "rect";
   private width: number = 500;
   private height: number = 500;
@@ -49,6 +51,7 @@ export class DielineTool implements Extension {
   // Position is stored as normalized coordinates (0-1)
   private position?: { x: number; y: number };
   private borderLength?: number;
+  private padding: number = 140;
   private pathData?: string;
 
   private canvasService?: CanvasService;
@@ -56,6 +59,7 @@ export class DielineTool implements Extension {
 
   constructor(
     options?: Partial<{
+      unit: Unit;
       shape: "rect" | "circle" | "ellipse" | "custom";
       width: number;
       height: number;
@@ -88,6 +92,7 @@ export class DielineTool implements Extension {
     const configService = context.services.get<any>("ConfigurationService");
     if (configService) {
       // Load initial config
+      this.unit = configService.get("dieline.unit", this.unit);
       this.shape = configService.get("dieline.shape", this.shape);
       this.width = configService.get("dieline.width", this.width);
       this.height = configService.get("dieline.height", this.height);
@@ -96,6 +101,7 @@ export class DielineTool implements Extension {
         "dieline.borderLength",
         this.borderLength,
       );
+      this.padding = configService.get("dieline.padding", this.padding);
       this.offset = configService.get("dieline.offset", this.offset);
       this.style = configService.get("dieline.style", this.style);
       this.insideColor = configService.get(
@@ -142,6 +148,13 @@ export class DielineTool implements Extension {
     return {
       [ContributionPointIds.CONFIGURATIONS]: [
         {
+          id: "dieline.unit",
+          type: "select",
+          label: "Unit",
+          options: ["px", "mm", "cm", "in"],
+          default: this.unit,
+        },
+        {
           id: "dieline.shape",
           type: "select",
           label: "Shape",
@@ -185,6 +198,14 @@ export class DielineTool implements Extension {
           min: 0,
           max: 500,
           default: this.borderLength,
+        },
+        {
+          id: "dieline.padding",
+          type: "number",
+          label: "View Padding",
+          min: 0,
+          max: 200,
+          default: this.padding,
         },
         {
           id: "dieline.offset",
@@ -255,8 +276,9 @@ export class DielineTool implements Extension {
               const newWidth = bounds.width * scale;
               const newHeight = bounds.height * scale;
 
-              const configService =
-                this.context?.services.get<any>("ConfigurationService");
+              const configService = this.context?.services.get<any>(
+                "ConfigurationService",
+              );
               if (configService) {
                 configService.update("dieline.width", newWidth);
                 configService.update("dieline.height", newHeight);
@@ -342,6 +364,7 @@ export class DielineTool implements Extension {
     if (!layer) return;
 
     const {
+      unit,
       shape,
       radius,
       offset,
@@ -358,21 +381,28 @@ export class DielineTool implements Extension {
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
-    let visualWidth = width;
-    let visualHeight = height;
+    // Calculate Layout based on Physical Dimensions and Canvas Size
+    // Add padding to avoid edge hugging
+    const layout = Coordinate.calculateLayout(
+      { width: canvasW, height: canvasH },
+      { width, height },
+      (borderLength || 0) + (this.padding || 0),
+    );
 
-    if (borderLength && borderLength > 0) {
-      visualWidth = Math.max(0, canvasW - borderLength * 2);
-      visualHeight = Math.max(0, canvasH - borderLength * 2);
-    }
+    const scale = layout.scale;
+    const cx = layout.offsetX + layout.width / 2;
+    const cy = layout.offsetY + layout.height / 2;
 
-    const cx = Coordinate.toAbsolute(position?.x ?? 0.5, canvasW);
-    const cy = Coordinate.toAbsolute(position?.y ?? 0.5, canvasH);
+    // Scaled dimensions for rendering (Pixels)
+    const visualWidth = layout.width;
+    const visualHeight = layout.height;
+    const visualRadius = radius * scale;
+    const visualOffset = offset * scale;
 
     // Clear existing objects
     layer.remove(...layer.getObjects());
 
-    // Resolve Holes for Geometry Generation
+    // Resolve Holes for Geometry Generation (using visual coordinates)
     const geometryForHoles = {
       x: cx,
       y: cy,
@@ -381,22 +411,32 @@ export class DielineTool implements Extension {
     };
 
     const absoluteHoles = (holes || []).map((h) => {
-      const pos = resolveHolePosition(
-        h,
-        geometryForHoles,
-        { width: canvasW, height: canvasH }
-      );
+      const pos = resolveHolePosition(h, geometryForHoles, {
+        width: canvasW,
+        height: canvasH,
+      });
       return {
         ...h,
         x: pos.x,
         y: pos.y,
+        // Scale hole radii if they are in physical units?
+        // Currently holes config doesn't specify unit, assumed same as dieline?
+        // Usually hole radius is small (e.g. 5mm).
+        // If we assume hole radius is also in 'unit', we need to scale it.
+        // But HoleData structure is simple.
+        // Let's assume HoleData radii are in the same UNIT as the Dieline.
+        innerRadius: h.innerRadius * scale,
+        outerRadius: h.outerRadius * scale,
+        offsetX: (h.offsetX || 0) * scale,
+        offsetY: (h.offsetY || 0) * scale,
       };
     });
 
     // 1. Draw Mask (Outside)
-    const cutW = Math.max(0, width + offset * 2);
-    const cutH = Math.max(0, height + offset * 2);
-    const cutR = radius === 0 ? 0 : Math.max(0, radius + offset);
+    const cutW = Math.max(0, visualWidth + visualOffset * 2);
+    const cutH = Math.max(0, visualHeight + visualOffset * 2);
+    const cutR =
+      visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
 
     // Use Paper.js to generate the complex mask path
     const maskPathData = generateMaskPath({
@@ -458,15 +498,15 @@ export class DielineTool implements Extension {
       const bleedPathData = generateBleedZonePath(
         {
           shape,
-          width,
-          height,
-          radius,
+          width: visualWidth,
+          height: visualHeight,
+          radius: visualRadius,
           x: cx,
           y: cy,
           holes: absoluteHoles,
           pathData: this.pathData,
         },
-        offset,
+        visualOffset,
       );
 
       // Use solid red for hatch lines to match dieline, background is transparent
@@ -517,9 +557,9 @@ export class DielineTool implements Extension {
     // generateDielinePath expects holes to be in absolute coordinates (matching width/height scale)
     const borderPathData = generateDielinePath({
       shape,
-      width: width,
-      height: height,
-      radius: radius,
+      width: visualWidth,
+      height: visualHeight,
+      radius: visualRadius,
       x: cx,
       y: cy,
       holes: absoluteHoles, // FIX: Use absoluteHoles instead of holes
@@ -575,30 +615,41 @@ export class DielineTool implements Extension {
 
   public getGeometry(): DielineGeometry | null {
     if (!this.canvasService) return null;
-    const { shape, width, height, radius, position, borderLength, offset } =
-      this;
+    const {
+      unit,
+      shape,
+      width,
+      height,
+      radius,
+      position,
+      borderLength,
+      offset,
+    } = this;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
-    let visualWidth = width;
-    let visualHeight = height;
+    const layout = Coordinate.calculateLayout(
+      { width: canvasW, height: canvasH },
+      { width, height },
+      (borderLength || 0) + (this.padding || 0),
+    );
 
-    if (borderLength && borderLength > 0) {
-      visualWidth = Math.max(0, canvasW - borderLength * 2);
-      visualHeight = Math.max(0, canvasH - borderLength * 2);
-    }
+    const scale = layout.scale;
+    const cx = layout.offsetX + layout.width / 2;
+    const cy = layout.offsetY + layout.height / 2;
 
-    const cx = Coordinate.toAbsolute(position?.x ?? 0.5, canvasW);
-    const cy = Coordinate.toAbsolute(position?.y ?? 0.5, canvasH);
+    const visualWidth = layout.width;
+    const visualHeight = layout.height;
 
     return {
       shape,
+      unit,
       x: cx,
       y: cy,
       width: visualWidth,
       height: visualHeight,
-      radius,
-      offset,
+      radius: radius * scale,
+      offset: offset * scale,
       borderLength,
       pathData: this.pathData,
     };
@@ -609,31 +660,46 @@ export class DielineTool implements Extension {
     const canvas = this.canvasService.canvas;
 
     // 1. Generate Path Data
-    const { shape, width, height, radius, position, holes } = this;
+    const { shape, width, height, radius, position, holes, borderLength } =
+      this;
     const canvasW = canvas.width || 800;
     const canvasH = canvas.height || 600;
-    const cx = Coordinate.toAbsolute(position?.x ?? 0.5, canvasW);
-    const cy = Coordinate.toAbsolute(position?.y ?? 0.5, canvasH);
+
+    const layout = Coordinate.calculateLayout(
+      { width: canvasW, height: canvasH },
+      { width, height },
+      (borderLength || 0) + (this.padding || 0),
+    );
+    const scale = layout.scale;
+    const cx = layout.offsetX + layout.width / 2;
+    const cy = layout.offsetY + layout.height / 2;
+    const visualWidth = layout.width;
+    const visualHeight = layout.height;
+    const visualRadius = radius * scale;
 
     // Denormalize Holes for Export
     const absoluteHoles = (holes || []).map((h) => {
       const pos = resolveHolePosition(
         h,
-        { x: cx, y: cy, width, height },
-        { width: canvasW, height: canvasH }
+        { x: cx, y: cy, width: visualWidth, height: visualHeight },
+        { width: canvasW, height: canvasH },
       );
       return {
         ...h,
         x: pos.x,
         y: pos.y,
+        innerRadius: h.innerRadius * scale,
+        outerRadius: h.outerRadius * scale,
+        offsetX: (h.offsetX || 0) * scale,
+        offsetY: (h.offsetY || 0) * scale,
       };
     });
 
     const pathData = generateDielinePath({
       shape,
-      width,
-      height,
-      radius,
+      width: visualWidth,
+      height: visualHeight,
+      radius: visualRadius,
       x: cx,
       y: cy,
       holes: absoluteHoles,

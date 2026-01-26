@@ -5,8 +5,9 @@ import {
   CommandContribution,
   ConfigurationContribution,
 } from "@pooder/core";
-import { Rect, Line, Text } from "fabric";
+import { Rect, Line, Text, Group, Polygon } from "fabric";
 import CanvasService from "./CanvasService";
+import { Coordinate, Unit } from "./coordinate";
 
 export class RulerTool implements Extension {
   id = "pooder.kit.ruler";
@@ -15,18 +16,27 @@ export class RulerTool implements Extension {
     name: "RulerTool",
   };
 
-  private unit: "px" | "mm" | "cm" | "in" = "px";
+  private unit: Unit = "mm";
   private thickness: number = 20;
+  private gap: number = 15;
   private backgroundColor: string = "#f0f0f0";
   private textColor: string = "#333333";
   private lineColor: string = "#999999";
   private fontSize: number = 10;
 
+  // Dieline context for sync
+  private dielineWidth: number = 500;
+  private dielineHeight: number = 500;
+  private dielineUnit: Unit = "mm";
+  private borderLength: number = 0;
+  private dielinePadding: number = 40;
+  private dielineOffset: number = 0;
+
   private canvasService?: CanvasService;
 
   constructor(
     options?: Partial<{
-      unit: "px" | "mm" | "cm" | "in";
+      unit: Unit;
       thickness: number;
       backgroundColor: string;
       textColor: string;
@@ -51,6 +61,7 @@ export class RulerTool implements Extension {
       // Load initial config
       this.unit = configService.get("ruler.unit", this.unit);
       this.thickness = configService.get("ruler.thickness", this.thickness);
+      this.thickness = configService.get("ruler.gap", this.gap);
       this.backgroundColor = configService.get(
         "ruler.backgroundColor",
         this.backgroundColor,
@@ -59,14 +70,47 @@ export class RulerTool implements Extension {
       this.lineColor = configService.get("ruler.lineColor", this.lineColor);
       this.fontSize = configService.get("ruler.fontSize", this.fontSize);
 
+      // Load Dieline Config
+      this.dielineUnit = configService.get("dieline.unit", this.dielineUnit);
+      this.dielineWidth = configService.get("dieline.width", this.dielineWidth);
+      this.dielineHeight = configService.get(
+        "dieline.height",
+        this.dielineHeight,
+      );
+      this.borderLength = configService.get(
+        "dieline.borderLength",
+        this.borderLength,
+      );
+      this.dielinePadding = configService.get(
+        "dieline.padding",
+        this.dielinePadding,
+      );
+      this.dielineOffset = configService.get(
+        "dieline.offset",
+        this.dielineOffset,
+      );
+
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
+        let shouldUpdate = false;
         if (e.key.startsWith("ruler.")) {
           const prop = e.key.split(".")[1];
           if (prop && prop in this) {
             (this as any)[prop] = e.value;
-            this.updateRuler();
+            shouldUpdate = true;
           }
+        } else if (e.key.startsWith("dieline.")) {
+          if (e.key === "dieline.unit") this.dielineUnit = e.value;
+          if (e.key === "dieline.width") this.dielineWidth = e.value;
+          if (e.key === "dieline.height") this.dielineHeight = e.value;
+          if (e.key === "dieline.borderLength") this.borderLength = e.value;
+          if (e.key === "dieline.padding") this.dielinePadding = e.value;
+          if (e.key === "dieline.offset") this.dielineOffset = e.value;
+          shouldUpdate = true;
+        }
+
+        if (shouldUpdate) {
+          this.updateRuler();
         }
       });
     }
@@ -97,6 +141,14 @@ export class RulerTool implements Extension {
           min: 10,
           max: 100,
           default: 20,
+        },
+        {
+          id: "ruler.gap",
+          type: "number",
+          label: "Gap",
+          min: 0,
+          max: 100,
+          default: 15,
         },
         {
           id: "ruler.backgroundColor",
@@ -201,6 +253,67 @@ export class RulerTool implements Extension {
     }
   }
 
+  private createArrowLine(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    color: string,
+  ): Group {
+    const line = new Line([x1, y1, x2, y2], {
+      stroke: color,
+      strokeWidth: 1,
+      selectable: false,
+      evented: false,
+    });
+
+    const arrowSize = 6;
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+
+    // End Arrow (at x2, y2)
+    const endArrow = new Polygon(
+      [
+        { x: 0, y: 0 },
+        { x: -arrowSize, y: -arrowSize / 2 },
+        { x: -arrowSize, y: arrowSize / 2 },
+      ],
+      {
+        fill: color,
+        left: x2,
+        top: y2,
+        originX: "right",
+        originY: "center",
+        angle: (angle * 180) / Math.PI,
+        selectable: false,
+        evented: false,
+      },
+    );
+
+    // Start Arrow (at x1, y1)
+    const startArrow = new Polygon(
+      [
+        { x: 0, y: 0 },
+        { x: arrowSize, y: -arrowSize / 2 },
+        { x: arrowSize, y: arrowSize / 2 },
+      ],
+      {
+        fill: color,
+        left: x1,
+        top: y1,
+        originX: "left",
+        originY: "center",
+        angle: (angle * 180) / Math.PI,
+        selectable: false,
+        evented: false,
+      },
+    );
+
+    return new Group([line, startArrow, endArrow], {
+      selectable: false,
+      evented: false,
+    });
+  }
+
   private updateRuler() {
     if (!this.canvasService) return;
     const layer = this.getLayer();
@@ -212,111 +325,180 @@ export class RulerTool implements Extension {
     const width = this.canvasService.canvas.width || 800;
     const height = this.canvasService.canvas.height || 600;
 
-    // Backgrounds
-    const topBg = new Rect({
-      left: 0,
-      top: 0,
-      width: width,
-      height: thickness,
-      fill: backgroundColor,
-      selectable: false,
-      evented: false,
-    });
+    // Calculate Layout using Dieline properties
+    // Add padding to match DielineTool
+    const layout = Coordinate.calculateLayout(
+      { width, height },
+      { width: this.dielineWidth, height: this.dielineHeight },
+      (this.borderLength || 0) + (this.dielinePadding || 0),
+    );
 
-    const leftBg = new Rect({
-      left: 0,
-      top: 0,
-      width: thickness,
-      height: height,
-      fill: backgroundColor,
-      selectable: false,
-      evented: false,
-    });
+    const scale = layout.scale;
+    const offsetX = layout.offsetX;
+    const offsetY = layout.offsetY;
+    const visualWidth = layout.width;
+    const visualHeight = layout.height;
 
-    const cornerBg = new Rect({
-      left: 0,
-      top: 0,
-      width: thickness,
-      height: thickness,
-      fill: backgroundColor,
-      stroke: lineColor,
-      strokeWidth: 1,
-      selectable: false,
-      evented: false,
-    });
+    // Logic for Bleed Offset:
+    // 1. If offset > 0 (Expand):
+    //    - Ruler expands to cover the bleed area.
+    //    - Dimensions show expanded size.
+    // 2. If offset < 0 (Shrink/Cut):
+    //    - Ruler stays at original Dieline boundary (does not shrink).
+    //    - Dimensions show original size.
+    //    - Bleed area is internal, so we ignore it for ruler placement.
 
-    layer.add(topBg);
-    layer.add(leftBg);
-    layer.add(cornerBg);
+    const rawOffset = this.dielineOffset || 0;
+    // Effective offset for ruler calculations (only positive offset expands the ruler)
+    const effectiveOffset = rawOffset > 0 ? rawOffset : 0;
 
-    // Drawing Constants (Pixel based for now)
-    const step = 100; // Major tick
-    const subStep = 10; // Minor tick
-    const midStep = 50; // Medium tick
+    // Pixel expansion based on effective offset
+    const expandPixels = effectiveOffset * scale;
+    // Use thickness as the gap distance from the object
+    const gap = this.gap || 15;
 
-    // Top Ruler
-    for (let x = 0; x <= width; x += subStep) {
-      if (x < thickness) continue; // Skip corner
+    // New Bounding Box for Ruler
+    const rulerLeft = offsetX - expandPixels;
+    const rulerTop = offsetY - expandPixels;
+    const rulerRight = offsetX + visualWidth + expandPixels;
+    const rulerBottom = offsetY + visualHeight + expandPixels;
 
-      let len = thickness * 0.25;
-      if (x % step === 0) len = thickness * 0.8;
-      else if (x % midStep === 0) len = thickness * 0.5;
+    // Display Dimensions (Physical)
+    const displayWidth = this.dielineWidth + effectiveOffset * 2;
+    const displayHeight = this.dielineHeight + effectiveOffset * 2;
 
-      const line = new Line([x, thickness - len, x, thickness], {
-        stroke: lineColor,
-        strokeWidth: 1,
-        selectable: false,
-        evented: false,
-      });
-      layer.add(line);
+    // Ruler Placement Coordinates
+    // Top Ruler: Above the top boundary
+    const topRulerY = rulerTop - gap;
+    const topRulerXStart = rulerLeft;
+    const topRulerXEnd = rulerRight;
 
-      if (x % step === 0) {
-        const text = new Text(x.toString(), {
-          left: x + 2,
-          top: 2,
-          fontSize: fontSize,
-          fill: textColor,
-          fontFamily: "Arial",
+    // Left Ruler: Left of the left boundary
+    const leftRulerX = rulerLeft - gap;
+    const leftRulerYStart = rulerTop;
+    const leftRulerYEnd = rulerBottom;
+
+    // 1. Top Dimension Line (X-Axis)
+    const topDimLine = this.createArrowLine(
+      topRulerXStart,
+      topRulerY,
+      topRulerXEnd,
+      topRulerY,
+      lineColor,
+    );
+    layer.add(topDimLine);
+
+    // Top Extension Lines
+    const extLen = 5;
+    layer.add(
+      new Line(
+        [
+          topRulerXStart,
+          topRulerY - extLen,
+          topRulerXStart,
+          topRulerY + extLen,
+        ],
+        {
+          stroke: lineColor,
+          strokeWidth: 1,
           selectable: false,
           evented: false,
-        });
-        layer.add(text);
-      }
-    }
-
-    // Left Ruler
-    for (let y = 0; y <= height; y += subStep) {
-      if (y < thickness) continue; // Skip corner
-
-      let len = thickness * 0.25;
-      if (y % step === 0) len = thickness * 0.8;
-      else if (y % midStep === 0) len = thickness * 0.5;
-
-      const line = new Line([thickness - len, y, thickness, y], {
-        stroke: lineColor,
-        strokeWidth: 1,
-        selectable: false,
-        evented: false,
-      });
-      layer.add(line);
-
-      if (y % step === 0) {
-        const text = new Text(y.toString(), {
-          angle: -90,
-          left: thickness / 2 - fontSize / 3, // approximate centering
-          top: y + fontSize,
-          fontSize: fontSize,
-          fill: textColor,
-          fontFamily: "Arial",
-          originX: "center",
-          originY: "center",
+        },
+      ),
+    );
+    layer.add(
+      new Line(
+        [topRulerXEnd, topRulerY - extLen, topRulerXEnd, topRulerY + extLen],
+        {
+          stroke: lineColor,
+          strokeWidth: 1,
           selectable: false,
           evented: false,
-        });
+        },
+      ),
+    );
 
-        layer.add(text);
-      }
-    }
+    // Top Text (Centered)
+    // Format to max 2 decimal places if needed
+    const widthStr = parseFloat(displayWidth.toFixed(2)).toString();
+    const topTextContent = `${widthStr} ${this.dielineUnit}`;
+    const topText = new Text(topTextContent, {
+      left: topRulerXStart + (rulerRight - rulerLeft) / 2,
+      top: topRulerY,
+      fontSize: fontSize,
+      fill: textColor,
+      fontFamily: "Arial",
+      originX: "center",
+      originY: "center",
+      backgroundColor: backgroundColor, // Background mask for readability
+      selectable: false,
+      evented: false,
+    });
+    // Add small padding to text background if Fabric supports it directly or via separate rect
+    // Fabric Text backgroundColor is tight.
+    layer.add(topText);
+
+    // 2. Left Dimension Line (Y-Axis)
+    const leftDimLine = this.createArrowLine(
+      leftRulerX,
+      leftRulerYStart,
+      leftRulerX,
+      leftRulerYEnd,
+      lineColor,
+    );
+    layer.add(leftDimLine);
+
+    // Left Extension Lines
+    layer.add(
+      new Line(
+        [
+          leftRulerX - extLen,
+          leftRulerYStart,
+          leftRulerX + extLen,
+          leftRulerYStart,
+        ],
+        {
+          stroke: lineColor,
+          strokeWidth: 1,
+          selectable: false,
+          evented: false,
+        },
+      ),
+    );
+    layer.add(
+      new Line(
+        [
+          leftRulerX - extLen,
+          leftRulerYEnd,
+          leftRulerX + extLen,
+          leftRulerYEnd,
+        ],
+        {
+          stroke: lineColor,
+          strokeWidth: 1,
+          selectable: false,
+          evented: false,
+        },
+      ),
+    );
+
+    // Left Text (Centered, Rotated)
+    const heightStr = parseFloat(displayHeight.toFixed(2)).toString();
+    const leftTextContent = `${heightStr} ${this.dielineUnit}`;
+    const leftText = new Text(leftTextContent, {
+      left: leftRulerX,
+      top: leftRulerYStart + (rulerBottom - rulerTop) / 2,
+      angle: -90,
+      fontSize: fontSize,
+      fill: textColor,
+      fontFamily: "Arial",
+      originX: "center",
+      originY: "center",
+      backgroundColor: backgroundColor,
+      selectable: false,
+      evented: false,
+    });
+    layer.add(leftText);
 
     // Always bring ruler to front
     this.canvasService.canvas.bringObjectToFront(layer);

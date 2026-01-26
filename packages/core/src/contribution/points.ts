@@ -43,7 +43,14 @@ export interface ViewContribution {
  */
 export interface ConfigurationContribution {
   id: string;
-  type: "string" | "number" | "boolean" | "color" | "select" | "json";
+  type:
+    | "string"
+    | "number"
+    | "boolean"
+    | "color"
+    | "select"
+    | "json"
+    | "array";
   label: string;
   default?: any;
   description?: string;

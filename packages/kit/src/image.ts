@@ -1,12 +1,12 @@
 import {
+  Extension,
+  ExtensionContext,
+  ContributionPointIds,
   CommandContribution,
   ConfigurationContribution,
   ConfigurationService,
-  ContributionPointIds,
-  Extension,
-  ExtensionContext,
 } from "@pooder/core";
-import { FabricImage as Image, Point, util } from "fabric";
+import { Image, Point, util } from "fabric";
 import CanvasService from "./CanvasService";
 import { Coordinate } from "./coordinate";
 
@@ -66,6 +66,7 @@ export class ImageTool implements Extension {
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
+        let shouldUpdate = false;
         if (e.key.startsWith("image.")) {
           const prop = e.key.split(".")[1];
           console.log(
@@ -73,8 +74,15 @@ export class ImageTool implements Extension {
           );
           if (prop && prop in this) {
             (this as any)[prop] = e.value;
-            this.updateImage();
+            shouldUpdate = true;
           }
+        } else if (e.key.startsWith("dieline.")) {
+          // Dieline changes affect image layout/scale
+          shouldUpdate = true;
+        }
+
+        if (shouldUpdate) {
+          this.updateImage();
         }
       });
     }
@@ -260,8 +268,32 @@ export class ImageTool implements Extension {
         const updates: any = {};
         const canvasW = this.canvasService.canvas.width || 800;
         const canvasH = this.canvasService.canvas.height || 600;
-        const centerX = canvasW / 2;
-        const centerY = canvasH / 2;
+
+        // Fetch Dieline Layout Info for physical positioning
+        const configService = this.context?.services.get<any>("ConfigurationService");
+        let layoutScale = 1;
+        let layoutOffsetX = 0;
+        let layoutOffsetY = 0;
+        let visualWidth = canvasW;
+        let visualHeight = canvasH;
+
+        if (configService) {
+          const dielineWidth = configService.get("dieline.width") || 500;
+          const dielineHeight = configService.get("dieline.height") || 500;
+          const borderLength = configService.get("dieline.borderLength") || 0;
+          const padding = configService.get("dieline.padding") || 40;
+          
+          const layout = Coordinate.calculateLayout(
+             { width: canvasW, height: canvasH },
+             { width: dielineWidth, height: dielineHeight },
+             borderLength + padding
+          );
+          layoutScale = layout.scale;
+          layoutOffsetX = layout.offsetX;
+          layoutOffsetY = layout.offsetY;
+          visualWidth = layout.width;
+          visualHeight = layout.height;
+        }
 
         if (userImage.opacity !== opacity) updates.opacity = opacity;
         if (angle !== undefined && userImage.angle !== angle)
@@ -277,22 +309,23 @@ export class ImageTool implements Extension {
         }
 
         if (left !== undefined) {
-          const globalLeft = Coordinate.toAbsolute(left, canvasW);
-          const localLeft = globalLeft - centerX;
-          if (Math.abs(userImage.left - localLeft) > 1)
-            updates.left = localLeft;
+          // left is normalized (0-1) relative to Dieline Content Area
+          const globalLeft = layoutOffsetX + left * visualWidth;
+          if (Math.abs(userImage.left - globalLeft) > 1)
+            updates.left = globalLeft;
         }
 
         if (top !== undefined) {
-          const globalTop = Coordinate.toAbsolute(top, canvasH);
-          const localTop = globalTop - centerY;
-          if (Math.abs(userImage.top - localTop) > 1) updates.top = localTop;
+           // top is normalized (0-1) relative to Dieline Content Area
+          const globalTop = layoutOffsetY + top * visualHeight;
+          if (Math.abs(userImage.top - globalTop) > 1) updates.top = globalTop;
         }
 
         if (width !== undefined && userImage.width)
-          updates.scaleX = width / userImage.width;
+          // width is physical units -> convert to pixels using layoutScale
+          updates.scaleX = (width * layoutScale) / userImage.width;
         if (height !== undefined && userImage.height)
-          updates.scaleY = height / userImage.height;
+          updates.scaleY = (height * layoutScale) / userImage.height;
 
         if (Object.keys(updates).length > 0) {
           userImage.set(updates);
@@ -318,52 +351,64 @@ export class ImageTool implements Extension {
 
         let { opacity, width, height, angle, left, top } = this;
 
-        // Auto-scale and center if not set
+        const canvasW = this.canvasService?.canvas.width || 800;
+        const canvasH = this.canvasService?.canvas.height || 600;
+
+        // Fetch Dieline Layout Info
+        let layoutScale = 1;
+        let layoutOffsetX = 0;
+        let layoutOffsetY = 0;
+        let visualWidth = canvasW;
+        let visualHeight = canvasH;
+        let dielinePhysicalWidth = 500;
+        let dielinePhysicalHeight = 500;
+
         if (this.context) {
           const configService = this.context.services.get<ConfigurationService>(
             "ConfigurationService",
           )!;
-          const dielineWidth = configService.get("dieline.width");
-          const dielineHeight = configService.get("dieline.height");
-
-          console.log(
-            "[ImageTool] Dieline config debug:",
-            {
-              widthVal: dielineWidth,
-              heightVal: dielineHeight,
-              // Debug: dump all keys to see what is available
-              allKeys: Array.from(
-                (configService as any).configValues?.keys() || [],
-              ),
-            },
-            configService,
+          dielinePhysicalWidth = configService.get("dieline.width") || 500;
+          dielinePhysicalHeight = configService.get("dieline.height") || 500;
+          const borderLength = configService.get("dieline.borderLength") || 0;
+          const padding = configService.get("dieline.padding") || 40;
+          
+          const layout = Coordinate.calculateLayout(
+             { width: canvasW, height: canvasH },
+             { width: dielinePhysicalWidth, height: dielinePhysicalHeight },
+             borderLength + padding
           );
+          layoutScale = layout.scale;
+          layoutOffsetX = layout.offsetX;
+          layoutOffsetY = layout.offsetY;
+          visualWidth = layout.width;
+          visualHeight = layout.height;
+        }
 
-          if (width === undefined && height === undefined) {
-            // Scale to fit dieline
-            const scale = Math.min(
-              dielineWidth / (image.width || 1),
-              dielineHeight / (image.height || 1),
-            );
-            width = (image.width || 1) * scale;
-            height = (image.height || 1) * scale;
-            this.width = width;
-            this.height = height;
-          }
+        // Auto-scale and center if not set
+        if (width === undefined && height === undefined) {
+           // Default to full Dieline width (Physical)
+           // If image aspect ratio differs, fit within dieline
+           const imgAspect = (image.width || 1) / (image.height || 1);
+           const dielineAspect = dielinePhysicalWidth / dielinePhysicalHeight;
+           
+           if (imgAspect > dielineAspect) {
+             width = dielinePhysicalWidth;
+             height = width / imgAspect;
+           } else {
+             height = dielinePhysicalHeight;
+             width = height * imgAspect;
+           }
+           
+           this.width = width;
+           this.height = height;
+        }
 
-          if (left === undefined && top === undefined) {
-            // Default to Dieline Position if available, otherwise Center (0.5)
-            const dielinePos = configService?.get("dieline.position");
-            if (dielinePos) {
-              this.left = dielinePos.x;
-              this.top = dielinePos.y;
-            } else {
-              this.left = 0.5;
-              this.top = 0.5;
-            }
-            left = this.left;
-            top = this.top;
-          }
+        if (left === undefined && top === undefined) {
+          // Default to center (0.5)
+          this.left = 0.5;
+          this.top = 0.5;
+          left = this.left;
+          top = this.top;
         }
 
         const existingImage = this.canvasService!.getObject(
@@ -372,98 +417,34 @@ export class ImageTool implements Extension {
         ) as any;
 
         if (existingImage) {
-          const defaultLeft = existingImage.left;
-          const defaultTop = existingImage.top;
-          const defaultAngle = existingImage.angle;
-          const defaultScaleX = existingImage.scaleX;
-          const defaultScaleY = existingImage.scaleY;
+           layer.remove(existingImage);
+        }
+        
+        // New image
+        image.set({
+          originX: "center",
+          originY: "center",
+        });
 
-          const canvasW = this.canvasService?.canvas.width || 800;
-          const canvasH = this.canvasService?.canvas.height || 600;
-          const centerX = canvasW / 2;
-          const centerY = canvasH / 2;
+        // Apply Physical Scale
+        if (width !== undefined && image.width)
+          image.scaleX = (width * layoutScale) / image.width;
+        if (height !== undefined && image.height)
+          image.scaleY = (height * layoutScale) / image.height;
+        
+        if (angle !== undefined) image.angle = angle;
 
-          let targetLeft = left !== undefined ? left : defaultLeft;
-          let targetTop = top !== undefined ? top : defaultTop;
-
-          // Log for debugging
-          const configService = this.context?.services.get<any>(
-            "ConfigurationService",
-          );
-          console.log("[ImageTool] Loading EXISTING image...", {
-            canvasW,
-            canvasH,
-            centerX,
-            centerY,
-            incomingLeft: left,
-            incomingTop: top,
-            dielinePos: configService?.get("dieline.position"),
-            existingImage: !!existingImage,
-          });
-
-          if (left !== undefined) {
-            const globalLeft = Coordinate.toAbsolute(left, canvasW);
-            targetLeft = globalLeft; // Layer is absolute, do not subtract center
-            console.log("[ImageTool] Calculated targetLeft", {
-              globalLeft,
-              targetLeft,
-            });
-          }
-          if (top !== undefined) {
-            const globalTop = Coordinate.toAbsolute(top, canvasH);
-            targetTop = globalTop; // Layer is absolute, do not subtract center
-            console.log("[ImageTool] Calculated targetTop", {
-              globalTop,
-              targetTop,
-            });
-          }
-
-          image.set({
-            originX: "center", // Use center origin for easier positioning
-            originY: "center",
-            left: targetLeft,
-            top: targetTop,
-            angle: angle !== undefined ? angle : defaultAngle,
-            scaleX:
-              width !== undefined && image.width
-                ? width / image.width
-                : defaultScaleX,
-            scaleY:
-              height !== undefined && image.height
-                ? height / image.height
-                : defaultScaleY,
-          });
-
-          layer.remove(existingImage);
+        // Apply Position (Normalized relative to Dieline)
+        if (left !== undefined) {
+          image.left = layoutOffsetX + left * visualWidth;
         } else {
-          // New image
-          image.set({
-            originX: "center",
-            originY: "center",
-          });
+          image.left = layoutOffsetX + visualWidth / 2;
+        }
 
-          if (width !== undefined && image.width)
-            image.scaleX = width / image.width;
-          if (height !== undefined && image.height)
-            image.scaleY = height / image.height;
-          if (angle !== undefined) image.angle = angle;
-
-          const canvasW = this.canvasService?.canvas.width || 800;
-          const canvasH = this.canvasService?.canvas.height || 600;
-          const centerX = canvasW / 2;
-          const centerY = canvasH / 2;
-
-          if (left !== undefined) {
-            image.left = Coordinate.toAbsolute(left, canvasW); // Layer is absolute
-          } else {
-            image.left = centerX; // Default to center of canvas
-          }
-
-          if (top !== undefined) {
-            image.top = Coordinate.toAbsolute(top, canvasH); // Layer is absolute
-          } else {
-            image.top = centerY; // Default to center of canvas
-          }
+        if (top !== undefined) {
+          image.top = layoutOffsetY + top * visualHeight;
+        } else {
+          image.top = layoutOffsetY + visualHeight / 2;
         }
 
         image.set({
@@ -478,15 +459,23 @@ export class ImageTool implements Extension {
         image.on("modified", (e: any) => {
           const matrix = image.calcTransformMatrix();
           const globalPoint = util.transformPoint(new Point(0, 0), matrix);
-          const canvasW = this.canvasService?.canvas.width || 800;
-          const canvasH = this.canvasService?.canvas.height || 600;
-
-          this.left = Coordinate.toNormalized(globalPoint.x, canvasW);
-          this.top = Coordinate.toNormalized(globalPoint.y, canvasH);
+          
+          // Reverse calculation to get normalized position relative to Dieline
+          // globalX = offsetX + normX * visualWidth
+          // normX = (globalX - offsetX) / visualWidth
+          this.left = (globalPoint.x - layoutOffsetX) / visualWidth;
+          this.top = (globalPoint.y - layoutOffsetY) / visualHeight;
           this.angle = e.target.angle;
 
-          if (image.width) this.width = e.target.width * e.target.scaleX;
-          if (image.height) this.height = e.target.height * e.target.scaleY;
+          // Width is physical: (scaleX * imgWidth) / layoutScale
+          if (image.width) {
+             const pixelWidth = e.target.width * e.target.scaleX;
+             this.width = pixelWidth / layoutScale;
+          }
+          if (image.height) {
+             const pixelHeight = e.target.height * e.target.scaleY;
+             this.height = pixelHeight / layoutScale;
+          }
 
           if (this.context) {
             this.context.eventBus.emit("update");

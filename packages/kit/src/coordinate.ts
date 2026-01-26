@@ -8,7 +8,45 @@ export interface Size {
   height: number;
 }
 
+export type Unit = "px" | "mm" | "cm" | "in";
+
+export interface Layout {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+}
+
 export class Coordinate {
+  /**
+   * Calculate layout to fit content within container while preserving aspect ratio.
+   */
+  static calculateLayout(
+    container: Size,
+    content: Size,
+    padding: number = 0,
+  ): Layout {
+    const availableWidth = Math.max(0, container.width - padding * 2);
+    const availableHeight = Math.max(0, container.height - padding * 2);
+
+    if (content.width === 0 || content.height === 0) {
+      return { scale: 1, offsetX: 0, offsetY: 0, width: 0, height: 0 };
+    }
+
+    const scaleX = availableWidth / content.width;
+    const scaleY = availableHeight / content.height;
+    const scale = Math.min(scaleX, scaleY);
+
+    const width = content.width * scale;
+    const height = content.height * scale;
+
+    const offsetX = (container.width - width) / 2;
+    const offsetY = (container.height - height) / 2;
+
+    return { scale, offsetX, offsetY, width, height };
+  }
+
   /**
    * Convert an absolute value to a normalized value (0-1).
    * @param value Absolute value (e.g., pixels)
