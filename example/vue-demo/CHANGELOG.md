@@ -1,5 +1,16 @@
 # vue-demo
 
+## 1.1.0
+
+### Minor Changes
+
+- ruler and size
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/vue@3.2.0
+
 ## 1.0.2
 
 ### Patch Changes

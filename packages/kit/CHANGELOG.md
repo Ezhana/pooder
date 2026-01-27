@@ -1,5 +1,16 @@
 # @pooder/kit
 
+## 3.2.0
+
+### Minor Changes
+
+- ruler and size
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/core@1.2.0
+
 ## 3.1.0
 
 ### Minor Changes
