@@ -55,11 +55,21 @@ const addImage = async (url: string, options?: any) => {
   return await cmdSvc.executeCommand("addImage", url, options);
 };
 
+const updateImage = async (id: string, options?: any) => {
+  return await cmdSvc.executeCommand("updateImage", id, options);
+};
+
+const clearImages = async () => {
+  return await cmdSvc.executeCommand("clearImages");
+};
+
 defineExpose({
   importConfig,
   exportConfig,
   generateCutImage,
   addImage,
+  updateImage,
+  clearImages,
 });
 
 const onCanvasReady = (canvasEl: HTMLCanvasElement) => {

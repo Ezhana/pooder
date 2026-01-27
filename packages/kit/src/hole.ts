@@ -304,7 +304,14 @@ export class HoleTool implements Extension {
         if (!target || target.data?.type !== "hole-marker") return;
 
         // Update state when hole is moved
-        this.syncHolesFromCanvas();
+        // Ensure final position is constrained (handles case where 'modified' reports unconstrained coords)
+        const changed = this.enforceConstraints();
+        
+        // If enforceConstraints changed something, it already synced.
+        // If not, we sync manually to save the move (which was valid).
+        if (!changed) {
+          this.syncHolesFromCanvas();
+        }
       };
       canvas.on("object:modified", this.handleModified);
     }
