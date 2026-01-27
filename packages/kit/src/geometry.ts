@@ -24,7 +24,7 @@ export interface HoleData {
 export function resolveHolePosition(
   hole: HoleData,
   geometry: { x: number; y: number; width: number; height: number },
-  canvasSize: { width: number; height: number }
+  canvasSize: { width: number; height: number },
 ): { x: number; y: number } {
   if (hole.anchor) {
     const { x, y, width, height } = geometry;
@@ -87,8 +87,8 @@ export function resolveHolePosition(
     // This handles padding correctly.
     const { x, width, y, height } = geometry;
     return {
-      x: hole.x * width + (x - width / 2),
-      y: hole.y * height + (y - height / 2),
+      x: hole.x * width + (x - width / 2) + (hole.offsetX || 0),
+      y: hole.y * height + (y - height / 2) + (hole.offsetY || 0),
     };
   }
   return { x: 0, y: 0 };
@@ -357,7 +357,10 @@ function getDielineShape(options: GeometryOptions): paper.PathItem {
         cutsPath.remove();
         mainShape = temp;
       } catch (e) {
-        console.error("Geometry: Failed to subtract cutsPath from mainShape", e);
+        console.error(
+          "Geometry: Failed to subtract cutsPath from mainShape",
+          e,
+        );
       }
     }
   }
@@ -540,6 +543,8 @@ export function getNearestPointOnDieline(
 }
 
 export function getPathBounds(pathData: string): {
+  x: number;
+  y: number;
   width: number;
   height: number;
 } {
@@ -547,5 +552,10 @@ export function getPathBounds(pathData: string): {
   path.pathData = pathData;
   const bounds = path.bounds;
   path.remove();
-  return { width: bounds.width, height: bounds.height };
+  return {
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  };
 }

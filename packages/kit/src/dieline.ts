@@ -412,28 +412,36 @@ export class DielineTool implements Extension {
       y: cy,
       width: visualWidth,
       height: visualHeight,
+      // Pass scale/unit context if needed by resolveHolePosition (though currently unused there)
     };
 
     const absoluteHoles = (holes || []).map((h) => {
-      const pos = resolveHolePosition(h, geometryForHoles, {
+      // Scale hole radii and offsets: mm -> current unit -> pixels
+      const unitScale = Coordinate.convertUnit(1, "mm", unit);
+      const offsetScale = unitScale * scale;
+
+      // Apply scaling to offsets BEFORE resolving position
+      const hWithPixelOffsets = {
+        ...h,
+        offsetX: (h.offsetX || 0) * offsetScale,
+        offsetY: (h.offsetY || 0) * offsetScale,
+      };
+
+      const pos = resolveHolePosition(hWithPixelOffsets, geometryForHoles, {
         width: canvasW,
         height: canvasH,
       });
-      // Convert hole radii (assumed mm) to current unit then to pixels via scale
-      // scale is px/unit.
-      // visual = radius_mm * convert(1, 'mm', unit) * scale
-      // Note: Coordinate.convertUnit(val, 'mm', unit) returns value in 'unit'.
-      const unitScale = Coordinate.convertUnit(1, "mm", unit);
 
       return {
         ...h,
         x: pos.x,
         y: pos.y,
         // Scale hole radii: mm -> current unit -> pixels
-        innerRadius: h.innerRadius * unitScale * scale,
-        outerRadius: h.outerRadius * unitScale * scale,
-        offsetX: (h.offsetX || 0) * scale,
-        offsetY: (h.offsetY || 0) * scale,
+        innerRadius: h.innerRadius * offsetScale,
+        outerRadius: h.outerRadius * offsetScale,
+        // Store scaled offsets in the result for consistency, though pos is already resolved
+        offsetX: hWithPixelOffsets.offsetX,
+        offsetY: hWithPixelOffsets.offsetY,
       };
     });
 
@@ -567,7 +575,7 @@ export class DielineTool implements Extension {
       radius: visualRadius,
       x: cx,
       y: cy,
-      holes: absoluteHoles, // FIX: Use absoluteHoles instead of holes
+      holes: absoluteHoles,
       pathData: this.pathData,
     });
 
@@ -611,6 +619,13 @@ export class DielineTool implements Extension {
     // Emit change event so other tools (like HoleTool) can react
     // Only emit if requested (to avoid loops when updating non-geometry props like holes)
     if (emitEvent && this.context) {
+      // FIX: Ensure we use the exact same geometry values as used in rendering above.
+      // Although getGeometry() recalculates layout, it should be identical if props haven't changed.
+      // But to be absolutely safe and avoid micro-differences or race conditions, we can reuse calculated values.
+      // However, getGeometry is public API, so it's better if it's correct.
+      // Let's verify getGeometry logic matches updateDieline logic perfectly.
+      // Yes, both use Coordinate.calculateLayout with the same inputs.
+
       const geometry = this.getGeometry();
       if (geometry) {
         this.context.eventBus.emit("dieline:geometry:change", geometry);
@@ -682,19 +697,27 @@ export class DielineTool implements Extension {
 
     // Denormalize Holes for Export
     const absoluteHoles = (holes || []).map((h) => {
+      const unit = this.unit || "mm";
+      const unitScale = Coordinate.convertUnit(1, "mm", unit);
+
       const pos = resolveHolePosition(
-        h,
+        {
+          ...h,
+          offsetX: (h.offsetX || 0) * unitScale * scale,
+          offsetY: (h.offsetY || 0) * unitScale * scale,
+        },
         { x: cx, y: cy, width: visualWidth, height: visualHeight },
         { width: canvasW, height: canvasH },
       );
+
       return {
         ...h,
         x: pos.x,
         y: pos.y,
-        innerRadius: h.innerRadius * scale,
-        outerRadius: h.outerRadius * scale,
-        offsetX: (h.offsetX || 0) * scale,
-        offsetY: (h.offsetY || 0) * scale,
+        innerRadius: h.innerRadius * unitScale * scale,
+        outerRadius: h.outerRadius * unitScale * scale,
+        offsetX: (h.offsetX || 0) * unitScale * scale,
+        offsetY: (h.offsetY || 0) * unitScale * scale,
       };
     });
 

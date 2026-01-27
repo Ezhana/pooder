@@ -377,6 +377,8 @@ export class HoleTool implements Extension {
 
       // Get current scale to denormalize offsets
       const scale = this.currentGeometry?.scale || 1;
+      const unit = this.currentGeometry?.unit || "mm";
+      const unitScale = Coordinate.convertUnit(1, "mm", unit);
 
       if (original && original.anchor && this.currentGeometry) {
         // Reverse calculate offset from anchor
@@ -429,9 +431,9 @@ export class HoleTool implements Extension {
         
         return {
           ...original,
-          // Denormalize offset back to physical units
-          offsetX: (newAbsX - bx) / scale,
-          offsetY: (newAbsY - by) / scale,
+          // Denormalize offset back to physical units (mm)
+          offsetX: (newAbsX - bx) / scale / unitScale,
+          offsetY: (newAbsY - by) / scale / unitScale,
           // Clear direct coordinates if we use anchor
           x: undefined,
           y: undefined,
@@ -515,21 +517,25 @@ export class HoleTool implements Extension {
     } as any;
 
     holes.forEach((hole, index) => {
-      // Resolve position
-      const pos = resolveHolePosition(
-        hole,
-        geometry,
-        { width: width || 800, height: height || 600 }
-      );
-
-      // Apply Scale to Radii for Rendering
-      // If scale is missing (legacy geometry), default to 1
+      // Geometry scale is needed.
       const scale = geometry.scale || 1;
       const unit = geometry.unit || "mm";
       const unitScale = Coordinate.convertUnit(1, 'mm', unit);
-
+      
       const visualInnerRadius = hole.innerRadius * unitScale * scale;
       const visualOuterRadius = hole.outerRadius * unitScale * scale;
+
+      // Resolve position
+      // Apply unit conversion and scale to offsets before resolving (mm -> px)
+      const pos = resolveHolePosition(
+        {
+          ...hole,
+          offsetX: (hole.offsetX || 0) * unitScale * scale,
+          offsetY: (hole.offsetY || 0) * unitScale * scale,
+        },
+        geometry,
+        { width: geometry.width, height: geometry.height } // Use geometry dims instead of canvas
+      );
 
       const innerCircle = new Circle({
         radius: visualInnerRadius,
