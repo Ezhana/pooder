@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 3.3.0
+
+### Minor Changes
+
+- hole shape
+
 ## 3.2.0
 
 ### Minor Changes
