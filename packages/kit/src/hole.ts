@@ -218,6 +218,7 @@ export class HoleTool implements Extension {
     if (!this.handleDielineChange) {
       this.handleDielineChange = (geometry: DielineGeometry) => {
         this.currentGeometry = geometry;
+        this.redraw();
         const changed = this.enforceConstraints();
         // Only sync if constraints actually moved something
         if (changed) {
@@ -369,20 +370,37 @@ export class HoleTool implements Extension {
     if (!this.canvasService) return;
     const objects = this.canvasService.canvas
       .getObjects()
-      .filter((obj: any) => obj.data?.type === "hole-marker");
+      .filter(
+        (obj: any) =>
+          obj.data?.type === "hole-marker" || obj.name === "hole-marker",
+      );
 
-    // Sort objects by index
+    // If we have markers but no state, or mismatch, we should be careful.
+    // However, if we just dragged one, we expect them to match.
+    if (objects.length === 0 && this.holes.length > 0) {
+      console.warn("HoleTool: No markers found on canvas to sync from");
+      return;
+    }
+
+    // Sort objects by index to match this.holes order
     objects.sort(
-      (a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0)
+      (a: any, b: any) => (a.data?.index ?? 0) - (b.data?.index ?? 0),
     );
 
     // Update holes based on canvas positions
-    // We need to preserve original hole properties (radii, anchor)
-    // If a hole has an anchor, we update offsetX/Y instead of x/y
     const newHoles = objects.map((obj, i) => {
       const original = this.holes[i];
       const newAbsX = obj.left!;
       const newAbsY = obj.top!;
+
+      // Validate coordinates to prevent NaN issues
+      if (isNaN(newAbsX) || isNaN(newAbsY)) {
+        console.error("HoleTool: Invalid marker coordinates", {
+          newAbsX,
+          newAbsY,
+        });
+        return original;
+      }
 
       // Get current scale to denormalize offsets
       const scale = this.currentGeometry?.scale || 1;
@@ -437,7 +455,7 @@ export class HoleTool implements Extension {
             by = bottom;
             break;
         }
-        
+
         return {
           ...original,
           // Denormalize offset back to physical units (mm)
@@ -446,11 +464,14 @@ export class HoleTool implements Extension {
           // Clear direct coordinates if we use anchor
           x: undefined,
           y: undefined,
+          // Ensure other properties are preserved
+          innerRadius: original.innerRadius,
+          outerRadius: original.outerRadius,
+          shape: original.shape || "circle",
         };
       }
 
       // If no anchor, use normalized coordinates relative to Dieline Geometry
-      // normalized = (absolute - (center - width/2)) / width
       let normalizedX = 0.5;
       let normalizedY = 0.5;
 
@@ -461,19 +482,23 @@ export class HoleTool implements Extension {
         normalizedX = width > 0 ? (newAbsX - left) / width : 0.5;
         normalizedY = height > 0 ? (newAbsY - top) / height : 0.5;
       } else {
-        // Fallback to Canvas normalization if no geometry (should rare)
+        // Fallback to Canvas normalization
         const { width, height } = this.canvasService!.canvas;
         normalizedX = Coordinate.toNormalized(newAbsX, width || 800);
         normalizedY = Coordinate.toNormalized(newAbsY, height || 600);
       }
-      
+
       return {
         ...original,
         x: normalizedX,
         y: normalizedY,
-        // Ensure radii are preserved
+        // Clear offsets if we are using direct normalized coordinates
+        offsetX: undefined,
+        offsetY: undefined,
+        // Ensure other properties are preserved
         innerRadius: original?.innerRadius ?? 15,
         outerRadius: original?.outerRadius ?? 25,
+        shape: original?.shape || "circle",
       };
     });
 

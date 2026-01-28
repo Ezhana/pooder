@@ -393,6 +393,15 @@ export class ImageTool implements Extension {
           originX: "center",
           originY: "center",
           data: { id: item.id },
+          uniformScaling: true,
+          lockScalingFlip: true,
+        });
+
+        image.setControlsVisibility({
+          mt: false,
+          mb: false,
+          ml: false,
+          mr: false,
         });
 
         // Initial Layout
