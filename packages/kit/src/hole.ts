@@ -6,7 +6,7 @@ import {
   ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
-import { Circle, Group, Point } from "fabric";
+import { Circle, Group, Point, Rect } from "fabric";
 import CanvasService from "./CanvasService";
 import { DielineGeometry } from "./dieline";
 import {
@@ -179,10 +179,12 @@ export class HoleTool implements Extension {
               const lastHole = currentHoles[currentHoles.length - 1];
               const innerRadius = lastHole?.innerRadius ?? 15;
               const outerRadius = lastHole?.outerRadius ?? 25;
+              const shape = lastHole?.shape ?? "circle";
 
               const newHole = {
                   x: normalizedX,
                   y: normalizedY,
+                  shape,
                   innerRadius,
                   outerRadius,
               };
@@ -544,26 +546,49 @@ export class HoleTool implements Extension {
         { width: geometry.width, height: geometry.height } // Use geometry dims instead of canvas
       );
 
-      const innerCircle = new Circle({
-        radius: visualInnerRadius,
-        fill: "transparent",
-        stroke: "red",
-        strokeWidth: 2,
-        originX: "center",
-        originY: "center",
-      });
+      const isSquare = hole.shape === "square";
 
-      const outerCircle = new Circle({
-        radius: visualOuterRadius,
-        fill: "transparent",
-        stroke: "#666",
-        strokeWidth: 1,
-        strokeDashArray: [5, 5],
-        originX: "center",
-        originY: "center",
-      });
+      const innerMarker = isSquare
+        ? new Rect({
+            width: visualInnerRadius * 2,
+            height: visualInnerRadius * 2,
+            fill: "transparent",
+            stroke: "red",
+            strokeWidth: 2,
+            originX: "center",
+            originY: "center",
+          })
+        : new Circle({
+            radius: visualInnerRadius,
+            fill: "transparent",
+            stroke: "red",
+            strokeWidth: 2,
+            originX: "center",
+            originY: "center",
+          });
 
-      const holeGroup = new Group([outerCircle, innerCircle], {
+      const outerMarker = isSquare
+        ? new Rect({
+            width: visualOuterRadius * 2,
+            height: visualOuterRadius * 2,
+            fill: "transparent",
+            stroke: "#666",
+            strokeWidth: 1,
+            strokeDashArray: [5, 5],
+            originX: "center",
+            originY: "center",
+          })
+        : new Circle({
+            radius: visualOuterRadius,
+            fill: "transparent",
+            stroke: "#666",
+            strokeWidth: 1,
+            strokeDashArray: [5, 5],
+            originX: "center",
+            originY: "center",
+          });
+
+      const holeGroup = new Group([outerMarker, innerMarker], {
         left: pos.x,
         top: pos.y,
         originX: "center",

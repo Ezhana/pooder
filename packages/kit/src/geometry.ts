@@ -14,6 +14,7 @@ export type PositionAnchor =
 export interface HoleData {
   x?: number;
   y?: number;
+  shape?: "circle" | "square";
   anchor?: PositionAnchor;
   offsetX?: number;
   offsetY?: number;
@@ -103,6 +104,8 @@ export interface GeometryOptions {
   y: number;
   holes: Array<HoleData>;
   pathData?: string;
+  canvasWidth?: number;
+  canvasHeight?: number;
 }
 
 export interface MaskGeometryOptions extends GeometryOptions {
@@ -287,21 +290,41 @@ function getDielineShape(options: GeometryOptions): paper.PathItem {
     let cutsPath: paper.PathItem | null = null;
 
     holes.forEach((hole) => {
+      const center = new paper.Point(hole.x!, hole.y!);
+
       // Create Lug (Outer Radius)
-      const lug = new paper.Path.Circle({
-        center: [hole.x, hole.y],
-        radius: hole.outerRadius,
-      });
+      const lug =
+        hole.shape === "square"
+          ? new paper.Path.Rectangle({
+              point: [
+                center.x - hole.outerRadius,
+                center.y - hole.outerRadius,
+              ],
+              size: [hole.outerRadius * 2, hole.outerRadius * 2],
+            })
+          : new paper.Path.Circle({
+              center: center,
+              radius: hole.outerRadius,
+            });
 
       // REMOVED: Intersects check. We want to process all holes defined in config.
       // If a hole is completely outside, it might form an island, but that's better than missing it.
       // Users can remove the hole if they don't want it.
 
       // Create Cut (Inner Radius)
-      const cut = new paper.Path.Circle({
-        center: [hole.x, hole.y],
-        radius: hole.innerRadius,
-      });
+      const cut =
+        hole.shape === "square"
+          ? new paper.Path.Rectangle({
+              point: [
+                center.x - hole.innerRadius,
+                center.y - hole.innerRadius,
+              ],
+              size: [hole.innerRadius * 2, hole.innerRadius * 2],
+            })
+          : new paper.Path.Circle({
+              center: center,
+              radius: hole.innerRadius,
+            });
 
       // Union Lugs
       if (!lugsPath) {
@@ -373,7 +396,9 @@ function getDielineShape(options: GeometryOptions): paper.PathItem {
  * Logic: (BaseShape UNION IntersectingLugs) SUBTRACT Cuts
  */
 export function generateDielinePath(options: GeometryOptions): string {
-  ensurePaper(options.width * 2, options.height * 2);
+  const paperWidth = options.canvasWidth || options.width * 2 || 2000;
+  const paperHeight = options.canvasHeight || options.height * 2 || 2000;
+  ensurePaper(paperWidth, paperHeight);
   paper.project.activeLayer.removeChildren();
 
   const mainShape = getDielineShape(options);
@@ -423,8 +448,9 @@ export function generateBleedZonePath(
   offset: number,
 ): string {
   // Ensure canvas is large enough
-  const maxDim = Math.max(options.width, options.height) + Math.abs(offset) * 4;
-  ensurePaper(maxDim, maxDim);
+  const paperWidth = options.canvasWidth || options.width * 2 || 2000;
+  const paperHeight = options.canvasHeight || options.height * 2 || 2000;
+  ensurePaper(paperWidth, paperHeight);
   paper.project.activeLayer.removeChildren();
 
   // 1. Original Shape

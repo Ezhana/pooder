@@ -493,6 +493,8 @@ export class DielineTool implements Extension {
         y: cy,
         holes: absoluteHoles,
         pathData: this.pathData,
+        canvasWidth: canvasW,
+        canvasHeight: canvasH,
       });
 
       const insideObj = new Path(productPathData, {
@@ -518,6 +520,8 @@ export class DielineTool implements Extension {
           y: cy,
           holes: absoluteHoles,
           pathData: this.pathData,
+          canvasWidth: canvasW,
+          canvasHeight: canvasH,
         },
         visualOffset,
       );
@@ -549,6 +553,8 @@ export class DielineTool implements Extension {
         y: cy,
         holes: absoluteHoles,
         pathData: this.pathData,
+        canvasWidth: canvasW,
+        canvasHeight: canvasH,
       });
 
       const offsetBorderObj = new Path(offsetPathData, {
@@ -577,6 +583,8 @@ export class DielineTool implements Extension {
       y: cy,
       holes: absoluteHoles,
       pathData: this.pathData,
+      canvasWidth: canvasW,
+      canvasHeight: canvasH,
     });
 
     const borderObj = new Path(borderPathData, {
@@ -730,6 +738,8 @@ export class DielineTool implements Extension {
       y: cy,
       holes: absoluteHoles,
       pathData: this.pathData,
+      canvasWidth: canvasW,
+      canvasHeight: canvasH,
     });
 
     // 2. Prepare for Export
