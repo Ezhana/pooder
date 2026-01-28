@@ -241,13 +241,27 @@ export class ImageTool implements Extension {
     let visualHeight = canvasH;
     let dielinePhysicalWidth = 500;
     let dielinePhysicalHeight = 500;
+    let bleedOffset = 0;
 
     if (this.context) {
       const configService = this.context.services.get<ConfigurationService>("ConfigurationService");
       if (configService) {
         dielinePhysicalWidth = configService.get("dieline.width") || 500;
         dielinePhysicalHeight = configService.get("dieline.height") || 500;
-        const padding = configService.get("dieline.padding") || 40;
+        bleedOffset = configService.get("dieline.offset") || 0;
+        
+        const paddingValue = configService.get("dieline.padding") || 40;
+        let padding = 0;
+        if (typeof paddingValue === "number") {
+          padding = paddingValue;
+        } else if (typeof paddingValue === "string") {
+          if (paddingValue.endsWith("%")) {
+            const percent = parseFloat(paddingValue) / 100;
+            padding = Math.min(canvasW, canvasH) * percent;
+          } else {
+            padding = parseFloat(paddingValue) || 0;
+          }
+        }
         
         const layout = Coordinate.calculateLayout(
             { width: canvasW, height: canvasH },
@@ -269,7 +283,8 @@ export class ImageTool implements Extension {
       visualWidth,
       visualHeight,
       dielinePhysicalWidth,
-      dielinePhysicalHeight
+      dielinePhysicalHeight,
+      bleedOffset
     };
   }
 
@@ -382,22 +397,21 @@ export class ImageTool implements Extension {
 
         // Initial Layout
         let { width, height, left, top } = item;
-        const { layoutScale, layoutOffsetX, layoutOffsetY, visualWidth, visualHeight, dielinePhysicalWidth, dielinePhysicalHeight } = layout;
+        const { layoutScale, layoutOffsetX, layoutOffsetY, visualWidth, visualHeight, dielinePhysicalWidth, dielinePhysicalHeight, bleedOffset } = layout;
 
         // Auto-scale if needed
         if (width === undefined && height === undefined) {
-           const imgAspect = (image.width || 1) / (image.height || 1);
-           const dielineAspect = dielinePhysicalWidth / dielinePhysicalHeight;
+           // Calculate target dimensions including bleed
+           const targetWidth = dielinePhysicalWidth + 2 * bleedOffset;
+           const targetHeight = dielinePhysicalHeight + 2 * bleedOffset;
            
-           if (imgAspect > dielineAspect) {
-             const w = dielinePhysicalWidth;
-             width = w;
-             height = w / imgAspect;
-           } else {
-             const h = dielinePhysicalHeight;
-             height = h;
-             width = h * imgAspect;
-           }
+           // "适应最长边" (Fit to longest side) logic
+           const targetMax = Math.max(targetWidth, targetHeight);
+           const imageMax = Math.max(image.width || 1, image.height || 1);
+           const scale = targetMax / imageMax;
+           
+           width = (image.width || 1) * scale;
+           height = (image.height || 1) * scale;
            
            // Update item with defaults
            item.width = width;
