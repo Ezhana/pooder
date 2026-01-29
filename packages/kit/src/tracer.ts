@@ -17,11 +17,12 @@ export class ImageTracer {
   public static async trace(
     imageUrl: string,
     options: {
-      threshold?: number; // 0-255, default 128
-      simplifyTolerance?: number; // default 1.0
-      scale?: number; // Scale factor for the processing canvas, default 1.0 (or smaller for speed)
+      threshold?: number; // 0-255, default 10
+      simplifyTolerance?: number; // default 2.0 (Balanced)
+      scale?: number; // Scale factor for the processing canvas, default 1.0
       scaleToWidth?: number;
       scaleToHeight?: number;
+      morphologyRadius?: number; // Default 10.
     } = {},
   ): Promise<string> {
     const img = await this.loadImage(imageUrl);
@@ -38,27 +39,276 @@ export class ImageTracer {
     ctx.drawImage(img, 0, 0);
     const imageData = ctx.getImageData(0, 0, width, height);
 
-    // 2. Trace contours using Marching Squares
-    const points = this.marchingSquares(imageData, options.threshold ?? 10);
+    // 2. Morphology processing
+    const threshold = options.threshold ?? 10;
+    // Adaptive radius: 3% of the image's largest dimension, at least 5px
+    const adaptiveRadius = Math.max(
+      5,
+      Math.floor(Math.max(width, height) * 0.02),
+    );
+    const radius = options.morphologyRadius ?? adaptiveRadius;
 
-    // 2.1 Scale points if target size is provided
-    let finalPoints = points;
-    if (options.scaleToWidth && options.scaleToHeight && points.length > 0) {
+    let mask = this.createMask(imageData, threshold);
+    if (radius > 0) {
+      // Closing operation: Dilation followed by Erosion to merge parts and smooth
+      mask = this.dilate(mask, width, height, radius);
+      mask = this.erode(mask, width, height, radius);
+      // Fill internal holes to ensure we only get the overall outer contour
+      mask = this.fillHoles(mask, width, height);
+    }
+
+    // 3. Trace contours from the unified mask
+    const allContourPoints = this.traceAllContours(mask, width, height);
+
+    if (allContourPoints.length === 0) {
+      // Fallback: Return a rectangular outline matching dimensions
+      const w = options.scaleToWidth ?? width;
+      const h = options.scaleToHeight ?? height;
+      return `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`;
+    }
+
+    // 4. Select the largest contour to ensure a single, consistent overall shape
+    const primaryContour = allContourPoints.sort(
+      (a, b) => b.length - a.length,
+    )[0];
+
+    // 5. Find bounds for the selected contour
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+
+    for (const p of primaryContour) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+
+    const globalBounds = {
+      minX,
+      minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    };
+
+    // 6. Post-processing
+    let finalPoints = primaryContour;
+    if (options.scaleToWidth && options.scaleToHeight) {
       finalPoints = this.scalePoints(
-        points,
+        primaryContour,
         options.scaleToWidth,
         options.scaleToHeight,
+        globalBounds,
       );
     }
 
-    // 3. Simplify path
     const simplifiedPoints = this.douglasPeucker(
       finalPoints,
-      options.simplifyTolerance ?? 0.5,
+      options.simplifyTolerance ?? 2.0,
     );
 
-    // 4. Convert to SVG Path
     return this.pointsToSVG(simplifiedPoints);
+  }
+
+  private static createMask(
+    imageData: ImageData,
+    threshold: number,
+  ): Uint8Array {
+    const { width, height, data } = imageData;
+    const mask = new Uint8Array(width * height);
+
+    for (let i = 0; i < width * height; i++) {
+      const idx = i * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const a = data[idx + 3];
+
+      // Alpha threshold + White background heuristic
+      if (a > threshold && !(r > 240 && g > 240 && b > 240)) {
+        mask[i] = 1;
+      } else {
+        mask[i] = 0;
+      }
+    }
+    return mask;
+  }
+
+  /**
+   * Fast 1D-separable Dilation
+   */
+  private static dilate(
+    mask: Uint8Array,
+    width: number,
+    height: number,
+    radius: number,
+  ): Uint8Array {
+    const horizontal = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+      let count = 0;
+      for (let x = -radius; x < width; x++) {
+        if (x + radius < width && mask[y * width + x + radius]) count++;
+        if (x - radius - 1 >= 0 && mask[y * width + x - radius - 1]) count--;
+        if (x >= 0) horizontal[y * width + x] = count > 0 ? 1 : 0;
+      }
+    }
+
+    const vertical = new Uint8Array(width * height);
+    for (let x = 0; x < width; x++) {
+      let count = 0;
+      for (let y = -radius; y < height; y++) {
+        if (y + radius < height && horizontal[(y + radius) * width + x])
+          count++;
+        if (y - radius - 1 >= 0 && horizontal[(y - radius - 1) * width + x])
+          count--;
+        if (y >= 0) vertical[y * width + x] = count > 0 ? 1 : 0;
+      }
+    }
+    return vertical;
+  }
+
+  /**
+   * Fast 1D-separable Erosion
+   */
+  private static erode(
+    mask: Uint8Array,
+    width: number,
+    height: number,
+    radius: number,
+  ): Uint8Array {
+    const horizontal = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+      let count = 0;
+      for (let x = -radius; x < width; x++) {
+        if (x + radius < width && mask[y * width + x + radius]) count++;
+        if (x - radius - 1 >= 0 && mask[y * width + x - radius - 1]) count--;
+        if (x >= 0) {
+          const winWidth =
+            Math.min(x + radius, width - 1) - Math.max(x - radius, 0) + 1;
+          horizontal[y * width + x] = count === winWidth ? 1 : 0;
+        }
+      }
+    }
+
+    const vertical = new Uint8Array(width * height);
+    for (let x = 0; x < width; x++) {
+      let count = 0;
+      for (let y = -radius; y < height; y++) {
+        if (y + radius < height && horizontal[(y + radius) * width + x])
+          count++;
+        if (y - radius - 1 >= 0 && horizontal[(y - radius - 1) * width + x])
+          count--;
+        if (y >= 0) {
+          const winHeight =
+            Math.min(y + radius, height - 1) - Math.max(y - radius, 0) + 1;
+          vertical[y * width + x] = count === winHeight ? 1 : 0;
+        }
+      }
+    }
+    return vertical;
+  }
+
+  /**
+   * Fills internal holes in the binary mask using flood fill from edges.
+   */
+  private static fillHoles(
+    mask: Uint8Array,
+    width: number,
+    height: number,
+  ): Uint8Array {
+    const background = new Uint8Array(width * height);
+    const queue: [number, number][] = [];
+
+    // Add all edge pixels that are 0 to the queue
+    for (let x = 0; x < width; x++) {
+      if (mask[x] === 0) {
+        background[x] = 1;
+        queue.push([x, 0]);
+      }
+      const lastRow = (height - 1) * width + x;
+      if (mask[lastRow] === 0) {
+        background[lastRow] = 1;
+        queue.push([x, height - 1]);
+      }
+    }
+    for (let y = 1; y < height - 1; y++) {
+      if (mask[y * width] === 0) {
+        background[y * width] = 1;
+        queue.push([0, y]);
+      }
+      if (mask[y * width + width - 1] === 0) {
+        background[y * width + width - 1] = 1;
+        queue.push([width - 1, y]);
+      }
+    }
+
+    // Flood fill from the edges to find all background pixels
+    const dirs = [
+      [0, 1],
+      [0, -1],
+      [1, 0],
+      [-1, 0],
+    ];
+    let head = 0;
+    while (head < queue.length) {
+      const [cx, cy] = queue[head++];
+      for (const [dx, dy] of dirs) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const nidx = ny * width + nx;
+          if (mask[nidx] === 0 && background[nidx] === 0) {
+            background[nidx] = 1;
+            queue.push([nx, ny]);
+          }
+        }
+      }
+    }
+
+    // Any pixel that is NOT reachable from the background is part of the "filled" mask
+    const filledMask = new Uint8Array(width * height);
+    for (let i = 0; i < width * height; i++) {
+      filledMask[i] = background[i] === 0 ? 1 : 0;
+    }
+
+    return filledMask;
+  }
+
+  /**
+   * Traces all contours in the mask with optimized start-point detection
+   */
+  private static traceAllContours(
+    mask: Uint8Array,
+    width: number,
+    height: number,
+  ): Point[][] {
+    const visited = new Uint8Array(width * height);
+    const allContours: Point[][] = [];
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = y * width + x;
+        if (mask[idx] && !visited[idx]) {
+          // Only start a new trace if it's a potential outer boundary (left edge)
+          const isLeftEdge = x === 0 || mask[idx - 1] === 0;
+          if (isLeftEdge) {
+            const contour = this.marchingSquares(
+              mask,
+              visited,
+              x,
+              y,
+              width,
+              height,
+            );
+            if (contour.length > 2) {
+              allContours.push(contour);
+            }
+          }
+        }
+      }
+    }
+    return allContours;
   }
 
   private static loadImage(url: string): Promise<HTMLImageElement> {
@@ -76,72 +326,17 @@ export class ImageTracer {
    * More robust for irregular shapes than simple Marching Squares walker.
    */
   private static marchingSquares(
-    imageData: ImageData,
-    alphaThreshold: number,
+    mask: Uint8Array,
+    visited: Uint8Array,
+    startX: number,
+    startY: number,
+    width: number,
+    height: number,
   ): Point[] {
-    const width = imageData.width;
-    const height = imageData.height;
-    const data = imageData.data;
-
-    // Use Luminance for solid check if Alpha is fully opaque
-    // Or check Alpha first, then Luminance?
-    // Let's assume:
-    // If pixel is transparent (Alpha <= threshold), it's empty.
-    // If pixel is opaque (Alpha > threshold):
-    //    If it's white (Luminance > some_high_value), it's empty (background).
-    //    Else it's solid.
-    // This supports black shapes on white background (JPG).
-
-    // Luminance = 0.299*R + 0.587*G + 0.114*B
-    // We treat "Dark" as solid? Or "Light" as solid?
-    // Usually "Content" is non-white on white background.
-    // Let's add a `luminanceThreshold` option?
-    // For now, let's hardcode a heuristic:
-    // If R,G,B are all > 240, treat as background (white).
-
     const isSolid = (x: number, y: number): boolean => {
       if (x < 0 || x >= width || y < 0 || y >= height) return false;
-      const index = (y * width + x) * 4;
-      const r = data[index];
-      const g = data[index + 1];
-      const b = data[index + 2];
-      const a = data[index + 3];
-
-      if (a <= alphaThreshold) return false;
-
-      // Check for White Background (approx)
-      // If average > 240, treat as empty
-      if (r > 240 && g > 240 && b > 240) return false;
-
-      return true;
+      return mask[y * width + x] === 1;
     };
-
-    // 1. Find Starting Pixel (Scanline)
-    // We want the *largest* contour ideally, or the first one.
-    // For now, let's just find the first one.
-    // To support holes, we would need to keep scanning.
-    // But Moore Tracing follows a single contour.
-
-    let startX = -1;
-    let startY = -1;
-
-    // Gaussian Blur Simulation (Box Blur) to reduce noise?
-    // Or just simple neighbor check?
-    // Let's implement a simple noise filter in isSolid? No, isSolid is per pixel.
-    // Let's preprocess data? Too slow in JS?
-    // Let's just rely on threshold.
-
-    searchLoop: for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        if (isSolid(x, y)) {
-          startX = x;
-          startY = y;
-          break searchLoop;
-        }
-      }
-    }
-
-    if (startX === -1) return [];
 
     const points: Point[] = [];
 
@@ -175,83 +370,26 @@ export class ImageTracer {
 
     do {
       points.push({ x: cx, y: cy });
+      visited[cy * width + cx] = 1; // Mark as visited to avoid re-starting here
 
       // Search for next solid neighbor in clockwise order, starting from backtrack
       let found = false;
 
-      // We check 8 neighbors.
-      // Moore algorithm says: start from backtrack, go clockwise until you find a black pixel.
-      // The backtrack for the NEXT step will be the neighbor BEFORE the one we found.
-
       for (let i = 0; i < 8; i++) {
-        // Index in neighbors array. Start from backtrack direction.
-        // Actually Moore algorithm typically starts from (backtrack + 1) % 8 ?
-        // Let's standard: Start searching clockwise from the pixel entered from.
-
         const idx = (backtrack + 1 + i) % 8;
         const nx = cx + neighbors[idx].x;
         const ny = cy + neighbors[idx].y;
 
         if (isSolid(nx, ny)) {
-          // Found next pixel P
           cx = nx;
           cy = ny;
-          // New backtrack is the neighbor pointing back to current P from previous P?
-          // No, backtrack is the empty neighbor immediately counter-clockwise from the new P.
-          // In our loop, it's the previous index (idx - 1).
-          backtrack = (idx + 4) % 8; // Actually, backtrack direction relative to New P is opposite?
-          // Let's strictly follow Moore:
-          // Entering P from direction D. Start scan from D-1 (or D+something).
-          // Let's use the property:
-          // We entered P from `idx`. The previous check `idx-1` was empty.
-          // So for the next step, we can start checking from `idx-3` (approx 90 deg back) or `idx-2`.
-          // Standard Moore: Backtrack = neighbor index that was empty previously.
-          // Here, `idx` is the direction FROM old P TO new P.
-          // The direction FROM new P TO old P is `(idx + 4) % 8`.
-          // We want to start scanning around new P.
-          // We start scanning from the neighbor that is "Left" of the incoming edge.
-
-          // Let's simplify: Start scanning from (EntryDirection + 5) % 8 ?
-          // EntryDirection is (idx). Backwards is (idx+4).
-          // We want to start from the white pixel we just passed.
-          // That was `(idx - 1)`.
-          // Direction FROM old P to (idx-1) is neighbors[idx-1].
-          // We want direction FROM new P to that same white pixel? No.
-
-          // Working Heuristic:
-          // Next search starts from (current_incoming_direction + 4 + 1) ?
-          // Let's set backtrack to point to the neighbor we entered from, then rotate CCW?
-          // Let's use: start search from `(idx + 5) % 8`.
-          // Why? idx is direction 0..7. Back is idx+4. +1 is clockwise.
-          // We want counter-clockwise.
-
-          backtrack = (idx + 4 + 1) % 8; // Start searching from neighbor "after" the one we came from (CCW)?
-          // Wait, loop above is Clockwise.
-          // To trace outer boundary counter-clockwise, we scan neighbors counter-clockwise?
-          // Or trace outer boundary clockwise, scan neighbors clockwise.
-
-          // Let's trace Clockwise.
-          // Scan neighbors Clockwise.
-          // Start scan from (IncomingDirection + 5) % 8. (Backwards + 1 CW).
-          backtrack = (idx + 4 + 1) % 8; // Backwards + 1 step CW.
-
-          // But wait, if we are tracing an 1-pixel line, we turn around (backtrack).
-          // Let's try `(idx + 5) % 8` if neighbors are ordered CW.
-          // neighbors[0] is Up. [2] is Right.
-          // If we move Right (idx=2). Back is Left (6).
-          // We want to check UpLeft (7), Up (0), UpRight (1)...
-          // So start from 7? That is 6+1.
-          // So `(idx + 4 + 1) % 8` seems correct.
-
+          backtrack = (idx + 4 + 1) % 8;
           found = true;
           break;
         }
       }
 
-      if (!found) {
-        // Isolated pixel
-        break;
-      }
+      if (!found) break;
 
       steps++;
     } while ((cx !== startX || cy !== startY) && steps < maxSteps);
@@ -319,42 +457,18 @@ export class ImageTracer {
     points: Point[],
     targetWidth: number,
     targetHeight: number,
+    bounds: { minX: number; minY: number; width: number; height: number },
   ): Point[] {
     if (points.length === 0) return points;
 
-    // Find bounds
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    for (const p of points) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
+    if (bounds.width === 0 || bounds.height === 0) return points;
 
-    const srcW = maxX - minX;
-    const srcH = maxY - minY;
-
-    if (srcW === 0 || srcH === 0) return points;
-
-    const scaleX = targetWidth / srcW;
-    const scaleY = targetHeight / srcH;
-
-    // Scale and center? Or just scale?
-    // User usually wants to fit the shape into the box.
-    // Let's just scale and align top-left to 0,0 for now, or center it?
-    // Dieline usually expects centered shape?
-    // geometry.ts createBaseShape aligns path.position = center.
-    // So the path data coordinates should probably be relative to 0,0 or centered.
-    // Paper.js Path(pathData) creates path in original coordinates.
-    // If we return points in 0..targetWidth, 0..targetHeight, paper will create it there.
-    // geometry.ts will then center it.
+    const scaleX = targetWidth / bounds.width;
+    const scaleY = targetHeight / bounds.height;
 
     return points.map((p) => ({
-      x: (p.x - minX) * scaleX,
-      y: (p.y - minY) * scaleY,
+      x: (p.x - bounds.minX) * scaleX,
+      y: (p.y - bounds.minY) * scaleY,
     }));
   }
 
