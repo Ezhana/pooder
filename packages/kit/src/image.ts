@@ -414,10 +414,12 @@ export class ImageTool implements Extension {
            const targetWidth = dielinePhysicalWidth + 2 * bleedOffset;
            const targetHeight = dielinePhysicalHeight + 2 * bleedOffset;
            
-           // "适应最长边" (Fit to longest side) logic
-           const targetMax = Math.max(targetWidth, targetHeight);
-           const imageMax = Math.max(image.width || 1, image.height || 1);
-           const scale = targetMax / imageMax;
+           // "铺满 dieline" (Cover dieline) logic
+           // Ensure image covers both dimensions: scale = max(targetW/imageW, targetH/imageH)
+           const scale = Math.max(
+             targetWidth / (image.width || 1),
+             targetHeight / (image.height || 1)
+           );
            
            width = (image.width || 1) * scale;
            height = (image.height || 1) * scale;
