@@ -57,6 +57,14 @@ const handleFileChange = (event: Event) => {
   // Reset input so same file can be selected again
   target.value = "";
 };
+
+const handleImageChange = (images: any[]) => {
+  console.log("Images Changed (App.vue):", images);
+};
+
+const handleConfigChange = (config: Record<string, any>) => {
+  console.log("Config Changed (App.vue):", config);
+};
 </script>
 
 <template>
@@ -78,7 +86,11 @@ const handleFileChange = (event: Event) => {
       </div>
     </header>
     <main class="editor-wrapper">
-      <PooderEditor ref="editorRef" />
+      <PooderEditor
+        ref="editorRef"
+        @image-change="handleImageChange"
+        @change="handleConfigChange"
+      />
     </main>
   </div>
 </template>

@@ -35,9 +35,18 @@ import CanvasArea from "./components/CanvasArea.vue";
 
 const pooder = new Pooder();
 provide("pooder", pooder);
-const cvsSvc = pooder.getService<CanvasService>("CanvasService")!;
 const cmdSvc = pooder.getService<CommandService>("CommandService")!;
 const cfgSvc = pooder.getService<ConfigurationService>("ConfigurationService")!;
+
+const emit = defineEmits<{
+  (e: "image-change", images: any[]): void;
+}>();
+
+const configDisposable = cfgSvc.onAnyChange((e) => {
+  if (e.key === "image.items") {
+    emit("image-change", e.value);
+  }
+});
 
 const importConfig = (config: Record<string, any>) => {
   cfgSvc.import(config);
@@ -47,12 +56,30 @@ const exportConfig = () => {
   return cfgSvc.export();
 };
 
+const getImages = () => {
+  return cfgSvc.get("image.items", []);
+};
+
 const generateCutImage = async () => {
   return await cmdSvc.executeCommand("exportCutImage");
 };
 
 const addImage = async (url: string, options?: any) => {
-  return await cmdSvc.executeCommand("addImage", url, options);
+  const id = await cmdSvc.executeCommand("addImage", url, options);
+
+  // Auto-fit to dieline if exists
+  const dielineWidth = cfgSvc.get("dieline.width");
+  const dielineHeight = cfgSvc.get("dieline.height");
+  const dielineOffset = cfgSvc.get("dieline.offset") || 0;
+
+  if (dielineWidth && dielineHeight) {
+    await cmdSvc.executeCommand("fitImageToArea", id, {
+      width: dielineWidth + 2 * dielineOffset,
+      height: dielineHeight + 2 * dielineOffset,
+    });
+  }
+
+  return id;
 };
 
 const updateImage = async (id: string, options?: any) => {
@@ -66,6 +93,7 @@ const clearImages = async () => {
 defineExpose({
   importConfig,
   exportConfig,
+  getImages,
   generateCutImage,
   addImage,
   updateImage,
@@ -92,7 +120,6 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
     pooder.extensionManager.register(tool);
   });
 
-  // cmdSvc?.executeCommand("image-tool.load-from-json", {})
   // console.log(cmdSvc.getCommands());
   // const res=cmdSvc.executeCommand("detectEdge","https://krakra.fan/api/minio/creation/1788f6aeb4444afe83cffd7703edc22a?f=png&w=2048&h=1190")
   // const res=cmdSvc.executeCommand("detectEdge","https://www.krakra.fan/api/minio/creation-cover/c8e2167d6e27411c8caf3ab0fb2a7ffc?f=webp&w=2480&h=3508")
@@ -117,6 +144,7 @@ onUnmounted(() => {
     canvasService.dispose();
   }
 
+  configDisposable.dispose();
   pooder.extensionManager.destroy();
 });
 </script>
