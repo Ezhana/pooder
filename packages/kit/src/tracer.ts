@@ -48,17 +48,28 @@ export class ImageTracer {
     );
     const radius = options.morphologyRadius ?? adaptiveRadius;
 
-    let mask = this.createMask(imageData, threshold);
+    // Add padding to the processing canvas to avoid edge clipping during dilation
+    // Padding should be at least the radius size
+    const padding = radius + 2;
+    const paddedWidth = width + padding * 2;
+    const paddedHeight = height + padding * 2;
+
+    let mask = this.createMask(imageData, threshold, padding, paddedWidth, paddedHeight);
+    
     if (radius > 0) {
-      // Closing operation: Dilation followed by Erosion to merge parts and smooth
-      mask = this.dilate(mask, width, height, radius);
-      mask = this.erode(mask, width, height, radius);
-      // Fill internal holes to ensure we only get the overall outer contour
-      mask = this.fillHoles(mask, width, height);
+      // 1. Primary Closing (Large Radius, Circular) to merge distant parts
+      mask = this.circularMorphology(mask, paddedWidth, paddedHeight, radius, "closing");
+      
+      // 2. Fill internal holes to ensure we only get the overall outer contour
+      mask = this.fillHoles(mask, paddedWidth, paddedHeight);
+
+      // 3. Secondary Smoothing (Small Radius, Circular) to round off sharp corners
+      const smoothRadius = Math.max(2, Math.floor(radius * 0.3));
+      mask = this.circularMorphology(mask, paddedWidth, paddedHeight, smoothRadius, "closing");
     }
 
-    // 3. Trace contours from the unified mask
-    const allContourPoints = this.traceAllContours(mask, width, height);
+    // 4. Trace contours from the unified mask
+    const allContourPoints = this.traceAllContours(mask, paddedWidth, paddedHeight);
 
     if (allContourPoints.length === 0) {
       // Fallback: Return a rectangular outline matching dimensions
@@ -72,13 +83,19 @@ export class ImageTracer {
       (a, b) => b.length - a.length,
     )[0];
 
-    // 5. Find bounds for the selected contour
+    // 5. Restore coordinates (remove padding)
+    const unpaddedPoints = primaryContour.map(p => ({
+      x: p.x - padding,
+      y: p.y - padding
+    }));
+
+    // 6. Find bounds for the selected contour
     let minX = Infinity,
       minY = Infinity,
       maxX = -Infinity,
       maxY = -Infinity;
 
-    for (const p of primaryContour) {
+    for (const p of unpaddedPoints) {
       if (p.x < minX) minX = p.x;
       if (p.y < minY) minY = p.y;
       if (p.x > maxX) maxX = p.x;
@@ -92,11 +109,11 @@ export class ImageTracer {
       height: maxY - minY,
     };
 
-    // 6. Post-processing
-    let finalPoints = primaryContour;
+    // 7. Post-processing
+    let finalPoints = unpaddedPoints;
     if (options.scaleToWidth && options.scaleToHeight) {
       finalPoints = this.scalePoints(
-        primaryContour,
+        unpaddedPoints,
         options.scaleToWidth,
         options.scaleToHeight,
         globalBounds,
@@ -114,99 +131,121 @@ export class ImageTracer {
   private static createMask(
     imageData: ImageData,
     threshold: number,
+    padding: number,
+    paddedWidth: number,
+    paddedHeight: number,
   ): Uint8Array {
     const { width, height, data } = imageData;
-    const mask = new Uint8Array(width * height);
+    const mask = new Uint8Array(paddedWidth * paddedHeight);
 
-    for (let i = 0; i < width * height; i++) {
-      const idx = i * 4;
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
-      const a = data[idx + 3];
+    // 1. Detect if the image has transparency (any pixel with alpha < 255)
+    let hasTransparency = false;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 255) {
+        hasTransparency = true;
+        break;
+      }
+    }
 
-      // Alpha threshold + White background heuristic
-      if (a > threshold && !(r > 240 && g > 240 && b > 240)) {
-        mask[i] = 1;
-      } else {
-        mask[i] = 0;
+    // 2. Binarize based on alpha or luminance
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const srcIdx = (y * width + x) * 4;
+        const r = data[srcIdx];
+        const g = data[srcIdx + 1];
+        const b = data[srcIdx + 2];
+        const a = data[srcIdx + 3];
+
+        const destIdx = (y + padding) * paddedWidth + (x + padding);
+
+        if (hasTransparency) {
+          if (a > threshold) {
+            mask[destIdx] = 1;
+          }
+        } else {
+          if (!(r > 240 && g > 240 && b > 240)) {
+            mask[destIdx] = 1;
+          }
+        }
       }
     }
     return mask;
   }
 
   /**
-   * Fast 1D-separable Dilation
+   * Fast circular morphology using a distance-transform inspired separable approach.
+   * O(N * R) complexity, where R is the radius.
    */
-  private static dilate(
+  private static circularMorphology(
     mask: Uint8Array,
     width: number,
     height: number,
     radius: number,
+    op: "dilate" | "erode" | "closing" | "opening",
   ): Uint8Array {
-    const horizontal = new Uint8Array(width * height);
-    for (let y = 0; y < height; y++) {
-      let count = 0;
-      for (let x = -radius; x < width; x++) {
-        if (x + radius < width && mask[y * width + x + radius]) count++;
-        if (x - radius - 1 >= 0 && mask[y * width + x - radius - 1]) count--;
-        if (x >= 0) horizontal[y * width + x] = count > 0 ? 1 : 0;
-      }
-    }
-
-    const vertical = new Uint8Array(width * height);
-    for (let x = 0; x < width; x++) {
-      let count = 0;
-      for (let y = -radius; y < height; y++) {
-        if (y + radius < height && horizontal[(y + radius) * width + x])
-          count++;
-        if (y - radius - 1 >= 0 && horizontal[(y - radius - 1) * width + x])
-          count--;
-        if (y >= 0) vertical[y * width + x] = count > 0 ? 1 : 0;
-      }
-    }
-    return vertical;
-  }
-
-  /**
-   * Fast 1D-separable Erosion
-   */
-  private static erode(
-    mask: Uint8Array,
-    width: number,
-    height: number,
-    radius: number,
-  ): Uint8Array {
-    const horizontal = new Uint8Array(width * height);
-    for (let y = 0; y < height; y++) {
-      let count = 0;
-      for (let x = -radius; x < width; x++) {
-        if (x + radius < width && mask[y * width + x + radius]) count++;
-        if (x - radius - 1 >= 0 && mask[y * width + x - radius - 1]) count--;
-        if (x >= 0) {
-          const winWidth =
-            Math.min(x + radius, width - 1) - Math.max(x - radius, 0) + 1;
-          horizontal[y * width + x] = count === winWidth ? 1 : 0;
+    const dilate = (m: Uint8Array, r: number) => {
+      const horizontalDist = new Int32Array(width * height);
+      // Horizontal pass: dist to nearest solid pixel in row
+      for (let y = 0; y < height; y++) {
+        let lastSolid = -r * 2;
+        for (let x = 0; x < width; x++) {
+          if (m[y * width + x]) lastSolid = x;
+          horizontalDist[y * width + x] = x - lastSolid;
+        }
+        lastSolid = width + r * 2;
+        for (let x = width - 1; x >= 0; x--) {
+          if (m[y * width + x]) lastSolid = x;
+          horizontalDist[y * width + x] = Math.min(
+            horizontalDist[y * width + x],
+            lastSolid - x,
+          );
         }
       }
-    }
 
-    const vertical = new Uint8Array(width * height);
-    for (let x = 0; x < width; x++) {
-      let count = 0;
-      for (let y = -radius; y < height; y++) {
-        if (y + radius < height && horizontal[(y + radius) * width + x])
-          count++;
-        if (y - radius - 1 >= 0 && horizontal[(y - radius - 1) * width + x])
-          count--;
-        if (y >= 0) {
-          const winHeight =
-            Math.min(y + radius, height - 1) - Math.max(y - radius, 0) + 1;
-          vertical[y * width + x] = count === winHeight ? 1 : 0;
+      const result = new Uint8Array(width * height);
+      const r2 = r * r;
+      // Vertical pass: check Euclidean distance using precomputed horizontal distances
+      for (let x = 0; x < width; x++) {
+        for (let y = 0; y < height; y++) {
+          let found = false;
+          const minY = Math.max(0, y - r);
+          const maxY = Math.min(height - 1, y + r);
+          for (let dy = minY; dy <= maxY; dy++) {
+            const dY = dy - y;
+            const hDist = horizontalDist[dy * width + x];
+            if (hDist * hDist + dY * dY <= r2) {
+              found = true;
+              break;
+            }
+          }
+          if (found) result[y * width + x] = 1;
         }
       }
+      return result;
+    };
+
+    const erode = (m: Uint8Array, r: number) => {
+      // Erosion is dilation of the inverted mask
+      const inverted = new Uint8Array(m.length);
+      for (let i = 0; i < m.length; i++) inverted[i] = m[i] ? 0 : 1;
+      const dilatedInverted = dilate(inverted, r);
+      const result = new Uint8Array(m.length);
+      for (let i = 0; i < m.length; i++) result[i] = dilatedInverted[i] ? 0 : 1;
+      return result;
+    };
+
+    switch (op) {
+      case "dilate":
+        return dilate(mask, radius);
+      case "erode":
+        return erode(mask, radius);
+      case "closing":
+        return erode(dilate(mask, radius), radius);
+      case "opening":
+        return dilate(erode(mask, radius), radius);
+      default:
+        return mask;
     }
-    return vertical;
   }
 
   /**
