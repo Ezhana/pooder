@@ -4,6 +4,7 @@ import { PooderEditor } from "@pooder/vue";
 
 const editorRef = ref<any>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
+const detectDielineInput = ref<HTMLInputElement | null>(null);
 
 const handleImport = () => {
   if (editorRef.value) {
@@ -43,6 +44,10 @@ const handleUploadClick = () => {
   fileInput.value?.click();
 };
 
+const handleDetectDielineClick = () => {
+  detectDielineInput.value?.click();
+};
+
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement;
   const file = target.files?.[0];
@@ -55,6 +60,20 @@ const handleFileChange = (event: Event) => {
     reader.readAsDataURL(file);
   }
   // Reset input so same file can be selected again
+  target.value = "";
+};
+
+const handleDetectDielineChange = (event: Event) => {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  if (file && editorRef.value) {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const url = e.target?.result as string;
+      await editorRef.value.detectDieline(url);
+    };
+    reader.readAsDataURL(file);
+  }
   target.value = "";
 };
 
@@ -73,6 +92,7 @@ const handleConfigChange = (config: Record<string, any>) => {
       <h1>Pooder Editor Demo</h1>
       <div class="actions">
         <button @click="handleUploadClick">Upload Image</button>
+        <button @click="handleDetectDielineClick">Detect Dieline</button>
         <button @click="handleImport">Import Demo Config</button>
         <button @click="handleExport">Export Config</button>
         <button @click="handleGenerateImage">Generate Cut Image</button>
@@ -82,6 +102,13 @@ const handleConfigChange = (config: Record<string, any>) => {
           accept="image/*"
           style="display: none"
           @change="handleFileChange"
+        />
+        <input
+          ref="detectDielineInput"
+          type="file"
+          accept="image/*"
+          style="display: none"
+          @change="handleDetectDielineChange"
         />
       </div>
     </header>

@@ -116,6 +116,15 @@ const clearImages = async () => {
   return await cmdSvc.executeCommand("clearImages");
 };
 
+const detectDieline = async (url: string) => {
+  const pathData = await cmdSvc.executeCommand("detectEdge", url);
+  if (pathData) {
+    cfgSvc.update("dieline.shape", "custom");
+    cfgSvc.update("dieline.pathData", pathData);
+  }
+  return pathData;
+};
+
 defineExpose({
   importConfig,
   exportConfig,
@@ -124,6 +133,7 @@ defineExpose({
   addImage,
   updateImage,
   clearImages,
+  detectDieline,
 });
 
 const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
@@ -145,16 +155,6 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
   tools.forEach((tool) => {
     pooder.extensionManager.register(tool);
   });
-
-  // console.log(cmdSvc.getCommands());
-  // const res=cmdSvc.executeCommand("detectEdge","https://krakra.fan/api/minio/creation/1788f6aeb4444afe83cffd7703edc22a?f=png&w=2048&h=1190")
-  // const res=cmdSvc.executeCommand("detectEdge","https://www.krakra.fan/api/minio/creation-cover/c8e2167d6e27411c8caf3ab0fb2a7ffc?f=webp&w=2480&h=3508")
-  // const res=cmdSvc.executeCommand("detectEdge","https://www.krakra.fan/api/minio/creation-cover/3481c73176e1429f9ece1fcdb46a103b?f=webp&w=1080&h=1620")
-  // res.then(r=>{
-  //   cfgSvc.update("dieline.shape", "custom");
-  //   cfgSvc.update("dieline.pathData", r);
-  // })
-  // console.log(cvsSvc!.canvas.getObjects());
 };
 
 const onResize = (width: number, height: number) => {
