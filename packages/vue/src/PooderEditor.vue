@@ -68,14 +68,40 @@ const addImage = async (url: string, options?: any) => {
   const id = await cmdSvc.executeCommand("addImage", url, options);
 
   // Auto-fit to dieline if exists
-  const dielineWidth = cfgSvc.get("dieline.width");
-  const dielineHeight = cfgSvc.get("dieline.height");
-  const dielineOffset = cfgSvc.get("dieline.offset") || 0;
+  const geo = await cmdSvc.executeCommand("getGeometry");
+  const canvasService = pooder.getService<CanvasService>("CanvasService");
 
-  if (dielineWidth && dielineHeight) {
+  if (geo && canvasService) {
+    const canvasW = canvasService.canvas.width;
+    const canvasH = canvasService.canvas.height;
+
+    // Get physical bleed offset (mm)
+    const dielineOffset = cfgSvc.get("dieline.offset") || 0;
+
+    // Convert physical bleed to visual pixels using dieline's scale
+    const visualOffset = dielineOffset * geo.scale;
+
+    // Target dimensions in pixels
+    const targetWidth = geo.width + 2 * visualOffset;
+    const targetHeight = geo.height + 2 * visualOffset;
+
+    // Normalized center coordinates (0-1)
+    const left = geo.x / canvasW;
+    const top = geo.y / canvasH;
+
     await cmdSvc.executeCommand("fitImageToArea", id, {
-      width: dielineWidth + 2 * dielineOffset,
-      height: dielineHeight + 2 * dielineOffset,
+      width: targetWidth,
+      height: targetHeight,
+      left,
+      top,
+    });
+  } else if (canvasService) {
+    // Default: Fit to canvas center if no dieline
+    await cmdSvc.executeCommand("fitImageToArea", id, {
+      width: canvasService.canvas.width,
+      height: canvasService.canvas.height,
+      left: 0.5,
+      top: 0.5,
     });
   }
 
@@ -107,12 +133,12 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
 
   const tools = [
     new BackgroundTool(),
-    new MirrorTool(),
+    new ImageTool(),
     // new FilmTool(),
     // new WhiteInkTool(),
+    new MirrorTool(),
     new DielineTool(),
     new RulerTool(),
-    new ImageTool(),
     new HoleTool(),
   ];
 

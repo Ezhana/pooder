@@ -53,17 +53,8 @@ export class ImageTool implements Extension {
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
 
-        let shouldUpdate = false;
         if (e.key === "image.items") {
           this.items = e.value || [];
-          shouldUpdate = true;
-        } else if (e.key.startsWith("dieline.") && e.key !== "dieline.holes") {
-          // Dieline changes affect image layout/scale
-          // Ignore dieline.holes as they don't affect layout and can cause jitter
-          shouldUpdate = true;
-        }
-
-        if (shouldUpdate) {
           this.updateImages();
         }
       });
@@ -122,7 +113,10 @@ export class ImageTool implements Extension {
         {
           command: "fitImageToArea",
           title: "Fit Image to Area",
-          handler: (id: string, area: { width: number; height: number }) => {
+          handler: (
+            id: string,
+            area: { width: number; height: number; left?: number; top?: number },
+          ) => {
             const item = this.items.find((i) => i.id === id);
             const obj = this.objectMap.get(id);
             if (item && obj && obj.width && obj.height) {
@@ -130,7 +124,11 @@ export class ImageTool implements Extension {
                 area.width / obj.width,
                 area.height / obj.height,
               );
-              this.updateImageInConfig(id, { scale, left: 0.5, top: 0.5 });
+              this.updateImageInConfig(id, {
+                scale,
+                left: area.left ?? 0.5,
+                top: area.top ?? 0.5,
+              });
             }
           },
         },
@@ -261,53 +259,12 @@ export class ImageTool implements Extension {
     const canvasW = this.canvasService?.canvas.width || 800;
     const canvasH = this.canvasService?.canvas.height || 600;
 
-    let layoutScale = 1;
-    let layoutOffsetX = 0;
-    let layoutOffsetY = 0;
-    let visualWidth = canvasW;
-    let visualHeight = canvasH;
-
-    if (this.context) {
-      const configService = this.context.services.get<ConfigurationService>(
-        "ConfigurationService",
-      );
-      if (configService) {
-        const dielinePhysicalWidth = configService.get("dieline.width") || 500;
-        const dielinePhysicalHeight =
-          configService.get("dieline.height") || 500;
-
-        const paddingValue = configService.get("dieline.padding") || 40;
-        let padding = 0;
-        if (typeof paddingValue === "number") {
-          padding = paddingValue;
-        } else if (typeof paddingValue === "string") {
-          if (paddingValue.endsWith("%")) {
-            const percent = parseFloat(paddingValue) / 100;
-            padding = Math.min(canvasW, canvasH) * percent;
-          } else {
-            padding = parseFloat(paddingValue) || 0;
-          }
-        }
-
-        const layout = Coordinate.calculateLayout(
-          { width: canvasW, height: canvasH },
-          { width: dielinePhysicalWidth, height: dielinePhysicalHeight },
-          padding,
-        );
-        layoutScale = layout.scale;
-        layoutOffsetX = layout.offsetX;
-        layoutOffsetY = layout.offsetY;
-        visualWidth = layout.width;
-        visualHeight = layout.height;
-      }
-    }
-
     return {
-      layoutScale,
-      layoutOffsetX,
-      layoutOffsetY,
-      visualWidth,
-      visualHeight,
+      layoutScale: 1,
+      layoutOffsetX: 0,
+      layoutOffsetY: 0,
+      visualWidth: canvasW,
+      visualHeight: canvasH,
     };
   }
 
@@ -339,22 +296,11 @@ export class ImageTool implements Extension {
         this.loadImage(item, layer, layout);
       } else {
         // Existing object, update properties
-        this.updateObjectProperties(obj, item, layout);
-
-        // Ensure Z-Index order
-        // Note: layer.add() appends to end, so if we process in order, they should be roughly correct.
-        // However, if we need strict ordering, we might need to verify index.
-        // For simplicity, we rely on the fact that if it exists, it's already on canvas.
-        // To enforce strict Z-order matching array order:
-        // We can check if the object at layer._objects[index] is this object.
-        // But Fabric's Group/Layer handling might be complex.
-        // A simple way is: remove and re-add if order is wrong, or use moveObjectTo.
-
-        // Since we are iterating items in order, we can check if the object is at the expected visual index relative to other user images.
-        // But for now, let's assume update logic is sufficient.
-        // If we want to support reordering, we should probably just `moveTo`
+        // We remove and re-add to ensure coordinates are correctly converted 
+        // from absolute (updateObjectProperties) to relative (layer.add)
         layer.remove(obj);
-        layer.add(obj); // Move to top of layer stack, effectively reordering if we iterate in order
+        this.updateObjectProperties(obj, item, layout);
+        layer.add(obj);
       }
     });
 
@@ -413,6 +359,7 @@ export class ImageTool implements Extension {
 
     if (Object.keys(updates).length > 0) {
       obj.set(updates);
+      obj.setCoords();
     }
   }
 
