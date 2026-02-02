@@ -117,7 +117,11 @@ const clearImages = async () => {
 };
 
 const detectDieline = async (url: string) => {
-  const pathData = await cmdSvc.executeCommand("detectEdge", url);
+  const pathData = await cmdSvc.executeCommand("detectEdge", url, {
+    expand: 10, // 安全距离（像素）
+    smoothing: true, // 是否平滑
+    simplifyTolerance: 2, // 平滑度容差，值越大越圆润
+  });
   if (pathData) {
     cfgSvc.update("dieline.shape", "custom");
     cfgSvc.update("dieline.pathData", pathData);

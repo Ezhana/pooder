@@ -3,6 +3,8 @@
  * Converts raster images (URL/Base64) to SVG Path Data using Marching Squares algorithm.
  */
 
+import paper from "paper";
+
 interface Point {
   x: number;
   y: number;
@@ -18,11 +20,13 @@ export class ImageTracer {
     imageUrl: string,
     options: {
       threshold?: number; // 0-255, default 10
-      simplifyTolerance?: number; // default 2.0 (Balanced)
+      simplifyTolerance?: number; // default 2.5
       scale?: number; // Scale factor for the processing canvas, default 1.0
       scaleToWidth?: number;
       scaleToHeight?: number;
       morphologyRadius?: number; // Default 10.
+      expand?: number; // Expansion radius in pixels. Default 0.
+      smoothing?: boolean; // Use Paper.js smoothing (curve fitting). Default true.
     } = {},
   ): Promise<string> {
     const img = await this.loadImage(imageUrl);
@@ -47,10 +51,11 @@ export class ImageTracer {
       Math.floor(Math.max(width, height) * 0.02),
     );
     const radius = options.morphologyRadius ?? adaptiveRadius;
+    const expand = options.expand ?? 0;
 
     // Add padding to the processing canvas to avoid edge clipping during dilation
-    // Padding should be at least the radius size
-    const padding = radius + 2;
+    // Padding should be at least the radius + expansion size
+    const padding = radius + expand + 2;
     const paddedWidth = width + padding * 2;
     const paddedHeight = height + padding * 2;
 
@@ -66,9 +71,17 @@ export class ImageTracer {
       // 3. Secondary Smoothing (Small Radius, Circular) to round off sharp corners
       const smoothRadius = Math.max(2, Math.floor(radius * 0.3));
       mask = this.circularMorphology(mask, paddedWidth, paddedHeight, smoothRadius, "closing");
+    } else {
+      // Even if no smoothing radius, we usually want to fill holes for a dieline
+      mask = this.fillHoles(mask, paddedWidth, paddedHeight);
     }
 
-    // 4. Trace contours from the unified mask
+    // 4. Expand (Dilation) - Apply safety distance
+    if (expand > 0) {
+      mask = this.circularMorphology(mask, paddedWidth, paddedHeight, expand, "dilate");
+    }
+
+    // 5. Trace contours from the unified mask
     const allContourPoints = this.traceAllContours(mask, paddedWidth, paddedHeight);
 
     if (allContourPoints.length === 0) {
@@ -78,18 +91,18 @@ export class ImageTracer {
       return `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`;
     }
 
-    // 4. Select the largest contour to ensure a single, consistent overall shape
+    // 6. Select the largest contour to ensure a single, consistent overall shape
     const primaryContour = allContourPoints.sort(
       (a, b) => b.length - a.length,
     )[0];
 
-    // 5. Restore coordinates (remove padding)
+    // 7. Restore coordinates (remove padding)
     const unpaddedPoints = primaryContour.map(p => ({
       x: p.x - padding,
       y: p.y - padding
     }));
 
-    // 6. Find bounds for the selected contour
+    // 8. Find bounds for the selected contour
     let minX = Infinity,
       minY = Infinity,
       maxX = -Infinity,
@@ -109,7 +122,7 @@ export class ImageTracer {
       height: maxY - minY,
     };
 
-    // 7. Post-processing
+    // 9. Post-processing (Scale)
     let finalPoints = unpaddedPoints;
     if (options.scaleToWidth && options.scaleToHeight) {
       finalPoints = this.scalePoints(
@@ -120,12 +133,18 @@ export class ImageTracer {
       );
     }
 
-    const simplifiedPoints = this.douglasPeucker(
-      finalPoints,
-      options.simplifyTolerance ?? 2.0,
-    );
-
-    return this.pointsToSVG(simplifiedPoints);
+    // 10. Simplify and Generate SVG
+    const useSmoothing = options.smoothing !== false; // Default true
+    
+    if (useSmoothing) {
+      return this.pointsToSVGPaper(finalPoints, options.simplifyTolerance ?? 2.5);
+    } else {
+      const simplifiedPoints = this.douglasPeucker(
+        finalPoints,
+        options.simplifyTolerance ?? 2.0,
+      );
+      return this.pointsToSVG(simplifiedPoints);
+    }
   }
 
   private static createMask(
@@ -521,5 +540,31 @@ export class ImageTracer {
       tail.map((p) => `L ${p.x} ${p.y}`).join(" ") +
       " Z"
     );
+  }
+
+  private static ensurePaper() {
+    if (!paper.project) {
+      paper.setup(new paper.Size(100, 100));
+    }
+  }
+
+  private static pointsToSVGPaper(points: Point[], tolerance: number): string {
+    if (points.length < 3) return this.pointsToSVG(points);
+    
+    this.ensurePaper();
+    
+    // Create Path
+    const path = new paper.Path({
+      segments: points.map(p => [p.x, p.y]),
+      closed: true
+    });
+    
+    // Simplify
+    path.simplify(tolerance);
+    
+    const data = path.pathData;
+    path.remove();
+    
+    return data;
   }
 }
