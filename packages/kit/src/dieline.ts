@@ -44,7 +44,10 @@ export class DielineTool implements Extension {
   private height: number = 500;
   private radius: number = 0;
   private offset: number = 0;
-  private style: "solid" | "dashed" = "solid";
+  private strokeWidth: number = 2.7;
+  private strokeColor: string = "#FF0000";
+  private dashLength: number = 5;
+  private style: "solid" | "dashed" | "hidden" = "solid";
   private insideColor: string = "rgba(0,0,0,0)";
   private outsideColor: string = "#ffffff";
   private showBleedLines: boolean = true;
@@ -68,7 +71,10 @@ export class DielineTool implements Extension {
       position: { x: number; y: number };
       padding: number | string;
       offset: number;
-      style: "solid" | "dashed";
+      strokeWidth: number;
+      strokeColor: string;
+      dashLength: number;
+      style: "solid" | "dashed" | "hidden";
       insideColor: string;
       outsideColor: string;
       showBleedLines: boolean;
@@ -99,6 +105,18 @@ export class DielineTool implements Extension {
       this.radius = configService.get("dieline.radius", this.radius);
       this.padding = configService.get("dieline.padding", this.padding);
       this.offset = configService.get("dieline.offset", this.offset);
+      this.strokeWidth = configService.get(
+        "dieline.strokeWidth",
+        this.strokeWidth,
+      );
+      this.strokeColor = configService.get(
+        "dieline.strokeColor",
+        this.strokeColor,
+      );
+      this.dashLength = configService.get(
+        "dieline.dashLength",
+        this.dashLength,
+      );
       this.style = configService.get("dieline.style", this.style);
       this.insideColor = configService.get(
         "dieline.insideColor",
@@ -209,10 +227,33 @@ export class DielineTool implements Extension {
           default: this.showBleedLines,
         },
         {
+          id: "dieline.strokeWidth",
+          type: "number",
+          label: "Line Width",
+          min: 0.1,
+          max: 10,
+          step: 0.1,
+          default: this.strokeWidth,
+        },
+        {
+          id: "dieline.strokeColor",
+          type: "color",
+          label: "Line Color",
+          default: this.strokeColor,
+        },
+        {
+          id: "dieline.dashLength",
+          type: "number",
+          label: "Dash Length",
+          min: 1,
+          max: 50,
+          default: this.dashLength,
+        },
+        {
           id: "dieline.style",
           type: "select",
           label: "Line Style",
-          options: ["solid", "dashed"],
+          options: ["solid", "dashed", "hidden"],
           default: this.style,
         },
         {
@@ -528,7 +569,7 @@ export class DielineTool implements Extension {
 
       // Use solid red for hatch lines to match dieline, background is transparent
       if (showBleedLines !== false) {
-        const pattern = this.createHatchPattern("red");
+        const pattern = this.createHatchPattern(this.strokeColor);
         if (pattern) {
           const bleedObj = new Path(bleedPathData, {
             fill: pattern,
@@ -559,9 +600,10 @@ export class DielineTool implements Extension {
 
       const offsetBorderObj = new Path(offsetPathData, {
         fill: null,
-        stroke: "#666", // Grey
-        strokeWidth: 1,
-        strokeDashArray: [4, 4], // Dashed
+        stroke: style === "hidden" ? null : this.strokeColor,
+        strokeWidth: this.strokeWidth,
+        strokeDashArray:
+          style === "dashed" ? [this.dashLength, this.dashLength] : undefined,
         selectable: false,
         evented: false,
         originX: "left",
@@ -589,9 +631,10 @@ export class DielineTool implements Extension {
 
     const borderObj = new Path(borderPathData, {
       fill: "transparent",
-      stroke: "red",
-      strokeWidth: 1,
-      strokeDashArray: style === "dashed" ? [5, 5] : undefined,
+      stroke: style === "hidden" ? null : this.strokeColor,
+      strokeWidth: this.strokeWidth,
+      strokeDashArray:
+        style === "dashed" ? [this.dashLength, this.dashLength] : undefined,
       selectable: false,
       evented: false,
       originX: "left",
