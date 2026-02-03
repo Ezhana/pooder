@@ -52,8 +52,6 @@ export class DielineTool implements Extension {
   private outsideColor: string = "#ffffff";
   private showBleedLines: boolean = true;
   private holes: HoleData[] = [];
-  // Position is stored as normalized coordinates (0-1)
-  private position?: { x: number; y: number };
   private padding: number | string = 140;
   private pathData?: string;
 
@@ -67,8 +65,6 @@ export class DielineTool implements Extension {
       width: number;
       height: number;
       radius: number;
-      // Position is normalized (0-1)
-      position: { x: number; y: number };
       padding: number | string;
       offset: number;
       strokeWidth: number;
@@ -197,12 +193,6 @@ export class DielineTool implements Extension {
           label: "Corner Radius",
           min: 0,
           max: 500,
-          default: this.radius,
-        },
-        {
-          id: "dieline.position",
-          type: "json",
-          label: "Position (Normalized)",
           default: this.radius,
         },
         {
@@ -416,7 +406,6 @@ export class DielineTool implements Extension {
       style,
       insideColor,
       outsideColor,
-      position,
       showBleedLines,
       holes,
     } = this;
@@ -686,7 +675,7 @@ export class DielineTool implements Extension {
 
   public getGeometry(): DielineGeometry | null {
     if (!this.canvasService) return null;
-    const { unit, shape, width, height, radius, position, offset } = this;
+    const { unit, shape, width, height, radius, offset } = this;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
@@ -729,7 +718,7 @@ export class DielineTool implements Extension {
     if (!userLayer) return null;
 
     // 1. Generate Path Data
-    const { shape, width, height, radius, position, holes } = this;
+    const { shape, width, height, radius, holes } = this;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
