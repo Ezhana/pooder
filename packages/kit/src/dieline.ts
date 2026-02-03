@@ -14,8 +14,7 @@ import {
   generateMaskPath,
   generateBleedZonePath,
   getPathBounds,
-  HoleData,
-  resolveHolePosition,
+  EdgeFeature,
 } from "./geometry";
 
 export interface DielineGeometry {
@@ -51,7 +50,7 @@ export class DielineTool implements Extension {
   private insideColor: string = "rgba(0,0,0,0)";
   private outsideColor: string = "#ffffff";
   private showBleedLines: boolean = true;
-  private holes: HoleData[] = [];
+  private features: EdgeFeature[] = [];
   private padding: number | string = 140;
   private pathData?: string;
 
@@ -74,7 +73,7 @@ export class DielineTool implements Extension {
       insideColor: string;
       outsideColor: string;
       showBleedLines: boolean;
-      holes: HoleData[];
+      features: EdgeFeature[];
       pathData: string;
     }>,
   ) {
@@ -126,7 +125,7 @@ export class DielineTool implements Extension {
         "dieline.showBleedLines",
         this.showBleedLines,
       );
-      this.holes = configService.get("dieline.holes", this.holes);
+      this.features = configService.get("dieline.features", this.features);
       this.pathData = configService.get("dieline.pathData", this.pathData);
 
       // Listen for changes
@@ -259,10 +258,10 @@ export class DielineTool implements Extension {
           default: this.outsideColor,
         },
         {
-          id: "dieline.holes",
+          id: "dieline.features",
           type: "json",
-          label: "Holes",
-          default: this.holes,
+          label: "Edge Features",
+          default: this.features,
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
@@ -401,7 +400,7 @@ export class DielineTool implements Extension {
       insideColor,
       outsideColor,
       showBleedLines,
-      holes,
+      features,
     } = this;
     let { width, height } = this;
 
@@ -430,42 +429,19 @@ export class DielineTool implements Extension {
     // Clear existing objects
     layer.remove(...layer.getObjects());
 
-    // Resolve Holes for Geometry Generation (using visual coordinates)
-    const geometryForHoles = {
-      x: cx,
-      y: cy,
-      width: visualWidth,
-      height: visualHeight,
-      // Pass scale/unit context if needed by resolveHolePosition (though currently unused there)
-    };
-
-    const absoluteHoles = (holes || []).map((h) => {
-      // Scale hole radii and offsets: mm -> current unit -> pixels
+    // Scale Features for Geometry Generation
+    const absoluteFeatures = (features || []).map((f) => {
+      // Scale mm -> current unit -> pixels
       const unitScale = Coordinate.convertUnit(1, "mm", unit);
-      const offsetScale = unitScale * scale;
-
-      // Apply scaling to offsets BEFORE resolving position
-      const hWithPixelOffsets = {
-        ...h,
-        offsetX: (h.offsetX || 0) * offsetScale,
-        offsetY: (h.offsetY || 0) * offsetScale,
-      };
-
-      const pos = resolveHolePosition(hWithPixelOffsets, geometryForHoles, {
-        width: canvasW,
-        height: canvasH,
-      });
+      const featureScale = unitScale * scale;
 
       return {
-        ...h,
-        x: pos.x,
-        y: pos.y,
-        // Scale hole radii: mm -> current unit -> pixels
-        innerRadius: h.innerRadius * offsetScale,
-        outerRadius: h.outerRadius * offsetScale,
-        // Store scaled offsets in the result for consistency, though pos is already resolved
-        offsetX: hWithPixelOffsets.offsetX,
-        offsetY: hWithPixelOffsets.offsetY,
+        ...f,
+        x: f.x,
+        y: f.y,
+        width: (f.width || 0) * featureScale,
+        height: (f.height || 0) * featureScale,
+        radius: (f.radius || 0) * featureScale,
       };
     });
 
@@ -485,7 +461,7 @@ export class DielineTool implements Extension {
       radius: cutR,
       x: cx,
       y: cy,
-      holes: absoluteHoles,
+      features: absoluteFeatures,
       pathData: this.pathData,
     });
 
@@ -501,13 +477,13 @@ export class DielineTool implements Extension {
     });
     layer.add(mask);
 
-    // 2. Draw Inside Fill (Dieline Shape itself, merged with holes if needed)
+    // 2. Draw Inside Fill (Dieline Shape itself, merged with features if needed)
     if (
       insideColor &&
       insideColor !== "transparent" &&
       insideColor !== "rgba(0,0,0,0)"
     ) {
-      // Generate path for the product shape (Paper) = Dieline - Holes
+      // Generate path for the product shape (Paper) = Dieline +/- Features
       const productPathData = generateDielinePath({
         shape,
         width: cutW,
@@ -515,7 +491,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        holes: absoluteHoles,
+        features: absoluteFeatures,
         pathData: this.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -542,7 +518,7 @@ export class DielineTool implements Extension {
           radius: visualRadius,
           x: cx,
           y: cy,
-          holes: absoluteHoles,
+          features: absoluteFeatures,
           pathData: this.pathData,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
@@ -575,7 +551,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        holes: absoluteHoles,
+        features: absoluteFeatures,
         pathData: this.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -596,9 +572,6 @@ export class DielineTool implements Extension {
     }
 
     // 4. Draw Dieline (Visual Border)
-    // This should outline the product shape AND the holes.
-    // NOTE: We need to use absoluteHoles (denormalized) here, NOT holes (normalized 0-1)
-    // generateDielinePath expects holes to be in absolute coordinates (matching width/height scale)
     const borderPathData = generateDielinePath({
       shape,
       width: visualWidth,
@@ -606,7 +579,7 @@ export class DielineTool implements Extension {
       radius: visualRadius,
       x: cx,
       y: cy,
-      holes: absoluteHoles,
+      features: absoluteFeatures,
       pathData: this.pathData,
       canvasWidth: canvasW,
       canvasHeight: canvasH,
@@ -650,16 +623,8 @@ export class DielineTool implements Extension {
     layer.dirty = true;
     this.canvasService.requestRenderAll();
 
-    // Emit change event so other tools (like HoleTool) can react
-    // Only emit if requested (to avoid loops when updating non-geometry props like holes)
+    // Emit change event so other tools (like FeatureTool) can react
     if (emitEvent && this.context) {
-      // FIX: Ensure we use the exact same geometry values as used in rendering above.
-      // Although getGeometry() recalculates layout, it should be identical if props haven't changed.
-      // But to be absolutely safe and avoid micro-differences or race conditions, we can reuse calculated values.
-      // However, getGeometry is public API, so it's better if it's correct.
-      // Let's verify getGeometry logic matches updateDieline logic perfectly.
-      // Yes, both use Coordinate.calculateLayout with the same inputs.
-
       const geometry = this.getGeometry();
       if (geometry) {
         this.context.eventBus.emit("dieline:geometry:change", geometry);
@@ -696,7 +661,7 @@ export class DielineTool implements Extension {
       height: visualHeight,
       radius: radius * scale,
       offset: offset * scale,
-      // Pass scale to help other tools (like HoleTool) convert units
+      // Pass scale to help other tools (like FeatureTool) convert units
       scale,
       pathData: this.pathData,
     } as DielineGeometry;
@@ -706,13 +671,10 @@ export class DielineTool implements Extension {
     if (!this.canvasService) return null;
     const userLayer = this.canvasService.getLayer("user");
 
-    // Even if no user images, we might want to export the shape?
-    // But usually "Cut Image" implies the printed content.
-    // If empty, maybe just return null or empty string.
     if (!userLayer) return null;
 
     // 1. Generate Path Data
-    const { shape, width, height, radius, holes } = this;
+    const { shape, width, height, radius, features } = this;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
@@ -729,29 +691,19 @@ export class DielineTool implements Extension {
     const visualHeight = layout.height;
     const visualRadius = radius * scale;
 
-    // Denormalize Holes for Export
-    const absoluteHoles = (holes || []).map((h) => {
+    // Scale Features
+    const absoluteFeatures = (features || []).map((f) => {
       const unit = this.unit || "mm";
       const unitScale = Coordinate.convertUnit(1, "mm", unit);
-
-      const pos = resolveHolePosition(
-        {
-          ...h,
-          offsetX: (h.offsetX || 0) * unitScale * scale,
-          offsetY: (h.offsetY || 0) * unitScale * scale,
-        },
-        { x: cx, y: cy, width: visualWidth, height: visualHeight },
-        { width: canvasW, height: canvasH },
-      );
+      const featureScale = unitScale * scale;
 
       return {
-        ...h,
-        x: pos.x,
-        y: pos.y,
-        innerRadius: h.innerRadius * unitScale * scale,
-        outerRadius: h.outerRadius * unitScale * scale,
-        offsetX: (h.offsetX || 0) * unitScale * scale,
-        offsetY: (h.offsetY || 0) * unitScale * scale,
+        ...f,
+        x: f.x,
+        y: f.y,
+        width: (f.width || 0) * featureScale,
+        height: (f.height || 0) * featureScale,
+        radius: (f.radius || 0) * featureScale,
       };
     });
 
@@ -762,41 +714,32 @@ export class DielineTool implements Extension {
       radius: visualRadius,
       x: cx,
       y: cy,
-      holes: absoluteHoles,
+      features: absoluteFeatures,
       pathData: this.pathData,
       canvasWidth: canvasW,
       canvasHeight: canvasH,
     });
 
     // 2. Prepare for Export
-    // Clone the layer to not affect the stage
     const clonedLayer = await userLayer.clone();
-
-    // Create Clip Path
-    // Note: In Fabric, clipPath is relative to the object center usually,
-    // but for a Group that is full-canvas (left=0, top=0), absolute coordinates should work
-    // if we configure it correctly.
-    // However, Fabric's clipPath handling can be tricky with Groups.
-    // Safest bet: Position the clipPath absolutely and ensuring group is absolute.
 
     const clipPath = new Path(pathData, {
       originX: "left",
       originY: "top",
       left: 0,
       top: 0,
-      absolutePositioned: true, // Important for groups
+      absolutePositioned: true,
     });
 
     clonedLayer.clipPath = clipPath;
 
     // 3. Calculate Crop Area (The Dieline Bounds)
-    // We want to export only the area covered by the dieline
     const bounds = clipPath.getBoundingRect();
 
     // 4. Export
     const dataUrl = clonedLayer.toDataURL({
       format: "png",
-      multiplier: 2, // Better quality
+      multiplier: 2,
       left: bounds.left,
       top: bounds.top,
       width: bounds.width,

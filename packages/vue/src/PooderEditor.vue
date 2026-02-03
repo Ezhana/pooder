@@ -25,7 +25,7 @@ import {
   RulerTool,
   DielineTool,
   FilmTool,
-  HoleTool,
+  FeatureTool,
   ImageTool,
   WhiteInkTool,
   MirrorTool,
@@ -157,7 +157,7 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
     new MirrorTool(),
     new DielineTool(),
     new RulerTool(),
-    new HoleTool(),
+    new FeatureTool(),
   ];
 
   tools.forEach((tool) => {
