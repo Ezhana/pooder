@@ -294,17 +294,11 @@ export class DielineTool implements Extension {
               const newWidth = bounds.width * scale;
               const newHeight = bounds.height * scale;
 
-              const configService = this.context?.services.get<any>(
-                "ConfigurationService",
-              );
-              if (configService) {
-                configService.update("dieline.width", newWidth);
-                configService.update("dieline.height", newHeight);
-                configService.update("dieline.shape", "custom");
-                configService.update("dieline.pathData", pathData);
-              }
-
-              return pathData;
+              return {
+                pathData,
+                width: newWidth,
+                height: newHeight,
+              };
             } catch (e) {
               console.error("Edge detection failed", e);
               throw e;
