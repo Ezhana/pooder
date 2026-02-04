@@ -32,54 +32,77 @@ export interface DielineGeometry {
   pathData?: string;
 }
 
+export interface LineStyle {
+  width: number;
+  color: string;
+  dashLength: number;
+  style: "solid" | "dashed" | "hidden";
+}
+
+export interface DielineState {
+  unit: Unit;
+  shape: "rect" | "circle" | "ellipse" | "custom";
+  width: number;
+  height: number;
+  radius: number;
+  offset: number;
+  padding: number | string;
+  mainLine: LineStyle;
+  offsetLine: LineStyle;
+  insideColor: string;
+  outsideColor: string;
+  showBleedLines: boolean;
+  features: EdgeFeature[];
+  pathData?: string;
+}
+
 export class DielineTool implements Extension {
   id = "pooder.kit.dieline";
   public metadata = {
     name: "DielineTool",
   };
 
-  private unit: Unit = "mm";
-  private shape: "rect" | "circle" | "ellipse" | "custom" = "rect";
-  private width: number = 500;
-  private height: number = 500;
-  private radius: number = 0;
-  private offset: number = 0;
-  private strokeWidth: number = 2.7;
-  private strokeColor: string = "#FF0000";
-  private dashLength: number = 5;
-  private style: "solid" | "dashed" | "hidden" = "solid";
-  private insideColor: string = "rgba(0,0,0,0)";
-  private outsideColor: string = "#ffffff";
-  private showBleedLines: boolean = true;
-  private features: EdgeFeature[] = [];
-  private padding: number | string = 140;
-  private pathData?: string;
+  private state: DielineState = {
+    unit: "mm",
+    shape: "rect",
+    width: 500,
+    height: 500,
+    radius: 0,
+    offset: 0,
+    padding: 140,
+    mainLine: {
+      width: 2.7,
+      color: "#FF0000",
+      dashLength: 5,
+      style: "solid",
+    },
+    offsetLine: {
+      width: 2.7,
+      color: "#FF0000",
+      dashLength: 5,
+      style: "solid",
+    },
+    insideColor: "rgba(0,0,0,0)",
+    outsideColor: "#ffffff",
+    showBleedLines: true,
+    features: [],
+  };
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
 
-  constructor(
-    options?: Partial<{
-      unit: Unit;
-      shape: "rect" | "circle" | "ellipse" | "custom";
-      width: number;
-      height: number;
-      radius: number;
-      padding: number | string;
-      offset: number;
-      strokeWidth: number;
-      strokeColor: string;
-      dashLength: number;
-      style: "solid" | "dashed" | "hidden";
-      insideColor: string;
-      outsideColor: string;
-      showBleedLines: boolean;
-      features: EdgeFeature[];
-      pathData: string;
-    }>,
-  ) {
+  constructor(options?: Partial<DielineState>) {
     if (options) {
-      Object.assign(this, options);
+      // Deep merge for styles to avoid overwriting defaults with partial objects
+      if (options.mainLine) {
+        Object.assign(this.state.mainLine, options.mainLine);
+        delete options.mainLine;
+      }
+      if (options.offsetLine) {
+        Object.assign(this.state.offsetLine, options.offsetLine);
+        delete options.offsetLine;
+      }
+      Object.assign(this.state, options);
     }
   }
 
@@ -94,52 +117,64 @@ export class DielineTool implements Extension {
     const configService = context.services.get<any>("ConfigurationService");
     if (configService) {
       // Load initial config
-      this.unit = configService.get("dieline.unit", this.unit);
-      this.shape = configService.get("dieline.shape", this.shape);
-      this.width = configService.get("dieline.width", this.width);
-      this.height = configService.get("dieline.height", this.height);
-      this.radius = configService.get("dieline.radius", this.radius);
-      this.padding = configService.get("dieline.padding", this.padding);
-      this.offset = configService.get("dieline.offset", this.offset);
-      this.strokeWidth = configService.get(
-        "dieline.strokeWidth",
-        this.strokeWidth,
-      );
-      this.strokeColor = configService.get(
-        "dieline.strokeColor",
-        this.strokeColor,
-      );
-      this.dashLength = configService.get(
-        "dieline.dashLength",
-        this.dashLength,
-      );
-      this.style = configService.get("dieline.style", this.style);
-      this.insideColor = configService.get(
-        "dieline.insideColor",
-        this.insideColor,
-      );
-      this.outsideColor = configService.get(
-        "dieline.outsideColor",
-        this.outsideColor,
-      );
-      this.showBleedLines = configService.get(
-        "dieline.showBleedLines",
-        this.showBleedLines,
-      );
-      this.features = configService.get("dieline.features", this.features);
-      this.pathData = configService.get("dieline.pathData", this.pathData);
+      const s = this.state;
+      s.unit = configService.get("dieline.unit", s.unit);
+      s.shape = configService.get("dieline.shape", s.shape);
+      s.width = configService.get("dieline.width", s.width);
+      s.height = configService.get("dieline.height", s.height);
+      s.radius = configService.get("dieline.radius", s.radius);
+      s.padding = configService.get("dieline.padding", s.padding);
+      s.offset = configService.get("dieline.offset", s.offset);
+      
+      // Main Line
+      s.mainLine.width = configService.get("dieline.strokeWidth", s.mainLine.width);
+      s.mainLine.color = configService.get("dieline.strokeColor", s.mainLine.color);
+      s.mainLine.dashLength = configService.get("dieline.dashLength", s.mainLine.dashLength);
+      s.mainLine.style = configService.get("dieline.style", s.mainLine.style);
+
+      // Offset Line
+      s.offsetLine.width = configService.get("dieline.offsetStrokeWidth", s.offsetLine.width);
+      s.offsetLine.color = configService.get("dieline.offsetStrokeColor", s.offsetLine.color);
+      s.offsetLine.dashLength = configService.get("dieline.offsetDashLength", s.offsetLine.dashLength);
+      s.offsetLine.style = configService.get("dieline.offsetStyle", s.offsetLine.style);
+
+      s.insideColor = configService.get("dieline.insideColor", s.insideColor);
+      s.outsideColor = configService.get("dieline.outsideColor", s.outsideColor);
+      s.showBleedLines = configService.get("dieline.showBleedLines", s.showBleedLines);
+      s.features = configService.get("dieline.features", s.features);
+      s.pathData = configService.get("dieline.pathData", s.pathData);
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (e.key.startsWith("dieline.")) {
-          const prop = e.key.split(".")[1];
-          console.log(
-            `[DielineTool] Config change detected: ${e.key} -> ${e.value}`,
-          );
-          if (prop && prop in this) {
-            (this as any)[prop] = e.value;
-            this.updateDieline();
+          console.log(`[DielineTool] Config change detected: ${e.key} -> ${e.value}`);
+          
+          switch (e.key) {
+            case "dieline.unit": s.unit = e.value; break;
+            case "dieline.shape": s.shape = e.value; break;
+            case "dieline.width": s.width = e.value; break;
+            case "dieline.height": s.height = e.value; break;
+            case "dieline.radius": s.radius = e.value; break;
+            case "dieline.padding": s.padding = e.value; break;
+            case "dieline.offset": s.offset = e.value; break;
+            
+            case "dieline.strokeWidth": s.mainLine.width = e.value; break;
+            case "dieline.strokeColor": s.mainLine.color = e.value; break;
+            case "dieline.dashLength": s.mainLine.dashLength = e.value; break;
+            case "dieline.style": s.mainLine.style = e.value; break;
+            
+            case "dieline.offsetStrokeWidth": s.offsetLine.width = e.value; break;
+            case "dieline.offsetStrokeColor": s.offsetLine.color = e.value; break;
+            case "dieline.offsetDashLength": s.offsetLine.dashLength = e.value; break;
+            case "dieline.offsetStyle": s.offsetLine.style = e.value; break;
+            
+            case "dieline.insideColor": s.insideColor = e.value; break;
+            case "dieline.outsideColor": s.outsideColor = e.value; break;
+            case "dieline.showBleedLines": s.showBleedLines = e.value; break;
+            case "dieline.features": s.features = e.value; break;
+            case "dieline.pathData": s.pathData = e.value; break;
           }
+          this.updateDieline();
         }
       });
     }
@@ -155,6 +190,7 @@ export class DielineTool implements Extension {
   }
 
   contribute() {
+    const s = this.state;
     return {
       [ContributionPointIds.CONFIGURATIONS]: [
         {
@@ -162,14 +198,14 @@ export class DielineTool implements Extension {
           type: "select",
           label: "Unit",
           options: ["px", "mm", "cm", "in"],
-          default: this.unit,
+          default: s.unit,
         },
         {
           id: "dieline.shape",
           type: "select",
           label: "Shape",
           options: ["rect", "circle", "ellipse", "custom"],
-          default: this.shape,
+          default: s.shape,
         },
         {
           id: "dieline.width",
@@ -177,7 +213,7 @@ export class DielineTool implements Extension {
           label: "Width",
           min: 10,
           max: 2000,
-          default: this.width,
+          default: s.width,
         },
         {
           id: "dieline.height",
@@ -185,7 +221,7 @@ export class DielineTool implements Extension {
           label: "Height",
           min: 10,
           max: 2000,
-          default: this.height,
+          default: s.height,
         },
         {
           id: "dieline.radius",
@@ -193,14 +229,14 @@ export class DielineTool implements Extension {
           label: "Corner Radius",
           min: 0,
           max: 500,
-          default: this.radius,
+          default: s.radius,
         },
         {
           id: "dieline.padding",
           type: "select",
           label: "View Padding",
           options: [0, 10, 20, 40, 60, 100, "2%", "5%", "10%", "15%", "20%"],
-          default: this.padding,
+          default: s.padding,
         },
         {
           id: "dieline.offset",
@@ -208,13 +244,13 @@ export class DielineTool implements Extension {
           label: "Bleed Offset",
           min: -100,
           max: 100,
-          default: this.offset,
+          default: s.offset,
         },
         {
           id: "dieline.showBleedLines",
           type: "boolean",
           label: "Show Bleed Lines",
-          default: this.showBleedLines,
+          default: s.showBleedLines,
         },
         {
           id: "dieline.strokeWidth",
@@ -223,13 +259,13 @@ export class DielineTool implements Extension {
           min: 0.1,
           max: 10,
           step: 0.1,
-          default: this.strokeWidth,
+          default: s.mainLine.width,
         },
         {
           id: "dieline.strokeColor",
           type: "color",
           label: "Line Color",
-          default: this.strokeColor,
+          default: s.mainLine.color,
         },
         {
           id: "dieline.dashLength",
@@ -237,32 +273,62 @@ export class DielineTool implements Extension {
           label: "Dash Length",
           min: 1,
           max: 50,
-          default: this.dashLength,
+          default: s.mainLine.dashLength,
         },
         {
           id: "dieline.style",
           type: "select",
           label: "Line Style",
           options: ["solid", "dashed", "hidden"],
-          default: this.style,
+          default: s.mainLine.style,
+        },
+        {
+          id: "dieline.offsetStrokeWidth",
+          type: "number",
+          label: "Offset Line Width",
+          min: 0.1,
+          max: 10,
+          step: 0.1,
+          default: s.offsetLine.width,
+        },
+        {
+          id: "dieline.offsetStrokeColor",
+          type: "color",
+          label: "Offset Line Color",
+          default: s.offsetLine.color,
+        },
+        {
+          id: "dieline.offsetDashLength",
+          type: "number",
+          label: "Offset Dash Length",
+          min: 1,
+          max: 50,
+          default: s.offsetLine.dashLength,
+        },
+        {
+          id: "dieline.offsetStyle",
+          type: "select",
+          label: "Offset Line Style",
+          options: ["solid", "dashed", "hidden"],
+          default: s.offsetLine.style,
         },
         {
           id: "dieline.insideColor",
           type: "color",
           label: "Inside Color",
-          default: this.insideColor,
+          default: s.insideColor,
         },
         {
           id: "dieline.outsideColor",
           type: "color",
           label: "Outside Color",
-          default: this.outsideColor,
+          default: s.outsideColor,
         },
         {
           id: "dieline.features",
           type: "json",
           label: "Edge Features",
-          default: this.features,
+          default: s.features,
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
@@ -288,7 +354,7 @@ export class DielineTool implements Extension {
               const pathData = await ImageTracer.trace(imageUrl, options);
               const bounds = getPathBounds(pathData);
 
-              const currentMax = Math.max(this.width, this.height);
+              const currentMax = Math.max(s.width, s.height);
               const scale = currentMax / Math.max(bounds.width, bounds.height);
 
               const newWidth = bounds.width * scale;
@@ -374,15 +440,15 @@ export class DielineTool implements Extension {
     containerWidth: number,
     containerHeight: number,
   ): number {
-    if (typeof this.padding === "number") {
-      return this.padding;
+    if (typeof this.state.padding === "number") {
+      return this.state.padding;
     }
-    if (typeof this.padding === "string") {
-      if (this.padding.endsWith("%")) {
-        const percent = parseFloat(this.padding) / 100;
+    if (typeof this.state.padding === "string") {
+      if (this.state.padding.endsWith("%")) {
+        const percent = parseFloat(this.state.padding) / 100;
         return Math.min(containerWidth, containerHeight) * percent;
       }
-      return parseFloat(this.padding) || 0;
+      return parseFloat(this.state.padding) || 0;
     }
     return 0;
   }
@@ -397,13 +463,14 @@ export class DielineTool implements Extension {
       shape,
       radius,
       offset,
-      style,
+      mainLine,
+      offsetLine,
       insideColor,
       outsideColor,
       showBleedLines,
       features,
-    } = this;
-    let { width, height } = this;
+    } = this.state;
+    let { width, height } = this.state;
 
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
@@ -474,7 +541,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       features: maskFeatures,
-      pathData: this.pathData,
+      pathData: this.state.pathData,
     });
 
     const mask = new Path(maskPathData, {
@@ -504,7 +571,7 @@ export class DielineTool implements Extension {
         x: cx,
         y: cy,
         features: maskFeatures, // Use same features as mask for consistency
-        pathData: this.pathData,
+        pathData: this.state.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
       });
@@ -531,7 +598,7 @@ export class DielineTool implements Extension {
           x: cx,
           y: cy,
           features: originalFeatures,
-          pathData: this.pathData,
+          pathData: this.state.pathData,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
         },
@@ -543,7 +610,7 @@ export class DielineTool implements Extension {
           x: cx,
           y: cy,
           features: offsetFeatures,
-          pathData: this.pathData,
+          pathData: this.state.pathData,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
         },
@@ -552,7 +619,7 @@ export class DielineTool implements Extension {
 
       // Use solid red for hatch lines to match dieline, background is transparent
       if (showBleedLines !== false) {
-        const pattern = this.createHatchPattern(this.strokeColor);
+        const pattern = this.createHatchPattern(mainLine.color);
         if (pattern) {
           const bleedObj = new Path(bleedPathData, {
             fill: pattern,
@@ -576,17 +643,19 @@ export class DielineTool implements Extension {
         x: cx,
         y: cy,
         features: offsetFeatures,
-        pathData: this.pathData,
+        pathData: this.state.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
       });
 
       const offsetBorderObj = new Path(offsetPathData, {
         fill: null,
-        stroke: style === "hidden" ? null : this.strokeColor,
-        strokeWidth: this.strokeWidth,
+        stroke: offsetLine.style === "hidden" ? null : offsetLine.color,
+        strokeWidth: offsetLine.width,
         strokeDashArray:
-          style === "dashed" ? [this.dashLength, this.dashLength] : undefined,
+          offsetLine.style === "dashed"
+            ? [offsetLine.dashLength, offsetLine.dashLength]
+            : undefined,
         selectable: false,
         evented: false,
         originX: "left",
@@ -604,17 +673,17 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       features: originalFeatures,
-      pathData: this.pathData,
+      pathData: this.state.pathData,
       canvasWidth: canvasW,
       canvasHeight: canvasH,
     });
 
     const borderObj = new Path(borderPathData, {
       fill: "transparent",
-      stroke: style === "hidden" ? null : this.strokeColor,
-      strokeWidth: this.strokeWidth,
+      stroke: mainLine.style === "hidden" ? null : mainLine.color,
+      strokeWidth: mainLine.width,
       strokeDashArray:
-        style === "dashed" ? [this.dashLength, this.dashLength] : undefined,
+        mainLine.style === "dashed" ? [mainLine.dashLength, mainLine.dashLength] : undefined,
       selectable: false,
       evented: false,
       originX: "left",
@@ -658,7 +727,7 @@ export class DielineTool implements Extension {
 
   public getGeometry(): DielineGeometry | null {
     if (!this.canvasService) return null;
-    const { unit, shape, width, height, radius, offset } = this;
+    const { unit, shape, width, height, radius, offset, mainLine, pathData } = this.state;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
@@ -687,8 +756,8 @@ export class DielineTool implements Extension {
       offset: offset * scale,
       // Pass scale to help other tools (like FeatureTool) convert units
       scale,
-      strokeWidth: this.strokeWidth,
-      pathData: this.pathData,
+      strokeWidth: mainLine.width,
+      pathData,
     } as DielineGeometry;
   }
 
@@ -699,7 +768,7 @@ export class DielineTool implements Extension {
     if (!userLayer) return null;
 
     // 1. Generate Path Data
-    const { shape, width, height, radius, features } = this;
+    const { shape, width, height, radius, features, unit, pathData } = this.state;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
@@ -718,7 +787,6 @@ export class DielineTool implements Extension {
 
     // Scale Features
     const absoluteFeatures = (features || []).map((f) => {
-      const unit = this.unit || "mm";
       const unitScale = Coordinate.convertUnit(1, "mm", unit);
       const featureScale = unitScale * scale;
 
@@ -736,7 +804,7 @@ export class DielineTool implements Extension {
       (f) => !f.target || f.target === "original" || f.target === "both",
     );
 
-    const pathData = generateDielinePath({
+    const generatedPathData = generateDielinePath({
       shape,
       width: visualWidth,
       height: visualHeight,
@@ -744,7 +812,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       features: originalFeatures,
-      pathData: this.pathData,
+      pathData,
       canvasWidth: canvasW,
       canvasHeight: canvasH,
     });
@@ -752,7 +820,7 @@ export class DielineTool implements Extension {
     // 2. Prepare for Export
     const clonedLayer = await userLayer.clone();
 
-    const clipPath = new Path(pathData, {
+    const clipPath = new Path(generatedPathData, {
       originX: "left",
       originY: "top",
       left: 0,
