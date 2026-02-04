@@ -448,9 +448,6 @@ export class DielineTool implements Extension {
     const originalFeatures = absoluteFeatures.filter(
       (f) => !f.target || f.target === "original" || f.target === "both",
     );
-    const offsetFeatures = absoluteFeatures.filter(
-      (f) => f.target === "offset" || f.target === "both",
-    );
 
     // 1. Draw Mask (Outside)
     const cutW = Math.max(0, visualWidth + visualOffset * 2);
@@ -468,7 +465,7 @@ export class DielineTool implements Extension {
       radius: cutR,
       x: cx,
       y: cy,
-      features: offsetFeatures,
+      features: absoluteFeatures,
       pathData: this.pathData,
     });
 
@@ -498,7 +495,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        features: offsetFeatures,
+        features: absoluteFeatures,
         pathData: this.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -537,7 +534,7 @@ export class DielineTool implements Extension {
           radius: cutR,
           x: cx,
           y: cy,
-          features: offsetFeatures,
+          features: absoluteFeatures,
           pathData: this.pathData,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
@@ -570,7 +567,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        features: offsetFeatures,
+        features: absoluteFeatures,
         pathData: this.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
