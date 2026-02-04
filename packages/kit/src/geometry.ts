@@ -14,6 +14,7 @@ export interface EdgeFeature {
   height?: number; // For rect (Physical units)
   radius?: number; // For circle or rect corners (Physical units)
   rotation?: number; // Degrees
+  target?: "original" | "offset" | "both";
 }
 
 export interface GeometryOptions {
@@ -255,49 +256,22 @@ export function generateMaskPath(options: MaskGeometryOptions): string {
  * Generates the path data for the Bleed Zone.
  */
 export function generateBleedZonePath(
-  options: GeometryOptions,
+  originalOptions: GeometryOptions,
+  offsetOptions: GeometryOptions,
   offset: number,
 ): string {
-  const paperWidth = options.canvasWidth || options.width * 2 || 2000;
-  const paperHeight = options.canvasHeight || options.height * 2 || 2000;
+  const paperWidth =
+    originalOptions.canvasWidth || originalOptions.width * 2 || 2000;
+  const paperHeight =
+    originalOptions.canvasHeight || originalOptions.height * 2 || 2000;
   ensurePaper(paperWidth, paperHeight);
   paper.project.activeLayer.removeChildren();
 
-  // 1. Original Shape (Base + Features)
-  const shapeOriginal = getDielineShape(options);
+  // 1. Generate Original Shape
+  const shapeOriginal = getDielineShape(originalOptions);
 
-  // 2. Offset Shape
-  // We offset the FINAL shape now, because features are part of the dieline.
-  
-  const stroker = shapeOriginal.clone() as paper.Path;
-  stroker.strokeColor = new paper.Color("black");
-  stroker.strokeWidth = Math.abs(offset) * 2;
-  stroker.strokeJoin = "round";
-  stroker.strokeCap = "round";
-
-  let expanded: paper.Item;
-  let shapeOffset: paper.PathItem;
-
-  try {
-    // @ts-ignore
-    expanded = stroker.expand({ stroke: true, fill: false, insert: false });
-    
-    if (offset > 0) {
-      // @ts-ignore
-      shapeOffset = shapeOriginal.unite(expanded);
-    } else {
-      // @ts-ignore
-      shapeOffset = shapeOriginal.subtract(expanded);
-    }
-    expanded.remove();
-  } catch (e) {
-    // Fallback if expand fails
-    stroker.remove();
-    shapeOffset = shapeOriginal.clone();
-    // Simple scale fallback?
-    // shapeOffset.scale(...)
-  }
-  stroker.remove();
+  // 2. Generate Offset Shape
+  const shapeOffset = getDielineShape(offsetOptions);
 
   // 3. Calculate Difference
   let bleedZone: paper.PathItem;
