@@ -124,6 +124,12 @@ export class FeatureTool implements Extension {
   private addFeature(type: "add" | "subtract") {
     if (!this.canvasService) return false;
 
+    const configService = this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
+    const unit = configService?.get("dieline.unit", "mm") || "mm";
+    const defaultSize = Coordinate.convertUnit(10, "mm", unit);
+
     // Default to top edge center
     const newFeature: EdgeFeature = {
       id: Date.now().toString(),
@@ -132,14 +138,10 @@ export class FeatureTool implements Extension {
       shape: "rect",
       x: 0.5,
       y: 0, // Top edge
-      width: 10,
-      height: 10,
+      width: defaultSize,
+      height: defaultSize,
       rotation: 0,
     };
-
-    const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
 
     if (configService) {
       const current = configService.get(
@@ -154,6 +156,13 @@ export class FeatureTool implements Extension {
   private addDoubleLayerHole() {
     if (!this.canvasService) return false;
 
+    const configService = this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
+    const unit = configService?.get("dieline.unit", "mm") || "mm";
+    const lugRadius = Coordinate.convertUnit(20, "mm", unit);
+    const holeRadius = Coordinate.convertUnit(15, "mm", unit);
+
     const groupId = Date.now().toString();
     const timestamp = Date.now();
 
@@ -165,7 +174,7 @@ export class FeatureTool implements Extension {
       shape: "circle",
       x: 0.5,
       y: 0,
-      radius: 20, // 20mm diameter
+      radius: lugRadius, // 20mm
       rotation: 0,
     };
 
@@ -177,13 +186,9 @@ export class FeatureTool implements Extension {
       shape: "circle",
       x: 0.5,
       y: 0,
-      radius: 15, // 10mm diameter
+      radius: holeRadius, // 15mm
       rotation: 0,
     };
-
-    const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
 
     if (configService) {
       const current = configService.get(
@@ -493,9 +498,8 @@ export class FeatureTool implements Extension {
       return;
     }
 
-    const unitScale = Coordinate.convertUnit(1, "mm", geometry.unit || "mm");
     const scale = geometry.scale || 1;
-    const finalScale = unitScale * scale;
+    const finalScale = scale;
 
     // Group features by groupId
     const groups: { [key: string]: { feature: EdgeFeature; index: number }[] } =
@@ -516,11 +520,8 @@ export class FeatureTool implements Extension {
       feature: EdgeFeature,
       pos: { x: number; y: number },
     ) => {
-      // 1. Calculate Unit Scale (e.g. mm -> current unit)
-      // Usually feature.radius is in mm. If not, we assume it's in the same unit as geometry.unit
-      // But standard is mm for features.
-      const unitScale = Coordinate.convertUnit(1, "mm", geometry.unit || "mm");
-      const featureScale = unitScale * scale;
+      // Features are in the same unit as geometry.unit
+      const featureScale = scale;
 
       const visualWidth = (feature.width || 10) * featureScale;
       const visualHeight = (feature.height || 10) * featureScale;

@@ -499,9 +499,8 @@ export class DielineTool implements Extension {
 
     // Scale Features for Geometry Generation
     const absoluteFeatures = (features || []).map((f) => {
-      // Scale mm -> current unit -> pixels
-      const unitScale = Coordinate.convertUnit(1, "mm", unit);
-      const featureScale = unitScale * scale;
+      // Scale current unit -> pixels (features share the same unit as the dieline)
+      const featureScale = scale;
 
       return {
         ...f,
@@ -787,8 +786,7 @@ export class DielineTool implements Extension {
 
     // Scale Features
     const absoluteFeatures = (features || []).map((f) => {
-      const unitScale = Coordinate.convertUnit(1, "mm", unit);
-      const featureScale = unitScale * scale;
+      const featureScale = scale;
 
       return {
         ...f,
