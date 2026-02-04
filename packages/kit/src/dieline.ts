@@ -448,12 +448,19 @@ export class DielineTool implements Extension {
     const originalFeatures = absoluteFeatures.filter(
       (f) => !f.target || f.target === "original" || f.target === "both",
     );
+    const offsetFeatures = absoluteFeatures.filter(
+      (f) => f.target === "offset" || f.target === "both",
+    );
 
     // 1. Draw Mask (Outside)
     const cutW = Math.max(0, visualWidth + visualOffset * 2);
     const cutH = Math.max(0, visualHeight + visualOffset * 2);
     const cutR =
       visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
+
+    // If no bleed offset, mask should match the original dieline (including its features)
+    // If bleed offset exists (positive or negative), mask matches bleed line (which only includes offset features)
+    const maskFeatures = visualOffset !== 0 ? offsetFeatures : originalFeatures;
 
     // Use Paper.js to generate the complex mask path
     const maskPathData = generateMaskPath({
@@ -465,7 +472,7 @@ export class DielineTool implements Extension {
       radius: cutR,
       x: cx,
       y: cy,
-      features: absoluteFeatures,
+      features: maskFeatures,
       pathData: this.pathData,
     });
 
@@ -495,7 +502,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        features: absoluteFeatures,
+        features: maskFeatures, // Use same features as mask for consistency
         pathData: this.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -534,7 +541,7 @@ export class DielineTool implements Extension {
           radius: cutR,
           x: cx,
           y: cy,
-          features: absoluteFeatures,
+          features: offsetFeatures,
           pathData: this.pathData,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
@@ -567,7 +574,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        features: absoluteFeatures,
+        features: offsetFeatures,
         pathData: this.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
