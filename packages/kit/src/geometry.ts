@@ -15,6 +15,8 @@ export interface EdgeFeature {
   radius?: number; // For circle or rect corners (Physical units)
   rotation?: number; // Degrees
   target?: "original" | "offset" | "both";
+  color?: string; // Hex color for the marker
+  strokeDash?: number[]; // Stroke dash array for the marker
 }
 
 export interface GeometryOptions {

@@ -491,11 +491,21 @@ export class FeatureTool implements Extension {
       feature: EdgeFeature,
       pos: { x: number; y: number },
     ) => {
-      const visualWidth = (feature.width || 10) * finalScale;
-      const visualHeight = (feature.height || 10) * finalScale;
-      const visualRadius = (feature.radius || 0) * finalScale;
-      const color = feature.operation === "add" ? "#00FF00" : "#FF0000";
-      const strokeDash = feature.operation === "subtract" ? [4, 4] : undefined;
+      // 1. Calculate Unit Scale (e.g. mm -> current unit)
+      // Usually feature.radius is in mm. If not, we assume it's in the same unit as geometry.unit
+      // But standard is mm for features.
+      const unitScale = Coordinate.convertUnit(1, "mm", geometry.unit || "mm");
+      const featureScale = unitScale * scale;
+
+      const visualWidth = (feature.width || 10) * featureScale;
+      const visualHeight = (feature.height || 10) * featureScale;
+      const visualRadius = (feature.radius || 0) * featureScale;
+      const color =
+        feature.color ||
+        (feature.operation === "add" ? "#00FF00" : "#FF0000");
+      const strokeDash =
+        feature.strokeDash ||
+        (feature.operation === "subtract" ? [4, 4] : undefined);
 
       let shape: any;
       if (feature.shape === "rect") {
