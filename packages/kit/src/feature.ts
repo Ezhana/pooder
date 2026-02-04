@@ -275,7 +275,15 @@ export class FeatureTool implements Extension {
         // For Group, target.left/top is group center (or top-left depending on origin)
         // We snap the target position itself.
         const p = new Point(target.left, target.top);
-        const snapped = this.snapToEdge(p, geometry);
+        
+        // Calculate limit based on target size (min dimension / 2 ensures overlap)
+        // Also subtract stroke width to ensure visual overlap (not just tangent)
+        // target.strokeWidth for group is usually 0, need a safe default (e.g. 2 for markers)
+        const markerStrokeWidth = (target.strokeWidth || 2) * (target.scaleX || 1);
+        const minDim = Math.min(target.getScaledWidth(), target.getScaledHeight());
+        const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
+        
+        const snapped = this.constrainPosition(p, geometry, limit);
 
         target.set({
           left: snapped.x,
@@ -393,18 +401,35 @@ export class FeatureTool implements Extension {
     this.canvasService.requestRenderAll();
   }
 
-  private snapToEdge(
+  private constrainPosition(
     p: Point,
     geometry: DielineGeometry,
+    limit: number
   ): { x: number; y: number } {
     // Use geometry helper to find nearest point on Base Shape
     // geometry object matches GeometryOptions structure required by getNearestPointOnDieline
     // except for 'features' which we don't need for base shape snapping
-    const result = getNearestPointOnDieline({ x: p.x, y: p.y }, {
+    const nearest = getNearestPointOnDieline({ x: p.x, y: p.y }, {
       ...geometry,
       features: [],
     } as any);
-    return result;
+
+    // Calculate vector from nearest point to current point
+    const dx = p.x - nearest.x;
+    const dy = p.y - nearest.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // If within limit, allow current position (offset from edge)
+    if (dist <= limit) {
+      return { x: p.x, y: p.y };
+    }
+
+    // Otherwise, clamp to limit
+    const scale = limit / dist;
+    return {
+      x: nearest.x + dx * scale,
+      y: nearest.y + dy * scale,
+    };
   }
 
   private syncFeatureFromCanvas(target: any) {
@@ -681,9 +706,14 @@ export class FeatureTool implements Extension {
         feature,
       );
 
-      const snapped = this.snapToEdge(
+      const markerStrokeWidth = (marker.strokeWidth || 2) * (marker.scaleX || 1);
+      const minDim = Math.min(marker.getScaledWidth(), marker.getScaledHeight());
+      const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
+      
+      const snapped = this.constrainPosition(
         new Point(marker.left, marker.top),
         geometry,
+        limit
       );
       marker.set({ left: snapped.x, top: snapped.y });
       marker.setCoords();

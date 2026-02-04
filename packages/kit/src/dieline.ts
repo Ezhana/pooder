@@ -28,6 +28,7 @@ export interface DielineGeometry {
   offset: number;
   borderLength?: number;
   scale?: number;
+  strokeWidth?: number;
   pathData?: string;
 }
 
@@ -686,6 +687,7 @@ export class DielineTool implements Extension {
       offset: offset * scale,
       // Pass scale to help other tools (like FeatureTool) convert units
       scale,
+      strokeWidth: this.strokeWidth,
       pathData: this.pathData,
     } as DielineGeometry;
   }
