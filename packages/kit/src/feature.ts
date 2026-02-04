@@ -128,7 +128,7 @@ export class FeatureTool implements Extension {
     const newFeature: EdgeFeature = {
       id: Date.now().toString(),
       operation: type,
-      target: "offset",
+      target: "original",
       shape: "rect",
       x: 0.5,
       y: 0, // Top edge

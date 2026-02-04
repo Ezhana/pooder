@@ -449,7 +449,7 @@ export class DielineTool implements Extension {
       (f) => !f.target || f.target === "original" || f.target === "both",
     );
     const offsetFeatures = absoluteFeatures.filter(
-      (f) => !f.target || f.target === "offset" || f.target === "both",
+      (f) => f.target === "offset" || f.target === "both",
     );
 
     // 1. Draw Mask (Outside)
