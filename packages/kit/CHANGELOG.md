@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 3.5.0
+
+### Minor Changes
+
+- edge features
+
 ## 3.4.0
 
 ### Minor Changes
