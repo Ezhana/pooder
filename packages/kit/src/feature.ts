@@ -195,6 +195,24 @@ export class FeatureTool implements Extension {
     return true;
   }
 
+  private getGeometryForFeature(
+    geometry: DielineGeometry,
+    feature?: EdgeFeature,
+  ): DielineGeometry {
+    if (feature?.target === "offset" && geometry.offset !== 0) {
+      return {
+        ...geometry,
+        width: geometry.width + geometry.offset * 2,
+        height: geometry.height + geometry.offset * 2,
+        radius:
+          geometry.radius === 0
+            ? 0
+            : Math.max(0, geometry.radius + geometry.offset),
+      };
+    }
+    return geometry;
+  }
+
   private setup() {
     if (!this.canvasService || !this.context) return;
     const canvas = this.canvasService.canvas;
@@ -234,11 +252,30 @@ export class FeatureTool implements Extension {
         if (!target || target.data?.type !== "feature-marker") return;
         if (!this.currentGeometry) return;
 
+        // Determine feature to use for snapping context
+        let feature: EdgeFeature | undefined;
+        if (target.data?.isGroup) {
+          const indices = target.data?.indices as number[];
+          if (indices && indices.length > 0) {
+            feature = this.features[indices[0]];
+          }
+        } else {
+          const index = target.data?.index;
+          if (index !== undefined) {
+            feature = this.features[index];
+          }
+        }
+
+        const geometry = this.getGeometryForFeature(
+          this.currentGeometry,
+          feature,
+        );
+
         // Snap to edge during move
         // For Group, target.left/top is group center (or top-left depending on origin)
         // We snap the target position itself.
         const p = new Point(target.left, target.top);
-        const snapped = this.snapToEdge(p, this.currentGeometry);
+        const snapped = this.snapToEdge(p, geometry);
 
         target.set({
           left: snapped.x,
@@ -272,9 +309,7 @@ export class FeatureTool implements Extension {
           // We locked rotation/scaling, so it's safe.
 
           const newFeatures = [...this.features];
-          const { width, height, x, y } = this.currentGeometry!;
-          const layoutLeft = x - width / 2;
-          const layoutTop = y - height / 2;
+          const { x, y } = this.currentGeometry!; // Center is same
 
           // Fabric Group objects have .getObjects() which returns children
           // But children inside group have coordinates relative to group center.
@@ -282,6 +317,15 @@ export class FeatureTool implements Extension {
 
           groupObj.getObjects().forEach((child, i) => {
             const originalIndex = indices[i];
+            const feature = this.features[originalIndex];
+            const geometry = this.getGeometryForFeature(
+              this.currentGeometry!,
+              feature,
+            );
+            const { width, height } = geometry;
+            const layoutLeft = x - width / 2;
+            const layoutTop = y - height / 2;
+
             // Calculate absolute position
             // child.left/top are relative to group center
             const absX = groupCenter.x + (child.left || 0);
@@ -371,7 +415,8 @@ export class FeatureTool implements Extension {
       return;
 
     const feature = this.features[index];
-    const { width, height, x, y } = this.currentGeometry;
+    const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+    const { width, height, x, y } = geometry;
 
     // Calculate Normalized Position
     // The geometry x/y is the CENTER.
@@ -489,6 +534,10 @@ export class FeatureTool implements Extension {
 
     // Render Singles
     singles.forEach(({ feature, index }) => {
+      const geometry = this.getGeometryForFeature(
+        this.currentGeometry!,
+        feature,
+      );
       const pos = resolveFeaturePosition(feature, geometry);
       const marker = createMarkerShape(feature, pos);
 
@@ -539,6 +588,10 @@ export class FeatureTool implements Extension {
       // Fabric will auto-calculate group center and adjust children.
 
       const shapes = members.map(({ feature }) => {
+        const geometry = this.getGeometryForFeature(
+          this.currentGeometry!,
+          feature,
+        );
         const pos = resolveFeaturePosition(feature, geometry);
         return createMarkerShape(feature, pos);
       });
@@ -599,9 +652,28 @@ export class FeatureTool implements Extension {
       .filter((obj: any) => obj.data?.type === "feature-marker");
 
     markers.forEach((marker: any) => {
+      // Find associated feature
+      let feature: EdgeFeature | undefined;
+      if (marker.data?.isGroup) {
+        const indices = marker.data?.indices as number[];
+        if (indices && indices.length > 0) {
+          feature = this.features[indices[0]];
+        }
+      } else {
+        const index = marker.data?.index;
+        if (index !== undefined) {
+          feature = this.features[index];
+        }
+      }
+
+      const geometry = this.getGeometryForFeature(
+        this.currentGeometry!,
+        feature,
+      );
+
       const snapped = this.snapToEdge(
         new Point(marker.left, marker.top),
-        this.currentGeometry!,
+        geometry,
       );
       marker.set({ left: snapped.x, top: snapped.y });
       marker.setCoords();
