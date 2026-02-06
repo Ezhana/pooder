@@ -1,123 +1,31 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
 import { PooderEditor } from "@pooder/vue";
+import CustomActivityBar from "./components/CustomActivityBar.vue";
+import CustomToolPanel from "./components/CustomToolPanel.vue";
 
 const editorRef = ref<any>(null);
-const fileInput = ref<HTMLInputElement | null>(null);
-const detectDielineInput = ref<HTMLInputElement | null>(null);
 
-const handleImport = () => {
+onMounted(() => {
   if (editorRef.value) {
-    // Example: Import a circular dieline configuration
-    editorRef.value.importConfig({
-      "dieline.shape": "circle",
-      "dieline.width": 400,
-      "dieline.height": 400,
-      "dieline.offset": 20,
-      "dieline.holes": [],
-    });
+    editorRef.value.updateConfig("dieline.showBleedLines", false);
+    editorRef.value.updateConfig("dieline.offsetStyle", "hidden");
+    editorRef.value.updateConfig("dieline.width", 50);
+    editorRef.value.updateConfig("dieline.height", 50);
   }
-};
-
-const handleExport = () => {
-  if (editorRef.value) {
-    const config = editorRef.value.exportConfig();
-    console.log("Exported Config:", config);
-    alert("Configuration exported to console");
-  }
-};
-
-const handleGenerateImage = async () => {
-  if (editorRef.value) {
-    const url = await editorRef.value.generateCutImage();
-    if (url) {
-      console.log("Generated Image:", url);
-      const win = window.open();
-      if (win) {
-        win.document.write(`<img src="${url}" style="max-width: 100%"/>`);
-      }
-    }
-  }
-};
-
-const handleUploadClick = () => {
-  fileInput.value?.click();
-};
-
-const handleDetectDielineClick = () => {
-  detectDielineInput.value?.click();
-};
-
-const handleFileChange = (event: Event) => {
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
-  if (file && editorRef.value) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const url = e.target?.result as string;
-      editorRef.value.addImage(url);
-    };
-    reader.readAsDataURL(file);
-  }
-  // Reset input so same file can be selected again
-  target.value = "";
-};
-
-const handleDetectDielineChange = (event: Event) => {
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
-  if (file && editorRef.value) {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const url = e.target?.result as string;
-      await editorRef.value.detectDieline(url);
-    };
-    reader.readAsDataURL(file);
-  }
-  target.value = "";
-};
+});
 
 const handleImageChange = (images: any[]) => {
   console.log("Images Changed (App.vue):", images);
-};
-
-const handleConfigChange = (config: Record<string, any>) => {
-  console.log("Config Changed (App.vue):", config);
 };
 </script>
 
 <template>
   <div class="app-container">
-    <header>
-      <h1>Pooder Editor Demo</h1>
-      <div class="actions">
-        <button @click="handleUploadClick">Upload Image</button>
-        <button @click="handleDetectDielineClick">Detect Dieline</button>
-        <button @click="handleImport">Import Demo Config</button>
-        <button @click="handleExport">Export Config</button>
-        <button @click="handleGenerateImage">Generate Cut Image</button>
-        <input
-          ref="fileInput"
-          type="file"
-          accept="image/*"
-          style="display: none"
-          @change="handleFileChange"
-        />
-        <input
-          ref="detectDielineInput"
-          type="file"
-          accept="image/*"
-          style="display: none"
-          @change="handleDetectDielineChange"
-        />
-      </div>
-    </header>
     <main class="editor-wrapper">
-      <PooderEditor
-        ref="editorRef"
-        @image-change="handleImageChange"
-        @change="handleConfigChange"
-      />
+      <PooderEditor ref="editorRef" @image-change="handleImageChange" />
+      <CustomActivityBar :editor="editorRef" />
+      <CustomToolPanel :editor="editorRef" />
     </main>
   </div>
 </template>
@@ -131,7 +39,7 @@ body,
   padding: 0;
   width: 100%;
   height: 100%;
-  overflow: hidden; /* Prevent body scroll */
+  overflow: hidden;
 }
 </style>
 
@@ -144,47 +52,11 @@ body,
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
 }
 
-header {
-  flex: 0 0 auto;
-  padding: 0 20px;
-  background-color: #2c3e50;
-  color: white;
-  display: flex;
-  align-items: center;
-  height: 50px;
-}
-
-h1 {
-  margin: 0;
-  font-size: 1.2rem;
-  font-weight: 500;
-}
-
 .editor-wrapper {
   flex: 1 1 auto;
   position: relative;
   overflow: hidden;
-}
-
-.actions {
-  margin-left: auto;
-  display: flex;
-  gap: 10px;
-}
-
-button {
-  padding: 6px 12px;
-  background-color: #34495e;
-  color: white;
-  border: 1px solid #4fc08d;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  transition: background-color 0.2s;
-}
-
-button:hover {
-  background-color: #4fc08d;
-  color: #2c3e50;
+  width: 100%;
+  height: 100%;
 }
 </style>

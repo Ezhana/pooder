@@ -33,6 +33,7 @@ export class ImageTool implements Extension {
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
+  private isToolActive = false;
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -41,6 +42,9 @@ export class ImageTool implements Extension {
       console.warn("CanvasService not found for ImageTool");
       return;
     }
+
+    // Listen to tool activation
+    context.eventBus.on("tool:activated", this.onToolActivated);
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -65,6 +69,8 @@ export class ImageTool implements Extension {
   }
 
   deactivate(context: ExtensionContext) {
+    context.eventBus.off("tool:activated", this.onToolActivated);
+    
     if (this.canvasService) {
       const layer = this.canvasService.getLayer("user");
       if (layer) {
@@ -77,6 +83,23 @@ export class ImageTool implements Extension {
       this.canvasService = undefined;
       this.context = undefined;
     }
+  }
+
+  private onToolActivated = (event: { id: string }) => {
+    this.isToolActive = event.id === this.id;
+    this.updateInteractivity();
+  };
+
+  private updateInteractivity() {
+    this.objectMap.forEach((obj) => {
+      obj.set({
+        selectable: this.isToolActive,
+        evented: this.isToolActive,
+        hasControls: this.isToolActive,
+        hasBorders: this.isToolActive,
+      });
+    });
+    this.canvasService?.requestRenderAll();
   }
 
   contribute() {
@@ -291,6 +314,20 @@ export class ImageTool implements Extension {
     this.items.forEach((item, index) => {
       let obj = this.objectMap.get(item.id);
 
+      // Check if URL changed, if so remove object to force reload
+      // We assume Fabric object has getSrc() or we check data.url if we stored it
+      // Since we don't store url on object easily accessible without casting, 
+      // let's rely on checking if we need to reload.
+      // Actually, standard Fabric Image doesn't expose src easily on type without casting to any.
+      if (obj && (obj as any).getSrc) {
+         const currentSrc = (obj as any).getSrc();
+         if (currentSrc !== item.url) {
+            layer.remove(obj);
+            this.objectMap.delete(item.id);
+            obj = undefined;
+         }
+      }
+
       if (!obj) {
         // New object, load it
         this.loadImage(item, layer, layout);
@@ -375,6 +412,10 @@ export class ImageTool implements Extension {
           data: { id: item.id },
           uniformScaling: true,
           lockScalingFlip: true,
+          selectable: this.isToolActive,
+          evented: this.isToolActive,
+          hasControls: this.isToolActive,
+          hasBorders: this.isToolActive,
         });
 
         image.setControlsVisibility({

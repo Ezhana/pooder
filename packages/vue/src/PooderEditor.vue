@@ -18,7 +18,12 @@
 
 <script setup lang="ts">
 import { provide, onUnmounted } from "vue";
-import { CommandService, ConfigurationService, Pooder } from "@pooder/core";
+import {
+  CommandService,
+  ConfigurationService,
+  Pooder,
+  WorkbenchService,
+} from "@pooder/core";
 import {
   CanvasService,
   BackgroundTool,
@@ -37,6 +42,7 @@ const pooder = new Pooder();
 provide("pooder", pooder);
 const cmdSvc = pooder.getService<CommandService>("CommandService")!;
 const cfgSvc = pooder.getService<ConfigurationService>("ConfigurationService")!;
+const wbSvc = pooder.getService<WorkbenchService>("WorkbenchService")!;
 
 const emit = defineEmits<{
   (e: "image-change", images: any[]): void;
@@ -128,6 +134,7 @@ const detectDieline = async (url: string) => {
     cfgSvc.update("dieline.pathData", pathData);
     cfgSvc.update("dieline.width", width);
     cfgSvc.update("dieline.height", height);
+    cfgSvc.update("dieline.offset", 0);
     return pathData;
   }
   return null;
@@ -142,10 +149,25 @@ defineExpose({
   updateImage,
   clearImages,
   detectDieline,
+  activateTool: (id: string) => wbSvc.activate(id),
+  on: (event: string, handler: any) => pooder.eventBus.on(event, handler),
+  off: (event: string, handler: any) => pooder.eventBus.off(event, handler),
+  emit: (event: string, data: any) => pooder.eventBus.emit(event, data),
+  executeCommand: (id: string, ...args: any[]) =>
+    cmdSvc.executeCommand(id, ...args),
+  getConfig: (key: string) => cfgSvc.get(key),
+  updateConfig: (key: string, val: any) => cfgSvc.update(key, val),
+  services: {
+    workbench: wbSvc,
+    command: cmdSvc,
+    config: cfgSvc,
+  },
 });
 
 const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
-  const canvasService = new CanvasService(canvasEl);
+  const canvasService = new CanvasService(canvasEl, {
+    eventBus: pooder.eventBus,
+  });
 
   pooder.registerService(canvasService, "CanvasService");
 

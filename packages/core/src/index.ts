@@ -8,7 +8,7 @@ import {
   ContributionPointIds,
   ContributionRegistry,
 } from "./contribution";
-import { CommandService, ConfigurationService } from "./services";
+import { CommandService, ConfigurationService, WorkbenchService } from "./services";
 import { ExtensionContext } from "./context";
 
 export * from "./extension";
@@ -16,6 +16,7 @@ export * from "./context";
 export * from "./contribution";
 export * from "./service";
 export * from "./services";
+export { default as EventBus } from "./event";
 
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();
@@ -33,6 +34,10 @@ export class Pooder {
 
     const configurationService = new ConfigurationService();
     this.registerService(configurationService, "ConfigurationService");
+
+    const workbenchService = new WorkbenchService();
+    workbenchService.setEventBus(this.eventBus);
+    this.registerService(workbenchService, "WorkbenchService");
 
     // Create a restricted context for extensions
     const context: ExtensionContext = {

@@ -1,8 +1,9 @@
 import { Canvas, Group, FabricObject } from "fabric";
-import { Service } from "@pooder/core";
+import { Service, EventBus } from "@pooder/core";
 
 export default class CanvasService implements Service {
   public canvas: Canvas;
+  private eventBus?: EventBus;
 
   constructor(el: HTMLCanvasElement | string | Canvas, options?: any) {
     if (el instanceof Canvas) {
@@ -13,6 +14,29 @@ export default class CanvasService implements Service {
         ...options,
       });
     }
+    
+    if (options?.eventBus) {
+      this.setEventBus(options.eventBus);
+    }
+  }
+
+  setEventBus(eventBus: EventBus) {
+    this.eventBus = eventBus;
+    this.setupEvents();
+  }
+
+  private setupEvents() {
+    if (!this.eventBus) return;
+    const bus = this.eventBus;
+
+    const forward = (name: string) => (e: any) => bus.emit(name, e);
+
+    this.canvas.on("selection:created", forward("selection:created"));
+    this.canvas.on("selection:updated", forward("selection:updated"));
+    this.canvas.on("selection:cleared", forward("selection:cleared"));
+    this.canvas.on("object:modified", forward("object:modified"));
+    this.canvas.on("object:added", forward("object:added"));
+    this.canvas.on("object:removed", forward("object:removed"));
   }
 
   dispose() {

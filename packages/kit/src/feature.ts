@@ -27,6 +27,7 @@ export class FeatureTool implements Extension {
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
+  private isToolActive = false;
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
@@ -70,13 +71,42 @@ export class FeatureTool implements Extension {
       });
     }
 
+    // Listen to tool activation
+    context.eventBus.on("tool:activated", this.onToolActivated);
+
     this.setup();
   }
 
   deactivate(context: ExtensionContext) {
+    context.eventBus.off("tool:activated", this.onToolActivated);
     this.teardown();
     this.canvasService = undefined;
     this.context = undefined;
+  }
+
+  private onToolActivated = (event: { id: string }) => {
+    this.isToolActive = event.id === this.id;
+    this.updateVisibility();
+  };
+
+  private updateVisibility() {
+    if (!this.canvasService) return;
+    const canvas = this.canvasService.canvas;
+    const markers = canvas
+      .getObjects()
+      .filter((obj: any) => obj.data?.type === "feature-marker");
+    
+    markers.forEach((marker: any) => {
+        // If tool active, allow selection. If not, disable selection.
+        // Also might want to hide them entirely or just disable interaction.
+        // Assuming we only want to see/edit holes when tool is active.
+        marker.set({
+            visible: this.isToolActive, // Or just selectable: false if we want them visible but locked
+            selectable: this.isToolActive,
+            evented: this.isToolActive
+        });
+    });
+    canvas.requestRenderAll();
   }
 
   contribute() {
@@ -578,7 +608,9 @@ export class FeatureTool implements Extension {
       const marker = createMarkerShape(feature, pos);
 
       marker.set({
-        selectable: true,
+        visible: this.isToolActive,
+        selectable: this.isToolActive,
+        evented: this.isToolActive,
         hasControls: false,
         hasBorders: false,
         hoverCursor: "move",
@@ -633,7 +665,9 @@ export class FeatureTool implements Extension {
       });
 
       const groupObj = new Group(shapes, {
-        selectable: true,
+        visible: this.isToolActive,
+        selectable: this.isToolActive,
+        evented: this.isToolActive,
         hasControls: false,
         hasBorders: false,
         hoverCursor: "move",
