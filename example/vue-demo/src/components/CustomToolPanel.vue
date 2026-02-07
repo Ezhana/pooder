@@ -62,7 +62,10 @@
           <option value="custom">Custom</option>
         </select>
       </div>
-      <div class="control-group">
+      <div
+        class="control-group"
+        :style="{ opacity: dielineState.shape === 'custom' ? 0.5 : 1 }"
+      >
         <div
           style="
             display: flex;
@@ -82,6 +85,7 @@
           step="1"
           v-model.number="dielineState.offset"
           @input="updateDielineConfig"
+          :disabled="dielineState.shape === 'custom'"
         />
         <div
           style="
@@ -180,7 +184,8 @@ const HOLE_PRESETS = [
         id: "2.5mm-hole-lug",
         groupId: "2.5mm-hole",
         operation: "add",
-        target: "original",
+        placement: "edge",
+        skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
@@ -191,7 +196,8 @@ const HOLE_PRESETS = [
         id: "2.5mm-hole-hole",
         groupId: "2.5mm-hole",
         operation: "subtract",
-        target: "original",
+        placement: "edge",
+        skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
@@ -208,7 +214,8 @@ const HOLE_PRESETS = [
         id: "3mm-hole-lug",
         groupId: "3mm-hole",
         operation: "add",
-        target: "original",
+        placement: "edge",
+        skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
@@ -219,7 +226,8 @@ const HOLE_PRESETS = [
         id: "3mm-hole-hole",
         groupId: "3mm-hole",
         operation: "subtract",
-        target: "original",
+        placement: "edge",
+        skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
@@ -236,7 +244,8 @@ const HOLE_PRESETS = [
         id: "10mm-hole-lug",
         groupId: "10mm-hole",
         operation: "add",
-        target: "original",
+        placement: "edge",
+        skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
@@ -247,7 +256,8 @@ const HOLE_PRESETS = [
         id: "10mm-hole-hole",
         groupId: "10mm-hole",
         operation: "subtract",
-        target: "original",
+        placement: "edge",
+        skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
@@ -434,10 +444,38 @@ const syncDielineState = () => {
   dielineState.offset = Math.abs(props.editor.getConfig("dieline.offset")) || 0;
 };
 
+const onConfigChange = (e) => {
+  if (e.key === "dieline.features" && featureState.groupId) {
+    const features = e.value || [];
+    const feature = features.find((f) => f.groupId === featureState.groupId);
+    if (feature) {
+      featureState.x = feature.x;
+      featureState.y = feature.y;
+      featureState.radius = feature.radius;
+    }
+  }
+};
+
 const onSelectionCreated = (e) => {
   const selection = e.selected ? e.selected[0] : null;
   if (!selection) {
     // Fallback to active tool
+    return;
+  }
+
+  // Check if feature selection
+  if (selection.data && selection.data.groupId) {
+    currentMode.value = "Hole";
+    featureState.groupId = selection.data.groupId;
+
+    // Sync state from config
+    const features = props.editor.getConfig("dieline.features") || [];
+    const feature = features.find((f) => f.groupId === featureState.groupId);
+    if (feature) {
+      featureState.x = feature.x;
+      featureState.y = feature.y;
+      featureState.radius = feature.radius;
+    }
     return;
   }
 
@@ -512,6 +550,7 @@ watch(
       editor.on("selection:updated", onSelectionCreated);
       editor.on("selection:cleared", onSelectionCleared);
       editor.on("tool:activated", onToolActivated);
+      editor.on("change", onConfigChange);
 
       // Initial sync
       if (editor.services && editor.services.workbench) {
@@ -529,6 +568,7 @@ onUnmounted(() => {
     props.editor.off("selection:updated", onSelectionCreated);
     props.editor.off("selection:cleared", onSelectionCleared);
     props.editor.off("tool:activated", onToolActivated);
+    props.editor.off("change", onConfigChange);
   }
 });
 </script>

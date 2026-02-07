@@ -14,7 +14,7 @@ import {
   generateMaskPath,
   generateBleedZonePath,
   getPathBounds,
-  EdgeFeature,
+  DielineFeature,
 } from "./geometry";
 
 export interface DielineGeometry {
@@ -52,7 +52,7 @@ export interface DielineState {
   insideColor: string;
   outsideColor: string;
   showBleedLines: boolean;
-  features: EdgeFeature[];
+  features: DielineFeature[];
   pathData?: string;
 }
 
@@ -512,22 +512,14 @@ export class DielineTool implements Extension {
       };
     });
 
-    const originalFeatures = absoluteFeatures.filter(
-      (f) => !f.target || f.target === "original" || f.target === "both",
-    );
-    const offsetFeatures = absoluteFeatures.filter(
-      (f) => f.target === "offset" || f.target === "both",
-    );
+    // Split features into Cut (Physical) and Visual (All)
+    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
 
     // 1. Draw Mask (Outside)
     const cutW = Math.max(0, visualWidth + visualOffset * 2);
     const cutH = Math.max(0, visualHeight + visualOffset * 2);
     const cutR =
       visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
-
-    // If no bleed offset, mask should match the original dieline (including its features)
-    // If bleed offset exists (positive or negative), mask matches bleed line (which only includes offset features)
-    const maskFeatures = visualOffset !== 0 ? offsetFeatures : originalFeatures;
 
     // Use Paper.js to generate the complex mask path
     const maskPathData = generateMaskPath({
@@ -539,7 +531,7 @@ export class DielineTool implements Extension {
       radius: cutR,
       x: cx,
       y: cy,
-      features: maskFeatures,
+      features: cutFeatures,
       pathData: this.state.pathData,
     });
 
@@ -569,7 +561,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        features: maskFeatures, // Use same features as mask for consistency
+        features: cutFeatures, // Use same features as mask for consistency
         pathData: this.state.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -596,7 +588,7 @@ export class DielineTool implements Extension {
           radius: visualRadius,
           x: cx,
           y: cy,
-          features: originalFeatures,
+          features: cutFeatures,
           pathData: this.state.pathData,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
@@ -608,7 +600,7 @@ export class DielineTool implements Extension {
           radius: cutR,
           x: cx,
           y: cy,
-          features: offsetFeatures,
+          features: cutFeatures,
           pathData: this.state.pathData,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
@@ -641,7 +633,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        features: offsetFeatures,
+        features: cutFeatures,
         pathData: this.state.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -671,7 +663,7 @@ export class DielineTool implements Extension {
       radius: visualRadius,
       x: cx,
       y: cy,
-      features: originalFeatures,
+      features: absoluteFeatures,
       pathData: this.state.pathData,
       canvasWidth: canvasW,
       canvasHeight: canvasH,
@@ -798,9 +790,7 @@ export class DielineTool implements Extension {
       };
     });
 
-    const originalFeatures = absoluteFeatures.filter(
-      (f) => !f.target || f.target === "original" || f.target === "both",
-    );
+    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
 
     const generatedPathData = generateDielinePath({
       shape,
@@ -809,7 +799,7 @@ export class DielineTool implements Extension {
       radius: visualRadius,
       x: cx,
       y: cy,
-      features: originalFeatures,
+      features: cutFeatures,
       pathData,
       canvasWidth: canvasW,
       canvasHeight: canvasH,

@@ -3,20 +3,21 @@ import paper from "paper";
 export type FeatureOperation = "add" | "subtract";
 export type FeatureShape = "rect" | "circle";
 
-export interface EdgeFeature {
+export interface DielineFeature {
   id: string;
-  groupId?: string; // For grouping features together (e.g. double-layer hole)
+  groupId?: string;
   operation: FeatureOperation;
   shape: FeatureShape;
-  x: number; // Normalized 0-1 relative to geometry bounds
-  y: number; // Normalized 0-1 relative to geometry bounds
-  width?: number; // For rect (Physical units)
-  height?: number; // For rect (Physical units)
-  radius?: number; // For circle or rect corners (Physical units)
-  rotation?: number; // Degrees
-  target?: "original" | "offset" | "both";
-  color?: string; // Hex color for the marker
-  strokeDash?: number[]; // Stroke dash array for the marker
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  radius?: number;
+  rotation?: number;
+  placement?: "edge" | "internal";
+  color?: string;
+  strokeDash?: number[];
+  skipCut?: boolean;
 }
 
 export interface GeometryOptions {
@@ -26,7 +27,7 @@ export interface GeometryOptions {
   radius: number;
   x: number;
   y: number;
-  features: Array<EdgeFeature>;
+  features: Array<DielineFeature>;
   pathData?: string;
   canvasWidth?: number;
   canvasHeight?: number;
@@ -41,7 +42,7 @@ export interface MaskGeometryOptions extends GeometryOptions {
  * Resolves the absolute position of a feature based on normalized coordinates.
  */
 export function resolveFeaturePosition(
-  feature: EdgeFeature,
+  feature: DielineFeature,
   geometry: { x: number; y: number; width: number; height: number },
 ): { x: number; y: number } {
   const { x, y, width, height } = geometry;
@@ -116,7 +117,7 @@ function createBaseShape(options: GeometryOptions): paper.PathItem {
  * Creates a Paper.js Item for a single feature.
  */
 function createFeatureItem(
-  feature: EdgeFeature,
+  feature: DielineFeature,
   center: paper.Point,
 ): paper.PathItem {
   let item: paper.PathItem;
@@ -147,20 +148,24 @@ function createFeatureItem(
 }
 
 /**
- * Internal helper to generate the Dieline Shape (Paper Item).
- * Logic: (Base U Adds) - Subtracts
+ * Internal helper to generate the Perimeter Shape (Base + Edge Features).
  */
-function getDielineShape(options: GeometryOptions): paper.PathItem {
+function getPerimeterShape(options: GeometryOptions): paper.PathItem {
   // 1. Create Base Shape
   let mainShape = createBaseShape(options);
 
   const { features } = options;
 
   if (features && features.length > 0) {
+    // Filter for Edge Features (Default or explicit 'edge')
+    const edgeFeatures = features.filter(
+      (f) => !f.placement || f.placement === "edge",
+    );
+
     const adds: paper.PathItem[] = [];
     const subtracts: paper.PathItem[] = [];
 
-    features.forEach((f) => {
+    edgeFeatures.forEach((f) => {
       const pos = resolveFeaturePosition(f, options);
       const center = new paper.Point(pos.x, pos.y);
       const item = createFeatureItem(f, center);
@@ -174,9 +179,6 @@ function getDielineShape(options: GeometryOptions): paper.PathItem {
 
     // 2. Process Additions (Union)
     if (adds.length > 0) {
-      // Unite all additions first to avoid artifacts?
-      // Or unite one by one to mainShape?
-      // Unite one by one is safer for simple logic.
       for (const item of adds) {
         try {
           const temp = mainShape.unite(item);
@@ -210,6 +212,49 @@ function getDielineShape(options: GeometryOptions): paper.PathItem {
 }
 
 /**
+ * Applies Internal/Surface features to a shape.
+ */
+function applySurfaceFeatures(
+  shape: paper.PathItem,
+  features: DielineFeature[],
+  options: GeometryOptions,
+): paper.PathItem {
+  const internalFeatures = features.filter((f) => f.placement === "internal");
+  
+  if (internalFeatures.length === 0) return shape;
+
+  let result = shape;
+  
+  // Internal features are usually subtractive (holes)
+  // But we support 'add' too (islands? maybe just unite)
+  
+  for (const f of internalFeatures) {
+    const pos = resolveFeaturePosition(f, options);
+    const center = new paper.Point(pos.x, pos.y);
+    const item = createFeatureItem(f, center);
+
+    try {
+      if (f.operation === "add") {
+         const temp = result.unite(item);
+         result.remove();
+         item.remove();
+         result = temp;
+      } else {
+         const temp = result.subtract(item);
+         result.remove();
+         item.remove();
+         result = temp;
+      }
+    } catch (e) {
+      console.error("Geometry: Failed to apply surface feature", e);
+      item.remove();
+    }
+  }
+  
+  return result;
+}
+
+/**
  * Generates the path data for the Dieline (Product Shape).
  */
 export function generateDielinePath(options: GeometryOptions): string {
@@ -218,10 +263,11 @@ export function generateDielinePath(options: GeometryOptions): string {
   ensurePaper(paperWidth, paperHeight);
   paper.project.activeLayer.removeChildren();
 
-  const mainShape = getDielineShape(options);
+  const perimeter = getPerimeterShape(options);
+  const finalShape = applySurfaceFeatures(perimeter, options.features, options);
 
-  const pathData = mainShape.pathData;
-  mainShape.remove();
+  const pathData = finalShape.pathData;
+  finalShape.remove();
 
   return pathData;
 }
@@ -241,7 +287,8 @@ export function generateMaskPath(options: MaskGeometryOptions): string {
     size: [canvasWidth, canvasHeight],
   });
 
-  const mainShape = getDielineShape(options);
+  const perimeter = getPerimeterShape(options);
+  const mainShape = applySurfaceFeatures(perimeter, options.features, options);
 
   const finalMask = maskRect.subtract(mainShape);
 
@@ -270,10 +317,12 @@ export function generateBleedZonePath(
   paper.project.activeLayer.removeChildren();
 
   // 1. Generate Original Shape
-  const shapeOriginal = getDielineShape(originalOptions);
+  const pOriginal = getPerimeterShape(originalOptions);
+  const shapeOriginal = applySurfaceFeatures(pOriginal, originalOptions.features, originalOptions);
 
   // 2. Generate Offset Shape
-  const shapeOffset = getDielineShape(offsetOptions);
+  const pOffset = getPerimeterShape(offsetOptions);
+  const shapeOffset = applySurfaceFeatures(pOffset, offsetOptions.features, offsetOptions);
 
   // 3. Calculate Difference
   let bleedZone: paper.PathItem;

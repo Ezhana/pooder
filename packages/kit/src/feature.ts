@@ -11,7 +11,7 @@ import CanvasService from "./CanvasService";
 import { DielineGeometry } from "./dieline";
 import {
   getNearestPointOnDieline,
-  EdgeFeature,
+  DielineFeature,
   resolveFeaturePosition,
 } from "./geometry";
 import { Coordinate } from "./coordinate";
@@ -23,7 +23,7 @@ export class FeatureTool implements Extension {
     name: "FeatureTool",
   };
 
-  private features: EdgeFeature[] = [];
+  private features: DielineFeature[] = [];
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
@@ -38,7 +38,7 @@ export class FeatureTool implements Extension {
 
   constructor(
     options?: Partial<{
-      features: EdgeFeature[];
+      features: DielineFeature[];
     }>,
   ) {
     if (options) {
@@ -161,10 +161,10 @@ export class FeatureTool implements Extension {
     const defaultSize = Coordinate.convertUnit(10, "mm", unit);
 
     // Default to top edge center
-    const newFeature: EdgeFeature = {
+    const newFeature: DielineFeature = {
       id: Date.now().toString(),
       operation: type,
-      target: "original",
+      placement: "edge",
       shape: "rect",
       x: 0.5,
       y: 0, // Top edge
@@ -177,7 +177,7 @@ export class FeatureTool implements Extension {
       const current = configService.get(
         "dieline.features",
         [],
-      ) as EdgeFeature[];
+      ) as DielineFeature[];
       configService.update("dieline.features", [...current, newFeature]);
     }
     return true;
@@ -197,11 +197,12 @@ export class FeatureTool implements Extension {
     const timestamp = Date.now();
 
     // 1. Lug (Outer) - Add
-    const lug: EdgeFeature = {
+    const lug: DielineFeature = {
       id: `${timestamp}-lug`,
       groupId,
       operation: "add",
       shape: "circle",
+      placement: "edge",
       x: 0.5,
       y: 0,
       radius: lugRadius, // 20mm
@@ -209,11 +210,12 @@ export class FeatureTool implements Extension {
     };
 
     // 2. Hole (Inner) - Subtract
-    const hole: EdgeFeature = {
+    const hole: DielineFeature = {
       id: `${timestamp}-hole`,
       groupId,
       operation: "subtract",
       shape: "circle",
+      placement: "edge",
       x: 0.5,
       y: 0,
       radius: holeRadius, // 15mm
@@ -224,7 +226,7 @@ export class FeatureTool implements Extension {
       const current = configService.get(
         "dieline.features",
         [],
-      ) as EdgeFeature[];
+      ) as DielineFeature[];
       configService.update("dieline.features", [...current, lug, hole]);
     }
     return true;
@@ -232,19 +234,10 @@ export class FeatureTool implements Extension {
 
   private getGeometryForFeature(
     geometry: DielineGeometry,
-    feature?: EdgeFeature,
+    feature?: DielineFeature,
   ): DielineGeometry {
-    if (feature?.target === "offset" && geometry.offset !== 0) {
-      return {
-        ...geometry,
-        width: geometry.width + geometry.offset * 2,
-        height: geometry.height + geometry.offset * 2,
-        radius:
-          geometry.radius === 0
-            ? 0
-            : Math.max(0, geometry.radius + geometry.offset),
-      };
-    }
+    // Legacy support or specialized scaling can go here if needed
+    // Currently all features operate on the base geometry (or scaled version of it)
     return geometry;
   }
 
@@ -288,7 +281,7 @@ export class FeatureTool implements Extension {
         if (!this.currentGeometry) return;
 
         // Determine feature to use for snapping context
-        let feature: EdgeFeature | undefined;
+        let feature: DielineFeature | undefined;
         if (target.data?.isGroup) {
           const indices = target.data?.indices as number[];
           if (indices && indices.length > 0) {
@@ -318,7 +311,7 @@ export class FeatureTool implements Extension {
         const minDim = Math.min(target.getScaledWidth(), target.getScaledHeight());
         const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
         
-        const snapped = this.constrainPosition(p, geometry, limit);
+        const snapped = this.constrainPosition(p, geometry, limit, feature);
 
         target.set({
           left: snapped.x,
@@ -439,8 +432,23 @@ export class FeatureTool implements Extension {
   private constrainPosition(
     p: Point,
     geometry: DielineGeometry,
-    limit: number
+    limit: number,
+    feature?: DielineFeature
   ): { x: number; y: number } {
+    if (feature && feature.placement === "internal") {
+       // Constrain to bounds
+       // geometry.x/y is center
+       const minX = geometry.x - geometry.width / 2;
+       const maxX = geometry.x + geometry.width / 2;
+       const minY = geometry.y - geometry.height / 2;
+       const maxY = geometry.y + geometry.height / 2;
+       
+       return {
+         x: Math.max(minX, Math.min(maxX, p.x)),
+         y: Math.max(minY, Math.min(maxY, p.y))
+       };
+    }
+
     // Use geometry helper to find nearest point on Base Shape
     // geometry object matches GeometryOptions structure required by getNearestPointOnDieline
     // except for 'features' which we don't need for base shape snapping
@@ -532,9 +540,9 @@ export class FeatureTool implements Extension {
     const finalScale = scale;
 
     // Group features by groupId
-    const groups: { [key: string]: { feature: EdgeFeature; index: number }[] } =
+    const groups: { [key: string]: { feature: DielineFeature; index: number }[] } =
       {};
-    const singles: { feature: EdgeFeature; index: number }[] = [];
+    const singles: { feature: DielineFeature; index: number }[] = [];
 
     this.features.forEach((f, i) => {
       if (f.groupId) {
@@ -547,7 +555,7 @@ export class FeatureTool implements Extension {
 
     // Helper to create marker shape
     const createMarkerShape = (
-      feature: EdgeFeature,
+      feature: DielineFeature,
       pos: { x: number; y: number },
     ) => {
       // Features are in the same unit as geometry.unit
@@ -723,7 +731,7 @@ export class FeatureTool implements Extension {
 
     markers.forEach((marker: any) => {
       // Find associated feature
-      let feature: EdgeFeature | undefined;
+      let feature: DielineFeature | undefined;
       if (marker.data?.isGroup) {
         const indices = marker.data?.indices as number[];
         if (indices && indices.length > 0) {
@@ -748,7 +756,8 @@ export class FeatureTool implements Extension {
       const snapped = this.constrainPosition(
         new Point(marker.left, marker.top),
         geometry,
-        limit
+        limit,
+        feature
       );
       marker.set({ left: snapped.x, top: snapped.y });
       marker.setCoords();
