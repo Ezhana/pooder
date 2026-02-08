@@ -1,5 +1,16 @@
 # @pooder/kit
 
+## 4.0.0
+
+### Major Changes
+
+- Virtual Features
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/core@2.0.0
+
 ## 3.5.0
 
 ### Minor Changes
