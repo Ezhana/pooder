@@ -132,6 +132,7 @@
             max="1"
             v-model.number="featureState.x"
             @input="updateGroupPosition"
+            :disabled="isXDisabled"
           />
         </div>
         <div class="control-group">
@@ -143,6 +144,7 @@
             max="1"
             v-model.number="featureState.y"
             @input="updateGroupPosition"
+            :disabled="isYDisabled"
           />
         </div>
       </div>
@@ -151,7 +153,7 @@
 </template>
 
 <script setup>
-import { ref, watch, reactive, onUnmounted } from "vue";
+import { ref, watch, reactive, onUnmounted, computed } from "vue";
 
 const props = defineProps({
   editor: Object,
@@ -266,6 +268,32 @@ const HOLE_PRESETS = [
       },
     ],
   },
+  {
+    name: "Standee Tab",
+    groupId: "standee-tab",
+    features: [
+      {
+        id: "standee-tab-lug",
+        groupId: "standee-tab",
+        operation: "add",
+        placement: "edge",
+        skipCut: true,
+        shape: "rect",
+        x: 0.5,
+        y: 1,
+        width: 15,
+        height: 6,
+        rotation: 0,
+        constraints: {
+          type: "edge",
+          params: {
+            allowedEdges: ["bottom"],
+            confine: true,
+          },
+        },
+      },
+    ],
+  },
 ];
 
 const featureState = reactive({
@@ -273,6 +301,7 @@ const featureState = reactive({
   x: 0,
   y: 0,
   radius: 0,
+  constraints: null,
 });
 
 const closePanel = () => {
@@ -367,25 +396,55 @@ const loadPreset = () => {
     featureState.y = preset.features[0].y;
     // Radius is tricky if they differ. I'll use the first one's radius as "base" size.
     featureState.radius = preset.features[0].radius;
+    featureState.constraints = preset.features[0].constraints;
   }
 };
 
+const isXDisabled = computed(() => {
+  if (!featureState.constraints) return false;
+  if (featureState.constraints.type === "edge") {
+    const edges = featureState.constraints.params?.allowedEdges || [
+      "top",
+      "bottom",
+      "left",
+      "right",
+    ];
+    // If only vertical edges allowed (left/right), X is fixed (0 or 1)
+    // Wait, if left/right, X is fixed to 0 or 1. So disable X.
+    // If top/bottom, X is variable.
+    // So if NO top/bottom in allowedEdges, disable X.
+    const hasHorizontalMovement =
+      edges.includes("top") || edges.includes("bottom");
+    return !hasHorizontalMovement;
+  }
+  return false;
+});
+
+const isYDisabled = computed(() => {
+  if (!featureState.constraints) return false;
+  if (featureState.constraints.type === "edge") {
+    const edges = featureState.constraints.params?.allowedEdges || [
+      "top",
+      "bottom",
+      "left",
+      "right",
+    ];
+    // If NO left/right, disable Y.
+    const hasVerticalMovement =
+      edges.includes("left") || edges.includes("right");
+    return !hasVerticalMovement;
+  }
+  return false;
+});
+
 const updateGroupPosition = () => {
   if (!featureState.groupId) return;
-  const features = props.editor.getConfig("dieline.features") || [];
-
-  let changed = false;
-  const newFeatures = features.map((f) => {
-    if (f.groupId === featureState.groupId) {
-      changed = true;
-      return { ...f, x: featureState.x, y: featureState.y };
-    }
-    return f;
-  });
-
-  if (changed) {
-    props.editor.updateConfig("dieline.features", newFeatures);
-  }
+  props.editor.executeCommand(
+    "updateFeaturePosition",
+    featureState.groupId,
+    featureState.x,
+    featureState.y,
+  );
 };
 
 const updateGroupRadius = () => {
@@ -452,6 +511,7 @@ const onConfigChange = (e) => {
       featureState.x = parseFloat((feature.x || 0).toFixed(2));
       featureState.y = parseFloat((feature.y || 0).toFixed(2));
       featureState.radius = feature.radius;
+      featureState.constraints = feature.constraints;
     }
   }
 };
@@ -475,6 +535,7 @@ const onSelectionCreated = (e) => {
       featureState.x = parseFloat((feature.x || 0).toFixed(2));
       featureState.y = parseFloat((feature.y || 0).toFixed(2));
       featureState.radius = feature.radius;
+      featureState.constraints = feature.constraints;
     }
     return;
   }

@@ -18,6 +18,10 @@ export interface DielineFeature {
   color?: string;
   strokeDash?: number[];
   skipCut?: boolean;
+  constraints?: {
+    type: string;
+    params?: any;
+  };
 }
 
 export interface GeometryOptions {

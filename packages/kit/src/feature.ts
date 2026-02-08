@@ -15,6 +15,7 @@ import {
   resolveFeaturePosition,
 } from "./geometry";
 import { Coordinate } from "./coordinate";
+import { ConstraintRegistry } from "./constraints";
 
 export class FeatureTool implements Extension {
   id = "pooder.kit.feature";
@@ -435,6 +436,30 @@ export class FeatureTool implements Extension {
     limit: number,
     feature?: DielineFeature
   ): { x: number; y: number } {
+    if (feature && feature.constraints) {
+      // Use Constraint Registry
+      // Convert to normalized coordinates
+      const minX = geometry.x - geometry.width / 2;
+      const minY = geometry.y - geometry.height / 2;
+      
+      const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
+      const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
+
+      const scale = geometry.scale || 1;
+      const dielineWidth = geometry.width / scale;
+      const dielineHeight = geometry.height / scale;
+
+      const constrained = ConstraintRegistry.apply(nx, ny, feature, {
+        dielineWidth,
+        dielineHeight,
+      });
+
+      return {
+        x: minX + constrained.x * geometry.width,
+        y: minY + constrained.y * geometry.height,
+      };
+    }
+
     if (feature && feature.placement === "internal") {
        // Constrain to bounds
        // geometry.x/y is center

@@ -16,6 +16,7 @@ import {
   getPathBounds,
   DielineFeature,
 } from "./geometry";
+import { ConstraintRegistry } from "./constraints";
 
 export interface DielineGeometry {
   shape: "rect" | "circle" | "ellipse" | "custom";
@@ -332,6 +333,40 @@ export class DielineTool implements Extension {
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
+        {
+          command: "updateFeaturePosition",
+          title: "Update Feature Position",
+          handler: (groupId: string, x: number, y: number) => {
+            const configService = this.context?.services.get<any>(
+              "ConfigurationService",
+            );
+            if (!configService) return;
+
+            const features = configService.get("dieline.features") || [];
+            const dielineWidth = configService.get("dieline.width") || 500;
+            const dielineHeight = configService.get("dieline.height") || 500;
+
+            let changed = false;
+            const newFeatures = features.map((f: any) => {
+              if (f.groupId === groupId) {
+                const constrained = ConstraintRegistry.apply(x, y, f, {
+                  dielineWidth,
+                  dielineHeight,
+                });
+
+                if (f.x !== constrained.x || f.y !== constrained.y) {
+                  changed = true;
+                  return { ...f, x: constrained.x, y: constrained.y };
+                }
+              }
+              return f;
+            });
+
+            if (changed) {
+              configService.update("dieline.features", newFeatures);
+            }
+          },
+        },
         {
           command: "getGeometry",
           title: "Get Geometry",
