@@ -449,8 +449,8 @@ const onConfigChange = (e) => {
     const features = e.value || [];
     const feature = features.find((f) => f.groupId === featureState.groupId);
     if (feature) {
-      featureState.x = feature.x;
-      featureState.y = feature.y;
+      featureState.x = parseFloat((feature.x || 0).toFixed(2));
+      featureState.y = parseFloat((feature.y || 0).toFixed(2));
       featureState.radius = feature.radius;
     }
   }
@@ -472,8 +472,8 @@ const onSelectionCreated = (e) => {
     const features = props.editor.getConfig("dieline.features") || [];
     const feature = features.find((f) => f.groupId === featureState.groupId);
     if (feature) {
-      featureState.x = feature.x;
-      featureState.y = feature.y;
+      featureState.x = parseFloat((feature.x || 0).toFixed(2));
+      featureState.y = parseFloat((feature.y || 0).toFixed(2));
       featureState.radius = feature.radius;
     }
     return;
