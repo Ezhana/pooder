@@ -19,6 +19,9 @@ export interface DielineFeature {
   color?: string;
   strokeDash?: number[];
   skipCut?: boolean;
+  bridge?: {
+    type: "vertical";
+  };
 }
 
 export interface GeometryOptions {
@@ -171,10 +174,106 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
       const center = new paper.Point(pos.x, pos.y);
       const item = createFeatureItem(f, center);
 
-      if (f.operation === "add") {
-        adds.push(item);
+      // Handle Bridge logic: Create a connection shape to the main body
+      if (f.bridge && f.bridge.type === "vertical") {
+        const itemBounds = item.bounds;
+        const mainBounds = mainShape.bounds;
+        const bridgeTop = mainBounds.top;
+        const bridgeBottom = itemBounds.top;
+
+        if (bridgeBottom > bridgeTop) {
+          // 1. Create a full column up to the top of the main shape
+          // Start slightly inside the feature to ensure overlap at the bottom
+          const startY = bridgeBottom + 1; 
+          const bridgeRect = new paper.Path.Rectangle({
+            from: [itemBounds.left, bridgeTop],
+            to: [itemBounds.right, startY],
+            insert: false,
+          });
+
+          // 2. Subtract the main shape from this column
+          // This leaves us with the parts of the column that are NOT inside the main shape (gaps)
+          const gaps = bridgeRect.subtract(mainShape);
+          bridgeRect.remove();
+
+          // 3. Find the gap piece that connects to our feature
+          // It should be the piece with the lowest bottom (highest Y) matching our feature top
+          let bridgePart: paper.PathItem | null = null;
+
+          // Helper to check if a part is the bottom one
+          const isBottomPart = (part: paper.PathItem) => {
+             // Check if bottom aligns with feature top (allow small tolerance)
+             return Math.abs(part.bounds.bottom - startY) < 2; 
+          };
+
+          if (gaps instanceof paper.CompoundPath) {
+             // Find the child that is at the bottom
+             const children = gaps.children;
+             let maxBottom = -Infinity;
+             let bestChild = null;
+             
+             for (const child of children) {
+                if (child.bounds.bottom > maxBottom) {
+                   maxBottom = child.bounds.bottom;
+                   bestChild = child;
+                }
+             }
+             
+             if (bestChild && isBottomPart(bestChild as paper.PathItem)) {
+                bridgePart = (bestChild as paper.PathItem).clone();
+             }
+          } else if (gaps instanceof paper.Path) {
+             if (isBottomPart(gaps)) {
+                bridgePart = gaps.clone();
+             }
+          }
+          
+          gaps.remove();
+
+          if (bridgePart) {
+              // Overlap fix:
+              // Scale the bridge up slightly from the bottom to ensure it overlaps with the main shape at the top.
+              // This prevents hairline gaps due to perfect alignment from subtract().
+              const bounds = bridgePart.bounds;
+              if (bounds.height > 0) {
+                 const overlap = 1; 
+                 const scaleY = (bounds.height + overlap) / bounds.height;
+                 // Scale around the bottom-center to keep the connection to the feature intact
+                 bridgePart.scale(1, scaleY, new paper.Point(bounds.center.x, bounds.bottom));
+              }
+
+              // Unite the bridge with the feature
+              const unitedItem = item.unite(bridgePart);
+              item.remove();
+              bridgePart.remove();
+              
+              if (f.operation === "add") {
+                adds.push(unitedItem);
+              } else {
+                subtracts.push(unitedItem);
+              }
+           } else {
+             // No bridge needed (feature touches or intersects main shape directly)
+             // or calculation failed. Fallback to original item.
+             if (f.operation === "add") {
+               adds.push(item);
+             } else {
+               subtracts.push(item);
+             }
+          }
+        } else {
+           if (f.operation === "add") {
+              adds.push(item);
+           } else {
+              subtracts.push(item);
+           }
+        }
       } else {
-        subtracts.push(item);
+        if (f.operation === "add") {
+          adds.push(item);
+        } else {
+          subtracts.push(item);
+        }
       }
     });
 

@@ -327,6 +327,9 @@ const HOLE_PRESETS = [
         height: 6,
         rotation: 0,
         renderBehavior: "edge",
+        bridge: {
+          type: "vertical",
+        },
         constraints: [
           {
             type: "lowest-tangent",

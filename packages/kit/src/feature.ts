@@ -721,6 +721,42 @@ export class FeatureTool implements Extension {
       if (feature.rotation) {
         shape.rotate(feature.rotation);
       }
+      
+      // Handle Indicator for Bridge
+      if (feature.bridge && feature.bridge.type === "vertical") {
+         // Create a visual indicator for the bridge
+         // A dashed rectangle extending upwards
+         const bridgeIndicator = new Rect({
+           width: visualWidth,
+           height: 100 * featureScale, // Arbitrary long length to show direction
+           fill: "transparent",
+           stroke: "#888",
+           strokeWidth: 1,
+           strokeDashArray: [2, 2],
+           originX: "center",
+           originY: "bottom", // Anchor at bottom so it extends up
+           left: pos.x,
+           top: pos.y - visualHeight / 2, // Start from top of feature
+           opacity: 0.5,
+           selectable: false,
+           evented: false
+         });
+         
+         // We need to return a group containing both shape and indicator
+         // But createMarkerShape is expected to return one object.
+         // If we return a Group, Fabric handles it.
+         // But the caller might wrap this in another Group if it's part of a feature group.
+         // Fabric supports nested groups.
+         
+         const group = new Group([bridgeIndicator, shape], {
+            originX: "center",
+            originY: "center",
+            left: pos.x,
+            top: pos.y
+         });
+         return group;
+      }
+      
       return shape;
     };
 
