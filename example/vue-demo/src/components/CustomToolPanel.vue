@@ -136,16 +136,31 @@
           />
         </div>
         <div class="control-group">
-          <label>Position Y (0-1)</label>
+          <label>Position Y (0-2)</label>
           <input
             type="number"
             step="0.01"
             min="0"
-            max="1"
+            max="2"
             v-model.number="featureState.y"
             @input="updateGroupPosition"
             :disabled="isYDisabled"
           />
+        </div>
+      </div>
+
+      <div class="control-group">
+        <button @click="completeWorking">Complete</button>
+        <div v-if="completeStatus.message" style="font-size: 12px; color: #666">
+          {{ completeStatus.message }}
+        </div>
+        <div
+          v-if="completeStatus.issues.length"
+          style="font-size: 12px; color: #b00020"
+        >
+          <div v-for="issue in completeStatus.issues" :key="issue.featureId">
+            {{ issue.featureId }}: {{ issue.reason }}
+          </div>
         </div>
       </div>
     </div>
@@ -157,6 +172,12 @@ import { ref, watch, reactive, onUnmounted, computed } from "vue";
 
 const props = defineProps({
   editor: Object,
+});
+
+const editor = computed(() => {
+  const e = props.editor;
+  if (e && typeof e === "object" && "value" in e) return e.value;
+  return e;
 });
 
 const currentMode = ref("");
@@ -285,10 +306,10 @@ const HOLE_PRESETS = [
         height: 6,
         rotation: 0,
         constraints: {
-          type: "edge",
+          type: "tangent-bottom",
           params: {
-            allowedEdges: ["bottom"],
-            confine: true,
+            gap: 0,
+            confineX: true,
           },
         },
       },
@@ -304,6 +325,11 @@ const featureState = reactive({
   constraints: null,
 });
 
+const completeStatus = reactive({
+  message: "",
+  issues: [],
+});
+
 const closePanel = () => {
   // Deactivate tool? Or just hide panel?
   // If we just hide panel, currentMode = ''.
@@ -313,7 +339,7 @@ const closePanel = () => {
   // Or just clear local state.
   currentMode.value = "";
   // If we want to clear selection too:
-  if (props.editor && props.editor.canvasService) {
+  if (editor.value && editor.value.canvasService) {
     // canvasService not exposed directly unless via services
     // props.editor.services.workbench.activate(null); // If workbench service supported null
     // For now just clear UI
@@ -329,13 +355,13 @@ const handleImageReplace = async (e) => {
   const url = URL.createObjectURL(file);
 
   if (imageState.id) {
-    await props.editor.updateImage(imageState.id, { url });
+    await editor.value.updateImage(imageState.id, { url });
   } else {
-    const id = await props.editor.addImage(url);
+    const id = await editor.value.addImage(url);
     imageState.id = id;
 
     // Sync state from new image default props
-    const items = props.editor.getConfig("image.items") || [];
+    const items = editor.value.getConfig("image.items") || [];
     const item = items.find((i) => i.id === id);
     if (item) {
       imageState.scale = item.scale || 1;
@@ -348,22 +374,36 @@ const handleDielineDetect = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const url = URL.createObjectURL(file);
-  await props.editor.detectDieline(url);
+  await editor.value.detectDieline(url);
   // Refresh config
   syncDielineState();
 };
 
 const updateImageState = () => {
   if (!imageState.id) return;
-  props.editor.executeCommand("updateImage", imageState.id, {
+  editor.value.executeCommand("updateImage", imageState.id, {
     scale: imageState.scale,
     angle: imageState.angle,
   });
 };
 
 const updateDielineConfig = () => {
-  props.editor.updateConfig("dieline.shape", dielineState.shape);
-  props.editor.updateConfig("dieline.offset", -dielineState.offset);
+  editor.value.updateConfig("dieline.shape", dielineState.shape);
+  editor.value.updateConfig("dieline.offset", -dielineState.offset);
+};
+
+const syncFeatureStateFromWorking = async (groupId) => {
+  if (!editor.value || !groupId) return;
+  try {
+    const features = await editor.value.executeCommand("getWorkingFeatures");
+    const feature = (features || []).find((f) => f.groupId === groupId);
+    if (feature) {
+      featureState.x = parseFloat((feature.x || 0).toFixed(2));
+      featureState.y = parseFloat((feature.y || 0).toFixed(2));
+      featureState.radius = feature.radius;
+      featureState.constraints = feature.constraints;
+    }
+  } catch (e) {}
 };
 
 const loadPreset = () => {
@@ -377,27 +417,20 @@ const loadPreset = () => {
   const preset = HOLE_PRESETS.find((p) => p.name === selectedPreset.value);
   if (!preset) return;
 
-  // Check if already exists?
-  // User requirement: "Select name... then load Hole".
-  // I will replace current features with this preset for simplicity, or add it?
-  // "Same group... regarded as whole".
-  // I'll overwrite features for now as this seems to be a single-group demo.
-  // Or I should check if groupId exists.
+  const features = JSON.parse(JSON.stringify(preset.features || []));
+  if (preset.name === "Standee Tab") {
+    const dielineHeight = editor.value.getConfig("dieline.height") || 50;
+    const tab = features[0];
+    const tabHeight = tab.height || 0;
+    tab.y = 1 + tabHeight / 2 / dielineHeight;
+  }
 
-  // For this specific requirement, let's just set the features.
-  props.editor.updateConfig("dieline.features", [...preset.features]);
+  editor.value.executeCommand("setWorkingFeatures", features);
 
   // Select it for editing
   featureState.groupId = preset.groupId;
 
-  // Initialize state from first feature (assuming shared position)
-  if (preset.features.length > 0) {
-    featureState.x = preset.features[0].x;
-    featureState.y = preset.features[0].y;
-    // Radius is tricky if they differ. I'll use the first one's radius as "base" size.
-    featureState.radius = preset.features[0].radius;
-    featureState.constraints = preset.features[0].constraints;
-  }
+  syncFeatureStateFromWorking(preset.groupId);
 };
 
 const isXDisabled = computed(() => {
@@ -439,81 +472,18 @@ const isYDisabled = computed(() => {
 
 const updateGroupPosition = () => {
   if (!featureState.groupId) return;
-  props.editor.executeCommand(
-    "updateFeaturePosition",
+  editor.value.executeCommand(
+    "updateWorkingGroupPosition",
     featureState.groupId,
     featureState.x,
     featureState.y,
   );
 };
 
-const updateGroupRadius = () => {
-  if (!featureState.groupId) return;
-  const features = props.editor.getConfig("dieline.features") || [];
-
-  // Logic: If I change radius, how do I apply it to multiple items with different radii?
-  // Option A: Set all to same radius (Bad for lug+hole)
-  // Option B: Scale them.
-  // Option C: Difference.
-  // User said "Size... is enough".
-  // Given "2.5mm" preset name, maybe they are fixed relative size?
-  // Let's implement scaling based on the ratio of change of the "primary" feature (the one we initialized state from).
-
-  // Find original radius of first feature in group to calculate scale factor
-  // This is hard because we don't store original state.
-  // Let's just update the radius of ALL items by delta?
-  // Or just update the first one and let others be? No, they need to resize together.
-
-  // Simplest approach for "lug + hole":
-  // Lug is 40, Hole is 20. Ratio is 2:1.
-  // If user inputs 40, Lug=40, Hole=20.
-  // If user inputs 20, Lug=20, Hole=10.
-  // So I need to know the "base" radius.
-
-  // Let's look at current features in config
-  const groupFeatures = features.filter(
-    (f) => f.groupId === featureState.groupId,
-  );
-  if (groupFeatures.length === 0) return;
-
-  const baseFeature = groupFeatures[0]; // Lug
-  const oldRadius = baseFeature.radius;
-  if (oldRadius === 0) return; // Avoid divide by zero
-
-  const scale = featureState.radius / oldRadius;
-
-  const newFeatures = features.map((f) => {
-    if (f.groupId === featureState.groupId) {
-      return { ...f, radius: f.radius * scale };
-    }
-    return f;
-  });
-
-  props.editor.updateConfig("dieline.features", newFeatures);
-};
-
-const syncFeaturesList = () => {
-  if (!props.editor) return;
-  featuresList.value = props.editor.getConfig("dieline.features") || [];
-};
-
 const syncDielineState = () => {
-  if (!props.editor) return;
-  dielineState.shape = props.editor.getConfig("dieline.shape") || "rect";
-  dielineState.offset = Math.abs(props.editor.getConfig("dieline.offset")) || 0;
-};
-
-const onConfigChange = (e) => {
-  if (e.key === "dieline.features" && featureState.groupId) {
-    const features = e.value || [];
-    const feature = features.find((f) => f.groupId === featureState.groupId);
-    if (feature) {
-      featureState.x = parseFloat((feature.x || 0).toFixed(2));
-      featureState.y = parseFloat((feature.y || 0).toFixed(2));
-      featureState.radius = feature.radius;
-      featureState.constraints = feature.constraints;
-    }
-  }
+  if (!editor.value) return;
+  dielineState.shape = editor.value.getConfig("dieline.shape") || "rect";
+  dielineState.offset = Math.abs(editor.value.getConfig("dieline.offset")) || 0;
 };
 
 const onSelectionCreated = (e) => {
@@ -527,16 +497,7 @@ const onSelectionCreated = (e) => {
   if (selection.data && selection.data.groupId) {
     currentMode.value = "Hole";
     featureState.groupId = selection.data.groupId;
-
-    // Sync state from config
-    const features = props.editor.getConfig("dieline.features") || [];
-    const feature = features.find((f) => f.groupId === featureState.groupId);
-    if (feature) {
-      featureState.x = parseFloat((feature.x || 0).toFixed(2));
-      featureState.y = parseFloat((feature.y || 0).toFixed(2));
-      featureState.radius = feature.radius;
-      featureState.constraints = feature.constraints;
-    }
+    syncFeatureStateFromWorking(featureState.groupId);
     return;
   }
 
@@ -551,7 +512,7 @@ const onSelectionCreated = (e) => {
     // But for simplicity, let's just use object scale
     // Wait, ImageTool stores config scale.
     // We can get config item.
-    const items = props.editor.getConfig("image.items") || [];
+    const items = editor.value.getConfig("image.items") || [];
     const item = items.find((i) => i.id === imageState.id);
     if (item) {
       imageState.scale = item.scale || 1;
@@ -603,6 +564,32 @@ const onToolActivated = ({ id }) => {
   }
 };
 
+const onWorkingChange = (e) => {
+  if (featureState.groupId && e?.features) {
+    const feature = (e.features || []).find(
+      (f) => f.groupId === featureState.groupId,
+    );
+    if (feature) {
+      featureState.x = parseFloat((feature.x || 0).toFixed(2));
+      featureState.y = parseFloat((feature.y || 0).toFixed(2));
+      featureState.radius = feature.radius;
+      featureState.constraints = feature.constraints;
+    }
+  }
+};
+
+const completeWorking = async () => {
+  completeStatus.message = "";
+  completeStatus.issues = [];
+  const res = await editor.value.executeCommand("completeFeatures");
+  if (res && res.ok) {
+    completeStatus.message = "Completed";
+    return;
+  }
+  completeStatus.message = "Complete failed";
+  completeStatus.issues = (res && res.issues) || [];
+};
+
 watch(
   () => props.editor,
   (editor) => {
@@ -611,7 +598,7 @@ watch(
       editor.on("selection:updated", onSelectionCreated);
       editor.on("selection:cleared", onSelectionCleared);
       editor.on("tool:activated", onToolActivated);
-      editor.on("change", onConfigChange);
+      editor.on("feature:working:change", onWorkingChange);
 
       // Initial sync
       if (editor.services && editor.services.workbench) {
@@ -629,7 +616,7 @@ onUnmounted(() => {
     props.editor.off("selection:updated", onSelectionCreated);
     props.editor.off("selection:cleared", onSelectionCleared);
     props.editor.off("tool:activated", onToolActivated);
-    props.editor.off("change", onConfigChange);
+    props.editor.off("feature:working:change", onWorkingChange);
   }
 });
 </script>

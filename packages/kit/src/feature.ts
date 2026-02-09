@@ -3,7 +3,6 @@ import {
   ExtensionContext,
   ContributionPointIds,
   CommandContribution,
-  ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
 import { Circle, Group, Point, Rect } from "fabric";
@@ -15,6 +14,10 @@ import {
   resolveFeaturePosition,
 } from "./geometry";
 import { ConstraintRegistry } from "./constraints";
+import {
+  completeFeaturesStrict,
+} from "./featureComplete";
+import { parseLengthToMm } from "./units";
 
 export class FeatureTool implements Extension {
   id = "pooder.kit.feature";
@@ -23,7 +26,7 @@ export class FeatureTool implements Extension {
     name: "FeatureTool",
   };
 
-  private features: DielineFeature[] = [];
+  private workingFeatures: DielineFeature[] = [];
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
@@ -59,14 +62,18 @@ export class FeatureTool implements Extension {
       "ConfigurationService",
     );
     if (configService) {
-      this.features = configService.get("dieline.features", []);
+      const features = (configService.get("dieline.features", []) ||
+        []) as DielineFeature[];
+      this.workingFeatures = this.cloneFeatures(features);
 
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
 
         if (e.key === "dieline.features") {
-          this.features = e.value || [];
+          const next = (e.value || []) as DielineFeature[];
+          this.workingFeatures = this.cloneFeatures(next);
           this.redraw();
+          this.emitWorkingChange();
         }
       });
     }
@@ -137,26 +144,175 @@ export class FeatureTool implements Extension {
           command: "clearFeatures",
           title: "Clear Features",
           handler: () => {
-            const configService =
-              this.context?.services.get<ConfigurationService>(
-                "ConfigurationService",
-              );
-            if (configService) {
-              configService.update("dieline.features", []);
-            }
+            this.setWorkingFeatures([]);
+            this.redraw();
+            this.emitWorkingChange();
             return true;
+          },
+        },
+        {
+          command: "getWorkingFeatures",
+          title: "Get Working Features",
+          handler: () => {
+            return this.cloneFeatures(this.workingFeatures);
+          },
+        },
+        {
+          command: "setWorkingFeatures",
+          title: "Set Working Features",
+          handler: async (features: DielineFeature[]) => {
+            await this.refreshGeometry();
+            this.setWorkingFeatures(this.cloneFeatures(features || []));
+            this.redraw();
+            this.emitWorkingChange();
+            return { ok: true };
+          },
+        },
+        {
+          command: "updateWorkingGroupPosition",
+          title: "Update Working Group Position",
+          handler: (groupId: string, x: number, y: number) => {
+            return this.updateWorkingGroupPosition(groupId, x, y);
+          },
+        },
+        {
+          command: "completeFeatures",
+          title: "Complete Features",
+          handler: () => {
+            return this.completeFeatures();
           },
         },
       ] as CommandContribution[],
     };
   }
 
+  private cloneFeatures(features: DielineFeature[]): DielineFeature[] {
+    return JSON.parse(JSON.stringify(features || [])) as DielineFeature[];
+  }
+
+  private emitWorkingChange() {
+    this.context?.eventBus.emit("feature:working:change", {
+      features: this.cloneFeatures(this.workingFeatures),
+    });
+  }
+
+  private async refreshGeometry() {
+    if (!this.context) return;
+    const commandService = this.context.services.get<any>("CommandService");
+    if (!commandService) return;
+    try {
+      const g = await Promise.resolve(commandService.executeCommand("getGeometry"));
+      if (g) this.currentGeometry = g as DielineGeometry;
+    } catch (e) {}
+  }
+
+  private setWorkingFeatures(next: DielineFeature[]) {
+    this.workingFeatures = next;
+  }
+
+  private updateWorkingGroupPosition(groupId: string, x: number, y: number) {
+    if (!groupId) return { ok: false };
+
+    const configService =
+      this.context?.services.get<ConfigurationService>("ConfigurationService");
+    if (!configService) return { ok: false };
+
+    const dielineWidth = parseLengthToMm(
+      configService.get("dieline.width") ?? 500,
+      "mm",
+    );
+    const dielineHeight = parseLengthToMm(
+      configService.get("dieline.height") ?? 500,
+      "mm",
+    );
+
+    let changed = false;
+    const next = this.workingFeatures.map((f) => {
+      if (f.groupId !== groupId) return f;
+      let nx = x;
+      let ny = y;
+      if (f.constraints && dielineWidth > 0 && dielineHeight > 0) {
+        const constrained = ConstraintRegistry.apply(nx, ny, f, {
+          dielineWidth,
+          dielineHeight,
+        });
+        nx = constrained.x;
+        ny = constrained.y;
+      }
+
+      if (f.x !== nx || f.y !== ny) {
+        changed = true;
+        return { ...f, x: nx, y: ny };
+      }
+      return f;
+    });
+
+    if (!changed) return { ok: true };
+
+    this.setWorkingFeatures(next);
+    this.redraw();
+    this.enforceConstraints();
+    this.emitWorkingChange();
+
+    return { ok: true };
+  }
+
+  private completeFeatures(): {
+    ok: boolean;
+    issues?: Array<{
+      featureId: string;
+      groupId?: string;
+      reason: string;
+    }>;
+  } {
+    const configService =
+      this.context?.services.get<ConfigurationService>("ConfigurationService");
+    if (!configService) {
+      return {
+        ok: false,
+        issues: [
+          { featureId: "unknown", reason: "ConfigurationService not found" },
+        ],
+      };
+    }
+
+    const dielineWidth = parseLengthToMm(
+      configService.get("dieline.width") ?? 500,
+      "mm",
+    );
+    const dielineHeight = parseLengthToMm(
+      configService.get("dieline.height") ?? 500,
+      "mm",
+    );
+
+    const result = completeFeaturesStrict(
+      this.workingFeatures,
+      { dielineWidth, dielineHeight },
+      (next) => {
+        this.isUpdatingConfig = true;
+        try {
+          configService.update("dieline.features", next);
+        } finally {
+          this.isUpdatingConfig = false;
+        }
+
+        this.workingFeatures = this.cloneFeatures(next as any);
+        this.emitWorkingChange();
+      },
+    );
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        issues: result.issues,
+      };
+    }
+
+    return { ok: true };
+  }
+
   private addFeature(type: "add" | "subtract") {
     if (!this.canvasService) return false;
-
-    const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
 
     // Default to top edge center
     const newFeature: DielineFeature = {
@@ -171,22 +327,14 @@ export class FeatureTool implements Extension {
       rotation: 0,
     };
 
-    if (configService) {
-      const current = configService.get(
-        "dieline.features",
-        [],
-      ) as DielineFeature[];
-      configService.update("dieline.features", [...current, newFeature]);
-    }
+    this.setWorkingFeatures([...(this.workingFeatures || []), newFeature]);
+    this.redraw();
+    this.emitWorkingChange();
     return true;
   }
 
   private addDoubleLayerHole() {
     if (!this.canvasService) return false;
-
-    const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
 
     const groupId = Date.now().toString();
     const timestamp = Date.now();
@@ -217,13 +365,9 @@ export class FeatureTool implements Extension {
       rotation: 0,
     };
 
-    if (configService) {
-      const current = configService.get(
-        "dieline.features",
-        [],
-      ) as DielineFeature[];
-      configService.update("dieline.features", [...current, lug, hole]);
-    }
+    this.setWorkingFeatures([...(this.workingFeatures || []), lug, hole]);
+    this.redraw();
+    this.emitWorkingChange();
     return true;
   }
 
@@ -280,12 +424,12 @@ export class FeatureTool implements Extension {
         if (target.data?.isGroup) {
           const indices = target.data?.indices as number[];
           if (indices && indices.length > 0) {
-            feature = this.features[indices[0]];
+            feature = this.workingFeatures[indices[0]];
           }
         } else {
           const index = target.data?.index;
           if (index !== undefined) {
-            feature = this.features[index];
+            feature = this.workingFeatures[index];
           }
         }
 
@@ -321,7 +465,6 @@ export class FeatureTool implements Extension {
         const target = e.target;
         if (!target || target.data?.type !== "feature-marker") return;
 
-        // Sync changes back to config
         if (target.data?.isGroup) {
           // It's a Group object
           const groupObj = target as Group;
@@ -339,7 +482,7 @@ export class FeatureTool implements Extension {
           // Simplified: just add relative coordinates if no rotation/scaling on group
           // We locked rotation/scaling, so it's safe.
 
-          const newFeatures = [...this.features];
+          const newFeatures = [...this.workingFeatures];
           const { x, y } = this.currentGeometry!; // Center is same
 
           // Fabric Group objects have .getObjects() which returns children
@@ -348,7 +491,7 @@ export class FeatureTool implements Extension {
 
           groupObj.getObjects().forEach((child, i) => {
             const originalIndex = indices[i];
-            const feature = this.features[originalIndex];
+            const feature = this.workingFeatures[originalIndex];
             const geometry = this.getGeometryForFeature(
               this.currentGeometry!,
               feature,
@@ -373,20 +516,8 @@ export class FeatureTool implements Extension {
             };
           });
 
-          this.features = newFeatures;
-
-          const configService =
-            this.context?.services.get<ConfigurationService>(
-              "ConfigurationService",
-            );
-          if (configService) {
-            this.isUpdatingConfig = true;
-            try {
-              configService.update("dieline.features", this.features);
-            } finally {
-              this.isUpdatingConfig = false;
-            }
-          }
+          this.setWorkingFeatures(newFeatures);
+          this.emitWorkingChange();
         } else {
           // Single object
           this.syncFeatureFromCanvas(target);
@@ -431,11 +562,9 @@ export class FeatureTool implements Extension {
     feature?: DielineFeature
   ): { x: number; y: number } {
     if (feature && feature.constraints) {
-      // Use Constraint Registry
-      // Convert to normalized coordinates
       const minX = geometry.x - geometry.width / 2;
       const minY = geometry.y - geometry.height / 2;
-      
+
       const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
       const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
 
@@ -455,38 +584,33 @@ export class FeatureTool implements Extension {
     }
 
     if (feature && feature.placement === "internal") {
-       // Constrain to bounds
-       // geometry.x/y is center
-       const minX = geometry.x - geometry.width / 2;
-       const maxX = geometry.x + geometry.width / 2;
-       const minY = geometry.y - geometry.height / 2;
-       const maxY = geometry.y + geometry.height / 2;
-       
-       return {
-         x: Math.max(minX, Math.min(maxX, p.x)),
-         y: Math.max(minY, Math.min(maxY, p.y))
-       };
+      const minX = geometry.x - geometry.width / 2;
+      const maxX = geometry.x + geometry.width / 2;
+      const minY = geometry.y - geometry.height / 2;
+      const maxY = geometry.y + geometry.height / 2;
+
+      return {
+        x: Math.max(minX, Math.min(maxX, p.x)),
+        y: Math.max(minY, Math.min(maxY, p.y)),
+      };
     }
 
-    // Use geometry helper to find nearest point on Base Shape
-    // geometry object matches GeometryOptions structure required by getNearestPointOnDieline
-    // except for 'features' which we don't need for base shape snapping
-    const nearest = getNearestPointOnDieline({ x: p.x, y: p.y }, {
-      ...geometry,
-      features: [],
-    } as any);
+    const nearest = getNearestPointOnDieline(
+      { x: p.x, y: p.y },
+      {
+        ...geometry,
+        features: [],
+      } as any,
+    );
 
-    // Calculate vector from nearest point to current point
     const dx = p.x - nearest.x;
     const dy = p.y - nearest.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    // If within limit, allow current position (offset from edge)
     if (dist <= limit) {
       return { x: p.x, y: p.y };
     }
 
-    // Otherwise, clamp to limit
     const scale = limit / dist;
     return {
       x: nearest.x + dx * scale,
@@ -498,10 +622,14 @@ export class FeatureTool implements Extension {
     if (!this.currentGeometry || !this.context) return;
 
     const index = target.data?.index;
-    if (index === undefined || index < 0 || index >= this.features.length)
+    if (
+      index === undefined ||
+      index < 0 ||
+      index >= this.workingFeatures.length
+    )
       return;
 
-    const feature = this.features[index];
+    const feature = this.workingFeatures[index];
     const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
     const { width, height, x, y } = geometry;
 
@@ -521,22 +649,10 @@ export class FeatureTool implements Extension {
       // Could also update rotation if we allowed rotating markers
     };
 
-    const newFeatures = [...this.features];
+    const newFeatures = [...this.workingFeatures];
     newFeatures[index] = updatedFeature;
-    this.features = newFeatures;
-
-    // Save to config
-    const configService = this.context.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
-    if (configService) {
-      this.isUpdatingConfig = true;
-      try {
-        configService.update("dieline.features", this.features);
-      } finally {
-        this.isUpdatingConfig = false;
-      }
-    }
+    this.setWorkingFeatures(newFeatures);
+    this.emitWorkingChange();
   }
 
   private redraw() {
@@ -550,7 +666,7 @@ export class FeatureTool implements Extension {
       .filter((obj: any) => obj.data?.type === "feature-marker");
     existing.forEach((obj) => canvas.remove(obj));
 
-    if (!this.features || this.features.length === 0) {
+    if (!this.workingFeatures || this.workingFeatures.length === 0) {
       this.canvasService.requestRenderAll();
       return;
     }
@@ -563,7 +679,7 @@ export class FeatureTool implements Extension {
       {};
     const singles: { feature: DielineFeature; index: number }[] = [];
 
-    this.features.forEach((f, i) => {
+    this.workingFeatures.forEach((f: DielineFeature, i: number) => {
       if (f.groupId) {
         if (!groups[f.groupId]) groups[f.groupId] = [];
         groups[f.groupId].push({ feature: f, index: i });
@@ -646,27 +762,6 @@ export class FeatureTool implements Extension {
         data: { type: "feature-marker", index, isGroup: false },
       });
 
-      // Auto-hide logic
-      marker.set("opacity", 0);
-      marker.on("mouseover", () => {
-        marker.set("opacity", 1);
-        canvas.requestRenderAll();
-      });
-      marker.on("mouseout", () => {
-        if (canvas.getActiveObject() !== marker) {
-          marker.set("opacity", 0);
-          canvas.requestRenderAll();
-        }
-      });
-      marker.on("selected", () => {
-        marker.set("opacity", 1);
-        canvas.requestRenderAll();
-      });
-      marker.on("deselected", () => {
-        marker.set("opacity", 0);
-        canvas.requestRenderAll();
-      });
-
       canvas.add(marker);
       canvas.bringObjectToFront(marker);
     });
@@ -711,27 +806,6 @@ export class FeatureTool implements Extension {
         },
       });
 
-      // Auto-hide logic for group
-      groupObj.set("opacity", 0);
-      groupObj.on("mouseover", () => {
-        groupObj.set("opacity", 1);
-        canvas.requestRenderAll();
-      });
-      groupObj.on("mouseout", () => {
-        if (canvas.getActiveObject() !== groupObj) {
-          groupObj.set("opacity", 0);
-          canvas.requestRenderAll();
-        }
-      });
-      groupObj.on("selected", () => {
-        groupObj.set("opacity", 1);
-        canvas.requestRenderAll();
-      });
-      groupObj.on("deselected", () => {
-        groupObj.set("opacity", 0);
-        canvas.requestRenderAll();
-      });
-
       canvas.add(groupObj);
       canvas.bringObjectToFront(groupObj);
     });
@@ -753,12 +827,12 @@ export class FeatureTool implements Extension {
       if (marker.data?.isGroup) {
         const indices = marker.data?.indices as number[];
         if (indices && indices.length > 0) {
-          feature = this.features[indices[0]];
+          feature = this.workingFeatures[indices[0]];
         }
       } else {
         const index = marker.data?.index;
         if (index !== undefined) {
-          feature = this.features[index];
+          feature = this.workingFeatures[index];
         }
       }
 

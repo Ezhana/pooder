@@ -1,14 +1,29 @@
-import { DielineFeature } from "./geometry";
-
 export interface ConstraintContext {
   dielineWidth: number;
   dielineHeight: number;
 }
 
+export interface ConstraintFeature {
+  id: string;
+  groupId?: string;
+  operation: "add" | "subtract";
+  shape: "rect" | "circle";
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  radius?: number;
+  placement?: "edge" | "internal";
+  constraints?: {
+    type: string;
+    params?: any;
+  };
+}
+
 export type ConstraintHandler = (
   x: number,
   y: number,
-  feature: DielineFeature,
+  feature: ConstraintFeature,
   context: ConstraintContext
 ) => { x: number; y: number };
 
@@ -22,7 +37,7 @@ export class ConstraintRegistry {
   static apply(
     x: number,
     y: number,
-    feature: DielineFeature,
+    feature: ConstraintFeature,
     context: ConstraintContext
   ): { x: number; y: number } {
     if (!feature.constraints || !feature.constraints.type) {
@@ -153,6 +168,40 @@ const internalConstraint: ConstraintHandler = (x, y, feature, context) => {
   return { x: clampedX, y: clampedY };
 };
 
+/**
+ * Bottom Tangent Strategy (stand protrusion)
+ * Forces a feature to be tangent to the dieline bottom edge from outside (below).
+ * Params:
+ * - gap: number (mm, default 0) extra clearance between dieline and protrusion
+ * - confineX: boolean (default true) keep feature within left/right bounds
+ */
+const tangentBottomConstraint: ConstraintHandler = (x, y, feature, context) => {
+  const { dielineWidth, dielineHeight } = context;
+  const params = feature.constraints?.params || {};
+  const gap = params.gap || 0;
+  const confineX = params.confineX !== false;
+
+  const extentY =
+    feature.shape === "circle"
+      ? feature.radius || 0
+      : (feature.height || 0) / 2;
+  const newY = 1 + (extentY + gap) / dielineHeight;
+
+  let newX = x;
+  if (confineX) {
+    const extentX =
+      feature.shape === "circle"
+        ? feature.radius || 0
+        : (feature.width || 0) / 2;
+    const minX = extentX / dielineWidth;
+    const maxX = 1 - extentX / dielineWidth;
+    newX = minX > maxX ? 0.5 : Math.max(minX, Math.min(newX, maxX));
+  }
+
+  return { x: newX, y: newY };
+};
+
 // Register built-ins
 ConstraintRegistry.register("edge", edgeConstraint);
 ConstraintRegistry.register("internal", internalConstraint);
+ConstraintRegistry.register("tangent-bottom", tangentBottomConstraint);
