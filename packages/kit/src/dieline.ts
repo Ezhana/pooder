@@ -8,7 +8,8 @@ import {
 import { Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
 import { ImageTracer } from "./tracer";
-import { Coordinate, Unit } from "./coordinate";
+import { Unit } from "./coordinate";
+import { parseLengthToMm } from "./units";
 import {
   generateDielinePath,
   generateMaskPath,
@@ -20,7 +21,8 @@ import { ConstraintRegistry } from "./constraints";
 
 export interface DielineGeometry {
   shape: "rect" | "circle" | "ellipse" | "custom";
-  unit: Unit;
+  unit: "mm";
+  displayUnit: Unit;
   x: number;
   y: number;
   width: number;
@@ -41,7 +43,7 @@ export interface LineStyle {
 }
 
 export interface DielineState {
-  unit: Unit;
+  displayUnit: Unit;
   shape: "rect" | "circle" | "ellipse" | "custom";
   width: number;
   height: number;
@@ -64,7 +66,7 @@ export class DielineTool implements Extension {
   };
 
   private state: DielineState = {
-    unit: "mm",
+    displayUnit: "mm",
     shape: "rect",
     width: 500,
     height: 500,
@@ -119,61 +121,138 @@ export class DielineTool implements Extension {
     if (configService) {
       // Load initial config
       const s = this.state;
-      s.unit = configService.get("dieline.unit", s.unit);
+      s.displayUnit = configService.get("dieline.displayUnit", s.displayUnit);
       s.shape = configService.get("dieline.shape", s.shape);
-      s.width = configService.get("dieline.width", s.width);
-      s.height = configService.get("dieline.height", s.height);
-      s.radius = configService.get("dieline.radius", s.radius);
+      s.width = parseLengthToMm(
+        configService.get("dieline.width", s.width),
+        "mm",
+      );
+      s.height = parseLengthToMm(
+        configService.get("dieline.height", s.height),
+        "mm",
+      );
+      s.radius = parseLengthToMm(
+        configService.get("dieline.radius", s.radius),
+        "mm",
+      );
       s.padding = configService.get("dieline.padding", s.padding);
-      s.offset = configService.get("dieline.offset", s.offset);
-      
+      s.offset = parseLengthToMm(
+        configService.get("dieline.offset", s.offset),
+        "mm",
+      );
+
       // Main Line
-      s.mainLine.width = configService.get("dieline.strokeWidth", s.mainLine.width);
-      s.mainLine.color = configService.get("dieline.strokeColor", s.mainLine.color);
-      s.mainLine.dashLength = configService.get("dieline.dashLength", s.mainLine.dashLength);
+      s.mainLine.width = configService.get(
+        "dieline.strokeWidth",
+        s.mainLine.width,
+      );
+      s.mainLine.color = configService.get(
+        "dieline.strokeColor",
+        s.mainLine.color,
+      );
+      s.mainLine.dashLength = configService.get(
+        "dieline.dashLength",
+        s.mainLine.dashLength,
+      );
       s.mainLine.style = configService.get("dieline.style", s.mainLine.style);
 
       // Offset Line
-      s.offsetLine.width = configService.get("dieline.offsetStrokeWidth", s.offsetLine.width);
-      s.offsetLine.color = configService.get("dieline.offsetStrokeColor", s.offsetLine.color);
-      s.offsetLine.dashLength = configService.get("dieline.offsetDashLength", s.offsetLine.dashLength);
-      s.offsetLine.style = configService.get("dieline.offsetStyle", s.offsetLine.style);
+      s.offsetLine.width = configService.get(
+        "dieline.offsetStrokeWidth",
+        s.offsetLine.width,
+      );
+      s.offsetLine.color = configService.get(
+        "dieline.offsetStrokeColor",
+        s.offsetLine.color,
+      );
+      s.offsetLine.dashLength = configService.get(
+        "dieline.offsetDashLength",
+        s.offsetLine.dashLength,
+      );
+      s.offsetLine.style = configService.get(
+        "dieline.offsetStyle",
+        s.offsetLine.style,
+      );
 
       s.insideColor = configService.get("dieline.insideColor", s.insideColor);
-      s.outsideColor = configService.get("dieline.outsideColor", s.outsideColor);
-      s.showBleedLines = configService.get("dieline.showBleedLines", s.showBleedLines);
+      s.outsideColor = configService.get(
+        "dieline.outsideColor",
+        s.outsideColor,
+      );
+      s.showBleedLines = configService.get(
+        "dieline.showBleedLines",
+        s.showBleedLines,
+      );
       s.features = configService.get("dieline.features", s.features);
       s.pathData = configService.get("dieline.pathData", s.pathData);
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (e.key.startsWith("dieline.")) {
-          console.log(`[DielineTool] Config change detected: ${e.key} -> ${e.value}`);
-          
           switch (e.key) {
-            case "dieline.unit": s.unit = e.value; break;
-            case "dieline.shape": s.shape = e.value; break;
-            case "dieline.width": s.width = e.value; break;
-            case "dieline.height": s.height = e.value; break;
-            case "dieline.radius": s.radius = e.value; break;
-            case "dieline.padding": s.padding = e.value; break;
-            case "dieline.offset": s.offset = e.value; break;
-            
-            case "dieline.strokeWidth": s.mainLine.width = e.value; break;
-            case "dieline.strokeColor": s.mainLine.color = e.value; break;
-            case "dieline.dashLength": s.mainLine.dashLength = e.value; break;
-            case "dieline.style": s.mainLine.style = e.value; break;
-            
-            case "dieline.offsetStrokeWidth": s.offsetLine.width = e.value; break;
-            case "dieline.offsetStrokeColor": s.offsetLine.color = e.value; break;
-            case "dieline.offsetDashLength": s.offsetLine.dashLength = e.value; break;
-            case "dieline.offsetStyle": s.offsetLine.style = e.value; break;
-            
-            case "dieline.insideColor": s.insideColor = e.value; break;
-            case "dieline.outsideColor": s.outsideColor = e.value; break;
-            case "dieline.showBleedLines": s.showBleedLines = e.value; break;
-            case "dieline.features": s.features = e.value; break;
-            case "dieline.pathData": s.pathData = e.value; break;
+            case "dieline.displayUnit":
+              s.displayUnit = e.value;
+              break;
+            case "dieline.shape":
+              s.shape = e.value;
+              break;
+            case "dieline.width":
+              s.width = parseLengthToMm(e.value, "mm");
+              break;
+            case "dieline.height":
+              s.height = parseLengthToMm(e.value, "mm");
+              break;
+            case "dieline.radius":
+              s.radius = parseLengthToMm(e.value, "mm");
+              break;
+            case "dieline.padding":
+              s.padding = e.value;
+              break;
+            case "dieline.offset":
+              s.offset = parseLengthToMm(e.value, "mm");
+              break;
+
+            case "dieline.strokeWidth":
+              s.mainLine.width = e.value;
+              break;
+            case "dieline.strokeColor":
+              s.mainLine.color = e.value;
+              break;
+            case "dieline.dashLength":
+              s.mainLine.dashLength = e.value;
+              break;
+            case "dieline.style":
+              s.mainLine.style = e.value;
+              break;
+
+            case "dieline.offsetStrokeWidth":
+              s.offsetLine.width = e.value;
+              break;
+            case "dieline.offsetStrokeColor":
+              s.offsetLine.color = e.value;
+              break;
+            case "dieline.offsetDashLength":
+              s.offsetLine.dashLength = e.value;
+              break;
+            case "dieline.offsetStyle":
+              s.offsetLine.style = e.value;
+              break;
+
+            case "dieline.insideColor":
+              s.insideColor = e.value;
+              break;
+            case "dieline.outsideColor":
+              s.outsideColor = e.value;
+              break;
+            case "dieline.showBleedLines":
+              s.showBleedLines = e.value;
+              break;
+            case "dieline.features":
+              s.features = e.value;
+              break;
+            case "dieline.pathData":
+              s.pathData = e.value;
+              break;
           }
           this.updateDieline();
         }
@@ -195,11 +274,11 @@ export class DielineTool implements Extension {
     return {
       [ContributionPointIds.CONFIGURATIONS]: [
         {
-          id: "dieline.unit",
+          id: "dieline.displayUnit",
           type: "select",
-          label: "Unit",
-          options: ["px", "mm", "cm", "in"],
-          default: s.unit,
+          label: "Display Unit",
+          options: ["mm", "cm", "in"],
+          default: s.displayUnit,
         },
         {
           id: "dieline.shape",
@@ -211,7 +290,7 @@ export class DielineTool implements Extension {
         {
           id: "dieline.width",
           type: "number",
-          label: "Width",
+          label: "Width (mm)",
           min: 10,
           max: 2000,
           default: s.width,
@@ -219,7 +298,7 @@ export class DielineTool implements Extension {
         {
           id: "dieline.height",
           type: "number",
-          label: "Height",
+          label: "Height (mm)",
           min: 10,
           max: 2000,
           default: s.height,
@@ -227,7 +306,7 @@ export class DielineTool implements Extension {
         {
           id: "dieline.radius",
           type: "number",
-          label: "Corner Radius",
+          label: "Corner Radius (mm)",
           min: 0,
           max: 500,
           default: s.radius,
@@ -242,7 +321,7 @@ export class DielineTool implements Extension {
         {
           id: "dieline.offset",
           type: "number",
-          label: "Bleed Offset",
+          label: "Bleed Offset (mm)",
           min: -100,
           max: 100,
           default: s.offset,
@@ -343,8 +422,14 @@ export class DielineTool implements Extension {
             if (!configService) return;
 
             const features = configService.get("dieline.features") || [];
-            const dielineWidth = configService.get("dieline.width") || 500;
-            const dielineHeight = configService.get("dieline.height") || 500;
+            const dielineWidth = parseLengthToMm(
+              configService.get("dieline.width") ?? 500,
+              "mm",
+            );
+            const dielineHeight = parseLengthToMm(
+              configService.get("dieline.height") ?? 500,
+              "mm",
+            );
 
             let changed = false;
             const newFeatures = features.map((f: any) => {
@@ -494,7 +579,7 @@ export class DielineTool implements Extension {
     if (!layer) return;
 
     const {
-      unit,
+      displayUnit,
       shape,
       radius,
       offset,
@@ -505,7 +590,7 @@ export class DielineTool implements Extension {
       showBleedLines,
       features,
     } = this.state;
-    let { width, height } = this.state;
+    const { width, height } = this.state;
 
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
@@ -513,11 +598,12 @@ export class DielineTool implements Extension {
     // Calculate Layout based on Physical Dimensions and Canvas Size
     // Add padding to avoid edge hugging
     const paddingPx = this.resolvePadding(canvasW, canvasH);
-    const layout = Coordinate.calculateLayout(
-      { width: canvasW, height: canvasH },
-      { width, height },
-      paddingPx,
-    );
+
+    // Update Viewport System
+    this.canvasService.viewport.setPadding(paddingPx);
+    this.canvasService.viewport.updatePhysical(width, height);
+
+    const layout = this.canvasService.viewport.layout;
 
     const scale = layout.scale;
     const cx = layout.offsetX + layout.width / 2;
@@ -534,7 +620,6 @@ export class DielineTool implements Extension {
 
     // Scale Features for Geometry Generation
     const absoluteFeatures = (features || []).map((f) => {
-      // Scale current unit -> pixels (features share the same unit as the dieline)
       const featureScale = scale;
 
       return {
@@ -709,7 +794,9 @@ export class DielineTool implements Extension {
       stroke: mainLine.style === "hidden" ? null : mainLine.color,
       strokeWidth: mainLine.width,
       strokeDashArray:
-        mainLine.style === "dashed" ? [mainLine.dashLength, mainLine.dashLength] : undefined,
+        mainLine.style === "dashed"
+          ? [mainLine.dashLength, mainLine.dashLength]
+          : undefined,
       selectable: false,
       evented: false,
       originX: "left",
@@ -753,16 +840,26 @@ export class DielineTool implements Extension {
 
   public getGeometry(): DielineGeometry | null {
     if (!this.canvasService) return null;
-    const { unit, shape, width, height, radius, offset, mainLine, pathData } = this.state;
+    const {
+      displayUnit,
+      shape,
+      width,
+      height,
+      radius,
+      offset,
+      mainLine,
+      pathData,
+    } = this.state;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
     const paddingPx = this.resolvePadding(canvasW, canvasH);
-    const layout = Coordinate.calculateLayout(
-      { width: canvasW, height: canvasH },
-      { width, height },
-      paddingPx,
-    );
+
+    // Update Viewport System (Ensure it's up to date)
+    this.canvasService.viewport.setPadding(paddingPx);
+    this.canvasService.viewport.updatePhysical(width, height);
+
+    const layout = this.canvasService.viewport.layout;
 
     const scale = layout.scale;
     const cx = layout.offsetX + layout.width / 2;
@@ -773,14 +870,14 @@ export class DielineTool implements Extension {
 
     return {
       shape,
-      unit,
+      unit: "mm",
+      displayUnit,
       x: cx,
       y: cy,
       width: visualWidth,
       height: visualHeight,
       radius: radius * scale,
       offset: offset * scale,
-      // Pass scale to help other tools (like FeatureTool) convert units
       scale,
       strokeWidth: mainLine.width,
       pathData,
@@ -794,16 +891,17 @@ export class DielineTool implements Extension {
     if (!userLayer) return null;
 
     // 1. Generate Path Data
-    const { shape, width, height, radius, features, unit, pathData } = this.state;
+    const { shape, width, height, radius, features, pathData } = this.state;
     const canvasW = this.canvasService.canvas.width || 800;
     const canvasH = this.canvasService.canvas.height || 600;
 
     const paddingPx = this.resolvePadding(canvasW, canvasH);
-    const layout = Coordinate.calculateLayout(
-      { width: canvasW, height: canvasH },
-      { width, height },
-      paddingPx,
-    );
+
+    // Update Viewport System
+    this.canvasService.viewport.setPadding(paddingPx);
+    this.canvasService.viewport.updatePhysical(width, height);
+
+    const layout = this.canvasService.viewport.layout;
     const scale = layout.scale;
     const cx = layout.offsetX + layout.width / 2;
     const cy = layout.offsetY + layout.height / 2;

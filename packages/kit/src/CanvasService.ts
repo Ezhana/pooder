@@ -1,8 +1,10 @@
 import { Canvas, Group, FabricObject } from "fabric";
 import { Service, EventBus } from "@pooder/core";
+import { ViewportSystem } from "./ViewportSystem";
 
 export default class CanvasService implements Service {
   public canvas: Canvas;
+  public viewport: ViewportSystem;
   private eventBus?: EventBus;
 
   constructor(el: HTMLCanvasElement | string | Canvas, options?: any) {
@@ -13,6 +15,11 @@ export default class CanvasService implements Service {
         preserveObjectStacking: true,
         ...options,
       });
+    }
+
+    this.viewport = new ViewportSystem();
+    if (this.canvas.width !== undefined && this.canvas.height !== undefined) {
+      this.viewport.updateContainer(this.canvas.width, this.canvas.height);
     }
     
     if (options?.eventBus) {

@@ -7,7 +7,8 @@ import {
 } from "@pooder/core";
 import { Rect, Line, Text, Group, Polygon } from "fabric";
 import CanvasService from "./CanvasService";
-import { Coordinate, Unit } from "./coordinate";
+import { Unit } from "./coordinate";
+import { formatMm } from "./units";
 
 export class RulerTool implements Extension {
   id = "pooder.kit.ruler";
@@ -26,7 +27,7 @@ export class RulerTool implements Extension {
   // Dieline context for sync
   private dielineWidth: number = 500;
   private dielineHeight: number = 500;
-  private dielineUnit: Unit = "mm";
+  private dielineDisplayUnit: Unit = "mm";
   private dielinePadding: number | string = 40;
   private dielineOffset: number = 0;
 
@@ -67,7 +68,10 @@ export class RulerTool implements Extension {
       this.fontSize = configService.get("ruler.fontSize", this.fontSize);
 
       // Load Dieline Config
-      this.dielineUnit = configService.get("dieline.unit", this.dielineUnit);
+      this.dielineDisplayUnit = configService.get(
+        "dieline.displayUnit",
+        this.dielineDisplayUnit,
+      );
       this.dielineWidth = configService.get("dieline.width", this.dielineWidth);
       this.dielineHeight = configService.get(
         "dieline.height",
@@ -92,7 +96,8 @@ export class RulerTool implements Extension {
             shouldUpdate = true;
           }
         } else if (e.key.startsWith("dieline.")) {
-          if (e.key === "dieline.unit") this.dielineUnit = e.value;
+          if (e.key === "dieline.displayUnit")
+            this.dielineDisplayUnit = e.value;
           if (e.key === "dieline.width") this.dielineWidth = e.value;
           if (e.key === "dieline.height") this.dielineHeight = e.value;
           if (e.key === "dieline.padding") this.dielinePadding = e.value;
@@ -320,11 +325,15 @@ export class RulerTool implements Extension {
     // Calculate Layout using Dieline properties
     // Add padding to match DielineTool
     const paddingPx = this.resolvePadding(width, height);
-    const layout = Coordinate.calculateLayout(
-      { width, height },
-      { width: this.dielineWidth, height: this.dielineHeight },
-      paddingPx,
+
+    // Sync Viewport (in case DielineTool hasn't updated it yet, or purely for consistency)
+    this.canvasService.viewport.setPadding(paddingPx);
+    this.canvasService.viewport.updatePhysical(
+      this.dielineWidth,
+      this.dielineHeight,
     );
+
+    const layout = this.canvasService.viewport.layout;
 
     const scale = layout.scale;
     const offsetX = layout.offsetX;
@@ -341,12 +350,12 @@ export class RulerTool implements Extension {
     //    - Dimensions show original size.
     //    - Bleed area is internal, so we ignore it for ruler placement.
 
-    const rawOffset = this.dielineOffset || 0;
+    const rawOffsetMm = this.dielineOffset || 0;
     // Effective offset for ruler calculations (only positive offset expands the ruler)
-    const effectiveOffset = rawOffset > 0 ? rawOffset : 0;
+    const effectiveOffsetMm = rawOffsetMm > 0 ? rawOffsetMm : 0;
 
     // Pixel expansion based on effective offset
-    const expandPixels = effectiveOffset * scale;
+    const expandPixels = effectiveOffsetMm * scale;
     // Use gap configuration
     const gap = this.gap || 15;
 
@@ -357,8 +366,8 @@ export class RulerTool implements Extension {
     const rulerBottom = offsetY + visualHeight + expandPixels;
 
     // Display Dimensions (Physical)
-    const displayWidth = this.dielineWidth + effectiveOffset * 2;
-    const displayHeight = this.dielineHeight + effectiveOffset * 2;
+    const displayWidthMm = this.dielineWidth + effectiveOffsetMm * 2;
+    const displayHeightMm = this.dielineHeight + effectiveOffsetMm * 2;
 
     // Ruler Placement Coordinates
     // Top Ruler: Above the top boundary
@@ -412,9 +421,8 @@ export class RulerTool implements Extension {
     );
 
     // Top Text (Centered)
-    // Format to max 2 decimal places if needed
-    const widthStr = parseFloat(displayWidth.toFixed(2)).toString();
-    const topTextContent = `${widthStr} ${this.dielineUnit}`;
+    const widthStr = formatMm(displayWidthMm, this.dielineDisplayUnit);
+    const topTextContent = `${widthStr} ${this.dielineDisplayUnit}`;
     const topText = new Text(topTextContent, {
       left: topRulerXStart + (rulerRight - rulerLeft) / 2,
       top: topRulerY,
@@ -476,8 +484,8 @@ export class RulerTool implements Extension {
     );
 
     // Left Text (Centered, Rotated)
-    const heightStr = parseFloat(displayHeight.toFixed(2)).toString();
-    const leftTextContent = `${heightStr} ${this.dielineUnit}`;
+    const heightStr = formatMm(displayHeightMm, this.dielineDisplayUnit);
+    const leftTextContent = `${heightStr} ${this.dielineDisplayUnit}`;
     const leftText = new Text(leftTextContent, {
       left: leftRulerX,
       top: leftRulerYStart + (rulerBottom - rulerTop) / 2,

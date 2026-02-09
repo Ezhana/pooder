@@ -14,7 +14,6 @@ import {
   DielineFeature,
   resolveFeaturePosition,
 } from "./geometry";
-import { Coordinate } from "./coordinate";
 import { ConstraintRegistry } from "./constraints";
 
 export class FeatureTool implements Extension {
@@ -158,8 +157,6 @@ export class FeatureTool implements Extension {
     const configService = this.context?.services.get<ConfigurationService>(
       "ConfigurationService",
     );
-    const unit = configService?.get("dieline.unit", "mm") || "mm";
-    const defaultSize = Coordinate.convertUnit(10, "mm", unit);
 
     // Default to top edge center
     const newFeature: DielineFeature = {
@@ -169,8 +166,8 @@ export class FeatureTool implements Extension {
       shape: "rect",
       x: 0.5,
       y: 0, // Top edge
-      width: defaultSize,
-      height: defaultSize,
+      width: 10,
+      height: 10,
       rotation: 0,
     };
 
@@ -190,9 +187,6 @@ export class FeatureTool implements Extension {
     const configService = this.context?.services.get<ConfigurationService>(
       "ConfigurationService",
     );
-    const unit = configService?.get("dieline.unit", "mm") || "mm";
-    const lugRadius = Coordinate.convertUnit(20, "mm", unit);
-    const holeRadius = Coordinate.convertUnit(15, "mm", unit);
 
     const groupId = Date.now().toString();
     const timestamp = Date.now();
@@ -206,7 +200,7 @@ export class FeatureTool implements Extension {
       placement: "edge",
       x: 0.5,
       y: 0,
-      radius: lugRadius, // 20mm
+      radius: 20,
       rotation: 0,
     };
 
@@ -219,7 +213,7 @@ export class FeatureTool implements Extension {
       placement: "edge",
       x: 0.5,
       y: 0,
-      radius: holeRadius, // 15mm
+      radius: 15,
       rotation: 0,
     };
 
@@ -583,7 +577,6 @@ export class FeatureTool implements Extension {
       feature: DielineFeature,
       pos: { x: number; y: number },
     ) => {
-      // Features are in the same unit as geometry.unit
       const featureScale = scale;
 
       const visualWidth = (feature.width || 10) * featureScale;
