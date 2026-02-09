@@ -1,5 +1,16 @@
 # @pooder/vue
 
+## 4.1.0
+
+### Minor Changes
+
+- viewport system, constraints and features
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/kit@4.2.0
+
 ## 4.0.1
 
 ### Patch Changes

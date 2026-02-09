@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 4.2.0
+
+### Minor Changes
+
+- viewport system, constraints and features
+
 ## 4.1.0
 
 ### Minor Changes
