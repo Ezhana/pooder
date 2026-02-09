@@ -14,14 +14,11 @@ export interface DielineFeature {
   height?: number;
   radius?: number;
   rotation?: number;
-  placement?: "edge" | "internal";
+  // Rendering behavior: 'edge' (modifies perimeter) or 'surface' (hole/island)
+  renderBehavior?: "edge" | "surface";
   color?: string;
   strokeDash?: number[];
   skipCut?: boolean;
-  constraints?: {
-    type: string;
-    params?: any;
-  };
 }
 
 export interface GeometryOptions {
@@ -161,9 +158,9 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
   const { features } = options;
 
   if (features && features.length > 0) {
-    // Filter for Edge Features (Default or explicit 'edge')
+    // Filter for Edge Features (Default is Edge, unless explicit 'surface')
     const edgeFeatures = features.filter(
-      (f) => !f.placement || f.placement === "edge",
+      (f) => !f.renderBehavior || f.renderBehavior === "edge",
     );
 
     const adds: paper.PathItem[] = [];
@@ -173,7 +170,7 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
       const pos = resolveFeaturePosition(f, options);
       const center = new paper.Point(pos.x, pos.y);
       const item = createFeatureItem(f, center);
-      
+
       if (f.operation === "add") {
         adds.push(item);
       } else {
@@ -223,38 +220,40 @@ function applySurfaceFeatures(
   features: DielineFeature[],
   options: GeometryOptions,
 ): paper.PathItem {
-  const internalFeatures = features.filter((f) => f.placement === "internal");
-  
-  if (internalFeatures.length === 0) return shape;
+  const surfaceFeatures = features.filter(
+    (f) => f.renderBehavior === "surface",
+  );
+
+  if (surfaceFeatures.length === 0) return shape;
 
   let result = shape;
-  
+
   // Internal features are usually subtractive (holes)
   // But we support 'add' too (islands? maybe just unite)
-  
-  for (const f of internalFeatures) {
+
+  for (const f of surfaceFeatures) {
     const pos = resolveFeaturePosition(f, options);
     const center = new paper.Point(pos.x, pos.y);
     const item = createFeatureItem(f, center);
 
     try {
       if (f.operation === "add") {
-         const temp = result.unite(item);
-         result.remove();
-         item.remove();
-         result = temp;
+        const temp = result.unite(item);
+        result.remove();
+        item.remove();
+        result = temp;
       } else {
-         const temp = result.subtract(item);
-         result.remove();
-         item.remove();
-         result = temp;
+        const temp = result.subtract(item);
+        result.remove();
+        item.remove();
+        result = temp;
       }
     } catch (e) {
       console.error("Geometry: Failed to apply surface feature", e);
       item.remove();
     }
   }
-  
+
   return result;
 }
 
@@ -322,11 +321,19 @@ export function generateBleedZonePath(
 
   // 1. Generate Original Shape
   const pOriginal = getPerimeterShape(originalOptions);
-  const shapeOriginal = applySurfaceFeatures(pOriginal, originalOptions.features, originalOptions);
+  const shapeOriginal = applySurfaceFeatures(
+    pOriginal,
+    originalOptions.features,
+    originalOptions,
+  );
 
   // 2. Generate Offset Shape
   const pOffset = getPerimeterShape(offsetOptions);
-  const shapeOffset = applySurfaceFeatures(pOffset, offsetOptions.features, offsetOptions);
+  const shapeOffset = applySurfaceFeatures(
+    pOffset,
+    offsetOptions.features,
+    offsetOptions,
+  );
 
   // 3. Calculate Difference
   let bleedZone: paper.PathItem;
@@ -352,7 +359,7 @@ export function generateBleedZonePath(
 export function getNearestPointOnDieline(
   point: { x: number; y: number },
   options: GeometryOptions,
-): { x: number; y: number } {
+): { x: number; y: number; normal?: { x: number; y: number } } {
   ensurePaper(options.width * 2, options.height * 2);
   paper.project.activeLayer.removeChildren();
 
@@ -361,9 +368,13 @@ export function getNearestPointOnDieline(
   const shape = createBaseShape(options);
 
   const p = new paper.Point(point.x, point.y);
-  const nearest = shape.getNearestPoint(p);
+  const location = shape.getNearestLocation(p);
 
-  const result = { x: nearest.x, y: nearest.y };
+  const result = {
+    x: location.point.x,
+    y: location.point.y,
+    normal: location.normal ? { x: location.normal.x, y: location.normal.y } : undefined
+  };
   shape.remove();
 
   return result;

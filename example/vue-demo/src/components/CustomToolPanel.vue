@@ -207,25 +207,43 @@ const HOLE_PRESETS = [
         id: "2.5mm-hole-lug",
         groupId: "2.5mm-hole",
         operation: "add",
-        placement: "edge",
         skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
         radius: 2.5,
         rotation: 0,
+        renderBehavior: "edge",
+        constraints: [
+          {
+            type: "path",
+            params: {
+              minOffset: -2.5,
+              maxOffset: 2,
+            },
+          },
+        ],
       },
       {
         id: "2.5mm-hole-hole",
         groupId: "2.5mm-hole",
         operation: "subtract",
-        placement: "edge",
         skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
         radius: 2,
         rotation: 0,
+        renderBehavior: "edge",
+        constraints: [
+          {
+            type: "path",
+            params: {
+              minOffset: -2.5,
+              maxOffset: 2,
+            },
+          },
+        ],
       },
     ],
   },
@@ -237,25 +255,27 @@ const HOLE_PRESETS = [
         id: "3mm-hole-lug",
         groupId: "3mm-hole",
         operation: "add",
-        placement: "edge",
         skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
         radius: 3,
         rotation: 0,
+        renderBehavior: "edge",
+        constraints: [{ type: "path" }],
       },
       {
         id: "3mm-hole-hole",
         groupId: "3mm-hole",
         operation: "subtract",
-        placement: "edge",
         skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
         radius: 2,
         rotation: 0,
+        renderBehavior: "edge",
+        constraints: [{ type: "path" }],
       },
     ],
   },
@@ -267,25 +287,27 @@ const HOLE_PRESETS = [
         id: "10mm-hole-lug",
         groupId: "10mm-hole",
         operation: "add",
-        placement: "edge",
         skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
         radius: 10,
         rotation: 0,
+        renderBehavior: "edge",
+        constraints: [{ type: "path" }],
       },
       {
         id: "10mm-hole-hole",
         groupId: "10mm-hole",
         operation: "subtract",
-        placement: "edge",
         skipCut: true,
         shape: "circle",
         x: 0.5,
         y: 0,
         radius: 5,
         rotation: 0,
+        renderBehavior: "edge",
+        constraints: [{ type: "path" }],
       },
     ],
   },
@@ -297,21 +319,24 @@ const HOLE_PRESETS = [
         id: "standee-tab-lug",
         groupId: "standee-tab",
         operation: "add",
-        placement: "edge",
         skipCut: true,
         shape: "rect",
         x: 0.5,
-        y: 1,
+        y: 1.02,
         width: 15,
         height: 6,
         rotation: 0,
-        constraints: {
-          type: "tangent-bottom",
-          params: {
-            gap: 0,
-            confineX: true,
+        renderBehavior: "edge",
+        constraints: [
+          {
+            type: "tangent-bottom",
+            params: {
+              gap: 0,
+              confineX: true,
+            },
+            validateOnly: true,
           },
-        },
+        ],
       },
     ],
   },
@@ -434,9 +459,14 @@ const loadPreset = () => {
 };
 
 const isXDisabled = computed(() => {
-  if (!featureState.constraints) return false;
-  if (featureState.constraints.type === "edge") {
-    const edges = featureState.constraints.params?.allowedEdges || [
+  if (!featureState.constraints || !Array.isArray(featureState.constraints))
+    return false;
+  const edgeConstraint = featureState.constraints.find(
+    (c) => c.type === "edge",
+  );
+
+  if (edgeConstraint) {
+    const edges = edgeConstraint.params?.allowedEdges || [
       "top",
       "bottom",
       "left",
@@ -454,9 +484,14 @@ const isXDisabled = computed(() => {
 });
 
 const isYDisabled = computed(() => {
-  if (!featureState.constraints) return false;
-  if (featureState.constraints.type === "edge") {
-    const edges = featureState.constraints.params?.allowedEdges || [
+  if (!featureState.constraints || !Array.isArray(featureState.constraints))
+    return false;
+  const edgeConstraint = featureState.constraints.find(
+    (c) => c.type === "edge",
+  );
+
+  if (edgeConstraint) {
+    const edges = edgeConstraint.params?.allowedEdges || [
       "top",
       "bottom",
       "left",

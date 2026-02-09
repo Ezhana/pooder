@@ -7,9 +7,10 @@ function validateFeaturesStrict(features, context) {
     const eps = 1e-6;
     const issues = [];
     for (const f of features) {
-        if (!f.constraints?.type)
+        if (!f.constraints || f.constraints.length === 0)
             continue;
-        const constrained = constraints_1.ConstraintRegistry.apply(f.x, f.y, f, context);
+        // Pass ALL constraints (including validateOnly) for strict validation check
+        const constrained = constraints_1.ConstraintRegistry.apply(f.x, f.y, f, context, f.constraints);
         if (Math.abs(constrained.x - f.x) > eps ||
             Math.abs(constrained.y - f.y) > eps) {
             issues.push({

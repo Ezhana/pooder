@@ -13,7 +13,7 @@ import {
   DielineFeature,
   resolveFeaturePosition,
 } from "./geometry";
-import { ConstraintRegistry } from "./constraints";
+import { ConstraintRegistry, ConstraintFeature } from "./constraints";
 import {
   completeFeaturesStrict,
 } from "./featureComplete";
@@ -26,7 +26,7 @@ export class FeatureTool implements Extension {
     name: "FeatureTool",
   };
 
-  private workingFeatures: DielineFeature[] = [];
+  private workingFeatures: ConstraintFeature[] = [];
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
@@ -41,7 +41,7 @@ export class FeatureTool implements Extension {
 
   constructor(
     options?: Partial<{
-      features: DielineFeature[];
+      features: ConstraintFeature[];
     }>,
   ) {
     if (options) {
@@ -63,14 +63,14 @@ export class FeatureTool implements Extension {
     );
     if (configService) {
       const features = (configService.get("dieline.features", []) ||
-        []) as DielineFeature[];
+        []) as ConstraintFeature[];
       this.workingFeatures = this.cloneFeatures(features);
 
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
 
         if (e.key === "dieline.features") {
-          const next = (e.value || []) as DielineFeature[];
+          const next = (e.value || []) as ConstraintFeature[];
           this.workingFeatures = this.cloneFeatures(next);
           this.redraw();
           this.emitWorkingChange();
@@ -160,7 +160,7 @@ export class FeatureTool implements Extension {
         {
           command: "setWorkingFeatures",
           title: "Set Working Features",
-          handler: async (features: DielineFeature[]) => {
+          handler: async (features: ConstraintFeature[]) => {
             await this.refreshGeometry();
             this.setWorkingFeatures(this.cloneFeatures(features || []));
             this.redraw();
@@ -186,8 +186,8 @@ export class FeatureTool implements Extension {
     };
   }
 
-  private cloneFeatures(features: DielineFeature[]): DielineFeature[] {
-    return JSON.parse(JSON.stringify(features || [])) as DielineFeature[];
+  private cloneFeatures(features: ConstraintFeature[]): ConstraintFeature[] {
+    return JSON.parse(JSON.stringify(features || [])) as ConstraintFeature[];
   }
 
   private emitWorkingChange() {
@@ -206,7 +206,7 @@ export class FeatureTool implements Extension {
     } catch (e) {}
   }
 
-  private setWorkingFeatures(next: DielineFeature[]) {
+  private setWorkingFeatures(next: ConstraintFeature[]) {
     this.workingFeatures = next;
   }
 
@@ -315,16 +315,18 @@ export class FeatureTool implements Extension {
     if (!this.canvasService) return false;
 
     // Default to top edge center
-    const newFeature: DielineFeature = {
+    const newFeature: ConstraintFeature = {
       id: Date.now().toString(),
       operation: type,
-      placement: "edge",
       shape: "rect",
       x: 0.5,
       y: 0, // Top edge
       width: 10,
       height: 10,
       rotation: 0,
+      renderBehavior: "edge",
+      // Default constraint: path (snap to edge)
+      constraints: [{ type: "path" }],
     };
 
     this.setWorkingFeatures([...(this.workingFeatures || []), newFeature]);
@@ -340,29 +342,31 @@ export class FeatureTool implements Extension {
     const timestamp = Date.now();
 
     // 1. Lug (Outer) - Add
-    const lug: DielineFeature = {
+    const lug: ConstraintFeature = {
       id: `${timestamp}-lug`,
       groupId,
       operation: "add",
       shape: "circle",
-      placement: "edge",
       x: 0.5,
       y: 0,
       radius: 20,
       rotation: 0,
+      renderBehavior: "edge",
+      constraints: [{ type: "path" }],
     };
 
     // 2. Hole (Inner) - Subtract
-    const hole: DielineFeature = {
+    const hole: ConstraintFeature = {
       id: `${timestamp}-hole`,
       groupId,
       operation: "subtract",
       shape: "circle",
-      placement: "edge",
       x: 0.5,
       y: 0,
       radius: 15,
       rotation: 0,
+      renderBehavior: "edge",
+      constraints: [{ type: "path" }],
     };
 
     this.setWorkingFeatures([...(this.workingFeatures || []), lug, hole]);
@@ -373,7 +377,7 @@ export class FeatureTool implements Extension {
 
   private getGeometryForFeature(
     geometry: DielineGeometry,
-    feature?: DielineFeature,
+    feature?: ConstraintFeature,
   ): DielineGeometry {
     // Legacy support or specialized scaling can go here if needed
     // Currently all features operate on the base geometry (or scaled version of it)
@@ -420,7 +424,7 @@ export class FeatureTool implements Extension {
         if (!this.currentGeometry) return;
 
         // Determine feature to use for snapping context
-        let feature: DielineFeature | undefined;
+        let feature: ConstraintFeature | undefined;
         if (target.data?.isGroup) {
           const indices = target.data?.indices as number[];
           if (indices && indices.length > 0) {
@@ -559,62 +563,42 @@ export class FeatureTool implements Extension {
     p: Point,
     geometry: DielineGeometry,
     limit: number,
-    feature?: DielineFeature
+    feature?: ConstraintFeature
   ): { x: number; y: number } {
-    if (feature && feature.constraints) {
-      const minX = geometry.x - geometry.width / 2;
-      const minY = geometry.y - geometry.height / 2;
-
-      const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
-      const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
-
-      const scale = geometry.scale || 1;
-      const dielineWidth = geometry.width / scale;
-      const dielineHeight = geometry.height / scale;
-
-      const constrained = ConstraintRegistry.apply(nx, ny, feature, {
-        dielineWidth,
-        dielineHeight,
-      });
-
-      return {
-        x: minX + constrained.x * geometry.width,
-        y: minY + constrained.y * geometry.height,
-      };
-    }
-
-    if (feature && feature.placement === "internal") {
-      const minX = geometry.x - geometry.width / 2;
-      const maxX = geometry.x + geometry.width / 2;
-      const minY = geometry.y - geometry.height / 2;
-      const maxY = geometry.y + geometry.height / 2;
-
-      return {
-        x: Math.max(minX, Math.min(maxX, p.x)),
-        y: Math.max(minY, Math.min(maxY, p.y)),
-      };
-    }
-
-    const nearest = getNearestPointOnDieline(
-      { x: p.x, y: p.y },
-      {
-        ...geometry,
-        features: [],
-      } as any,
-    );
-
-    const dx = p.x - nearest.x;
-    const dy = p.y - nearest.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist <= limit) {
+    if (!feature) {
       return { x: p.x, y: p.y };
     }
 
-    const scale = limit / dist;
+    const minX = geometry.x - geometry.width / 2;
+    const minY = geometry.y - geometry.height / 2;
+
+    // Normalize
+    const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
+    const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
+
+    const scale = geometry.scale || 1;
+    const dielineWidth = geometry.width / scale;
+    const dielineHeight = geometry.height / scale;
+
+    // Filter constraints: only apply those that are NOT validateOnly
+    const activeConstraints = feature.constraints?.filter((c) => !c.validateOnly);
+
+    const constrained = ConstraintRegistry.apply(
+      nx,
+      ny,
+      feature,
+      {
+        dielineWidth,
+        dielineHeight,
+        geometry,
+      },
+      activeConstraints,
+    );
+
+    // Denormalize
     return {
-      x: nearest.x + dx * scale,
-      y: nearest.y + dy * scale,
+      x: minX + constrained.x * geometry.width,
+      y: minY + constrained.y * geometry.height,
     };
   }
 
@@ -675,11 +659,11 @@ export class FeatureTool implements Extension {
     const finalScale = scale;
 
     // Group features by groupId
-    const groups: { [key: string]: { feature: DielineFeature; index: number }[] } =
+    const groups: { [key: string]: { feature: ConstraintFeature; index: number }[] } =
       {};
-    const singles: { feature: DielineFeature; index: number }[] = [];
+    const singles: { feature: ConstraintFeature; index: number }[] = [];
 
-    this.workingFeatures.forEach((f: DielineFeature, i: number) => {
+    this.workingFeatures.forEach((f: ConstraintFeature, i: number) => {
       if (f.groupId) {
         if (!groups[f.groupId]) groups[f.groupId] = [];
         groups[f.groupId].push({ feature: f, index: i });
@@ -690,7 +674,7 @@ export class FeatureTool implements Extension {
 
     // Helper to create marker shape
     const createMarkerShape = (
-      feature: DielineFeature,
+      feature: ConstraintFeature,
       pos: { x: number; y: number },
     ) => {
       const featureScale = scale;
@@ -823,7 +807,7 @@ export class FeatureTool implements Extension {
 
     markers.forEach((marker: any) => {
       // Find associated feature
-      let feature: DielineFeature | undefined;
+      let feature: ConstraintFeature | undefined;
       if (marker.data?.isGroup) {
         const indices = marker.data?.indices as number[];
         if (indices && indices.length > 0) {

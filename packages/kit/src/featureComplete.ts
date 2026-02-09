@@ -14,8 +14,9 @@ export function validateFeaturesStrict(
   const issues: FeatureCompleteIssue[] = [];
 
   for (const f of features) {
-    if (!f.constraints?.type) continue;
-    const constrained = ConstraintRegistry.apply(f.x, f.y, f, context);
+    if (!f.constraints || f.constraints.length === 0) continue;
+    // Pass ALL constraints (including validateOnly) for strict validation check
+    const constrained = ConstraintRegistry.apply(f.x, f.y, f, context, f.constraints);
     if (
       Math.abs(constrained.x - f.x) > eps ||
       Math.abs(constrained.y - f.y) > eps

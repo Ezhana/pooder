@@ -247,13 +247,15 @@ class FeatureTool {
         const newFeature = {
             id: Date.now().toString(),
             operation: type,
-            placement: "edge",
             shape: "rect",
             x: 0.5,
             y: 0, // Top edge
             width: 10,
             height: 10,
             rotation: 0,
+            renderBehavior: "edge",
+            // Default constraint: path (snap to edge)
+            constraints: [{ type: "path" }],
         };
         this.setWorkingFeatures([...(this.workingFeatures || []), newFeature]);
         this.redraw();
@@ -271,11 +273,12 @@ class FeatureTool {
             groupId,
             operation: "add",
             shape: "circle",
-            placement: "edge",
             x: 0.5,
             y: 0,
             radius: 20,
             rotation: 0,
+            renderBehavior: "edge",
+            constraints: [{ type: "path" }],
         };
         // 2. Hole (Inner) - Subtract
         const hole = {
@@ -283,11 +286,12 @@ class FeatureTool {
             groupId,
             operation: "subtract",
             shape: "circle",
-            placement: "edge",
             x: 0.5,
             y: 0,
             radius: 15,
             rotation: 0,
+            renderBehavior: "edge",
+            constraints: [{ type: "path" }],
         };
         this.setWorkingFeatures([...(this.workingFeatures || []), lug, hole]);
         this.redraw();
@@ -445,47 +449,28 @@ class FeatureTool {
         this.canvasService.requestRenderAll();
     }
     constrainPosition(p, geometry, limit, feature) {
-        if (feature && feature.constraints) {
-            const minX = geometry.x - geometry.width / 2;
-            const minY = geometry.y - geometry.height / 2;
-            const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
-            const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
-            const scale = geometry.scale || 1;
-            const dielineWidth = geometry.width / scale;
-            const dielineHeight = geometry.height / scale;
-            const constrained = constraints_1.ConstraintRegistry.apply(nx, ny, feature, {
-                dielineWidth,
-                dielineHeight,
-            });
-            return {
-                x: minX + constrained.x * geometry.width,
-                y: minY + constrained.y * geometry.height,
-            };
-        }
-        if (feature && feature.placement === "internal") {
-            const minX = geometry.x - geometry.width / 2;
-            const maxX = geometry.x + geometry.width / 2;
-            const minY = geometry.y - geometry.height / 2;
-            const maxY = geometry.y + geometry.height / 2;
-            return {
-                x: Math.max(minX, Math.min(maxX, p.x)),
-                y: Math.max(minY, Math.min(maxY, p.y)),
-            };
-        }
-        const nearest = (0, geometry_1.getNearestPointOnDieline)({ x: p.x, y: p.y }, {
-            ...geometry,
-            features: [],
-        });
-        const dx = p.x - nearest.x;
-        const dy = p.y - nearest.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= limit) {
+        if (!feature) {
             return { x: p.x, y: p.y };
         }
-        const scale = limit / dist;
+        const minX = geometry.x - geometry.width / 2;
+        const minY = geometry.y - geometry.height / 2;
+        // Normalize
+        const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
+        const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
+        const scale = geometry.scale || 1;
+        const dielineWidth = geometry.width / scale;
+        const dielineHeight = geometry.height / scale;
+        // Filter constraints: only apply those that are NOT validateOnly
+        const activeConstraints = feature.constraints?.filter((c) => !c.validateOnly);
+        const constrained = constraints_1.ConstraintRegistry.apply(nx, ny, feature, {
+            dielineWidth,
+            dielineHeight,
+            geometry,
+        }, activeConstraints);
+        // Denormalize
         return {
-            x: nearest.x + dx * scale,
-            y: nearest.y + dy * scale,
+            x: minX + constrained.x * geometry.width,
+            y: minY + constrained.y * geometry.height,
         };
     }
     syncFeatureFromCanvas(target) {

@@ -116,8 +116,8 @@ function getPerimeterShape(options) {
     let mainShape = createBaseShape(options);
     const { features } = options;
     if (features && features.length > 0) {
-        // Filter for Edge Features (Default or explicit 'edge')
-        const edgeFeatures = features.filter((f) => !f.placement || f.placement === "edge");
+        // Filter for Edge Features (Default is Edge, unless explicit 'surface')
+        const edgeFeatures = features.filter((f) => !f.renderBehavior || f.renderBehavior === "edge");
         const adds = [];
         const subtracts = [];
         edgeFeatures.forEach((f) => {
@@ -168,13 +168,13 @@ function getPerimeterShape(options) {
  * Applies Internal/Surface features to a shape.
  */
 function applySurfaceFeatures(shape, features, options) {
-    const internalFeatures = features.filter((f) => f.placement === "internal");
-    if (internalFeatures.length === 0)
+    const surfaceFeatures = features.filter((f) => f.renderBehavior === "surface");
+    if (surfaceFeatures.length === 0)
         return shape;
     let result = shape;
     // Internal features are usually subtractive (holes)
     // But we support 'add' too (islands? maybe just unite)
-    for (const f of internalFeatures) {
+    for (const f of surfaceFeatures) {
         const pos = resolveFeaturePosition(f, options);
         const center = new paper_1.default.Point(pos.x, pos.y);
         const item = createFeatureItem(f, center);
@@ -273,8 +273,22 @@ function getNearestPointOnDieline(point, options) {
     // because usually you want to snap to the main edge.
     const shape = createBaseShape(options);
     const p = new paper_1.default.Point(point.x, point.y);
-    const nearest = shape.getNearestPoint(p);
-    const result = { x: nearest.x, y: nearest.y };
+    const location = shape.getNearestLocation(p);
+    if (!location) {
+        shape.remove();
+        return {
+            x: p.x,
+            y: p.y,
+            normal: { x: 0, y: 0 },
+            tangent: { x: 1, y: 0 },
+        };
+    }
+    const result = {
+        x: location.point.x,
+        y: location.point.y,
+        normal: { x: location.normal.x, y: location.normal.y },
+        tangent: { x: location.tangent.x, y: location.tangent.y },
+    };
     shape.remove();
     return result;
 }
