@@ -353,6 +353,27 @@ export function generateBleedZonePath(
 }
 
 /**
+ * Finds the lowest point (Max Y) on the Dieline geometry (Base Shape ONLY).
+ */
+export function getLowestPointOnDieline(
+  options: GeometryOptions,
+): { x: number; y: number } {
+  ensurePaper(options.width * 2, options.height * 2);
+  paper.project.activeLayer.removeChildren();
+
+  const shape = createBaseShape(options);
+  const bounds = shape.bounds;
+
+  const result = {
+    x: bounds.center.x,
+    y: bounds.bottom,
+  };
+  shape.remove();
+
+  return result;
+}
+
+/**
  * Finds the nearest point on the Dieline geometry (Base Shape ONLY) for a given target point.
  * Used for constraining feature movement.
  */

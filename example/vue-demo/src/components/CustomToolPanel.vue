@@ -329,12 +329,11 @@ const HOLE_PRESETS = [
         renderBehavior: "edge",
         constraints: [
           {
-            type: "tangent-bottom",
+            type: "lowest-tangent",
             params: {
               gap: 0,
               confineX: true,
             },
-            validateOnly: true,
           },
         ],
       },

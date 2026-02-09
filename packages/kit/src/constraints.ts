@@ -1,4 +1,4 @@
-import { DielineFeature, getNearestPointOnDieline } from "./geometry";
+import { DielineFeature, getNearestPointOnDieline, getLowestPointOnDieline } from "./geometry";
 
 export interface ConstraintContext {
   dielineWidth: number;
@@ -275,8 +275,48 @@ const tangentBottomConstraint: ConstraintHandler = (x, y, feature, context, para
   return { x: newX, y: newY };
 };
 
+/**
+ * Lowest Tangent Strategy (Lowest Point Lock)
+ * Finds the lowest point of the Dieline geometry and locks the feature's Y to that level.
+ * Allows horizontal movement (X).
+ */
+const lowestTangentConstraint: ConstraintHandler = (x, y, feature, context, params) => {
+  const { dielineWidth, dielineHeight, geometry } = context;
+  if (!geometry) return { x, y };
+
+  const lowest = getLowestPointOnDieline(geometry);
+  
+  // Calculate normalized Y of the lowest point
+  const minY = geometry.y - geometry.height / 2;
+  const normY = (lowest.y - minY) / geometry.height;
+  
+  const gap = params.gap || 0;
+  const confineX = params.confineX !== false;
+
+  const extentY =
+    feature.shape === "circle"
+      ? feature.radius || 0
+      : (feature.height || 0) / 2;
+      
+  const newY = normY + (extentY + gap) / dielineHeight;
+
+  let newX = x;
+  if (confineX) {
+    const extentX =
+      feature.shape === "circle"
+        ? feature.radius || 0
+        : (feature.width || 0) / 2;
+    const minX = extentX / dielineWidth;
+    const maxX = 1 - extentX / dielineWidth;
+    newX = minX > maxX ? 0.5 : Math.max(minX, Math.min(newX, maxX));
+  }
+  
+  return { x: newX, y: newY };
+};
+
 // Register built-ins
 ConstraintRegistry.register("path", pathConstraint);
 ConstraintRegistry.register("edge", edgeConstraint);
 ConstraintRegistry.register("internal", internalConstraint);
 ConstraintRegistry.register("tangent-bottom", tangentBottomConstraint);
+ConstraintRegistry.register("lowest-tangent", lowestTangentConstraint);
