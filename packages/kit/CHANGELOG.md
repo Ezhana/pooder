@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 4.3.0
+
+### Minor Changes
+
+- bridge and constraints
+
 ## 4.2.0
 
 ### Minor Changes

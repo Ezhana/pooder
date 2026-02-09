@@ -1,5 +1,11 @@
 # vue-demo
 
+## 2.0.3
+
+### Patch Changes
+
+- @pooder/vue@4.1.1
+
 ## 2.0.2
 
 ### Patch Changes
