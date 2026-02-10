@@ -182,86 +182,82 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
         const bridgeBottom = itemBounds.top;
 
         if (bridgeBottom > bridgeTop) {
-          // 1. Create a full column up to the top of the main shape
-          // Start slightly inside the feature to ensure overlap at the bottom
-          const startY = bridgeBottom + 1; 
-          const bridgeRect = new paper.Path.Rectangle({
-            from: [itemBounds.left, bridgeTop],
-            to: [itemBounds.right, startY],
-            insert: false,
-          });
+            // Ray Casting Approach:
+            // 1. Create a vertical ray from the center of the feature upwards
+            const centerX = itemBounds.center.x;
+            const ray = new paper.Path.Line({
+              from: [centerX, bridgeBottom],
+              to: [centerX, bridgeTop - 10], // Extend slightly past top to ensure intersection
+              insert: false
+            });
 
-          // 2. Subtract the main shape from this column
-          // This leaves us with the parts of the column that are NOT inside the main shape (gaps)
-          const gaps = bridgeRect.subtract(mainShape);
-          bridgeRect.remove();
+            // 2. Find intersections with the main shape
+            const intersections = mainShape.getIntersections(ray);
+            
+            // 3. Find the lowest intersection point (highest Y)
+            // Intersections are usually sorted by offset, but we want to be safe.
+            // We want the point with the largest Y that is still <= bridgeBottom.
+            let targetY = bridgeTop; // Default to top if no intersection (shouldn't happen if overlapping)
+            let found = false;
 
-          // 3. Find the gap piece that connects to our feature
-          // It should be the piece with the lowest bottom (highest Y) matching our feature top
-          let bridgePart: paper.PathItem | null = null;
+            if (intersections && intersections.length > 0) {
+               // Filter intersections that are strictly above the feature start
+               // (allow small tolerance for touching)
+               const validHits = intersections.filter(i => i.point.y < bridgeBottom - 0.1);
+               
+               if (validHits.length > 0) {
+                  // We want the HIT that is CLOSEST to the feature (Largest Y)
+                  validHits.sort((a, b) => b.point.y - a.point.y);
+                  targetY = validHits[0].point.y;
+                  found = true;
+               }
+            }
+            
+            ray.remove();
 
-          // Helper to check if a part is the bottom one
-          const isBottomPart = (part: paper.PathItem) => {
-             // Check if bottom aligns with feature top (allow small tolerance)
-             return Math.abs(part.bounds.bottom - startY) < 2; 
-          };
+            // 4. Create the bridge rect
+            // If we found a hit, targetY is the surface of the main shape.
+            // We want to overlap slightly to ensure union.
+            const overlap = 2; // Overlap by 2 units
+            const rectBottom = bridgeBottom; // Start at feature top
+            let rectTop = found ? targetY + overlap : bridgeTop; // If not found, go all the way? Or maybe fail safe.
+            
+            // If we didn't find an intersection, it might mean the feature is completely below the shape (no X overlap).
+            // In that case, maybe we shouldn't bridge? Or bridge to the bounding box bottom?
+            // For now, if found, use it. If not, use mainBounds.bottom?
+            // Let's assume if !found, we try to project to mainBounds.bottom if it's above us.
+            if (!found) {
+               if (mainBounds.bottom < bridgeBottom) {
+                  targetY = mainBounds.bottom;
+                  rectTop = targetY - overlap; // Penetrate up
+               }
+            }
 
-          if (gaps instanceof paper.CompoundPath) {
-             // Find the child that is at the bottom
-             const children = gaps.children;
-             let maxBottom = -Infinity;
-             let bestChild = null;
-             
-             for (const child of children) {
-                if (child.bounds.bottom > maxBottom) {
-                   maxBottom = child.bounds.bottom;
-                   bestChild = child;
-                }
-             }
-             
-             if (bestChild && isBottomPart(bestChild as paper.PathItem)) {
-                bridgePart = (bestChild as paper.PathItem).clone();
-             }
-          } else if (gaps instanceof paper.Path) {
-             if (isBottomPart(gaps)) {
-                bridgePart = gaps.clone();
-             }
-          }
-          
-          gaps.remove();
+            if (rectTop < rectBottom) {
+               const bridgeRect = new paper.Path.Rectangle({
+                  from: [itemBounds.left, rectTop],
+                  to: [itemBounds.right, rectBottom],
+                  insert: false
+               });
 
-          if (bridgePart) {
-              // Overlap fix:
-              // Scale the bridge up slightly from the bottom to ensure it overlaps with the main shape at the top.
-              // This prevents hairline gaps due to perfect alignment from subtract().
-              const bounds = bridgePart.bounds;
-              if (bounds.height > 0) {
-                 const overlap = 1; 
-                 const scaleY = (bounds.height + overlap) / bounds.height;
-                 // Scale around the bottom-center to keep the connection to the feature intact
-                 bridgePart.scale(1, scaleY, new paper.Point(bounds.center.x, bounds.bottom));
-              }
+               const unitedItem = item.unite(bridgeRect);
+               item.remove();
+               bridgeRect.remove();
 
-              // Unite the bridge with the feature
-              const unitedItem = item.unite(bridgePart);
-              item.remove();
-              bridgePart.remove();
-              
-              if (f.operation === "add") {
-                adds.push(unitedItem);
-              } else {
-                subtracts.push(unitedItem);
-              }
-           } else {
-             // No bridge needed (feature touches or intersects main shape directly)
-             // or calculation failed. Fallback to original item.
-             if (f.operation === "add") {
-               adds.push(item);
-             } else {
-               subtracts.push(item);
-             }
-          }
-        } else {
+               if (f.operation === "add") {
+                  adds.push(unitedItem);
+               } else {
+                  subtracts.push(unitedItem);
+               }
+            } else {
+               // Bridge height is negative or zero, just use item
+               if (f.operation === "add") {
+                  adds.push(item);
+               } else {
+                  subtracts.push(item);
+               }
+            }
+          } else {
            if (f.operation === "add") {
               adds.push(item);
            } else {
