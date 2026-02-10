@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 4.3.1
+
+### Patch Changes
+
+- bugfix
+
 ## 4.3.0
 
 ### Minor Changes
