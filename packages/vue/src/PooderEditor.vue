@@ -129,12 +129,58 @@ const detectDieline = async (url: string) => {
     simplifyTolerance: 2, // 平滑度容差，值越大越圆润
   });
   if (result) {
-    const { pathData, width, height } = result;
+    const { pathData, width, height, rawBounds, imageWidth, imageHeight } =
+      result;
     cfgSvc.update("dieline.shape", "custom");
     cfgSvc.update("dieline.pathData", pathData);
     cfgSvc.update("dieline.width", width);
     cfgSvc.update("dieline.height", height);
     cfgSvc.update("dieline.offset", 0);
+
+    // Auto-align image to the detected dieline
+    if (rawBounds && imageWidth && imageHeight) {
+      const canvasService = pooder.getService<CanvasService>("CanvasService");
+      const images = cfgSvc.get("image.items") || [];
+      const targetImage = images.find((img: any) => img.url === url);
+
+      if (canvasService && targetImage) {
+        // Get updated geometry (which includes the new viewport scale)
+        const geo = await cmdSvc.executeCommand("getGeometry");
+
+        if (geo) {
+          // Calculate scale to match the dieline's visual width
+          const ratio = geo.width / rawBounds.width;
+
+          // Calculate offset of the object center from the image center (original pixels)
+          const imgCenterX = imageWidth / 2;
+          const imgCenterY = imageHeight / 2;
+          const objCenterX = rawBounds.x + rawBounds.width / 2;
+          const objCenterY = rawBounds.y + rawBounds.height / 2;
+
+          const deltaX = objCenterX - imgCenterX;
+          const deltaY = objCenterY - imgCenterY;
+
+          // Convert offset to screen pixels
+          const screenDeltaX = deltaX * ratio;
+          const screenDeltaY = deltaY * ratio;
+
+          // Calculate new normalized position
+          // We want the object center to be at the canvas center (0.5, 0.5)
+          const canvasW = canvasService.canvas.width;
+          const canvasH = canvasService.canvas.height;
+
+          const newLeft = 0.5 - screenDeltaX / canvasW;
+          const newTop = 0.5 - screenDeltaY / canvasH;
+
+          await cmdSvc.executeCommand("updateImage", targetImage.id, {
+            scale: ratio,
+            left: newLeft,
+            top: newTop,
+          });
+        }
+      }
+    }
+
     return pathData;
   }
   return null;

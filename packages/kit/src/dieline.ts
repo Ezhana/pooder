@@ -457,7 +457,22 @@ export class DielineTool implements Extension {
           title: "Detect Edge from Image",
           handler: async (imageUrl: string, options?: any) => {
             try {
-              const pathData = await ImageTracer.trace(imageUrl, options);
+              // Helper to get image dimensions
+              const loadImage = (url: string): Promise<HTMLImageElement> => {
+                return new Promise((resolve, reject) => {
+                  const img = new Image();
+                  img.crossOrigin = "Anonymous";
+                  img.onload = () => resolve(img);
+                  img.onerror = (e) => reject(e);
+                  img.src = url;
+                });
+              };
+
+              const [img, pathData] = await Promise.all([
+                loadImage(imageUrl),
+                ImageTracer.trace(imageUrl, options),
+              ]);
+              
               const bounds = getPathBounds(pathData);
 
               const currentMax = Math.max(s.width, s.height);
@@ -470,6 +485,9 @@ export class DielineTool implements Extension {
                 pathData,
                 width: newWidth,
                 height: newHeight,
+                rawBounds: bounds,
+                imageWidth: img.width,
+                imageHeight: img.height,
               };
             } catch (e) {
               console.error("Edge detection failed", e);
