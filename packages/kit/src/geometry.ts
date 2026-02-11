@@ -1,4 +1,6 @@
 import paper from "paper";
+import { pickExitIndex, scoreOutsideAbove } from "./bridgeSelection";
+import { sampleWrappedOffsets, wrappedDistance } from "./wrappedOffsets";
 
 export type FeatureOperation = "add" | "subtract";
 export type FeatureShape = "rect" | "circle";
@@ -182,87 +184,147 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
         const bridgeBottom = itemBounds.top;
 
         if (bridgeBottom > bridgeTop) {
-            // Ray Casting Approach:
-            // 1. Create a vertical ray from the center of the feature upwards
-            const centerX = itemBounds.center.x;
+          const overlap = 2;
+          const rayPadding = 10;
+          const eps = 0.1;
+          const delta = 0.5;
+
+          const toY = bridgeTop - rayPadding;
+          const inset = Math.min(1, Math.max(0, itemBounds.width * 0.01));
+          const xLeft = itemBounds.left + inset;
+          const xRight = itemBounds.right - inset;
+
+          if (!(mainShape instanceof paper.Path)) {
+            throw new Error("Geometry: Bridge requires base shape to be a Path");
+          }
+
+          const findExitHit = (x: number) => {
             const ray = new paper.Path.Line({
-              from: [centerX, bridgeBottom],
-              to: [centerX, bridgeTop - 10], // Extend slightly past top to ensure intersection
-              insert: false
+              from: [x, bridgeBottom],
+              to: [x, toY],
+              insert: false,
             });
 
-            // 2. Find intersections with the main shape
-            const intersections = mainShape.getIntersections(ray);
-            
-            // 3. Find the lowest intersection point (highest Y)
-            // Intersections are usually sorted by offset, but we want to be safe.
-            // We want the point with the largest Y that is still <= bridgeBottom.
-            let targetY = bridgeTop; // Default to top if no intersection (shouldn't happen if overlapping)
-            let found = false;
-
-            if (intersections && intersections.length > 0) {
-               // Filter intersections that are strictly above the feature start
-               // (allow small tolerance for touching)
-               const validHits = intersections.filter(i => i.point.y < bridgeBottom - 0.1);
-               
-               if (validHits.length > 0) {
-                  // We want the HIT that is CLOSEST to the feature (Largest Y)
-                  validHits.sort((a, b) => b.point.y - a.point.y);
-                  targetY = validHits[0].point.y;
-                  found = true;
-               }
-            }
-            
+            const intersections = mainShape.getIntersections(ray) || [];
             ray.remove();
 
-            // 4. Create the bridge rect
-            // If we found a hit, targetY is the surface of the main shape.
-            // We want to overlap slightly to ensure union.
-            const overlap = 2; // Overlap by 2 units
-            const rectBottom = bridgeBottom; // Start at feature top
-            let rectTop = found ? targetY + overlap : bridgeTop; // If not found, go all the way? Or maybe fail safe.
-            
-            // If we didn't find an intersection, it might mean the feature is completely below the shape (no X overlap).
-            // In that case, maybe we shouldn't bridge? Or bridge to the bounding box bottom?
-            // For now, if found, use it. If not, use mainBounds.bottom?
-            // Let's assume if !found, we try to project to mainBounds.bottom if it's above us.
-            if (!found) {
-               if (mainBounds.bottom < bridgeBottom) {
-                  targetY = mainBounds.bottom;
-                  rectTop = targetY - overlap; // Penetrate up
-               }
-            }
+            const validHits = intersections.filter(
+              (i) => i.point.y < bridgeBottom - eps,
+            );
+            if (validHits.length === 0) return null;
 
-            if (rectTop < rectBottom) {
-               const bridgeRect = new paper.Path.Rectangle({
-                  from: [itemBounds.left, rectTop],
-                  to: [itemBounds.right, rectBottom],
-                  insert: false
-               });
+            validHits.sort((a, b) => b.point.y - a.point.y);
+            const flags = validHits.map((h) => {
+              const above = h.point.add(new paper.Point(0, -delta));
+              const below = h.point.add(new paper.Point(0, delta));
+              return {
+                insideAbove: mainShape.contains(above),
+                insideBelow: mainShape.contains(below),
+              };
+            });
 
-               const unitedItem = item.unite(bridgeRect);
-               item.remove();
-               bridgeRect.remove();
+            const idx = pickExitIndex(flags);
+            if (idx < 0) return null;
 
-               if (f.operation === "add") {
-                  adds.push(unitedItem);
-               } else {
-                  subtracts.push(unitedItem);
-               }
-            } else {
-               // Bridge height is negative or zero, just use item
-               if (f.operation === "add") {
-                  adds.push(item);
-               } else {
-                  subtracts.push(item);
-               }
-            }
+            const hit = validHits[idx];
+            return { point: hit.point, location: hit };
+          };
+
+          const leftHit = findExitHit(xLeft);
+          const rightHit = findExitHit(xRight);
+
+          if (!leftHit || !rightHit || xRight - xLeft <= eps) {
+            throw new Error("Geometry: Bridge ray intersection not found");
+          }
+
+          const path = mainShape as paper.Path;
+          const pathLength = path.length;
+          const leftOffset = leftHit.location.offset;
+          const rightOffset = rightHit.location.offset;
+
+          const distanceA = wrappedDistance(pathLength, leftOffset, rightOffset);
+          const distanceB = wrappedDistance(pathLength, rightOffset, leftOffset);
+          const countFor = (d: number) => Math.max(8, Math.min(80, Math.ceil(d / 6)));
+
+          const offsetsA = sampleWrappedOffsets(
+            pathLength,
+            leftOffset,
+            rightOffset,
+            countFor(distanceA),
+          );
+
+          const offsetsB = sampleWrappedOffsets(
+            pathLength,
+            rightOffset,
+            leftOffset,
+            countFor(distanceB),
+          );
+
+          const pointsA = offsetsA
+            .map((o) => path.getPointAt(o))
+            .filter((p): p is paper.Point => Boolean(p));
+          const pointsB = offsetsB
+            .map((o) => path.getPointAt(o))
+            .filter((p): p is paper.Point => Boolean(p));
+
+          if (pointsA.length < 2 || pointsB.length < 2) {
+            throw new Error("Geometry: Bridge contour sampling failed");
+          }
+
+          const scoreA = scoreOutsideAbove(
+            pointsA.map((p) => ({
+              outsideAbove: !mainShape.contains(p.add(new paper.Point(0, -delta))),
+            })),
+          );
+          const scoreB = scoreOutsideAbove(
+            pointsB.map((p) => ({
+              outsideAbove: !mainShape.contains(p.add(new paper.Point(0, -delta))),
+            })),
+          );
+
+          let topBase = scoreA >= scoreB ? pointsA : pointsB;
+
+          const dist2 = (a: paper.Point, b: paper.Point) => {
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            return dx * dx + dy * dy;
+          };
+
+          if (dist2(topBase[0], leftHit.point) > dist2(topBase[0], rightHit.point)) {
+            topBase = topBase.slice().reverse();
+          }
+
+          topBase = topBase.slice();
+          topBase[0] = leftHit.point;
+          topBase[topBase.length - 1] = rightHit.point;
+
+          const capShiftY = f.operation === "subtract" ? -overlap : overlap;
+          const topPoints = topBase.map(
+            (p) => p.add(new paper.Point(0, capShiftY)),
+          );
+
+          const bridgeBottomY = bridgeBottom + overlap;
+          const bridgePoly = new paper.Path({ insert: false });
+          for (const p of topPoints) bridgePoly.add(p);
+          bridgePoly.add(new paper.Point(itemBounds.right, bridgeBottomY));
+          bridgePoly.add(new paper.Point(itemBounds.left, bridgeBottomY));
+          bridgePoly.closed = true;
+
+          const unitedItem = item.unite(bridgePoly);
+          item.remove();
+          bridgePoly.remove();
+
+          if (f.operation === "add") {
+            adds.push(unitedItem);
           } else {
-           if (f.operation === "add") {
-              adds.push(item);
-           } else {
-              subtracts.push(item);
-           }
+            subtracts.push(unitedItem);
+          }
+        } else {
+          if (f.operation === "add") {
+            adds.push(item);
+          } else {
+            subtracts.push(item);
+          }
         }
       } else {
         if (f.operation === "add") {
@@ -280,7 +342,10 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
           const temp = mainShape.unite(item);
           mainShape.remove();
           item.remove();
-          mainShape = temp;
+          mainShape =
+            typeof (temp as any).reduce === "function"
+              ? ((temp as any).reduce({}) as paper.PathItem)
+              : temp;
         } catch (e) {
           console.error("Geometry: Failed to unite feature", e);
           item.remove();
@@ -295,7 +360,10 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
           const temp = mainShape.subtract(item);
           mainShape.remove();
           item.remove();
-          mainShape = temp;
+          mainShape =
+            typeof (temp as any).reduce === "function"
+              ? ((temp as any).reduce({}) as paper.PathItem)
+              : temp;
         } catch (e) {
           console.error("Geometry: Failed to subtract feature", e);
           item.remove();
