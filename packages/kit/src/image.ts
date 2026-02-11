@@ -5,6 +5,7 @@ import {
   CommandContribution,
   ConfigurationContribution,
   ConfigurationService,
+  ToolSessionService,
 } from "@pooder/core";
 import { Point, util } from "fabric";
 import CanvasService from "./CanvasService";
@@ -36,6 +37,7 @@ export class ImageTool implements Extension {
   private isUpdatingConfig = false;
   private isToolActive = false;
   private renderSeq = 0;
+  private dirtyTrackerDisposable?: { dispose(): void };
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -73,6 +75,13 @@ export class ImageTool implements Extension {
       });
     }
 
+    const toolSessionService =
+      context.services.get<ToolSessionService>("ToolSessionService");
+    this.dirtyTrackerDisposable = toolSessionService?.registerDirtyTracker(
+      this.id,
+      () => this.hasWorkingChanges,
+    );
+
     this.ensureLayer();
     this.updateImages();
   }
@@ -80,6 +89,8 @@ export class ImageTool implements Extension {
   deactivate(context: ExtensionContext) {
     context.eventBus.off("tool:activated", this.onToolActivated);
     context.eventBus.off("object:modified", this.onObjectModified);
+    this.dirtyTrackerDisposable?.dispose();
+    this.dirtyTrackerDisposable = undefined;
     
     if (this.canvasService) {
       void this.canvasService.applyObjectSpecsToLayer("image-overlay", []);
@@ -90,19 +101,28 @@ export class ImageTool implements Extension {
   }
 
   private onToolActivated = (event: { id: string }) => {
-    const nextActive = event.id === this.id;
-    if (this.isToolActive && !nextActive) {
-      if (this.hasWorkingChanges) {
-        this.workingItems = this.cloneItems(this.items);
-        this.hasWorkingChanges = false;
-      }
-    }
-    this.isToolActive = nextActive;
+    this.isToolActive = event.id === this.id;
     this.updateImages();
   };
 
   contribute() {
     return {
+      [ContributionPointIds.TOOLS]: [
+        {
+          id: this.id,
+          name: "Image",
+          interaction: "session",
+          commands: {
+            begin: "resetWorkingImages",
+            commit: "completeImages",
+            rollback: "resetWorkingImages",
+          },
+          session: {
+            autoBegin: true,
+            leavePolicy: "block",
+          },
+        },
+      ],
       [ContributionPointIds.CONFIGURATIONS]: [
         {
           id: "image.items",

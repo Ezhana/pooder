@@ -271,6 +271,17 @@ export class DielineTool implements Extension {
   contribute() {
     const s = this.state;
     return {
+      [ContributionPointIds.TOOLS]: [
+        {
+          id: this.id,
+          name: "Dieline",
+          interaction: "session",
+          session: {
+            autoBegin: false,
+            leavePolicy: "block",
+          },
+        },
+      ],
       [ContributionPointIds.CONFIGURATIONS]: [
         {
           id: "dieline.displayUnit",

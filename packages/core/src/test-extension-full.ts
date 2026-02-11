@@ -57,9 +57,9 @@ export const fullExtension: Extension = {
           id: "test.tool.calculator",
           name: "Calculator",
           description: "Simple calculator",
-          execute: async (op: string, a: number, b: number) => {
-            if (op === "add") return a + b;
-            return 0;
+          interaction: "instant",
+          commands: {
+            execute: "test.declarative.auto",
           },
         } as ToolContribution,
       ],

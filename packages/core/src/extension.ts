@@ -3,6 +3,7 @@ import { Contribution, ContributionPointIds } from "./contribution";
 import Disposable from "./disposable";
 import CommandService from "./services/CommandService";
 import { ConfigurationService } from "./services";
+import ToolRegistryService from "./services/ToolRegistryService";
 
 interface ExtensionMetadata {
   name: string;
@@ -109,6 +110,12 @@ class ExtensionManager {
         this.context.services.get<CommandService>("CommandService")!;
 
       return commandService.registerCommand(item.id, item.data.handler);
+    }
+    if (pointId === ContributionPointIds.TOOLS) {
+      const toolRegistry =
+        this.context.services.get<ToolRegistryService>("ToolRegistryService");
+      if (!toolRegistry) return;
+      return toolRegistry.registerTool(item.data);
     }
   }
 

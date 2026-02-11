@@ -17,12 +17,36 @@ export interface CommandContribution {
 /**
  * Tool Contribution Data Definition
  */
+export type ToolInteraction = "instant" | "session" | "hybrid";
+
+export type ToolSessionLeavePolicy = "block" | "commit" | "rollback";
+
+export interface ToolCommandBindings {
+  execute?: string;
+  begin?: string;
+  validate?: string;
+  commit?: string;
+  rollback?: string;
+  reset?: string;
+}
+
 export interface ToolContribution {
   id: string;
   name: string;
-  description: string;
-  parameters?: Record<string, any>; // JSON Schema for parameters
-  execute: (...args: any[]) => Promise<any>;
+  description?: string;
+  icon?: string;
+  interaction: ToolInteraction;
+  parameters?: Record<string, any>;
+  commands?: ToolCommandBindings;
+  view?: {
+    id?: string;
+    type?: "sidebar" | "panel" | "editor" | "dialog";
+    location?: string;
+  };
+  session?: {
+    autoBegin?: boolean;
+    leavePolicy?: ToolSessionLeavePolicy;
+  };
 }
 
 /**

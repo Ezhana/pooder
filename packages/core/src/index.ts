@@ -8,7 +8,13 @@ import {
   ContributionPointIds,
   ContributionRegistry,
 } from "./contribution";
-import { CommandService, ConfigurationService, WorkbenchService } from "./services";
+import {
+  CommandService,
+  ConfigurationService,
+  ToolRegistryService,
+  ToolSessionService,
+  WorkbenchService,
+} from "./services";
 import { ExtensionContext } from "./context";
 
 export * from "./extension";
@@ -35,8 +41,18 @@ export class Pooder {
     const configurationService = new ConfigurationService();
     this.registerService(configurationService, "ConfigurationService");
 
+    const toolRegistryService = new ToolRegistryService();
+    this.registerService(toolRegistryService, "ToolRegistryService");
+
+    const toolSessionService = new ToolSessionService();
+    toolSessionService.setCommandService(commandService);
+    toolSessionService.setToolRegistry(toolRegistryService);
+    this.registerService(toolSessionService, "ToolSessionService");
+
     const workbenchService = new WorkbenchService();
     workbenchService.setEventBus(this.eventBus);
+    workbenchService.setToolRegistry(toolRegistryService);
+    workbenchService.setToolSessionService(toolSessionService);
     this.registerService(workbenchService, "WorkbenchService");
 
     // Create a restricted context for extensions

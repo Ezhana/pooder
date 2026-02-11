@@ -4,6 +4,7 @@ import {
   ContributionPointIds,
   CommandContribution,
   ConfigurationService,
+  ToolSessionService,
 } from "@pooder/core";
 import { Circle, Group, Point, Rect } from "fabric";
 import CanvasService from "./CanvasService";
@@ -31,6 +32,8 @@ export class FeatureTool implements Extension {
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isToolActive = false;
+  private hasWorkingChanges = false;
+  private dirtyTrackerDisposable?: { dispose(): void };
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
@@ -65,6 +68,7 @@ export class FeatureTool implements Extension {
       const features = (configService.get("dieline.features", []) ||
         []) as ConstraintFeature[];
       this.workingFeatures = this.cloneFeatures(features);
+      this.hasWorkingChanges = false;
 
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
@@ -72,11 +76,19 @@ export class FeatureTool implements Extension {
         if (e.key === "dieline.features") {
           const next = (e.value || []) as ConstraintFeature[];
           this.workingFeatures = this.cloneFeatures(next);
+          this.hasWorkingChanges = false;
           this.redraw();
           this.emitWorkingChange();
         }
       });
     }
+
+    const toolSessionService =
+      context.services.get<ToolSessionService>("ToolSessionService");
+    this.dirtyTrackerDisposable = toolSessionService?.registerDirtyTracker(
+      this.id,
+      () => this.hasWorkingChanges,
+    );
 
     // Listen to tool activation
     context.eventBus.on("tool:activated", this.onToolActivated);
@@ -86,6 +98,8 @@ export class FeatureTool implements Extension {
 
   deactivate(context: ExtensionContext) {
     context.eventBus.off("tool:activated", this.onToolActivated);
+    this.dirtyTrackerDisposable?.dispose();
+    this.dirtyTrackerDisposable = undefined;
     this.teardown();
     this.canvasService = undefined;
     this.context = undefined;
@@ -118,6 +132,20 @@ export class FeatureTool implements Extension {
 
   contribute() {
     return {
+      [ContributionPointIds.TOOLS]: [
+        {
+          id: this.id,
+          name: "Feature",
+          interaction: "session",
+          commands: {
+            commit: "completeFeatures",
+          },
+          session: {
+            autoBegin: false,
+            leavePolicy: "block",
+          },
+        },
+      ],
       [ContributionPointIds.COMMANDS]: [
         {
           command: "addFeature",
@@ -145,6 +173,7 @@ export class FeatureTool implements Extension {
           title: "Clear Features",
           handler: () => {
             this.setWorkingFeatures([]);
+            this.hasWorkingChanges = true;
             this.redraw();
             this.emitWorkingChange();
             return true;
@@ -163,6 +192,7 @@ export class FeatureTool implements Extension {
           handler: async (features: ConstraintFeature[]) => {
             await this.refreshGeometry();
             this.setWorkingFeatures(this.cloneFeatures(features || []));
+            this.hasWorkingChanges = true;
             this.redraw();
             this.emitWorkingChange();
             return { ok: true };
@@ -250,6 +280,7 @@ export class FeatureTool implements Extension {
     if (!changed) return { ok: true };
 
     this.setWorkingFeatures(next);
+    this.hasWorkingChanges = true;
     this.redraw();
     this.enforceConstraints();
     this.emitWorkingChange();
@@ -308,6 +339,7 @@ export class FeatureTool implements Extension {
       };
     }
 
+    this.hasWorkingChanges = false;
     return { ok: true };
   }
 
@@ -330,6 +362,7 @@ export class FeatureTool implements Extension {
     };
 
     this.setWorkingFeatures([...(this.workingFeatures || []), newFeature]);
+    this.hasWorkingChanges = true;
     this.redraw();
     this.emitWorkingChange();
     return true;
@@ -370,6 +403,7 @@ export class FeatureTool implements Extension {
     };
 
     this.setWorkingFeatures([...(this.workingFeatures || []), lug, hole]);
+    this.hasWorkingChanges = true;
     this.redraw();
     this.emitWorkingChange();
     return true;
@@ -521,6 +555,7 @@ export class FeatureTool implements Extension {
           });
 
           this.setWorkingFeatures(newFeatures);
+          this.hasWorkingChanges = true;
           this.emitWorkingChange();
         } else {
           // Single object
@@ -636,6 +671,7 @@ export class FeatureTool implements Extension {
     const newFeatures = [...this.workingFeatures];
     newFeatures[index] = updatedFeature;
     this.setWorkingFeatures(newFeatures);
+    this.hasWorkingChanges = true;
     this.emitWorkingChange();
   }
 
