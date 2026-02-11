@@ -6,9 +6,9 @@ import {
   ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
-import { Image, Point, Rect, util, Object as FabricObject } from "fabric";
+import { Point, util } from "fabric";
 import CanvasService from "./CanvasService";
-import { Coordinate } from "./coordinate";
+import type { RenderObjectSpec } from "./renderSpec";
 
 export interface ImageItem {
   id: string;
@@ -30,13 +30,12 @@ export class ImageTool implements Extension {
   private items: ImageItem[] = [];
   private workingItems: ImageItem[] = [];
   private hasWorkingChanges = false;
-  private objectMap: Map<string, FabricObject> = new Map();
   private loadResolvers: Map<string, () => void> = new Map();
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isToolActive = false;
-  private dielineFrameRect?: FabricObject;
+  private renderSeq = 0;
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -48,6 +47,7 @@ export class ImageTool implements Extension {
 
     // Listen to tool activation
     context.eventBus.on("tool:activated", this.onToolActivated);
+    context.eventBus.on("object:modified", this.onObjectModified);
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -79,17 +79,11 @@ export class ImageTool implements Extension {
 
   deactivate(context: ExtensionContext) {
     context.eventBus.off("tool:activated", this.onToolActivated);
+    context.eventBus.off("object:modified", this.onObjectModified);
     
     if (this.canvasService) {
-      const userLayer = this.canvasService.getLayer("user");
-      if (userLayer) {
-        this.objectMap.forEach((obj) => {
-          userLayer.remove(obj);
-        });
-        this.objectMap.clear();
-        this.canvasService.requestRenderAll();
-      }
-      this.hideDielineFrameRect();
+      void this.canvasService.applyObjectSpecsToLayer("image-overlay", []);
+      void this.canvasService.applyObjectSpecsToLayer("user", []);
       this.canvasService = undefined;
       this.context = undefined;
     }
@@ -102,24 +96,10 @@ export class ImageTool implements Extension {
         this.workingItems = this.cloneItems(this.items);
         this.hasWorkingChanges = false;
       }
-      this.hideDielineFrameRect();
     }
     this.isToolActive = nextActive;
-    this.updateInteractivity();
     this.updateImages();
   };
-
-  private updateInteractivity() {
-    this.objectMap.forEach((obj) => {
-      obj.set({
-        selectable: this.isToolActive,
-        evented: this.isToolActive,
-        hasControls: this.isToolActive,
-        hasBorders: this.isToolActive,
-      });
-    });
-    this.canvasService?.requestRenderAll();
-  }
 
   contribute() {
     return {
@@ -200,19 +180,14 @@ export class ImageTool implements Extension {
             id: string,
             area: { width: number; height: number; left?: number; top?: number },
           ) => {
-            const item = this.items.find((i) => i.id === id);
-            const obj = this.objectMap.get(id);
-            if (item && obj && obj.width && obj.height) {
-              const scale = Math.max(
-                area.width / obj.width,
-                area.height / obj.height,
-              );
-              this.updateImageInConfig(id, {
-                scale,
-                left: area.left ?? 0.5,
-                top: area.top ?? 0.5,
-              });
-            }
+            const obj = this.canvasService?.getObject(id, "user") as any;
+            if (!obj || !obj.width || !obj.height) return;
+            const scale = Math.max(area.width / obj.width, area.height / obj.height);
+            this.updateImageInConfig(id, {
+              scale,
+              left: area.left ?? 0.5,
+              top: area.top ?? 0.5,
+            });
           },
         },
         {
@@ -322,8 +297,6 @@ export class ImageTool implements Extension {
     let userLayer = this.canvasService.getLayer("user");
     if (!userLayer) {
       userLayer = this.canvasService.createLayer("user", {
-        width: this.canvasService.canvas.width,
-        height: this.canvasService.canvas.height,
         left: 0,
         top: 0,
         originX: "left",
@@ -353,6 +326,33 @@ export class ImageTool implements Extension {
       }
       this.canvasService.requestRenderAll();
     }
+
+    let overlayLayer = this.canvasService.getLayer("image-overlay");
+    if (!overlayLayer) {
+      overlayLayer = this.canvasService.createLayer("image-overlay", {
+        left: 0,
+        top: 0,
+        originX: "left",
+        originY: "top",
+        selectable: false,
+        evented: false,
+      });
+    }
+
+    const dielineLayer = this.canvasService.getLayer("dieline-overlay");
+    const objects = this.canvasService.canvas.getObjects();
+    const userIndex = objects.indexOf(userLayer);
+    const overlayIndex = objects.indexOf(overlayLayer);
+    const dielineIndex = dielineLayer ? objects.indexOf(dielineLayer) : -1;
+
+    if (userIndex >= 0 && overlayIndex >= 0) {
+      if (dielineLayer && dielineIndex >= 0) {
+        const target = Math.max(userIndex + 1, dielineIndex);
+        this.canvasService.canvas.moveObjectTo(overlayLayer, target);
+      } else {
+        this.canvasService.canvas.moveObjectTo(overlayLayer, userIndex + 1);
+      }
+    }
   }
 
   private getLayoutInfo() {
@@ -369,70 +369,17 @@ export class ImageTool implements Extension {
   }
 
   private updateImages() {
-    if (!this.canvasService) return;
-    const userLayer = this.canvasService.getLayer("user");
-    if (!userLayer) {
-      console.warn("[ImageTool] User layer not found");
-      return;
-    }
-
-    const renderItems = this.isToolActive ? this.workingItems : this.items;
-
-    // 1. Remove objects that are no longer in items
-    const currentIds = new Set(renderItems.map((i) => i.id));
-    for (const [id, obj] of this.objectMap) {
-      if (!currentIds.has(id)) {
-        userLayer.remove(obj);
-        this.objectMap.delete(id);
-      }
-    }
-
-    // 2. Add or Update objects
-    const layout = this.getLayoutInfo();
-
-    renderItems.forEach((item, index) => {
-      let obj = this.objectMap.get(item.id);
-
-      // Check if URL changed, if so remove object to force reload
-      // We assume Fabric object has getSrc() or we check data.url if we stored it
-      // Since we don't store url on object easily accessible without casting, 
-      // let's rely on checking if we need to reload.
-      // Actually, standard Fabric Image doesn't expose src easily on type without casting to any.
-      if (obj && (obj as any).getSrc) {
-         const currentSrc = (obj as any).getSrc();
-         if (currentSrc !== item.url) {
-            userLayer.remove(obj);
-            this.objectMap.delete(item.id);
-            obj = undefined;
-         }
-      }
-
-      if (!obj) {
-        // New object, load it
-        this.loadImage(item, userLayer, layout);
-      } else {
-        // Existing object, update properties
-        // We remove and re-add to ensure coordinates are correctly converted 
-        // from absolute (updateObjectProperties) to relative (layer.add)
-        userLayer.remove(obj);
-        this.updateObjectProperties(obj, item, layout);
-        userLayer.add(obj);
-      }
-    });
-
-    if (this.isToolActive) {
-      this.syncDielineFrameRect();
-    }
-
-    userLayer.dirty = true;
-    this.canvasService.requestRenderAll();
+    void this.updateImagesAsync();
   }
 
-  private updateObjectProperties(
-    obj: FabricObject,
-    item: ImageItem,
-    layout: any,
-  ) {
+  private async updateImagesAsync() {
+    const seq = ++this.renderSeq;
+    if (!this.canvasService) return;
+
+    this.ensureLayer();
+
+    const renderItems = this.isToolActive ? this.workingItems : this.items;
+    const layout = this.getLayoutInfo();
     const {
       layoutScale,
       layoutOffsetX,
@@ -440,122 +387,103 @@ export class ImageTool implements Extension {
       visualWidth,
       visualHeight,
     } = layout;
-    const updates: any = {};
 
-    // Opacity
-    if (obj.opacity !== item.opacity) updates.opacity = item.opacity;
+    const imageSpecs: RenderObjectSpec[] = renderItems.map((item) => {
+      const scale = item.scale ?? 1;
+      const left = item.left ?? 0.5;
+      const top = item.top ?? 0.5;
 
-    // Angle
-    if (item.angle !== undefined && obj.angle !== item.angle)
-      updates.angle = item.angle;
+      const globalLeft = layoutOffsetX + left * visualWidth;
+      const globalTop = layoutOffsetY + top * visualHeight;
+      const targetScale = scale * layoutScale;
 
-    // Position (Normalized -> Absolute)
-    if (item.left !== undefined) {
-      const globalLeft = layoutOffsetX + item.left * visualWidth;
-      if (Math.abs(obj.left - globalLeft) > 1) updates.left = globalLeft;
-    }
-    if (item.top !== undefined) {
-      const globalTop = layoutOffsetY + item.top * visualHeight;
-      if (Math.abs(obj.top - globalTop) > 1) updates.top = globalTop;
-    }
-
-    // Scale
-    if (item.scale !== undefined) {
-      const targetScale = item.scale * layoutScale;
-      if (Math.abs(obj.scaleX - targetScale) > 0.001) {
-        updates.scaleX = targetScale;
-        updates.scaleY = targetScale;
-      }
-    }
-
-    // Center origin if not set
-    if (obj.originX !== "center") {
-      updates.originX = "center";
-      updates.originY = "center";
-      // Adjust position because origin changed (Fabric logic)
-      // For simplicity, we just set it, next cycle will fix pos if needed,
-      // or we can calculate the shift. Ideally we set origin on creation.
-    }
-
-    if (Object.keys(updates).length > 0) {
-      obj.set(updates);
-      obj.setCoords();
-    }
-  }
-
-  private loadImage(item: ImageItem, layer: any, layout: any) {
-    Image.fromURL(item.url, { crossOrigin: "anonymous" })
-      .then((image) => {
-        // Double check if item still exists
-        if (!this.items.find((i) => i.id === item.id)) return;
-
-        image.set({
+      return {
+        id: item.id,
+        type: "image",
+        src: item.url,
+        data: { id: item.id },
+        props: {
           originX: "center",
           originY: "center",
-          data: { id: item.id },
           uniformScaling: true,
           lockScalingFlip: true,
           selectable: this.isToolActive,
           evented: this.isToolActive,
           hasControls: this.isToolActive,
           hasBorders: this.isToolActive,
-        });
+          opacity: item.opacity,
+          angle: item.angle ?? 0,
+          left: globalLeft,
+          top: globalTop,
+          scaleX: targetScale,
+          scaleY: targetScale,
+        },
+      };
+    });
 
-        image.setControlsVisibility({
-          mt: false,
-          mb: false,
-          ml: false,
-          mr: false,
-        });
+    await this.canvasService.applyObjectSpecsToLayer("user", imageSpecs);
+    if (seq !== this.renderSeq) return;
 
-        // Initial Layout
-        let { scale, left, top } = item;
+    imageSpecs.forEach((s) => {
+      const resolver = this.loadResolvers.get(s.id);
+      if (!resolver) return;
+      const obj = this.canvasService?.getObject(s.id, "user");
+      if (obj) {
+        resolver();
+        this.loadResolvers.delete(s.id);
+      }
+    });
 
-        if (scale === undefined) {
-          scale = 1; // Default scale if not provided and not fitted yet
-          item.scale = scale;
-        }
+    const dielineWidth = this.isToolActive
+      ? this.getConfig<number>("dieline.width", 0) || 0
+      : 0;
+    const dielineHeight = this.isToolActive
+      ? this.getConfig<number>("dieline.height", 0) || 0
+      : 0;
 
-        if (left === undefined && top === undefined) {
-          left = 0.5;
-          top = 0.5;
-          item.left = left;
-          item.top = top;
-        }
+    if (!this.isToolActive || !dielineWidth || !dielineHeight) {
+      await this.canvasService.applyObjectSpecsToLayer("image-overlay", []);
+      return;
+    }
 
-        // Apply Props
-        this.updateObjectProperties(image, item, layout);
+    const canvasW = this.canvasService.canvas.width || 0;
+    const canvasH = this.canvasService.canvas.height || 0;
+    this.canvasService.viewport.updateContainer(canvasW, canvasH);
+    this.canvasService.viewport.updatePhysical(dielineWidth, dielineHeight);
+    const frameLayout = this.canvasService.viewport.layout;
 
-        layer.add(image);
-        this.objectMap.set(item.id, image);
+    const frameSpec: RenderObjectSpec = {
+      id: "image.dielineFrame",
+      type: "rect",
+      data: { id: "image.dielineFrame" },
+      props: {
+        left: frameLayout.offsetX + frameLayout.width / 2,
+        top: frameLayout.offsetY + frameLayout.height / 2,
+        width: frameLayout.width,
+        height: frameLayout.height,
+        originX: "center",
+        originY: "center",
+        fill: "rgba(0,0,0,0)",
+        stroke: "#666",
+        strokeWidth: 1,
+        strokeDashArray: [8, 6],
+        selectable: false,
+        evented: false,
+        hasControls: false,
+        hasBorders: false,
+      },
+    };
 
-        // Notify addImage that load is complete
-        const resolver = this.loadResolvers.get(item.id);
-        if (resolver) {
-          resolver();
-          this.loadResolvers.delete(item.id);
-        }
-
-        // Bind Events
-        image.on("modified", (e: any) => {
-          this.handleObjectModified(item.id, image);
-        });
-
-        layer.dirty = true;
-        this.canvasService?.requestRenderAll();
-
-        // Save defaults if we set them
-        if (item.scale !== scale || item.left !== left || item.top !== top) {
-          this.updateImageInConfig(item.id, { scale, left, top }, true);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to load image", item.url, err);
-      });
+    await this.canvasService.applyObjectSpecsToLayer("image-overlay", [frameSpec]);
   }
 
-  private handleObjectModified(id: string, image: FabricObject) {
+  private onObjectModified = (e: any) => {
     if (!this.isToolActive) return;
+    const target = e?.target;
+    const id = target?.data?.id;
+    if (typeof id !== "string") return;
+    if (!this.workingItems.find((i) => i.id === id)) return;
+
     const layout = this.getLayoutInfo();
     const {
       layoutScale,
@@ -565,21 +493,17 @@ export class ImageTool implements Extension {
       visualHeight,
     } = layout;
 
-    const matrix = image.calcTransformMatrix();
+    const matrix = target.calcTransformMatrix();
     const globalPoint = util.transformPoint(new Point(0, 0), matrix);
 
     const updates: Partial<ImageItem> = {};
-
-    // Normalize Position
     updates.left = (globalPoint.x - layoutOffsetX) / visualWidth;
     updates.top = (globalPoint.y - layoutOffsetY) / visualHeight;
-    updates.angle = image.angle;
-
-    // Scale
-    updates.scale = image.scaleX / layoutScale;
+    updates.angle = target.angle;
+    updates.scale = target.scaleX / layoutScale;
 
     this.updateImageInWorking(id, updates);
-  }
+  };
 
   private updateImageInWorking(id: string, updates: Partial<ImageItem>) {
     const index = this.workingItems.findIndex((i) => i.id === id);
@@ -605,70 +529,6 @@ export class ImageTool implements Extension {
       newItems[index] = { ...newItems[index], ...updates };
       this.updateConfig(newItems, skipCanvasUpdate);
     }
-  }
-
-  private ensureDielineFrameRect() {
-    if (!this.canvasService) return;
-    if (this.dielineFrameRect) return;
-    const rect = new Rect({
-      left: 0,
-      top: 0,
-      width: 0,
-      height: 0,
-      originX: "center",
-      originY: "center",
-      fill: "rgba(0,0,0,0)",
-      stroke: "#666",
-      strokeWidth: 1,
-      strokeDashArray: [8, 6],
-      selectable: false,
-      evented: false,
-      hasControls: false,
-      hasBorders: false,
-    });
-    this.canvasService.canvas.add(rect);
-    this.dielineFrameRect = rect;
-  }
-
-  private hideDielineFrameRect() {
-    if (!this.canvasService) return;
-    if (this.dielineFrameRect) {
-      this.canvasService.canvas.remove(this.dielineFrameRect);
-      this.dielineFrameRect = undefined;
-      this.canvasService.requestRenderAll();
-    }
-  }
-
-  private syncDielineFrameRect() {
-    if (!this.isToolActive) return;
-    if (!this.canvasService) return;
-    const dielineWidth = this.getConfig<number>("dieline.width", 0) || 0;
-    const dielineHeight = this.getConfig<number>("dieline.height", 0) || 0;
-    if (!dielineWidth || !dielineHeight) {
-      this.hideDielineFrameRect();
-      return;
-    }
-
-    const canvasW = this.canvasService.canvas.width || 0;
-    const canvasH = this.canvasService.canvas.height || 0;
-    this.canvasService.viewport.updateContainer(canvasW, canvasH);
-    this.canvasService.viewport.updatePhysical(dielineWidth, dielineHeight);
-    const layout = this.canvasService.viewport.layout;
-
-    this.ensureDielineFrameRect();
-    if (!this.dielineFrameRect) return;
-
-    this.dielineFrameRect.set({
-      left: layout.offsetX + layout.width / 2,
-      top: layout.offsetY + layout.height / 2,
-      width: layout.width,
-      height: layout.height,
-      scaleX: 1,
-      scaleY: 1,
-      angle: 0,
-    } as any);
-    this.dielineFrameRect.setCoords();
-    this.canvasService.canvas.bringObjectToFront(this.dielineFrameRect);
   }
 
   private async exportImageFrameUrl(
