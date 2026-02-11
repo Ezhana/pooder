@@ -6,7 +6,7 @@ import {
   ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
-import { Image, Point, util, Object as FabricObject } from "fabric";
+import { Image, Point, Rect, util, Object as FabricObject } from "fabric";
 import CanvasService from "./CanvasService";
 import { Coordinate } from "./coordinate";
 
@@ -28,12 +28,15 @@ export class ImageTool implements Extension {
   };
 
   private items: ImageItem[] = [];
+  private workingItems: ImageItem[] = [];
+  private hasWorkingChanges = false;
   private objectMap: Map<string, FabricObject> = new Map();
   private loadResolvers: Map<string, () => void> = new Map();
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isToolActive = false;
+  private dielineFrameRect?: FabricObject;
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -52,6 +55,8 @@ export class ImageTool implements Extension {
     if (configService) {
       // Load initial config
       this.items = configService.get("image.items", []) || [];
+      this.workingItems = this.cloneItems(this.items);
+      this.hasWorkingChanges = false;
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
@@ -59,6 +64,10 @@ export class ImageTool implements Extension {
 
         if (e.key === "image.items") {
           this.items = e.value || [];
+          if (!this.isToolActive || !this.hasWorkingChanges) {
+            this.workingItems = this.cloneItems(this.items);
+            this.hasWorkingChanges = false;
+          }
           this.updateImages();
         }
       });
@@ -72,22 +81,32 @@ export class ImageTool implements Extension {
     context.eventBus.off("tool:activated", this.onToolActivated);
     
     if (this.canvasService) {
-      const layer = this.canvasService.getLayer("user");
-      if (layer) {
+      const userLayer = this.canvasService.getLayer("user");
+      if (userLayer) {
         this.objectMap.forEach((obj) => {
-          layer.remove(obj);
+          userLayer.remove(obj);
         });
         this.objectMap.clear();
         this.canvasService.requestRenderAll();
       }
+      this.hideDielineFrameRect();
       this.canvasService = undefined;
       this.context = undefined;
     }
   }
 
   private onToolActivated = (event: { id: string }) => {
-    this.isToolActive = event.id === this.id;
+    const nextActive = event.id === this.id;
+    if (this.isToolActive && !nextActive) {
+      if (this.hasWorkingChanges) {
+        this.workingItems = this.cloneItems(this.items);
+        this.hasWorkingChanges = false;
+      }
+      this.hideDielineFrameRect();
+    }
+    this.isToolActive = nextActive;
     this.updateInteractivity();
+    this.updateImages();
   };
 
   private updateInteractivity() {
@@ -131,6 +150,47 @@ export class ImageTool implements Extension {
 
             this.updateConfig([...this.items, newItem]);
             return promise;
+          },
+        },
+        {
+          command: "getWorkingImages",
+          title: "Get Working Images",
+          handler: () => {
+            return this.cloneItems(this.workingItems);
+          },
+        },
+        {
+          command: "setWorkingImage",
+          title: "Set Working Image",
+          handler: (id: string, updates: Partial<ImageItem>) => {
+            this.updateImageInWorking(id, updates);
+          },
+        },
+        {
+          command: "resetWorkingImages",
+          title: "Reset Working Images",
+          handler: () => {
+            this.workingItems = this.cloneItems(this.items);
+            this.hasWorkingChanges = false;
+            this.updateImages();
+          },
+        },
+        {
+          command: "completeImages",
+          title: "Complete Images",
+          handler: () => {
+            this.updateConfig(this.cloneItems(this.workingItems));
+            this.hasWorkingChanges = false;
+            return { ok: true };
+          },
+        },
+        {
+          command: "exportImageFrameUrl",
+          title: "Export Image Frame Url",
+          handler: async (
+            options: { multiplier?: number; format?: "png" | "jpeg" } = {},
+          ) => {
+            return await this.exportImageFrameUrl(options);
           },
         },
         {
@@ -218,10 +278,27 @@ export class ImageTool implements Extension {
     return Math.random().toString(36).substring(2, 9);
   }
 
+  private cloneItems(items: ImageItem[]): ImageItem[] {
+    return (items || []).map((i) => ({ ...i }));
+  }
+
+  private getConfig<T>(key: string, fallback?: T): T | undefined {
+    if (!this.context) return fallback;
+    const configService = this.context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
+    if (!configService) return fallback;
+    return (configService.get(key, fallback) as T) ?? fallback;
+  }
+
   private updateConfig(newItems: ImageItem[], skipCanvasUpdate = false) {
     if (!this.context) return;
     this.isUpdatingConfig = true;
     this.items = newItems;
+    if (!this.isToolActive || !this.hasWorkingChanges) {
+      this.workingItems = this.cloneItems(newItems);
+      this.hasWorkingChanges = false;
+    }
     const configService = this.context.services.get<ConfigurationService>(
       "ConfigurationService",
     );
@@ -293,17 +370,19 @@ export class ImageTool implements Extension {
 
   private updateImages() {
     if (!this.canvasService) return;
-    const layer = this.canvasService.getLayer("user");
-    if (!layer) {
+    const userLayer = this.canvasService.getLayer("user");
+    if (!userLayer) {
       console.warn("[ImageTool] User layer not found");
       return;
     }
 
+    const renderItems = this.isToolActive ? this.workingItems : this.items;
+
     // 1. Remove objects that are no longer in items
-    const currentIds = new Set(this.items.map((i) => i.id));
+    const currentIds = new Set(renderItems.map((i) => i.id));
     for (const [id, obj] of this.objectMap) {
       if (!currentIds.has(id)) {
-        layer.remove(obj);
+        userLayer.remove(obj);
         this.objectMap.delete(id);
       }
     }
@@ -311,7 +390,7 @@ export class ImageTool implements Extension {
     // 2. Add or Update objects
     const layout = this.getLayoutInfo();
 
-    this.items.forEach((item, index) => {
+    renderItems.forEach((item, index) => {
       let obj = this.objectMap.get(item.id);
 
       // Check if URL changed, if so remove object to force reload
@@ -322,7 +401,7 @@ export class ImageTool implements Extension {
       if (obj && (obj as any).getSrc) {
          const currentSrc = (obj as any).getSrc();
          if (currentSrc !== item.url) {
-            layer.remove(obj);
+            userLayer.remove(obj);
             this.objectMap.delete(item.id);
             obj = undefined;
          }
@@ -330,18 +409,22 @@ export class ImageTool implements Extension {
 
       if (!obj) {
         // New object, load it
-        this.loadImage(item, layer, layout);
+        this.loadImage(item, userLayer, layout);
       } else {
         // Existing object, update properties
         // We remove and re-add to ensure coordinates are correctly converted 
         // from absolute (updateObjectProperties) to relative (layer.add)
-        layer.remove(obj);
+        userLayer.remove(obj);
         this.updateObjectProperties(obj, item, layout);
-        layer.add(obj);
+        userLayer.add(obj);
       }
     });
 
-    layer.dirty = true;
+    if (this.isToolActive) {
+      this.syncDielineFrameRect();
+    }
+
+    userLayer.dirty = true;
     this.canvasService.requestRenderAll();
   }
 
@@ -472,6 +555,7 @@ export class ImageTool implements Extension {
   }
 
   private handleObjectModified(id: string, image: FabricObject) {
+    if (!this.isToolActive) return;
     const layout = this.getLayoutInfo();
     const {
       layoutScale,
@@ -494,7 +578,20 @@ export class ImageTool implements Extension {
     // Scale
     updates.scale = image.scaleX / layoutScale;
 
-    this.updateImageInConfig(id, updates, true);
+    this.updateImageInWorking(id, updates);
+  }
+
+  private updateImageInWorking(id: string, updates: Partial<ImageItem>) {
+    const index = this.workingItems.findIndex((i) => i.id === id);
+    if (index !== -1) {
+      const next = [...this.workingItems];
+      next[index] = { ...next[index], ...updates };
+      this.workingItems = next;
+      this.hasWorkingChanges = true;
+      if (this.isToolActive) {
+        this.updateImages();
+      }
+    }
   }
 
   private updateImageInConfig(
@@ -508,5 +605,113 @@ export class ImageTool implements Extension {
       newItems[index] = { ...newItems[index], ...updates };
       this.updateConfig(newItems, skipCanvasUpdate);
     }
+  }
+
+  private ensureDielineFrameRect() {
+    if (!this.canvasService) return;
+    if (this.dielineFrameRect) return;
+    const rect = new Rect({
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+      originX: "center",
+      originY: "center",
+      fill: "rgba(0,0,0,0)",
+      stroke: "#666",
+      strokeWidth: 1,
+      strokeDashArray: [8, 6],
+      selectable: false,
+      evented: false,
+      hasControls: false,
+      hasBorders: false,
+    });
+    this.canvasService.canvas.add(rect);
+    this.dielineFrameRect = rect;
+  }
+
+  private hideDielineFrameRect() {
+    if (!this.canvasService) return;
+    if (this.dielineFrameRect) {
+      this.canvasService.canvas.remove(this.dielineFrameRect);
+      this.dielineFrameRect = undefined;
+      this.canvasService.requestRenderAll();
+    }
+  }
+
+  private syncDielineFrameRect() {
+    if (!this.isToolActive) return;
+    if (!this.canvasService) return;
+    const dielineWidth = this.getConfig<number>("dieline.width", 0) || 0;
+    const dielineHeight = this.getConfig<number>("dieline.height", 0) || 0;
+    if (!dielineWidth || !dielineHeight) {
+      this.hideDielineFrameRect();
+      return;
+    }
+
+    const canvasW = this.canvasService.canvas.width || 0;
+    const canvasH = this.canvasService.canvas.height || 0;
+    this.canvasService.viewport.updateContainer(canvasW, canvasH);
+    this.canvasService.viewport.updatePhysical(dielineWidth, dielineHeight);
+    const layout = this.canvasService.viewport.layout;
+
+    this.ensureDielineFrameRect();
+    if (!this.dielineFrameRect) return;
+
+    this.dielineFrameRect.set({
+      left: layout.offsetX + layout.width / 2,
+      top: layout.offsetY + layout.height / 2,
+      width: layout.width,
+      height: layout.height,
+      scaleX: 1,
+      scaleY: 1,
+      angle: 0,
+    } as any);
+    this.dielineFrameRect.setCoords();
+    this.canvasService.canvas.bringObjectToFront(this.dielineFrameRect);
+  }
+
+  private async exportImageFrameUrl(
+    options: { multiplier?: number; format?: "png" | "jpeg" } = {},
+  ): Promise<{ url: string }> {
+    if (!this.canvasService) {
+      throw new Error("CanvasService not initialized");
+    }
+
+    const dielineWidth = this.getConfig<number>("dieline.width", 0) || 0;
+    const dielineHeight = this.getConfig<number>("dieline.height", 0) || 0;
+    if (!dielineWidth || !dielineHeight) {
+      throw new Error("dieline.width/height is required for exportImageFrameUrl");
+    }
+
+    const userLayer = this.canvasService.getLayer("user");
+    if (!userLayer) {
+      throw new Error("User layer not found");
+    }
+
+    const canvasW = this.canvasService.canvas.width || 0;
+    const canvasH = this.canvasService.canvas.height || 0;
+    this.canvasService.viewport.updateContainer(canvasW, canvasH);
+    this.canvasService.viewport.updatePhysical(dielineWidth, dielineHeight);
+    const layout = this.canvasService.viewport.layout;
+
+    const left = layout.offsetX;
+    const top = layout.offsetY;
+    const width = layout.width;
+    const height = layout.height;
+
+    const clonedLayer = await (userLayer as any).clone();
+    const dataUrl: string = clonedLayer.toDataURL({
+      left,
+      top,
+      width,
+      height,
+      multiplier: options.multiplier ?? 2,
+      format: options.format ?? "png",
+    });
+
+    const blob = await (await fetch(dataUrl)).blob();
+    const url = URL.createObjectURL(blob);
+    return { url };
   }
 }

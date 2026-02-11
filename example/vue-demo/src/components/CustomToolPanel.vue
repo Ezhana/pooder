@@ -7,6 +7,15 @@
 
     <!-- Image Controls -->
     <div v-if="currentMode === 'Image'" class="controls">
+      <div class="control-group" v-if="imageState.id">
+        <label>Original size</label>
+        <div class="hint">
+          {{ imageState.originalWidth }} × {{ imageState.originalHeight }} px
+        </div>
+        <div class="hint" v-if="imageOriginalMm">
+          {{ imageOriginalMm.width }} × {{ imageOriginalMm.height }} mm
+        </div>
+      </div>
       <div class="control-group">
         <label>Scale</label>
         <input
@@ -16,6 +25,7 @@
           step="0.1"
           v-model.number="imageState.scale"
           @input="updateImageState"
+          :disabled="!imageState.id"
         />
         <span>{{ imageState.scale.toFixed(1) }}</span>
       </div>
@@ -27,6 +37,7 @@
           max="360"
           v-model.number="imageState.angle"
           @input="updateImageState"
+          :disabled="!imageState.id"
         />
         <span>{{ imageState.angle }}°</span>
       </div>
@@ -39,6 +50,17 @@
           @change="handleImageReplace"
           accept="image/*"
         />
+      </div>
+      <div class="control-group">
+        <button @click="completeImageWorking" :disabled="!imageState.id">
+          Complete
+        </button>
+        <button @click="detectDielineFromFrame" :disabled="!imageState.id">
+          Detect Dieline
+        </button>
+        <div v-if="imageCompleteStatus.message" class="hint">
+          {{ imageCompleteStatus.message }}
+        </div>
       </div>
     </div>
 
@@ -188,6 +210,24 @@ const imageState = reactive({
   id: null,
   scale: 1,
   angle: 0,
+  originalWidth: 0,
+  originalHeight: 0,
+});
+
+const imageCompleteStatus = reactive({
+  message: "",
+  issues: [],
+});
+
+const imageOriginalMm = computed(() => {
+  const w = imageState.originalWidth;
+  const h = imageState.originalHeight;
+  if (!w || !h) return null;
+  const pxToMm = 0.264583;
+  return {
+    width: parseFloat((w * pxToMm).toFixed(1)),
+    height: parseFloat((h * pxToMm).toFixed(1)),
+  };
 });
 
 const dielineState = reactive({
@@ -383,17 +423,15 @@ const handleImageReplace = async (e) => {
 
   if (imageState.id) {
     await editor.value.updateImage(imageState.id, { url });
+    await editor.value.executeCommand("resetWorkingImages");
+    await syncImageStateFromWorking(imageState.id);
   } else {
     const id = await editor.value.addImage(url);
     imageState.id = id;
 
     // Sync state from new image default props
-    const items = editor.value.getConfig("image.items") || [];
-    const item = items.find((i) => i.id === id);
-    if (item) {
-      imageState.scale = item.scale || 1;
-      imageState.angle = item.angle || 0;
-    }
+    await editor.value.executeCommand("resetWorkingImages");
+    await syncImageStateFromWorking(id);
   }
 };
 
@@ -408,10 +446,50 @@ const handleDielineDetect = async (e) => {
 
 const updateImageState = () => {
   if (!imageState.id) return;
-  editor.value.executeCommand("updateImage", imageState.id, {
+  imageCompleteStatus.message = "";
+  imageCompleteStatus.issues = [];
+  editor.value.executeCommand("setWorkingImage", imageState.id, {
     scale: imageState.scale,
     angle: imageState.angle,
   });
+};
+
+const syncImageStateFromWorking = async (id) => {
+  if (!editor.value || !id) return;
+  try {
+    const items = await editor.value.executeCommand("getWorkingImages");
+    const item = (items || []).find((i) => i.id === id);
+    if (item) {
+      imageState.scale = item.scale || 1;
+      imageState.angle = item.angle || 0;
+    }
+  } catch (e) {}
+};
+
+const completeImageWorking = async () => {
+  imageCompleteStatus.message = "";
+  imageCompleteStatus.issues = [];
+  if (!imageState.id) return;
+  const res = await editor.value.executeCommand("completeImages");
+  if (res && res.ok) {
+    imageCompleteStatus.message = "Completed";
+    return;
+  }
+  imageCompleteStatus.message = "Complete failed";
+  imageCompleteStatus.issues = (res && res.issues) || [];
+};
+
+const detectDielineFromFrame = async () => {
+  imageCompleteStatus.message = "";
+  imageCompleteStatus.issues = [];
+  if (!imageState.id) return;
+  await completeImageWorking();
+  const res = await editor.value.detectDielineFromFrame();
+  if (res && res.pathData) {
+    imageCompleteStatus.message = "Dieline detected";
+    return;
+  }
+  imageCompleteStatus.message = "Detect failed";
 };
 
 const updateDielineConfig = () => {
@@ -523,7 +601,7 @@ const syncDielineState = () => {
   dielineState.offset = Math.abs(editor.value.getConfig("dieline.offset")) || 0;
 };
 
-const onSelectionCreated = (e) => {
+const onSelectionCreated = async (e) => {
   const selection = e.selected ? e.selected[0] : null;
   if (!selection) {
     // Fallback to active tool
@@ -544,17 +622,10 @@ const onSelectionCreated = (e) => {
     // Actually we should check type or something, but data.id is used by ImageTool
     currentMode.value = "Image";
     imageState.id = selection.data.id;
+    imageState.originalWidth = Math.round(selection.width || 0);
+    imageState.originalHeight = Math.round(selection.height || 0);
 
-    // Need to reverse calculate scale relative to original...
-    // But for simplicity, let's just use object scale
-    // Wait, ImageTool stores config scale.
-    // We can get config item.
-    const items = editor.value.getConfig("image.items") || [];
-    const item = items.find((i) => i.id === imageState.id);
-    if (item) {
-      imageState.scale = item.scale || 1;
-      imageState.angle = item.angle || 0;
-    }
+    await syncImageStateFromWorking(imageState.id);
   }
 
   // Check if feature
@@ -570,8 +641,13 @@ const onSelectionCleared = () => {
   // But if we are in "Dieline" mode (tool active), we shouldn't close just because no object selected.
   // However, Image mode depends on selection.
   if (currentMode.value === "Image") {
-    currentMode.value = "";
     imageState.id = null;
+    imageState.originalWidth = 0;
+    imageState.originalHeight = 0;
+    const activeId = editor.value?.services?.workbench?.activeToolId;
+    if (activeId !== "pooder.kit.image") {
+      currentMode.value = "";
+    }
   }
   // For Hole/Dieline, they are activated by ActivityBar, so we keep them open until tool changes?
   // User said: "panel opened but cannot close".
@@ -590,6 +666,8 @@ const onToolActivated = ({ id }) => {
     // If we just activate tool "Image", maybe we show nothing or "Select an image".
     // Current logic sets 'Image'.
     currentMode.value = "Image";
+    imageCompleteStatus.message = "";
+    imageCompleteStatus.issues = [];
   } else if (id === "pooder.kit.dieline") {
     currentMode.value = "Dieline";
     syncDielineState();
@@ -703,6 +781,11 @@ onUnmounted(() => {
 }
 
 .control-group label {
+  font-size: 12px;
+  color: #666;
+}
+
+.hint {
   font-size: 12px;
   color: #666;
 }

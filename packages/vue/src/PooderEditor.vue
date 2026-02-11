@@ -34,6 +34,7 @@ import {
   ImageTool,
   WhiteInkTool,
   MirrorTool,
+  SceneViewService,
 } from "@pooder/kit";
 import ToolPanel from "./components/ToolPanel.vue";
 import CanvasArea from "./components/CanvasArea.vue";
@@ -129,8 +130,15 @@ const detectDieline = async (url: string) => {
     simplifyTolerance: 2, // 平滑度容差，值越大越圆润
   });
   if (result) {
-    const { pathData, width, height, rawBounds, imageWidth, imageHeight } =
-      result;
+    const {
+      pathData,
+      width,
+      height,
+      rawBounds,
+      baseBounds,
+      imageWidth,
+      imageHeight,
+    } = result;
     cfgSvc.update("dieline.shape", "custom");
     cfgSvc.update("dieline.pathData", pathData);
     cfgSvc.update("dieline.width", width);
@@ -138,7 +146,8 @@ const detectDieline = async (url: string) => {
     cfgSvc.update("dieline.offset", 0);
 
     // Auto-align image to the detected dieline
-    if (rawBounds && imageWidth && imageHeight) {
+    const alignBounds = baseBounds || rawBounds;
+    if (alignBounds && imageWidth && imageHeight) {
       const canvasService = pooder.getService<CanvasService>("CanvasService");
       const images = cfgSvc.get("image.items") || [];
       const targetImage = images.find((img: any) => img.url === url);
@@ -149,13 +158,13 @@ const detectDieline = async (url: string) => {
 
         if (geo) {
           // Calculate scale to match the dieline's visual width
-          const ratio = geo.width / rawBounds.width;
+          const ratio = geo.width / alignBounds.width;
 
           // Calculate offset of the object center from the image center (original pixels)
           const imgCenterX = imageWidth / 2;
           const imgCenterY = imageHeight / 2;
-          const objCenterX = rawBounds.x + rawBounds.width / 2;
-          const objCenterY = rawBounds.y + rawBounds.height / 2;
+          const objCenterX = alignBounds.x + alignBounds.width / 2;
+          const objCenterY = alignBounds.y + alignBounds.height / 2;
 
           const deltaX = objCenterX - imgCenterX;
           const deltaY = objCenterY - imgCenterY;
@@ -186,6 +195,114 @@ const detectDieline = async (url: string) => {
   return null;
 };
 
+const detectDielineFromFrame = async (options?: {
+  detect?: {
+    expand?: number;
+    smoothing?: boolean;
+    simplifyTolerance?: number;
+  };
+  commit?: boolean;
+}) => {
+  const { url } = await cmdSvc.executeCommand("exportImageFrameUrl", {
+    multiplier: 2,
+    format: "png",
+  });
+
+  try {
+    const result = await cmdSvc.executeCommand("detectEdge", url, {
+      expand: options?.detect?.expand ?? 10,
+      smoothing: options?.detect?.smoothing ?? true,
+      simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
+    });
+
+    if (!result) return null;
+
+    if (options?.commit === false) {
+      return result;
+    }
+
+    const { pathData, width, height } = result;
+    cfgSvc.update("dieline.shape", "custom");
+    cfgSvc.update("dieline.pathData", pathData);
+    cfgSvc.update("dieline.width", width);
+    cfgSvc.update("dieline.height", height);
+    cfgSvc.update("dieline.offset", 0);
+
+    return result;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+  }
+};
+
+const uploadAndDetectEdge = async (
+  url: string,
+  options?: {
+    expand?: number;
+    smoothing?: boolean;
+    simplifyTolerance?: number;
+  },
+) => {
+  const imageId = await addImage(url);
+  const result = await cmdSvc.executeCommand("detectEdge", url, {
+    expand: options?.expand ?? 10,
+    smoothing: options?.smoothing ?? true,
+    simplifyTolerance: options?.simplifyTolerance ?? 2,
+  });
+  if (!result) return null;
+
+  const {
+    pathData,
+    width,
+    height,
+    rawBounds,
+    baseBounds,
+    imageWidth,
+    imageHeight,
+  } = result;
+
+  cfgSvc.update("dieline.shape", "custom");
+  cfgSvc.update("dieline.pathData", pathData);
+  cfgSvc.update("dieline.width", width);
+  cfgSvc.update("dieline.height", height);
+  cfgSvc.update("dieline.offset", 0);
+
+  const alignBounds = baseBounds || rawBounds;
+  if (alignBounds && imageWidth && imageHeight) {
+    const canvasService = pooder.getService<CanvasService>("CanvasService");
+    if (canvasService) {
+      const geo = await cmdSvc.executeCommand("getGeometry");
+      if (geo) {
+        const ratio = geo.width / alignBounds.width;
+
+        const imgCenterX = imageWidth / 2;
+        const imgCenterY = imageHeight / 2;
+        const objCenterX = alignBounds.x + alignBounds.width / 2;
+        const objCenterY = alignBounds.y + alignBounds.height / 2;
+
+        const deltaX = objCenterX - imgCenterX;
+        const deltaY = objCenterY - imgCenterY;
+
+        const screenDeltaX = deltaX * ratio;
+        const screenDeltaY = deltaY * ratio;
+
+        const canvasW = canvasService.canvas.width;
+        const canvasH = canvasService.canvas.height;
+
+        const newLeft = 0.5 - screenDeltaX / canvasW;
+        const newTop = 0.5 - screenDeltaY / canvasH;
+
+        await cmdSvc.executeCommand("updateImage", imageId, {
+          scale: ratio,
+          left: newLeft,
+          top: newTop,
+        });
+      }
+    }
+  }
+
+  return { imageId, url, pathData };
+};
+
 defineExpose({
   importConfig,
   exportConfig,
@@ -195,6 +312,8 @@ defineExpose({
   updateImage,
   clearImages,
   detectDieline,
+  detectDielineFromFrame,
+  uploadAndDetectEdge,
   activateTool: (id: string) => wbSvc.activate(id),
   on: (event: string, handler: any) => pooder.eventBus.on(event, handler),
   off: (event: string, handler: any) => pooder.eventBus.off(event, handler),
@@ -219,6 +338,7 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
 
   const tools = [
     new BackgroundTool(),
+    new SceneViewService(),
     new ImageTool(),
     // new FilmTool(),
     // new WhiteInkTool(),

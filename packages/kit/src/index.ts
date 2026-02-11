@@ -6,5 +6,6 @@ export * from "./image";
 export * from "./white-ink";
 export * from "./ruler";
 export * from "./mirror";
+export * from "./sceneView";
 export * from "./units";
 export { default as CanvasService } from "./CanvasService";

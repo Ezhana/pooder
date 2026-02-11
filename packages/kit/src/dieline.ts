@@ -8,13 +8,13 @@ import {
 import { Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
 import { ImageTracer } from "./tracer";
+import { computeDetectEdgeSize } from "./edgeScale";
 import { Unit } from "./coordinate";
 import { parseLengthToMm } from "./units";
 import {
   generateDielinePath,
   generateMaskPath,
   generateBleedZonePath,
-  getPathBounds,
   DielineFeature,
 } from "./geometry";
 
@@ -468,24 +468,25 @@ export class DielineTool implements Extension {
                 });
               };
 
-              const [img, pathData] = await Promise.all([
+              const [img, traced] = await Promise.all([
                 loadImage(imageUrl),
-                ImageTracer.trace(imageUrl, options),
+                ImageTracer.traceWithBounds(imageUrl, options),
               ]);
-              
-              const bounds = getPathBounds(pathData);
+              const { pathData, baseBounds, bounds } = traced;
 
               const currentMax = Math.max(s.width, s.height);
-              const scale = currentMax / Math.max(bounds.width, bounds.height);
-
-              const newWidth = bounds.width * scale;
-              const newHeight = bounds.height * scale;
+              const { width: newWidth, height: newHeight } = computeDetectEdgeSize(
+                currentMax,
+                baseBounds,
+                bounds,
+              );
 
               return {
                 pathData,
                 width: newWidth,
                 height: newHeight,
                 rawBounds: bounds,
+                baseBounds,
                 imageWidth: img.width,
                 imageHeight: img.height,
               };

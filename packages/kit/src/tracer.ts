@@ -4,10 +4,25 @@
  */
 
 import paper from "paper";
+import {
+  circularMorphology,
+  createMask,
+  fillHoles,
+  findMinimalConnectRadius,
+  polygonSignedArea,
+  type MaskMode,
+} from "./maskOps";
 
 interface Point {
   x: number;
   y: number;
+}
+
+interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export class ImageTracer {
@@ -25,10 +40,37 @@ export class ImageTracer {
       scaleToWidth?: number;
       scaleToHeight?: number;
       morphologyRadius?: number; // Default 10.
+      connectRadiusMax?: number;
+      maskMode?: MaskMode;
+      whiteThreshold?: number;
+      alphaOpaqueCutoff?: number;
       expand?: number; // Expansion radius in pixels. Default 0.
+      noChannels?: boolean;
       smoothing?: boolean; // Use Paper.js smoothing (curve fitting). Default true.
     } = {},
   ): Promise<string> {
+    const { pathData } = await this.traceWithBounds(imageUrl, options);
+    return pathData;
+  }
+
+  public static async traceWithBounds(
+    imageUrl: string,
+    options: {
+      threshold?: number;
+      simplifyTolerance?: number;
+      scale?: number;
+      scaleToWidth?: number;
+      scaleToHeight?: number;
+      morphologyRadius?: number;
+      connectRadiusMax?: number;
+      maskMode?: MaskMode;
+      whiteThreshold?: number;
+      alphaOpaqueCutoff?: number;
+      expand?: number;
+      noChannels?: boolean;
+      smoothing?: boolean;
+    } = {},
+  ): Promise<{ pathData: string; baseBounds: Bounds; bounds: Bounds }> {
     const img = await this.loadImage(imageUrl);
     const width = img.width;
     const height = img.height;
@@ -52,6 +94,7 @@ export class ImageTracer {
     );
     const radius = options.morphologyRadius ?? adaptiveRadius;
     const expand = options.expand ?? 0;
+    const noChannels = options.noChannels !== false;
 
     // Add padding to the processing canvas to avoid edge clipping during dilation
     // Padding should be at least the radius + expansion size
@@ -59,92 +102,163 @@ export class ImageTracer {
     const paddedWidth = width + padding * 2;
     const paddedHeight = height + padding * 2;
 
-    let mask = this.createMask(imageData, threshold, padding, paddedWidth, paddedHeight);
-    
+    let mask = createMask(imageData, {
+      threshold,
+      padding,
+      paddedWidth,
+      paddedHeight,
+      maskMode: options.maskMode,
+      whiteThreshold: options.whiteThreshold,
+      alphaOpaqueCutoff: options.alphaOpaqueCutoff,
+    });
+
+    const connectRadiusMax =
+      options.connectRadiusMax ?? Math.max(10, Math.floor(Math.max(width, height) * 0.12));
+
+    const rConnect = findMinimalConnectRadius(
+      mask,
+      paddedWidth,
+      paddedHeight,
+      connectRadiusMax,
+    );
+
+    if (rConnect > 0) {
+      mask = circularMorphology(mask, paddedWidth, paddedHeight, rConnect, "closing");
+    }
+
     if (radius > 0) {
-      // 1. Primary Closing (Large Radius, Circular) to merge distant parts
-      mask = this.circularMorphology(mask, paddedWidth, paddedHeight, radius, "closing");
-      
-      // 2. Fill internal holes to ensure we only get the overall outer contour
-      mask = this.fillHoles(mask, paddedWidth, paddedHeight);
+      mask = circularMorphology(mask, paddedWidth, paddedHeight, radius, "closing");
+    }
 
-      // 3. Secondary Smoothing (Small Radius, Circular) to round off sharp corners
+    if (noChannels) {
+      mask = fillHoles(mask, paddedWidth, paddedHeight);
+    }
+
+    if (radius > 0) {
       const smoothRadius = Math.max(2, Math.floor(radius * 0.3));
-      mask = this.circularMorphology(mask, paddedWidth, paddedHeight, smoothRadius, "closing");
-    } else {
-      // Even if no smoothing radius, we usually want to fill holes for a dieline
-      mask = this.fillHoles(mask, paddedWidth, paddedHeight);
+      mask = circularMorphology(mask, paddedWidth, paddedHeight, smoothRadius, "closing");
     }
 
-    // 4. Expand (Dilation) - Apply safety distance
-    if (expand > 0) {
-      mask = this.circularMorphology(mask, paddedWidth, paddedHeight, expand, "dilate");
-    }
+    const baseMask = mask;
+    const baseContour = this.pickPrimaryContour(
+      this.traceAllContours(baseMask, paddedWidth, paddedHeight),
+    );
 
-    // 5. Trace contours from the unified mask
-    const allContourPoints = this.traceAllContours(mask, paddedWidth, paddedHeight);
-
-    if (allContourPoints.length === 0) {
+    if (!baseContour) {
       // Fallback: Return a rectangular outline matching dimensions
       const w = options.scaleToWidth ?? width;
       const h = options.scaleToHeight ?? height;
-      return `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`;
+      return {
+        pathData: `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`,
+        baseBounds: { x: 0, y: 0, width: w, height: h },
+        bounds: { x: 0, y: 0, width: w, height: h },
+      };
     }
 
-    // 6. Select the largest contour to ensure a single, consistent overall shape
-    const primaryContour = allContourPoints.sort(
-      (a, b) => b.length - a.length,
-    )[0];
-
-    // 7. Restore coordinates (remove padding)
-    const unpaddedPoints = primaryContour.map(p => ({
+    const baseUnpadded = baseContour.map(p => ({
       x: p.x - padding,
-      y: p.y - padding
+      y: p.y - padding,
     }));
+    let baseBounds = this.boundsFromPoints(baseUnpadded);
 
-    // 8. Find bounds for the selected contour
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-
-    for (const p of unpaddedPoints) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
+    let maskExpanded = baseMask;
+    if (expand > 0) {
+      maskExpanded = circularMorphology(baseMask, paddedWidth, paddedHeight, expand, "dilate");
     }
 
-    const globalBounds = {
-      minX,
-      minY,
-      width: maxX - minX,
-      height: maxY - minY,
-    };
+    const expandedContour = this.pickPrimaryContour(
+      this.traceAllContours(maskExpanded, paddedWidth, paddedHeight),
+    );
+    if (!expandedContour) {
+      return {
+        pathData: `M 0 0 L ${width} 0 L ${width} ${height} L 0 ${height} Z`,
+        baseBounds,
+        bounds: baseBounds,
+      };
+    }
+
+    const expandedUnpadded = expandedContour.map(p => ({
+      x: p.x - padding,
+      y: p.y - padding,
+    }));
+    let globalBounds = this.boundsFromPoints(expandedUnpadded);
 
     // 9. Post-processing (Scale)
-    let finalPoints = unpaddedPoints;
+    let finalPoints = expandedUnpadded;
     if (options.scaleToWidth && options.scaleToHeight) {
       finalPoints = this.scalePoints(
-        unpaddedPoints,
+        expandedUnpadded,
         options.scaleToWidth,
         options.scaleToHeight,
         globalBounds,
       );
+      globalBounds = this.boundsFromPoints(finalPoints);
+
+      const baseScaled = this.scalePoints(
+        baseUnpadded,
+        options.scaleToWidth,
+        options.scaleToHeight,
+        baseBounds,
+      );
+      baseBounds = this.boundsFromPoints(baseScaled);
     }
 
     // 10. Simplify and Generate SVG
     const useSmoothing = options.smoothing !== false; // Default true
     
     if (useSmoothing) {
-      return this.pointsToSVGPaper(finalPoints, options.simplifyTolerance ?? 2.5);
+      return {
+        pathData: this.pointsToSVGPaper(finalPoints, options.simplifyTolerance ?? 2.5),
+        baseBounds,
+        bounds: globalBounds,
+      };
     } else {
       const simplifiedPoints = this.douglasPeucker(
         finalPoints,
         options.simplifyTolerance ?? 2.0,
       );
-      return this.pointsToSVG(simplifiedPoints);
+      return {
+        pathData: this.pointsToSVG(simplifiedPoints),
+        baseBounds,
+        bounds: globalBounds,
+      };
     }
+  }
+
+  private static pickPrimaryContour(contours: Point[][]): Point[] | null {
+    if (contours.length === 0) return null;
+    return contours.reduce((best, cur) => {
+      if (!best) return cur;
+      const bestArea = Math.abs(polygonSignedArea(best));
+      const curArea = Math.abs(polygonSignedArea(cur));
+      if (curArea !== bestArea) return curArea > bestArea ? cur : best;
+      return cur.length > best.length ? cur : best;
+    }, contours[0]);
+  }
+
+  private static boundsFromPoints(points: Point[]): Bounds {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    };
   }
 
   private static createMask(
@@ -515,7 +629,7 @@ export class ImageTracer {
     points: Point[],
     targetWidth: number,
     targetHeight: number,
-    bounds: { minX: number; minY: number; width: number; height: number },
+    bounds: { x: number; y: number; width: number; height: number },
   ): Point[] {
     if (points.length === 0) return points;
 
@@ -525,8 +639,8 @@ export class ImageTracer {
     const scaleY = targetHeight / bounds.height;
 
     return points.map((p) => ({
-      x: (p.x - bounds.minX) * scaleX,
-      y: (p.y - bounds.minY) * scaleY,
+      x: (p.x - bounds.x) * scaleX,
+      y: (p.y - bounds.y) * scaleY,
     }));
   }
 
