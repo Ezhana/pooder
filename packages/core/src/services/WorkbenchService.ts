@@ -143,8 +143,9 @@ export default class WorkbenchService implements Service {
 
     const previous = this._activeToolId;
     this._activeToolId = id;
-    this.eventBus?.emit("tool:activated", { id, previous });
-    this.eventBus?.emit("tool:switch", { from: previous, to: id });
+    const reason = options?.reason;
+    this.eventBus?.emit("tool:activated", { id, previous, reason });
+    this.eventBus?.emit("tool:switch", { from: previous, to: id, reason });
     return { ok: true, from: previous, to: id };
   }
 

@@ -71,9 +71,7 @@ const generateCutImage = async () => {
   return await cmdSvc.executeCommand("exportCutImage");
 };
 
-const addImage = async (url: string, options?: any) => {
-  const id = await cmdSvc.executeCommand("addImage", url, options);
-
+const fitImageToDefaultArea = async (id: string) => {
   // Auto-fit to dieline if exists
   const geo = await cmdSvc.executeCommand("getGeometry");
   const canvasService = pooder.getService<CanvasService>("CanvasService");
@@ -111,8 +109,40 @@ const addImage = async (url: string, options?: any) => {
       top: 0.5,
     });
   }
+};
 
-  return id;
+const upsertImage = async (
+  url: string,
+  options?: {
+    id?: string;
+    mode?: "auto" | "replace" | "add";
+    createIfMissing?: boolean;
+    addOptions?: any;
+    fitOnAdd?: boolean;
+  },
+) => {
+  const result = await cmdSvc.executeCommand("upsertImage", url, {
+    id: options?.id,
+    mode: options?.mode,
+    createIfMissing: options?.createIfMissing,
+    addOptions: options?.addOptions,
+  });
+
+  if (result?.mode === "add" && options?.fitOnAdd !== false) {
+    await fitImageToDefaultArea(result.id);
+  }
+
+  return result;
+};
+
+const addImage = async (url: string, options?: any) => {
+  const result = await upsertImage(url, {
+    mode: "add",
+    addOptions: options,
+    fitOnAdd: true,
+  });
+
+  return result.id;
 };
 
 const updateImage = async (id: string, options?: any) => {
@@ -309,6 +339,7 @@ defineExpose({
   getImages,
   generateCutImage,
   addImage,
+  upsertImage,
   updateImage,
   clearImages,
   detectDieline,

@@ -108,6 +108,61 @@ export default class CanvasService implements Service {
     await this.applyObjectSpecsToContainer(layer, objects);
   }
 
+  getRootLayerObjects(layerId: string): FabricObject[] {
+    return this.canvas
+      .getObjects()
+      .filter((obj: any) => obj?.data?.layerId === layerId);
+  }
+
+  async applyObjectSpecsToRootLayer(
+    layerId: string,
+    specs: RenderObjectSpec[],
+  ): Promise<void> {
+    const desiredIds = new Set(specs.map((s) => s.id));
+    const existing = this.getRootLayerObjects(layerId) as any[];
+    existing.forEach((obj) => {
+      const id = obj?.data?.id;
+      if (typeof id === "string" && !desiredIds.has(id)) {
+        this.canvas.remove(obj);
+      }
+    });
+
+    const byId = new Map<string, any>();
+    this.getRootLayerObjects(layerId).forEach((obj: any) => {
+      const id = obj?.data?.id;
+      if (typeof id === "string") byId.set(id, obj);
+    });
+
+    for (let index = 0; index < specs.length; index += 1) {
+      const spec = specs[index];
+      let current = byId.get(spec.id);
+      if (
+        current &&
+        spec.type === "image" &&
+        spec.src &&
+        current.getSrc &&
+        current.getSrc() !== spec.src
+      ) {
+        this.canvas.remove(current);
+        byId.delete(spec.id);
+        current = undefined;
+      }
+
+      if (!current) {
+        const created = await this.createFabricObject(spec);
+        if (!created) continue;
+        this.patchFabricObject(created as any, spec, { layerId });
+        this.canvas.add(created as any);
+        byId.set(spec.id, created);
+        continue;
+      }
+
+      this.patchFabricObject(current, spec, { layerId });
+    }
+
+    this.requestRenderAll();
+  }
+
   private async applyObjectSpecsToContainer(
     container: Group,
     specs: RenderObjectSpec[],
@@ -127,40 +182,76 @@ export default class CanvasService implements Service {
       if (typeof id === "string") byId.set(id, obj);
     });
 
-    const tasks = specs.map(async (spec) => {
-      const current = byId.get(spec.id);
-      if (current) {
-        if (
-          spec.type === "image" &&
-          spec.src &&
-          current.getSrc &&
-          current.getSrc() !== spec.src
-        ) {
-          container.remove(current);
-          byId.delete(spec.id);
-        } else {
-          this.patchFabricObject(current, spec);
-          container.remove(current);
-          container.add(current);
-          return;
-        }
-        return;
+    for (let index = 0; index < specs.length; index += 1) {
+      const spec = specs[index];
+      let current = byId.get(spec.id);
+      if (
+        current &&
+        spec.type === "image" &&
+        spec.src &&
+        current.getSrc &&
+        current.getSrc() !== spec.src
+      ) {
+        container.remove(current);
+        byId.delete(spec.id);
+        current = undefined;
       }
 
-      const created = await this.createFabricObject(spec);
-      if (!created) return;
-      container.add(created as any);
-    });
+      if (!current) {
+        const created = await this.createFabricObject(spec);
+        if (!created) continue;
+        container.add(created as any);
+        current = created as any;
+        byId.set(spec.id, current);
+      } else {
+        this.patchFabricObject(current, spec);
+      }
 
-    await Promise.all(tasks);
+      this.moveObjectInContainer(container, current, index);
+    }
+
     container.dirty = true;
     this.requestRenderAll();
   }
 
-  private patchFabricObject(obj: any, spec: RenderObjectSpec) {
-    const nextData = { ...(obj.data || {}), ...(spec.data || {}), id: spec.id };
+  private patchFabricObject(
+    obj: any,
+    spec: RenderObjectSpec,
+    extraData?: Record<string, any>,
+  ) {
+    const nextData = {
+      ...(obj.data || {}),
+      ...(spec.data || {}),
+      ...(extraData || {}),
+      id: spec.id,
+    };
     obj.set({ ...(spec.props || {}), data: nextData });
     obj.setCoords();
+  }
+
+  private moveObjectInContainer(
+    container: Group | Canvas,
+    obj: any,
+    index: number,
+  ) {
+    if (!obj) return;
+
+    const moveObjectTo = (container as any).moveObjectTo;
+    if (typeof moveObjectTo === "function") {
+      moveObjectTo.call(container, obj, index);
+      return;
+    }
+
+    const list = (container as any)._objects as any[] | undefined;
+    if (!Array.isArray(list)) return;
+    const from = list.indexOf(obj);
+    if (from < 0 || from === index) return;
+    list.splice(from, 1);
+    const target = Math.max(0, Math.min(index, list.length));
+    list.splice(target, 0, obj);
+    if (typeof (container as any)._onStackOrderChanged === "function") {
+      (container as any)._onStackOrderChanged();
+    }
   }
 
   private async createFabricObject(

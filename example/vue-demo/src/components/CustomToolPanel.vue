@@ -421,18 +421,16 @@ const handleImageReplace = async (e) => {
   if (!file) return;
   const url = URL.createObjectURL(file);
 
-  if (imageState.id) {
-    await editor.value.updateImage(imageState.id, { url });
-    await editor.value.executeCommand("resetWorkingImages");
-    await syncImageStateFromWorking(imageState.id);
-  } else {
-    const id = await editor.value.addImage(url);
-    imageState.id = id;
+  const result = await editor.value.upsertImage(url, {
+    id: imageState.id || undefined,
+    mode: "auto",
+    createIfMissing: true,
+  });
+  imageState.id = result?.id || imageState.id;
 
-    // Sync state from new image default props
-    await editor.value.executeCommand("resetWorkingImages");
-    await syncImageStateFromWorking(id);
-  }
+  await editor.value.executeCommand("resetWorkingImages");
+  await syncImageStateFromWorking(imageState.id);
+  e.target.value = "";
 };
 
 const handleDielineDetect = async (e) => {
