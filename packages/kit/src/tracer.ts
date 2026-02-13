@@ -47,6 +47,7 @@ export class ImageTracer {
       expand?: number; // Expansion radius in pixels. Default 0.
       noChannels?: boolean;
       smoothing?: boolean; // Use Paper.js smoothing (curve fitting). Default true.
+      debug?: boolean;
     } = {},
   ): Promise<string> {
     const { pathData } = await this.traceWithBounds(imageUrl, options);
@@ -69,11 +70,21 @@ export class ImageTracer {
       expand?: number;
       noChannels?: boolean;
       smoothing?: boolean;
+      debug?: boolean;
     } = {},
   ): Promise<{ pathData: string; baseBounds: Bounds; bounds: Bounds }> {
     const img = await this.loadImage(imageUrl);
     const width = img.width;
     const height = img.height;
+    const debug = options.debug === true;
+    const debugLog = (message: string, payload?: Record<string, unknown>) => {
+      if (!debug) return;
+      if (payload) {
+        console.info(`[ImageTracer] ${message}`, payload);
+        return;
+      }
+      console.info(`[ImageTracer] ${message}`);
+    };
 
     // 1. Draw to canvas and get pixel data
     const canvas = document.createElement("canvas");
@@ -95,6 +106,16 @@ export class ImageTracer {
     const radius = options.morphologyRadius ?? adaptiveRadius;
     const expand = options.expand ?? 0;
     const noChannels = options.noChannels !== false;
+    debugLog("traceWithBounds:start", {
+      width,
+      height,
+      threshold,
+      radius,
+      expand,
+      noChannels,
+      simplifyTolerance: options.simplifyTolerance ?? 2.5,
+      smoothing: options.smoothing !== false,
+    });
 
     // Add padding to the processing canvas to avoid edge clipping during dilation
     // Padding should be at least the radius + expansion size
@@ -148,6 +169,7 @@ export class ImageTracer {
       // Fallback: Return a rectangular outline matching dimensions
       const w = options.scaleToWidth ?? width;
       const h = options.scaleToHeight ?? height;
+      debugLog("fallback:no-base-contour", { width: w, height: h });
       return {
         pathData: `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`,
         baseBounds: { x: 0, y: 0, width: w, height: h },
@@ -170,6 +192,12 @@ export class ImageTracer {
       this.traceAllContours(maskExpanded, paddedWidth, paddedHeight),
     );
     if (!expandedContour) {
+      debugLog("fallback:no-expanded-contour", {
+        baseBounds,
+        width,
+        height,
+        expand,
+      });
       return {
         pathData: `M 0 0 L ${width} 0 L ${width} ${height} L 0 ${height} Z`,
         baseBounds,
@@ -205,7 +233,14 @@ export class ImageTracer {
 
     // 10. Simplify and Generate SVG
     const useSmoothing = options.smoothing !== false; // Default true
-    
+    debugLog("traceWithBounds:contours", {
+      baseBounds,
+      expandedBounds: globalBounds,
+      expandedDeltaX: globalBounds.width - baseBounds.width,
+      expandedDeltaY: globalBounds.height - baseBounds.height,
+      useSmoothing,
+    });
+
     if (useSmoothing) {
       return {
         pathData: this.pointsToSVGPaper(finalPoints, options.simplifyTolerance ?? 2.5),

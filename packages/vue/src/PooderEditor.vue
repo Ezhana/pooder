@@ -153,74 +153,233 @@ const clearImages = async () => {
   return await cmdSvc.executeCommand("clearImages");
 };
 
+interface DetectBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface DetectEdgeResult {
+  pathData: string;
+  width: number;
+  height: number;
+  rawBounds?: DetectBounds;
+  baseBounds?: DetectBounds;
+  imageWidth?: number;
+  imageHeight?: number;
+}
+
+interface ImageRenderSnapshot {
+  id: string;
+  centerX: number;
+  centerY: number;
+  objectScale: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}
+
+interface FrameRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+const IMAGE_OBJECT_LAYER_ID = "image.user";
+
+const clampNormalized = (value: number): number => {
+  return Math.max(-1, Math.min(2, value));
+};
+
+const toFrameRect = (geo: any): FrameRect | null => {
+  const width = Number(geo?.width);
+  const height = Number(geo?.height);
+  const centerX = Number(geo?.x);
+  const centerY = Number(geo?.y);
+
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    !Number.isFinite(centerX) ||
+    !Number.isFinite(centerY) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return null;
+  }
+
+  return {
+    left: centerX - width / 2,
+    top: centerY - height / 2,
+    width,
+    height,
+  };
+};
+
+const snapshotImageRenderStates = (
+  canvasService?: CanvasService | null,
+): ImageRenderSnapshot[] => {
+  if (!canvasService) return [];
+
+  const objects = canvasService.canvas.getObjects();
+  const snapshots: ImageRenderSnapshot[] = [];
+
+  for (const obj of objects as any[]) {
+    if (obj?.data?.layerId !== IMAGE_OBJECT_LAYER_ID) continue;
+    const id = obj?.data?.id;
+    if (typeof id !== "string") continue;
+
+    const center = obj.getCenterPoint ? obj.getCenterPoint() : null;
+    const centerX = Number(center?.x ?? obj.left);
+    const centerY = Number(center?.y ?? obj.top);
+    const objectScale = Number(obj.scaleX);
+    const sourceWidth = Number(obj.width);
+    const sourceHeight = Number(obj.height);
+
+    if (
+      !Number.isFinite(centerX) ||
+      !Number.isFinite(centerY) ||
+      !Number.isFinite(objectScale) ||
+      !Number.isFinite(sourceWidth) ||
+      !Number.isFinite(sourceHeight) ||
+      sourceWidth <= 0 ||
+      sourceHeight <= 0
+    ) {
+      continue;
+    }
+
+    snapshots.push({
+      id,
+      centerX,
+      centerY,
+      objectScale,
+      sourceWidth,
+      sourceHeight,
+    });
+  }
+
+  return snapshots;
+};
+
+const applyDetectedDielineConfig = (result: DetectEdgeResult) => {
+  cfgSvc.update("dieline.shape", "custom");
+  cfgSvc.update("dieline.pathData", result.pathData);
+  cfgSvc.update("dieline.width", result.width);
+  cfgSvc.update("dieline.height", result.height);
+  cfgSvc.update("dieline.offset", 0);
+};
+
+const computeDetectAlignmentShift = (
+  result: DetectEdgeResult,
+  frame: FrameRect,
+): { shiftX: number; shiftY: number } => {
+  const expanded = result.rawBounds || result.baseBounds;
+  const imageWidth = Number(result.imageWidth ?? 0);
+  const imageHeight = Number(result.imageHeight ?? 0);
+
+  if (
+    !expanded ||
+    !Number.isFinite(expanded.x) ||
+    !Number.isFinite(expanded.y) ||
+    !Number.isFinite(expanded.width) ||
+    !Number.isFinite(expanded.height) ||
+    expanded.width <= 0 ||
+    expanded.height <= 0 ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return { shiftX: 0, shiftY: 0 };
+  }
+
+  const ratioX = frame.width / expanded.width;
+  const ratioY = frame.height / expanded.height;
+
+  // Custom dieline path is centered by expanded bounds in geometry.ts,
+  // so compensation must use expanded center to avoid one-sided drift.
+  const objectCenterX = expanded.x + expanded.width / 2;
+  const objectCenterY = expanded.y + expanded.height / 2;
+  const imageCenterX = imageWidth / 2;
+  const imageCenterY = imageHeight / 2;
+
+  return {
+    shiftX: (objectCenterX - imageCenterX) * ratioX,
+    shiftY: (objectCenterY - imageCenterY) * ratioY,
+  };
+};
+
+const compensateImagesForDetectedDieline = async (
+  result: DetectEdgeResult,
+  snapshots: ImageRenderSnapshot[],
+  debug = false,
+) => {
+  if (!snapshots.length) return;
+
+  const geo = await cmdSvc.executeCommand("getGeometry");
+  const frame = toFrameRect(geo);
+  if (!frame) return;
+
+  const { shiftX, shiftY } = computeDetectAlignmentShift(result, frame);
+
+  if (debug) {
+    console.info("[PooderEditor] detectDieline alignment", {
+      frame,
+      shiftX,
+      shiftY,
+      snapshotCount: snapshots.length,
+      baseBounds: result.baseBounds,
+      rawBounds: result.rawBounds,
+      imageWidth: result.imageWidth,
+      imageHeight: result.imageHeight,
+    });
+  }
+
+  for (const snapshot of snapshots) {
+    const coverScale = Math.max(
+      frame.width / Math.max(1, snapshot.sourceWidth),
+      frame.height / Math.max(1, snapshot.sourceHeight),
+    );
+    const targetScale = Math.max(0.05, snapshot.objectScale / coverScale);
+    const targetCenterX = snapshot.centerX - shiftX;
+    const targetCenterY = snapshot.centerY - shiftY;
+
+    const left = clampNormalized(
+      (targetCenterX - frame.left) / Math.max(1, frame.width),
+    );
+    const top = clampNormalized(
+      (targetCenterY - frame.top) / Math.max(1, frame.height),
+    );
+
+    await cmdSvc.executeCommand("updateImage", snapshot.id, {
+      scale: targetScale,
+      left,
+      top,
+    });
+  }
+};
+
 const detectDieline = async (url: string) => {
-  const result = await cmdSvc.executeCommand("detectEdge", url, {
+  const canvasService = pooder.getService<CanvasService>("CanvasService");
+  const snapshots = snapshotImageRenderStates(canvasService);
+
+  const result = (await cmdSvc.executeCommand("detectEdge", url, {
     expand: 10, // 安全距离（像素）
     smoothing: true, // 是否平滑
     simplifyTolerance: 2, // 平滑度容差，值越大越圆润
-  });
+  })) as DetectEdgeResult | null;
   if (result) {
-    const {
-      pathData,
-      width,
-      height,
-      rawBounds,
-      baseBounds,
-      imageWidth,
-      imageHeight,
-    } = result;
-    cfgSvc.update("dieline.shape", "custom");
-    cfgSvc.update("dieline.pathData", pathData);
-    cfgSvc.update("dieline.width", width);
-    cfgSvc.update("dieline.height", height);
-    cfgSvc.update("dieline.offset", 0);
+    applyDetectedDielineConfig(result);
 
-    // Auto-align image to the detected dieline
-    const alignBounds = baseBounds || rawBounds;
-    if (alignBounds && imageWidth && imageHeight) {
-      const canvasService = pooder.getService<CanvasService>("CanvasService");
-      const images = cfgSvc.get("image.items") || [];
-      const targetImage = images.find((img: any) => img.url === url);
-
-      if (canvasService && targetImage) {
-        // Get updated geometry (which includes the new viewport scale)
-        const geo = await cmdSvc.executeCommand("getGeometry");
-
-        if (geo) {
-          // Calculate scale to match the dieline's visual width
-          const ratio = geo.width / alignBounds.width;
-
-          // Calculate offset of the object center from the image center (original pixels)
-          const imgCenterX = imageWidth / 2;
-          const imgCenterY = imageHeight / 2;
-          const objCenterX = alignBounds.x + alignBounds.width / 2;
-          const objCenterY = alignBounds.y + alignBounds.height / 2;
-
-          const deltaX = objCenterX - imgCenterX;
-          const deltaY = objCenterY - imgCenterY;
-
-          // Convert offset to screen pixels
-          const screenDeltaX = deltaX * ratio;
-          const screenDeltaY = deltaY * ratio;
-
-          // Calculate new normalized position
-          // We want the object center to be at the canvas center (0.5, 0.5)
-          const canvasW = canvasService.canvas.width;
-          const canvasH = canvasService.canvas.height;
-
-          const newLeft = 0.5 - screenDeltaX / canvasW;
-          const newTop = 0.5 - screenDeltaY / canvasH;
-
-          await cmdSvc.executeCommand("updateImage", targetImage.id, {
-            scale: ratio,
-            left: newLeft,
-            top: newTop,
-          });
-        }
-      }
+    const images = cfgSvc.get("image.items") || [];
+    const targetImage = images.find((img: any) => img.url === url);
+    if (targetImage?.id) {
+      const targetSnapshots = snapshots.filter(
+        (item) => item.id === targetImage.id,
+      );
+      await compensateImagesForDetectedDieline(result, targetSnapshots);
     }
 
-    return pathData;
+    return result.pathData;
   }
   return null;
 };
@@ -230,20 +389,26 @@ const detectDielineFromFrame = async (options?: {
     expand?: number;
     smoothing?: boolean;
     simplifyTolerance?: number;
+    debug?: boolean;
   };
   commit?: boolean;
 }) => {
+  const debug = options?.detect?.debug === true;
+  const canvasService = pooder.getService<CanvasService>("CanvasService");
+  const snapshots = snapshotImageRenderStates(canvasService);
+
   const { url } = await cmdSvc.executeCommand("exportImageFrameUrl", {
     multiplier: 2,
     format: "png",
   });
 
   try {
-    const result = await cmdSvc.executeCommand("detectEdge", url, {
-      expand: options?.detect?.expand ?? 10,
+    const result = (await cmdSvc.executeCommand("detectEdge", url, {
+      expand: options?.detect?.expand ?? 40,
       smoothing: options?.detect?.smoothing ?? true,
       simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
-    });
+      debug,
+    })) as DetectEdgeResult | null;
 
     if (!result) return null;
 
@@ -251,12 +416,8 @@ const detectDielineFromFrame = async (options?: {
       return result;
     }
 
-    const { pathData, width, height } = result;
-    cfgSvc.update("dieline.shape", "custom");
-    cfgSvc.update("dieline.pathData", pathData);
-    cfgSvc.update("dieline.width", width);
-    cfgSvc.update("dieline.height", height);
-    cfgSvc.update("dieline.offset", 0);
+    applyDetectedDielineConfig(result);
+    await compensateImagesForDetectedDieline(result, snapshots, debug);
 
     return result;
   } finally {
@@ -272,65 +433,22 @@ const uploadAndDetectEdge = async (
     simplifyTolerance?: number;
   },
 ) => {
+  const canvasService = pooder.getService<CanvasService>("CanvasService");
   const imageId = await addImage(url);
-  const result = await cmdSvc.executeCommand("detectEdge", url, {
+  const snapshots = snapshotImageRenderStates(canvasService).filter(
+    (item) => item.id === imageId,
+  );
+  const result = (await cmdSvc.executeCommand("detectEdge", url, {
     expand: options?.expand ?? 10,
     smoothing: options?.smoothing ?? true,
     simplifyTolerance: options?.simplifyTolerance ?? 2,
-  });
+  })) as DetectEdgeResult | null;
   if (!result) return null;
 
-  const {
-    pathData,
-    width,
-    height,
-    rawBounds,
-    baseBounds,
-    imageWidth,
-    imageHeight,
-  } = result;
+  applyDetectedDielineConfig(result);
+  await compensateImagesForDetectedDieline(result, snapshots);
 
-  cfgSvc.update("dieline.shape", "custom");
-  cfgSvc.update("dieline.pathData", pathData);
-  cfgSvc.update("dieline.width", width);
-  cfgSvc.update("dieline.height", height);
-  cfgSvc.update("dieline.offset", 0);
-
-  const alignBounds = baseBounds || rawBounds;
-  if (alignBounds && imageWidth && imageHeight) {
-    const canvasService = pooder.getService<CanvasService>("CanvasService");
-    if (canvasService) {
-      const geo = await cmdSvc.executeCommand("getGeometry");
-      if (geo) {
-        const ratio = geo.width / alignBounds.width;
-
-        const imgCenterX = imageWidth / 2;
-        const imgCenterY = imageHeight / 2;
-        const objCenterX = alignBounds.x + alignBounds.width / 2;
-        const objCenterY = alignBounds.y + alignBounds.height / 2;
-
-        const deltaX = objCenterX - imgCenterX;
-        const deltaY = objCenterY - imgCenterY;
-
-        const screenDeltaX = deltaX * ratio;
-        const screenDeltaY = deltaY * ratio;
-
-        const canvasW = canvasService.canvas.width;
-        const canvasH = canvasService.canvas.height;
-
-        const newLeft = 0.5 - screenDeltaX / canvasW;
-        const newTop = 0.5 - screenDeltaY / canvasH;
-
-        await cmdSvc.executeCommand("updateImage", imageId, {
-          scale: ratio,
-          left: newLeft,
-          top: newTop,
-        });
-      }
-    }
-  }
-
-  return { imageId, url, pathData };
+  return { imageId, url, pathData: result.pathData };
 };
 
 defineExpose({
