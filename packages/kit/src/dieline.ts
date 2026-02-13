@@ -8,7 +8,6 @@ import {
 import { Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
 import { ImageTracer } from "./tracer";
-import { computeDetectEdgeSize } from "./edgeScale";
 import { Unit } from "./coordinate";
 import { parseLengthToMm } from "./units";
 import {
@@ -488,21 +487,14 @@ export class DielineTool implements Extension {
               ]);
               const { pathData, baseBounds, bounds } = traced;
 
-              const currentMax = Math.max(s.width, s.height);
-              const { width: newWidth, height: newHeight } = computeDetectEdgeSize(
-                currentMax,
-                baseBounds,
-                bounds,
-              );
-
               if (debug) {
                 console.info("[DielineTool] detectEdge", {
                   imageWidth: img.width,
                   imageHeight: img.height,
                   baseBounds,
                   expandedBounds: bounds,
-                  computedWidth: newWidth,
-                  computedHeight: newHeight,
+                  currentDielineWidth: s.width,
+                  currentDielineHeight: s.height,
                   options: {
                     expand: detectOptions.expand ?? 0,
                     morphologyRadius: detectOptions.morphologyRadius,
@@ -515,8 +507,6 @@ export class DielineTool implements Extension {
 
               return {
                 pathData,
-                width: newWidth,
-                height: newHeight,
                 rawBounds: bounds,
                 baseBounds,
                 imageWidth: img.width,

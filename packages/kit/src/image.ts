@@ -60,11 +60,58 @@ interface UpsertImageOptions {
   mode?: "auto" | "replace" | "add";
   createIfMissing?: boolean;
   addOptions?: Partial<ImageItem>;
+  fitOnAdd?: boolean;
+}
+
+interface DielineFitArea {
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+}
+
+interface UpdateImageOptions {
+  target?: "auto" | "config" | "working";
+}
+
+interface DetectBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface DetectEdgeResult {
+  pathData: string;
+  rawBounds?: DetectBounds;
+  baseBounds?: DetectBounds;
+  imageWidth?: number;
+  imageHeight?: number;
+}
+
+interface ImageRenderSnapshot {
+  id: string;
+  centerX: number;
+  centerY: number;
+  objectScale: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}
+
+interface DetectFromFrameOptions {
+  expand?: number;
+  smoothing?: boolean;
+  simplifyTolerance?: number;
+  multiplier?: number;
+  debug?: boolean;
 }
 
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
 const IMAGE_REPLACE_GUARD_MS = 2500;
+const IMAGE_DETECT_EXPAND_DEFAULT = 30;
+const IMAGE_DETECT_SIMPLIFY_TOLERANCE_DEFAULT = 2;
+const IMAGE_DETECT_MULTIPLIER_DEFAULT = 2;
 
 export class ImageTool implements Extension {
   id = "pooder.kit.image";
@@ -430,6 +477,13 @@ export class ImageTool implements Extension {
           },
         },
         {
+          command: "fitImageToDefaultArea",
+          title: "Fit Image to Default Area",
+          handler: async (id: string) => {
+            await this.fitImageToDefaultArea(id);
+          },
+        },
+        {
           command: "removeImage",
           title: "Remove Image",
           handler: (id: string) => {
@@ -448,8 +502,12 @@ export class ImageTool implements Extension {
         {
           command: "updateImage",
           title: "Update Image",
-          handler: async (id: string, updates: Partial<ImageItem>) => {
-            await this.updateImageInConfig(id, updates);
+          handler: async (
+            id: string,
+            updates: Partial<ImageItem>,
+            options: UpdateImageOptions = {},
+          ) => {
+            await this.updateImage(id, updates, options);
           },
         },
         {
@@ -556,6 +614,7 @@ export class ImageTool implements Extension {
   private async addImageEntry(
     url: string,
     options?: Partial<ImageItem>,
+    fitOnAdd = true,
   ): Promise<string> {
     const id = this.generateId();
     const newItem = this.normalizeItem({
@@ -568,10 +627,17 @@ export class ImageTool implements Extension {
     this.focusedImageId = id;
     this.isImageSelectionActive = true;
     this.suppressSelectionClearUntil = Date.now() + IMAGE_REPLACE_GUARD_MS;
+    const sessionDirtyBeforeAdd = this.isToolActive && this.hasWorkingChanges;
     const waitLoaded = this.waitImageLoaded(id, true);
     this.updateConfig([...this.items, newItem]);
-    await waitLoaded;
-    this.focusImageSelection(id);
+    this.addItemToWorkingSessionIfNeeded(newItem, sessionDirtyBeforeAdd);
+    const loaded = await waitLoaded;
+    if (loaded && fitOnAdd) {
+      await this.fitImageToDefaultArea(id);
+    }
+    if (loaded) {
+      this.focusImageSelection(id);
+    }
     return id;
   }
 
@@ -580,8 +646,9 @@ export class ImageTool implements Extension {
     options: UpsertImageOptions = {},
   ): Promise<{ id: string; mode: "replace" | "add" }> {
     const mode = options.mode || "auto";
+    const fitOnAdd = options.fitOnAdd !== false;
     if (mode === "add") {
-      const id = await this.addImageEntry(url, options.addOptions);
+      const id = await this.addImageEntry(url, options.addOptions, fitOnAdd);
       return { id, mode: "add" };
     }
 
@@ -595,8 +662,34 @@ export class ImageTool implements Extension {
       throw new Error("replace-target-not-found");
     }
 
-    const id = await this.addImageEntry(url, options.addOptions);
+    const id = await this.addImageEntry(url, options.addOptions, fitOnAdd);
     return { id, mode: "add" };
+  }
+
+  private addItemToWorkingSessionIfNeeded(
+    item: ImageItem,
+    sessionDirtyBeforeAdd: boolean,
+  ) {
+    if (!sessionDirtyBeforeAdd || !this.isToolActive) return;
+    if (this.workingItems.some((existing) => existing.id === item.id)) return;
+    this.workingItems = this.cloneItems([...this.workingItems, item]);
+    this.updateImages();
+  }
+
+  private async updateImage(
+    id: string,
+    updates: Partial<ImageItem>,
+    options: UpdateImageOptions = {},
+  ) {
+    this.syncToolActiveFromWorkbench();
+    const target = options.target || "auto";
+
+    if (target === "working" || (target === "auto" && this.isToolActive)) {
+      this.updateImageInWorking(id, updates);
+      return;
+    }
+
+    await this.updateImageInConfig(id, updates);
   }
 
   private getConfig<T>(key: string, fallback?: T): T | undefined {
@@ -672,6 +765,60 @@ export class ImageTool implements Extension {
       width: layout.width,
       height: layout.height,
     };
+  }
+
+  private async resolveDefaultFitArea(): Promise<DielineFitArea | null> {
+    if (!this.context || !this.canvasService) return null;
+    const commandService = this.context.services.get<any>("CommandService");
+    if (!commandService) return null;
+
+    try {
+      const geometry = await Promise.resolve(
+        commandService.executeCommand("getGeometry"),
+      );
+      const width = Number(geometry?.width);
+      const height = Number(geometry?.height);
+      const centerX = Number(geometry?.x);
+      const centerY = Number(geometry?.y);
+      const offset = Number(geometry?.offset ?? 0);
+
+      if (
+        !Number.isFinite(width) ||
+        !Number.isFinite(height) ||
+        !Number.isFinite(centerX) ||
+        !Number.isFinite(centerY)
+      ) {
+        return null;
+      }
+
+      return {
+        width: Math.max(1, width + offset * 2),
+        height: Math.max(1, height + offset * 2),
+        left: centerX,
+        top: centerY,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async fitImageToDefaultArea(id: string) {
+    if (!this.canvasService) return;
+    const area = await this.resolveDefaultFitArea();
+
+    if (area) {
+      await this.fitImageToArea(id, area);
+      return;
+    }
+
+    const canvasW = Math.max(1, this.canvasService.canvas.width || 0);
+    const canvasH = Math.max(1, this.canvasService.canvas.height || 0);
+    await this.fitImageToArea(id, {
+      width: canvasW,
+      height: canvasH,
+      left: canvasW / 2,
+      top: canvasH / 2,
+    });
   }
 
   private getImageObjects(): any[] {
@@ -1278,7 +1425,8 @@ export class ImageTool implements Extension {
 
     const obj = this.getImageObject(id);
     if (!obj) return;
-    const current = this.items.find((item) => item.id === id);
+    const renderItems = this.isToolActive ? this.workingItems : this.items;
+    const current = renderItems.find((item) => item.id === id);
     if (!current) return;
     const render = this.resolveRenderImageState(current);
 
@@ -1303,7 +1451,7 @@ export class ImageTool implements Extension {
     const areaTopPx =
       areaTopInput <= 1.5 ? areaTopInput * canvasH : areaTopInput;
 
-    await this.updateImageInConfig(id, {
+    const updates: Partial<ImageItem> = {
       scale: Math.max(0.05, desiredScale / baseCover),
       left: this.clampNormalized(
         (areaLeftPx - frame.left) / Math.max(1, frame.width),
@@ -1311,7 +1459,14 @@ export class ImageTool implements Extension {
       top: this.clampNormalized(
         (areaTopPx - frame.top) / Math.max(1, frame.height),
       ),
-    });
+    };
+
+    if (this.isToolActive) {
+      this.updateImageInWorking(id, updates);
+      return;
+    }
+
+    await this.updateImageInConfig(id, updates);
   }
 
   private async commitWorkingImagesAsCropped() {

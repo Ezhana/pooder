@@ -71,46 +71,6 @@ const generateCutImage = async () => {
   return await cmdSvc.executeCommand("exportCutImage");
 };
 
-const fitImageToDefaultArea = async (id: string) => {
-  // Auto-fit to dieline if exists
-  const geo = await cmdSvc.executeCommand("getGeometry");
-  const canvasService = pooder.getService<CanvasService>("CanvasService");
-
-  if (geo && canvasService) {
-    const canvasW = canvasService.canvas.width;
-    const canvasH = canvasService.canvas.height;
-
-    // Get physical bleed offset (mm)
-    const dielineOffset = cfgSvc.get("dieline.offset") || 0;
-
-    // Convert physical bleed to visual pixels using dieline's scale
-    const visualOffset = dielineOffset * geo.scale;
-
-    // Target dimensions in pixels
-    const targetWidth = geo.width + 2 * visualOffset;
-    const targetHeight = geo.height + 2 * visualOffset;
-
-    // Normalized center coordinates (0-1)
-    const left = geo.x / canvasW;
-    const top = geo.y / canvasH;
-
-    await cmdSvc.executeCommand("fitImageToArea", id, {
-      width: targetWidth,
-      height: targetHeight,
-      left,
-      top,
-    });
-  } else if (canvasService) {
-    // Default: Fit to canvas center if no dieline
-    await cmdSvc.executeCommand("fitImageToArea", id, {
-      width: canvasService.canvas.width,
-      height: canvasService.canvas.height,
-      left: 0.5,
-      top: 0.5,
-    });
-  }
-};
-
 const upsertImage = async (
   url: string,
   options?: {
@@ -126,11 +86,8 @@ const upsertImage = async (
     mode: options?.mode,
     createIfMissing: options?.createIfMissing,
     addOptions: options?.addOptions,
+    fitOnAdd: options?.fitOnAdd,
   });
-
-  if (result?.mode === "add" && options?.fitOnAdd !== false) {
-    await fitImageToDefaultArea(result.id);
-  }
 
   return result;
 };
@@ -162,8 +119,6 @@ interface DetectBounds {
 
 interface DetectEdgeResult {
   pathData: string;
-  width: number;
-  height: number;
   rawBounds?: DetectBounds;
   baseBounds?: DetectBounds;
   imageWidth?: number;
@@ -265,8 +220,6 @@ const snapshotImageRenderStates = (
 const applyDetectedDielineConfig = (result: DetectEdgeResult) => {
   cfgSvc.update("dieline.shape", "custom");
   cfgSvc.update("dieline.pathData", result.pathData);
-  cfgSvc.update("dieline.width", result.width);
-  cfgSvc.update("dieline.height", result.height);
   cfgSvc.update("dieline.offset", 0);
 };
 
@@ -404,7 +357,7 @@ const detectDielineFromFrame = async (options?: {
 
   try {
     const result = (await cmdSvc.executeCommand("detectEdge", url, {
-      expand: options?.detect?.expand ?? 40,
+      expand: options?.detect?.expand ?? 30,
       smoothing: options?.detect?.smoothing ?? true,
       simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
       debug,
