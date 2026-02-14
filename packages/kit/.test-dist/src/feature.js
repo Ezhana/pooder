@@ -16,6 +16,7 @@ class FeatureTool {
         this.workingFeatures = [];
         this.isUpdatingConfig = false;
         this.isToolActive = false;
+        this.hasWorkingChanges = false;
         this.handleMoving = null;
         this.handleModified = null;
         this.handleDielineChange = null;
@@ -40,23 +41,29 @@ class FeatureTool {
             const features = (configService.get("dieline.features", []) ||
                 []);
             this.workingFeatures = this.cloneFeatures(features);
+            this.hasWorkingChanges = false;
             configService.onAnyChange((e) => {
                 if (this.isUpdatingConfig)
                     return;
                 if (e.key === "dieline.features") {
                     const next = (e.value || []);
                     this.workingFeatures = this.cloneFeatures(next);
+                    this.hasWorkingChanges = false;
                     this.redraw();
                     this.emitWorkingChange();
                 }
             });
         }
+        const toolSessionService = context.services.get("ToolSessionService");
+        this.dirtyTrackerDisposable = toolSessionService?.registerDirtyTracker(this.id, () => this.hasWorkingChanges);
         // Listen to tool activation
         context.eventBus.on("tool:activated", this.onToolActivated);
         this.setup();
     }
     deactivate(context) {
         context.eventBus.off("tool:activated", this.onToolActivated);
+        this.dirtyTrackerDisposable?.dispose();
+        this.dirtyTrackerDisposable = undefined;
         this.teardown();
         this.canvasService = undefined;
         this.context = undefined;
@@ -82,6 +89,20 @@ class FeatureTool {
     }
     contribute() {
         return {
+            [core_1.ContributionPointIds.TOOLS]: [
+                {
+                    id: this.id,
+                    name: "Feature",
+                    interaction: "session",
+                    commands: {
+                        commit: "completeFeatures",
+                    },
+                    session: {
+                        autoBegin: false,
+                        leavePolicy: "block",
+                    },
+                },
+            ],
             [core_1.ContributionPointIds.COMMANDS]: [
                 {
                     command: "addFeature",
@@ -109,6 +130,7 @@ class FeatureTool {
                     title: "Clear Features",
                     handler: () => {
                         this.setWorkingFeatures([]);
+                        this.hasWorkingChanges = true;
                         this.redraw();
                         this.emitWorkingChange();
                         return true;
@@ -127,6 +149,7 @@ class FeatureTool {
                     handler: async (features) => {
                         await this.refreshGeometry();
                         this.setWorkingFeatures(this.cloneFeatures(features || []));
+                        this.hasWorkingChanges = true;
                         this.redraw();
                         this.emitWorkingChange();
                         return { ok: true };
@@ -204,6 +227,7 @@ class FeatureTool {
         if (!changed)
             return { ok: true };
         this.setWorkingFeatures(next);
+        this.hasWorkingChanges = true;
         this.redraw();
         this.enforceConstraints();
         this.emitWorkingChange();
@@ -238,6 +262,7 @@ class FeatureTool {
                 issues: result.issues,
             };
         }
+        this.hasWorkingChanges = false;
         return { ok: true };
     }
     addFeature(type) {
@@ -258,6 +283,7 @@ class FeatureTool {
             constraints: [{ type: "path" }],
         };
         this.setWorkingFeatures([...(this.workingFeatures || []), newFeature]);
+        this.hasWorkingChanges = true;
         this.redraw();
         this.emitWorkingChange();
         return true;
@@ -294,6 +320,7 @@ class FeatureTool {
             constraints: [{ type: "path" }],
         };
         this.setWorkingFeatures([...(this.workingFeatures || []), lug, hole]);
+        this.hasWorkingChanges = true;
         this.redraw();
         this.emitWorkingChange();
         return true;
@@ -416,6 +443,7 @@ class FeatureTool {
                         };
                     });
                     this.setWorkingFeatures(newFeatures);
+                    this.hasWorkingChanges = true;
                     this.emitWorkingChange();
                 }
                 else {
@@ -500,6 +528,7 @@ class FeatureTool {
         const newFeatures = [...this.workingFeatures];
         newFeatures[index] = updatedFeature;
         this.setWorkingFeatures(newFeatures);
+        this.hasWorkingChanges = true;
         this.emitWorkingChange();
     }
     redraw() {

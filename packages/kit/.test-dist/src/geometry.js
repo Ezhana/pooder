@@ -37,6 +37,90 @@ function ensurePaper(width, height) {
         paper_1.default.view.viewSize = new paper_1.default.Size(width, height);
     }
 }
+const isBridgeDebugEnabled = () => Boolean(globalThis.__POODER_BRIDGE_DEBUG__);
+function normalizePathItem(shape) {
+    let result = shape;
+    if (typeof result.resolveCrossings === "function")
+        result = result.resolveCrossings();
+    if (typeof result.reduce === "function")
+        result = result.reduce({});
+    if (typeof result.reorient === "function")
+        result = result.reorient(true, true);
+    if (typeof result.reduce === "function")
+        result = result.reduce({});
+    return result;
+}
+function getBridgeDelta(itemBounds, overlap) {
+    return Math.max(overlap, Math.min(5, Math.max(1, itemBounds.height * 0.02)));
+}
+function getExitHit(args) {
+    const { mainShape, x, bridgeBottom, toY, eps, delta, overlap, op } = args;
+    const ray = new paper_1.default.Path.Line({
+        from: [x, bridgeBottom],
+        to: [x, toY],
+        insert: false,
+    });
+    const intersections = mainShape.getIntersections(ray) || [];
+    ray.remove();
+    const validHits = intersections.filter((i) => i.point.y < bridgeBottom - eps);
+    if (validHits.length === 0)
+        return null;
+    validHits.sort((a, b) => b.point.y - a.point.y);
+    const flags = validHits.map((h) => {
+        const above = h.point.add(new paper_1.default.Point(0, -delta));
+        const below = h.point.add(new paper_1.default.Point(0, delta));
+        return {
+            insideAbove: mainShape.contains(above),
+            insideBelow: mainShape.contains(below),
+        };
+    });
+    const idx = (0, bridgeSelection_1.pickExitIndex)(flags);
+    if (idx < 0)
+        return null;
+    if (isBridgeDebugEnabled()) {
+        console.debug("Geometry: Bridge ray", {
+            x,
+            validHits: validHits.length,
+            idx,
+            delta,
+            overlap,
+            op,
+        });
+    }
+    const hit = validHits[idx];
+    return { point: hit.point, location: hit };
+}
+function selectOuterChain(args) {
+    const { mainShape, pointsA, pointsB, delta, overlap, op } = args;
+    const scoreA = (0, bridgeSelection_1.scoreOutsideAbove)(pointsA.map((p) => ({
+        outsideAbove: !mainShape.contains(p.add(new paper_1.default.Point(0, -delta))),
+    })));
+    const scoreB = (0, bridgeSelection_1.scoreOutsideAbove)(pointsB.map((p) => ({
+        outsideAbove: !mainShape.contains(p.add(new paper_1.default.Point(0, -delta))),
+    })));
+    const ratioA = scoreA / pointsA.length;
+    const ratioB = scoreB / pointsB.length;
+    if (isBridgeDebugEnabled()) {
+        console.debug("Geometry: Bridge chain", {
+            scoreA,
+            scoreB,
+            lenA: pointsA.length,
+            lenB: pointsB.length,
+            ratioA,
+            ratioB,
+            delta,
+            overlap,
+            op,
+        });
+    }
+    const ratioEps = 1e-6;
+    if (Math.abs(ratioA - ratioB) > ratioEps) {
+        return ratioA > ratioB ? pointsA : pointsB;
+    }
+    if (scoreA !== scoreB)
+        return scoreA > scoreB ? pointsA : pointsB;
+    return pointsA.length <= pointsB.length ? pointsA : pointsB;
+}
 /**
  * Creates the base dieline shape (Rect/Circle/Ellipse/Custom)
  */
@@ -137,7 +221,7 @@ function getPerimeterShape(options) {
                     const overlap = 2;
                     const rayPadding = 10;
                     const eps = 0.1;
-                    const delta = 0.5;
+                    const delta = getBridgeDelta(itemBounds, overlap);
                     const toY = bridgeTop - rayPadding;
                     const inset = Math.min(1, Math.max(0, itemBounds.width * 0.01));
                     const xLeft = itemBounds.left + inset;
@@ -145,34 +229,26 @@ function getPerimeterShape(options) {
                     if (!(mainShape instanceof paper_1.default.Path)) {
                         throw new Error("Geometry: Bridge requires base shape to be a Path");
                     }
-                    const findExitHit = (x) => {
-                        const ray = new paper_1.default.Path.Line({
-                            from: [x, bridgeBottom],
-                            to: [x, toY],
-                            insert: false,
-                        });
-                        const intersections = mainShape.getIntersections(ray) || [];
-                        ray.remove();
-                        const validHits = intersections.filter((i) => i.point.y < bridgeBottom - eps);
-                        if (validHits.length === 0)
-                            return null;
-                        validHits.sort((a, b) => b.point.y - a.point.y);
-                        const flags = validHits.map((h) => {
-                            const above = h.point.add(new paper_1.default.Point(0, -delta));
-                            const below = h.point.add(new paper_1.default.Point(0, delta));
-                            return {
-                                insideAbove: mainShape.contains(above),
-                                insideBelow: mainShape.contains(below),
-                            };
-                        });
-                        const idx = (0, bridgeSelection_1.pickExitIndex)(flags);
-                        if (idx < 0)
-                            return null;
-                        const hit = validHits[idx];
-                        return { point: hit.point, location: hit };
-                    };
-                    const leftHit = findExitHit(xLeft);
-                    const rightHit = findExitHit(xRight);
+                    const leftHit = getExitHit({
+                        mainShape,
+                        x: xLeft,
+                        bridgeBottom,
+                        toY,
+                        eps,
+                        delta,
+                        overlap,
+                        op: f.operation,
+                    });
+                    const rightHit = getExitHit({
+                        mainShape,
+                        x: xRight,
+                        bridgeBottom,
+                        toY,
+                        eps,
+                        delta,
+                        overlap,
+                        op: f.operation,
+                    });
                     if (!leftHit || !rightHit || xRight - xLeft <= eps) {
                         throw new Error("Geometry: Bridge ray intersection not found");
                     }
@@ -194,13 +270,14 @@ function getPerimeterShape(options) {
                     if (pointsA.length < 2 || pointsB.length < 2) {
                         throw new Error("Geometry: Bridge contour sampling failed");
                     }
-                    const scoreA = (0, bridgeSelection_1.scoreOutsideAbove)(pointsA.map((p) => ({
-                        outsideAbove: !mainShape.contains(p.add(new paper_1.default.Point(0, -delta))),
-                    })));
-                    const scoreB = (0, bridgeSelection_1.scoreOutsideAbove)(pointsB.map((p) => ({
-                        outsideAbove: !mainShape.contains(p.add(new paper_1.default.Point(0, -delta))),
-                    })));
-                    let topBase = scoreA >= scoreB ? pointsA : pointsB;
+                    let topBase = selectOuterChain({
+                        mainShape,
+                        pointsA,
+                        pointsB,
+                        delta,
+                        overlap,
+                        op: f.operation,
+                    });
                     const dist2 = (a, b) => {
                         const dx = a.x - b.x;
                         const dy = a.y - b.y;
@@ -212,14 +289,14 @@ function getPerimeterShape(options) {
                     topBase = topBase.slice();
                     topBase[0] = leftHit.point;
                     topBase[topBase.length - 1] = rightHit.point;
-                    const capShiftY = f.operation === "subtract" ? -overlap : overlap;
+                    const capShiftY = f.operation === "subtract" ? -Math.max(overlap * 2, delta) : overlap;
                     const topPoints = topBase.map((p) => p.add(new paper_1.default.Point(0, capShiftY)));
-                    const bridgeBottomY = bridgeBottom + overlap;
+                    const bridgeBottomY = bridgeBottom + overlap * 2;
                     const bridgePoly = new paper_1.default.Path({ insert: false });
                     for (const p of topPoints)
                         bridgePoly.add(p);
-                    bridgePoly.add(new paper_1.default.Point(itemBounds.right, bridgeBottomY));
-                    bridgePoly.add(new paper_1.default.Point(itemBounds.left, bridgeBottomY));
+                    bridgePoly.add(new paper_1.default.Point(xRight, bridgeBottomY));
+                    bridgePoly.add(new paper_1.default.Point(xLeft, bridgeBottomY));
                     bridgePoly.closed = true;
                     const unitedItem = item.unite(bridgePoly);
                     item.remove();
@@ -256,10 +333,7 @@ function getPerimeterShape(options) {
                     const temp = mainShape.unite(item);
                     mainShape.remove();
                     item.remove();
-                    mainShape =
-                        typeof temp.reduce === "function"
-                            ? temp.reduce({})
-                            : temp;
+                    mainShape = normalizePathItem(temp);
                 }
                 catch (e) {
                     console.error("Geometry: Failed to unite feature", e);
@@ -274,10 +348,7 @@ function getPerimeterShape(options) {
                     const temp = mainShape.subtract(item);
                     mainShape.remove();
                     item.remove();
-                    mainShape =
-                        typeof temp.reduce === "function"
-                            ? temp.reduce({})
-                            : temp;
+                    mainShape = normalizePathItem(temp);
                 }
                 catch (e) {
                     console.error("Geometry: Failed to subtract feature", e);
@@ -307,13 +378,13 @@ function applySurfaceFeatures(shape, features, options) {
                 const temp = result.unite(item);
                 result.remove();
                 item.remove();
-                result = temp;
+                result = normalizePathItem(temp);
             }
             else {
                 const temp = result.subtract(item);
                 result.remove();
                 item.remove();
-                result = temp;
+                result = normalizePathItem(temp);
             }
         }
         catch (e) {

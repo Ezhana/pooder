@@ -4,7 +4,6 @@ exports.DielineTool = void 0;
 const core_1 = require("@pooder/core");
 const fabric_1 = require("fabric");
 const tracer_1 = require("./tracer");
-const edgeScale_1 = require("./edgeScale");
 const units_1 = require("./units");
 const geometry_1 = require("./geometry");
 class DielineTool {
@@ -164,6 +163,17 @@ class DielineTool {
     contribute() {
         const s = this.state;
         return {
+            [core_1.ContributionPointIds.TOOLS]: [
+                {
+                    id: this.id,
+                    name: "Dieline",
+                    interaction: "session",
+                    session: {
+                        autoBegin: false,
+                        leavePolicy: "block",
+                    },
+                },
+            ],
             [core_1.ContributionPointIds.CONFIGURATIONS]: [
                 {
                     id: "dieline.displayUnit",
@@ -346,6 +356,8 @@ class DielineTool {
                     title: "Detect Edge from Image",
                     handler: async (imageUrl, options) => {
                         try {
+                            const detectOptions = options || {};
+                            const debug = detectOptions.debug === true;
                             // Helper to get image dimensions
                             const loadImage = (url) => {
                                 return new Promise((resolve, reject) => {
@@ -358,15 +370,28 @@ class DielineTool {
                             };
                             const [img, traced] = await Promise.all([
                                 loadImage(imageUrl),
-                                tracer_1.ImageTracer.traceWithBounds(imageUrl, options),
+                                tracer_1.ImageTracer.traceWithBounds(imageUrl, detectOptions),
                             ]);
                             const { pathData, baseBounds, bounds } = traced;
-                            const currentMax = Math.max(s.width, s.height);
-                            const { width: newWidth, height: newHeight } = (0, edgeScale_1.computeDetectEdgeSize)(currentMax, baseBounds, bounds);
+                            if (debug) {
+                                console.info("[DielineTool] detectEdge", {
+                                    imageWidth: img.width,
+                                    imageHeight: img.height,
+                                    baseBounds,
+                                    expandedBounds: bounds,
+                                    currentDielineWidth: s.width,
+                                    currentDielineHeight: s.height,
+                                    options: {
+                                        expand: detectOptions.expand ?? 0,
+                                        morphologyRadius: detectOptions.morphologyRadius,
+                                        smoothing: detectOptions.smoothing,
+                                        simplifyTolerance: detectOptions.simplifyTolerance,
+                                        threshold: detectOptions.threshold,
+                                    },
+                                });
+                            }
                             return {
                                 pathData,
-                                width: newWidth,
-                                height: newHeight,
                                 rawBounds: bounds,
                                 baseBounds,
                                 imageWidth: img.width,

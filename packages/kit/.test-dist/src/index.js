@@ -26,6 +26,7 @@ __exportStar(require("./image"), exports);
 __exportStar(require("./white-ink"), exports);
 __exportStar(require("./ruler"), exports);
 __exportStar(require("./mirror"), exports);
+__exportStar(require("./sceneView"), exports);
 __exportStar(require("./units"), exports);
 var CanvasService_1 = require("./CanvasService");
 Object.defineProperty(exports, "CanvasService", { enumerable: true, get: function () { return __importDefault(CanvasService_1).default; } });
