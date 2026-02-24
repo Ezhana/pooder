@@ -8,7 +8,7 @@ const WHITE_INK_OBJECT_LAYER_ID = "white-ink.user";
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 const WHITE_INK_DEBUG_KEY = "whiteInk.debug";
 const WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY = "whiteInk.previewImageVisible";
-const WHITE_INK_DEFAULT_OPACITY = 0.45;
+const WHITE_INK_DEFAULT_OPACITY = 0.85;
 class WhiteInkTool {
     constructor() {
         this.id = "pooder.kit.white-ink";

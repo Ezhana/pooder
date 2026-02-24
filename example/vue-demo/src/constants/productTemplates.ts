@@ -141,32 +141,51 @@ export const TEMPLATE_HOLE_PRESETS = {
     [PRODUCT_TEMPLATES.WOOD_STANDEES]: ['STANDEE_TAB'],
 };
 
+const buildCutConfigFromOffset = (offset = 0) => {
+    if (offset > 0) {
+        return {
+            "size.cutMode": "outset",
+            "size.cutMarginMm": offset,
+        };
+    }
+    if (offset < 0) {
+        return {
+            "size.cutMode": "inset",
+            "size.cutMarginMm": Math.abs(offset),
+        };
+    }
+    return {
+        "size.cutMode": "trim",
+        "size.cutMarginMm": 0,
+    };
+};
+
 export const TEMPLATE_CONFIGS = {
     [PRODUCT_TEMPLATES.BASIC]: () => ({}),
 
     [PRODUCT_TEMPLATES.ROUND_BADGE]: () => ({
         "dieline.shape": "circle",
-        "dieline.offset": 3.5,
-        "dieline.displayUnit": "mm",
+        "size.unit": "mm",
         "dieline.showBleedLines": true,
+        ...buildCutConfigFromOffset(3.5),
     }),
 
     [PRODUCT_TEMPLATES.RECT_BADGE]: () => ({
         "dieline.radius": 10,
-        "dieline.offset": 5,
+        ...buildCutConfigFromOffset(5),
     }),
 
     [PRODUCT_TEMPLATES.ACRYLIC]: () => ({
         "dieline.radius": 10,
-        "dieline.offset": 5,
+        ...buildCutConfigFromOffset(5),
     }),
 
     [PRODUCT_TEMPLATES.ACRYLIC_KEYCHAIN]: () => ({
         "dieline.shape": "rect",
         "dieline.showBleedLines": false,
-        "dieline.offset": -2,
         "dieline.offsetStyle": "hidden",
         "dieline.features": HOLE_PRESETS.KEYCHAIN_NORMAL.features,
+        ...buildCutConfigFromOffset(-2),
     }),
 
     [PRODUCT_TEMPLATES.SHIKISHI]: () => ({
@@ -174,12 +193,12 @@ export const TEMPLATE_CONFIGS = {
     }),
 
     [PRODUCT_TEMPLATES.ACRYLIC_STANDEES]: () => ({
-        "dieline.padding": "20%",
+        "size.viewPadding": "20%",
         "dieline.features": HOLE_PRESETS.STANDEE_TAB.features,
     }),
 
     [PRODUCT_TEMPLATES.WOOD_STANDEES]: () => ({
-        "dieline.padding": "20%",
+        "size.viewPadding": "20%",
         "dieline.features": HOLE_PRESETS.STANDEE_TAB.features,
     }),
 
@@ -197,31 +216,31 @@ export const TEMPLATE_CONFIGS = {
 
     [PRODUCT_TEMPLATES.HOLOGRAPHIC_BADGES]: () => ({
         "dieline.shape": "circle",
-        "dieline.offset": 3.5,
         "dieline.showBleedLines": true,
+        ...buildCutConfigFromOffset(3.5),
     }),
 
     [PRODUCT_TEMPLATES.OVAL_BADGES]: () => ({
         "dieline.shape": "ellipse",
-        "dieline.offset": 3.5,
         "dieline.showBleedLines": true,
+        ...buildCutConfigFromOffset(3.5),
     }),
 
     [PRODUCT_TEMPLATES.SPECIAL_BADGES]: () => ({
         "dieline.shape": "circle",
-        "dieline.offset": 3.5,
         "dieline.showBleedLines": true,
+        ...buildCutConfigFromOffset(3.5),
     }),
 
     [PRODUCT_TEMPLATES.THICK_ACRYLIC_KEYCHAIN]: () => ({
-        "dieline.displayUnit": "mm",
-        "dieline.width": 50,
-        "dieline.height": 80,
+        "size.unit": "mm",
+        "size.actualWidthMm": 50,
+        "size.actualHeightMm": 80,
         "dieline.shape": "rect",
-        "dieline.offset": -2,
         "dieline.showBleedLines": false,
         "dieline.offsetStyle": "hidden",
         "dieline.features": HOLE_PRESETS.KEYCHAIN_THICK.features,
+        ...buildCutConfigFromOffset(-2),
     }),
 };
 
