@@ -210,7 +210,7 @@
         <select v-model="selectedPreset" @change="loadPreset">
           <option value="">Select a preset...</option>
           <option
-            v-for="preset in HOLE_PRESETS"
+            v-for="preset in availablePresets"
             :key="preset.name"
             :value="preset.name"
           >
@@ -266,9 +266,15 @@
 
 <script setup>
 import { ref, watch, reactive, onUnmounted, computed } from "vue";
+import {
+  CATEGORY_TEMPLATE_MAP,
+  HOLE_PRESETS,
+  TEMPLATE_HOLE_PRESETS,
+} from "../constants/productTemplates";
 
 const props = defineProps({
   editor: Object,
+  category: String,
 });
 
 const editor = computed(() => {
@@ -332,154 +338,20 @@ const dielineState = reactive({
   shape: "rect",
 });
 
-const featuresList = ref([]);
 const selectedPreset = ref("");
 
-const HOLE_PRESETS = [
-  {
-    name: "2.5mm",
-    groupId: "2.5mm-hole",
-    features: [
-      {
-        id: "2.5mm-hole-lug",
-        groupId: "2.5mm-hole",
-        operation: "add",
-        skipCut: true,
-        shape: "circle",
-        x: 0.5,
-        y: 0,
-        radius: 2.5,
-        rotation: 0,
-        renderBehavior: "edge",
-        constraints: [
-          {
-            type: "path",
-            params: {
-              minOffset: -2.5,
-              maxOffset: 2,
-            },
-          },
-        ],
-      },
-      {
-        id: "2.5mm-hole-hole",
-        groupId: "2.5mm-hole",
-        operation: "subtract",
-        skipCut: true,
-        shape: "circle",
-        x: 0.5,
-        y: 0,
-        radius: 2,
-        rotation: 0,
-        renderBehavior: "edge",
-        constraints: [
-          {
-            type: "path",
-            params: {
-              minOffset: -2.5,
-              maxOffset: 2,
-            },
-          },
-        ],
-      },
-    ],
-  },
-  {
-    name: "3mm",
-    groupId: "3mm-hole",
-    features: [
-      {
-        id: "3mm-hole-lug",
-        groupId: "3mm-hole",
-        operation: "add",
-        skipCut: true,
-        shape: "circle",
-        x: 0.5,
-        y: 0,
-        radius: 3,
-        rotation: 0,
-        renderBehavior: "edge",
-        constraints: [{ type: "path" }],
-      },
-      {
-        id: "3mm-hole-hole",
-        groupId: "3mm-hole",
-        operation: "subtract",
-        skipCut: true,
-        shape: "circle",
-        x: 0.5,
-        y: 0,
-        radius: 2,
-        rotation: 0,
-        renderBehavior: "edge",
-        constraints: [{ type: "path" }],
-      },
-    ],
-  },
-  {
-    name: "10mm",
-    groupId: "10mm-hole",
-    features: [
-      {
-        id: "10mm-hole-lug",
-        groupId: "10mm-hole",
-        operation: "add",
-        skipCut: true,
-        shape: "circle",
-        x: 0.5,
-        y: 0,
-        radius: 10,
-        rotation: 0,
-        renderBehavior: "edge",
-        constraints: [{ type: "path" }],
-      },
-      {
-        id: "10mm-hole-hole",
-        groupId: "10mm-hole",
-        operation: "subtract",
-        skipCut: true,
-        shape: "circle",
-        x: 0.5,
-        y: 0,
-        radius: 5,
-        rotation: 0,
-        renderBehavior: "edge",
-        constraints: [{ type: "path" }],
-      },
-    ],
-  },
-  {
-    name: "Standee Tab",
-    groupId: "standee-tab",
-    features: [
-      {
-        id: "standee-tab-lug",
-        groupId: "standee-tab",
-        operation: "add",
-        skipCut: true,
-        shape: "rect",
-        x: 0.5,
-        y: 1.02,
-        width: 15,
-        height: 6,
-        rotation: 0,
-        renderBehavior: "edge",
-        bridge: {
-          type: "vertical",
-        },
-        constraints: [
-          {
-            type: "lowest-tangent",
-            params: {
-              gap: 0,
-              confineX: true,
-            },
-          },
-        ],
-      },
-    ],
-  },
-];
+const availablePresets = computed(() => {
+  if (!props.category) return [];
+
+  let templateType = CATEGORY_TEMPLATE_MAP[props.category];
+  if (!templateType) {
+    templateType = CATEGORY_TEMPLATE_MAP[props.category.trim()];
+  }
+  if (!templateType) return [];
+
+  const allowedKeys = TEMPLATE_HOLE_PRESETS[templateType] || [];
+  return allowedKeys.map((key) => HOLE_PRESETS[key]).filter(Boolean);
+});
 
 const featureState = reactive({
   groupId: null,
@@ -493,6 +365,18 @@ const completeStatus = reactive({
   message: "",
   issues: [],
 });
+
+watch(
+  availablePresets,
+  (newPresets) => {
+    if (newPresets.length > 0) {
+      selectedPreset.value = newPresets[0].name;
+      return;
+    }
+    selectedPreset.value = "";
+  },
+  { immediate: true },
+);
 
 const resetPanelState = () => {
   currentMode.value = "";
@@ -805,29 +689,24 @@ const syncFeatureStateFromWorking = async (groupId) => {
 
 const loadPreset = () => {
   if (!selectedPreset.value) {
-    // Clear features if no preset selected?
-    // props.editor.updateConfig('dieline.features', []);
-    // featureState.groupId = null;
     return;
   }
 
-  const preset = HOLE_PRESETS.find((p) => p.name === selectedPreset.value);
+  const preset = availablePresets.value.find(
+    (p) => p.name === selectedPreset.value,
+  );
   if (!preset) return;
 
   const features = JSON.parse(JSON.stringify(preset.features || []));
-  if (preset.name === "Standee Tab") {
-    const dielineHeight = editor.value.getConfig("size.actualHeightMm") || 50;
-    const tab = features[0];
-    const tabHeight = tab.height || 0;
-    tab.y = 1 + tabHeight / 2 / dielineHeight;
-  }
+  const groupId = features[0]?.groupId || null;
+  if (!groupId) return;
 
   editor.value.executeCommand("setWorkingFeatures", features);
 
   // Select it for editing
-  featureState.groupId = preset.groupId;
+  featureState.groupId = groupId;
 
-  syncFeatureStateFromWorking(preset.groupId);
+  syncFeatureStateFromWorking(groupId);
 };
 
 const isXDisabled = computed(() => {

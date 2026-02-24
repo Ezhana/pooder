@@ -5,6 +5,7 @@ import CustomActivityBar from "./components/CustomActivityBar.vue";
 import CustomToolPanel from "./components/CustomToolPanel.vue";
 
 const editorRef = ref<any>(null);
+const currentCategory = ref("Acrylic Keychain");
 
 onMounted(() => {
   if (editorRef.value) {
@@ -25,7 +26,7 @@ const handleImageChange = (images: any[]) => {
     <main class="editor-wrapper">
       <PooderEditor ref="editorRef" @image-change="handleImageChange" />
       <CustomActivityBar :editor="editorRef" />
-      <CustomToolPanel :editor="editorRef" />
+      <CustomToolPanel :editor="editorRef" :category="currentCategory" />
     </main>
   </div>
 </template>
