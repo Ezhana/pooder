@@ -64,6 +64,38 @@
       </div>
     </div>
 
+    <!-- White Ink Controls -->
+    <div v-if="currentMode === 'White Ink'" class="controls">
+      <div class="control-group">
+        <button @click="triggerWhiteInkUpload">Upload</button>
+        <input
+          type="file"
+          ref="whiteInkInput"
+          style="display: none"
+          @change="handleWhiteInkReplace"
+          accept="image/*"
+        />
+      </div>
+      <div class="control-group">
+        <label>
+          <input
+            type="checkbox"
+            v-model="whiteInkState.printWithWhiteInk"
+            @change="toggleWhiteInkPrint"
+            :disabled="!whiteInkState.id"
+          />
+          Print with White Ink
+        </label>
+      </div>
+      <div class="control-group" v-if="whiteInkState.id">
+        <button @click="completeWhiteInkWorking">Complete</button>
+        <button @click="clearWhiteInk">Clear</button>
+        <div v-if="whiteInkActionStatus.message" class="hint">
+          {{ whiteInkActionStatus.message }}
+        </div>
+      </div>
+    </div>
+
     <!-- Dieline Controls -->
     <div v-if="currentMode === 'Dieline'" class="controls">
       <div class="control-group">
@@ -204,6 +236,7 @@ const editor = computed(() => {
 
 const currentMode = ref("");
 const imageInput = ref(null);
+const whiteInkInput = ref(null);
 const dielineInput = ref(null);
 
 const imageState = reactive({
@@ -217,6 +250,15 @@ const imageState = reactive({
 const imageCompleteStatus = reactive({
   message: "",
   issues: [],
+});
+
+const whiteInkState = reactive({
+  id: null,
+  printWithWhiteInk: true,
+});
+
+const whiteInkActionStatus = reactive({
+  message: "",
 });
 
 const imageOriginalMm = computed(() => {
@@ -397,23 +439,63 @@ const completeStatus = reactive({
   issues: [],
 });
 
-const closePanel = () => {
-  // Deactivate tool? Or just hide panel?
-  // If we just hide panel, currentMode = ''.
-  // But ActivityBar might still show active tool.
-  // Ideally we should deactivate tool.
-  // Editor doesn't expose deactivateTool directly but we can activate empty tool or 'default'.
-  // Or just clear local state.
+const resetPanelState = () => {
   currentMode.value = "";
-  // If we want to clear selection too:
-  if (editor.value && editor.value.canvasService) {
-    // canvasService not exposed directly unless via services
-    // props.editor.services.workbench.activate(null); // If workbench service supported null
-    // For now just clear UI
+  imageState.id = null;
+  imageState.scale = 1;
+  imageState.angle = 0;
+  imageState.originalWidth = 0;
+  imageState.originalHeight = 0;
+  imageCompleteStatus.message = "";
+  imageCompleteStatus.issues = [];
+
+  whiteInkState.id = null;
+  whiteInkState.printWithWhiteInk = true;
+  whiteInkActionStatus.message = "";
+
+  featureState.groupId = null;
+  featureState.x = 0;
+  featureState.y = 0;
+  featureState.radius = 0;
+  featureState.constraints = null;
+  completeStatus.message = "";
+  completeStatus.issues = [];
+};
+
+const rollbackWorkingByTool = async (toolId) => {
+  if (!editor.value || !toolId) return;
+
+  if (toolId === "pooder.kit.image") {
+    await editor.value.executeCommand("resetWorkingImages");
+    return;
+  }
+  if (toolId === "pooder.kit.white-ink") {
+    await editor.value.executeCommand("resetWorkingWhiteInks");
+    return;
+  }
+  if (toolId === "pooder.kit.feature") {
+    await editor.value.executeCommand("resetWorkingFeatures");
   }
 };
 
+const closePanel = async () => {
+  if (!editor.value) {
+    resetPanelState();
+    return;
+  }
+
+  const activeToolId = editor.value?.services?.workbench?.activeToolId || null;
+
+  try {
+    await rollbackWorkingByTool(activeToolId);
+    await editor.value.deactivateTool();
+  } catch (e) {}
+
+  resetPanelState();
+};
+
 const triggerImageUpload = () => imageInput.value.click();
+const triggerWhiteInkUpload = () => whiteInkInput.value.click();
 const triggerDielineUpload = () => dielineInput.value.click();
 
 const handleImageReplace = async (e) => {
@@ -430,6 +512,16 @@ const handleImageReplace = async (e) => {
 
   await editor.value.executeCommand("resetWorkingImages");
   await syncImageStateFromWorking(imageState.id);
+  e.target.value = "";
+};
+
+const handleWhiteInkReplace = async (e) => {
+  const file = e.target.files[0];
+  if (!file || !editor.value) return;
+  const url = URL.createObjectURL(file);
+  whiteInkActionStatus.message = "";
+  await editor.value.executeCommand("setWhiteInkImage", url);
+  await syncWhiteInkSettings();
   e.target.value = "";
 };
 
@@ -462,6 +554,44 @@ const syncImageStateFromWorking = async (id) => {
       imageState.angle = item.angle || 0;
     }
   } catch (e) {}
+};
+
+const syncWhiteInkSettings = async () => {
+  if (!editor.value) return;
+  try {
+    const settings = await editor.value.executeCommand("getWhiteInkSettings");
+    whiteInkState.id = settings?.id || null;
+    whiteInkState.printWithWhiteInk = settings?.printWithWhiteInk !== false;
+    return;
+  } catch (e) {}
+
+  whiteInkState.id = null;
+  whiteInkState.printWithWhiteInk = true;
+};
+
+const toggleWhiteInkPrint = async () => {
+  if (!editor.value || !whiteInkState.id) return;
+  whiteInkActionStatus.message = "";
+  await editor.value.executeCommand(
+    "setWhiteInkPrintEnabled",
+    !!whiteInkState.printWithWhiteInk,
+  );
+};
+
+const completeWhiteInkWorking = async () => {
+  if (!editor.value || !whiteInkState.id) return;
+  whiteInkActionStatus.message = "";
+  const res = await editor.value.executeCommand("completeWhiteInks");
+  whiteInkActionStatus.message = res && res.ok ? "Completed" : "Complete failed";
+  await syncWhiteInkSettings();
+};
+
+const clearWhiteInk = async () => {
+  if (!editor.value || !whiteInkState.id) return;
+  whiteInkActionStatus.message = "";
+  await editor.value.executeCommand("clearWhiteInks");
+  await syncWhiteInkSettings();
+  whiteInkActionStatus.message = "Cleared";
 };
 
 const completeImageWorking = async () => {
@@ -614,16 +744,21 @@ const onSelectionCreated = async (e) => {
     return;
   }
 
+  if (selection.data?.layerId === "white-ink.user" && selection.data?.id) {
+    currentMode.value = "White Ink";
+    await syncWhiteInkSettings();
+    return;
+  }
+
   // Check if image
-  if (selection.data && selection.data.id && !selection.featureIndex) {
-    // Assume it's an image if it has ID and not a feature
-    // Actually we should check type or something, but data.id is used by ImageTool
+  if (selection.data?.layerId === "image.user" && selection.data?.id) {
     currentMode.value = "Image";
     imageState.id = selection.data.id;
     imageState.originalWidth = Math.round(selection.width || 0);
     imageState.originalHeight = Math.round(selection.height || 0);
 
     await syncImageStateFromWorking(imageState.id);
+    return;
   }
 
   // Check if feature
@@ -647,6 +782,15 @@ const onSelectionCleared = () => {
       currentMode.value = "";
     }
   }
+  if (currentMode.value === "White Ink") {
+    const activeId = editor.value?.services?.workbench?.activeToolId;
+    if (activeId !== "pooder.kit.white-ink") {
+      whiteInkState.id = null;
+      currentMode.value = "";
+    } else {
+      void syncWhiteInkSettings();
+    }
+  }
   // For Hole/Dieline, they are activated by ActivityBar, so we keep them open until tool changes?
   // User said: "panel opened but cannot close".
   // If I click empty space, active tool might remain Dieline, but no selection.
@@ -666,6 +810,9 @@ const onToolActivated = ({ id }) => {
     currentMode.value = "Image";
     imageCompleteStatus.message = "";
     imageCompleteStatus.issues = [];
+  } else if (id === "pooder.kit.white-ink") {
+    currentMode.value = "White Ink";
+    syncWhiteInkSettings();
   } else if (id === "pooder.kit.dieline") {
     currentMode.value = "Dieline";
     syncDielineState();

@@ -138,7 +138,9 @@ export class FeatureTool implements Extension {
           name: "Feature",
           interaction: "session",
           commands: {
+            begin: "resetWorkingFeatures",
             commit: "completeFeatures",
+            rollback: "resetWorkingFeatures",
           },
           session: {
             autoBegin: false,
@@ -193,6 +195,25 @@ export class FeatureTool implements Extension {
             await this.refreshGeometry();
             this.setWorkingFeatures(this.cloneFeatures(features || []));
             this.hasWorkingChanges = true;
+            this.redraw();
+            this.emitWorkingChange();
+            return { ok: true };
+          },
+        },
+        {
+          command: "resetWorkingFeatures",
+          title: "Reset Working Features",
+          handler: async () => {
+            const configService =
+              this.context?.services.get<ConfigurationService>(
+                "ConfigurationService",
+              );
+            const next = (configService?.get("dieline.features", []) ||
+              []) as ConstraintFeature[];
+
+            await this.refreshGeometry();
+            this.setWorkingFeatures(this.cloneFeatures(next));
+            this.hasWorkingChanges = false;
             this.redraw();
             this.emitWorkingChange();
             return { ok: true };

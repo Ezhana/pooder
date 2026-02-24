@@ -9,7 +9,7 @@ export class SceneViewService implements Extension {
   };
 
   private canvasService?: CanvasService;
-  private activeToolId?: string;
+  private activeToolId: string | null = null;
 
   activate(context: ExtensionContext) {
     this.canvasService = context.services.get<CanvasService>("CanvasService");
@@ -20,11 +20,11 @@ export class SceneViewService implements Extension {
   deactivate(context: ExtensionContext) {
     context.eventBus.off("tool:activated", this.onToolActivated);
     context.eventBus.off("object:added", this.onObjectAdded);
-    this.activeToolId = undefined;
+    this.activeToolId = null;
     this.canvasService = undefined;
   }
 
-  private onToolActivated = (e: { id: string }) => {
+  private onToolActivated = (e: { id: string | null }) => {
     this.activeToolId = e.id;
     this.apply();
   };
@@ -34,15 +34,16 @@ export class SceneViewService implements Extension {
   };
 
   private apply() {
-    if (!this.canvasService || !this.activeToolId) return;
+    if (!this.canvasService) return;
 
     const dielineLayer = this.canvasService.getLayer("dieline-overlay");
     if (dielineLayer) {
-      const visible = this.activeToolId !== "pooder.kit.image";
+      const visible =
+        this.activeToolId !== "pooder.kit.image" &&
+        this.activeToolId !== "pooder.kit.white-ink";
       (dielineLayer as any).set({ visible });
     }
 
     this.canvasService.requestRenderAll();
   }
 }
-

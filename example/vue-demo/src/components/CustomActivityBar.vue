@@ -23,6 +23,7 @@ const activeTool = ref('');
 
 const tools = [
   { id: 'pooder.kit.image', label: 'Image' },
+  { id: 'pooder.kit.white-ink', label: 'White Ink' },
   { id: 'pooder.kit.dieline', label: 'Dieline' },
   { id: 'pooder.kit.feature', label: 'Hole' }
 ];

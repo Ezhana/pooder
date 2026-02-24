@@ -444,7 +444,7 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
     new SceneViewService(),
     new ImageTool(),
     // new FilmTool(),
-    // new WhiteInkTool(),
+    new WhiteInkTool(),
     new MirrorTool(),
     new DielineTool(),
     new RulerTool(),
