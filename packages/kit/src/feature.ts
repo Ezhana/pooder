@@ -8,7 +8,6 @@ import {
 } from "@pooder/core";
 import { Circle, Group, Point, Rect } from "fabric";
 import CanvasService from "./CanvasService";
-import { DielineGeometry } from "./dieline";
 import {
   getNearestPointOnDieline,
   DielineFeature,
@@ -18,7 +17,10 @@ import { ConstraintRegistry, ConstraintFeature } from "./constraints";
 import {
   completeFeaturesStrict,
 } from "./featureComplete";
-import { parseLengthToMm } from "./units";
+import {
+  readSizeState,
+  type SceneGeometrySnapshot as DielineGeometry,
+} from "./sceneLayoutModel";
 
 export class FeatureTool implements Extension {
   id = "pooder.kit.feature";
@@ -37,7 +39,7 @@ export class FeatureTool implements Extension {
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
-  private handleDielineChange: ((geometry: DielineGeometry) => void) | null =
+  private handleSceneGeometryChange: ((geometry: DielineGeometry) => void) | null =
     null;
 
   private currentGeometry: DielineGeometry | null = null;
@@ -252,7 +254,9 @@ export class FeatureTool implements Extension {
     const commandService = this.context.services.get<any>("CommandService");
     if (!commandService) return;
     try {
-      const g = await Promise.resolve(commandService.executeCommand("getGeometry"));
+      const g = await Promise.resolve(
+        commandService.executeCommand("getSceneGeometry"),
+      );
       if (g) this.currentGeometry = g as DielineGeometry;
     } catch (e) {}
   }
@@ -268,14 +272,9 @@ export class FeatureTool implements Extension {
       this.context?.services.get<ConfigurationService>("ConfigurationService");
     if (!configService) return { ok: false };
 
-    const dielineWidth = parseLengthToMm(
-      configService.get("dieline.width") ?? 500,
-      "mm",
-    );
-    const dielineHeight = parseLengthToMm(
-      configService.get("dieline.height") ?? 500,
-      "mm",
-    );
+    const sizeState = readSizeState(configService);
+    const dielineWidth = sizeState.actualWidthMm;
+    const dielineHeight = sizeState.actualHeightMm;
 
     let changed = false;
     const next = this.workingFeatures.map((f) => {
@@ -328,14 +327,9 @@ export class FeatureTool implements Extension {
       };
     }
 
-    const dielineWidth = parseLengthToMm(
-      configService.get("dieline.width") ?? 500,
-      "mm",
-    );
-    const dielineHeight = parseLengthToMm(
-      configService.get("dieline.height") ?? 500,
-      "mm",
-    );
+    const sizeState = readSizeState(configService);
+    const dielineWidth = sizeState.actualWidthMm;
+    const dielineHeight = sizeState.actualHeightMm;
 
     const result = completeFeaturesStrict(
       this.workingFeatures,
@@ -443,16 +437,16 @@ export class FeatureTool implements Extension {
     if (!this.canvasService || !this.context) return;
     const canvas = this.canvasService.canvas;
 
-    // 1. Listen for Dieline Geometry Changes
-    if (!this.handleDielineChange) {
-      this.handleDielineChange = (geometry: DielineGeometry) => {
+    // 1. Listen for Scene Geometry Changes
+    if (!this.handleSceneGeometryChange) {
+      this.handleSceneGeometryChange = (geometry: DielineGeometry) => {
         this.currentGeometry = geometry;
         this.redraw();
         this.enforceConstraints();
       };
       this.context.eventBus.on(
-        "dieline:geometry:change",
-        this.handleDielineChange,
+        "scene:geometry:change",
+        this.handleSceneGeometryChange,
       );
     }
 
@@ -460,7 +454,7 @@ export class FeatureTool implements Extension {
     const commandService = this.context.services.get<any>("CommandService");
     if (commandService) {
       try {
-        Promise.resolve(commandService.executeCommand("getGeometry")).then(
+        Promise.resolve(commandService.executeCommand("getSceneGeometry")).then(
           (g) => {
             if (g) {
               this.currentGeometry = g as DielineGeometry;
@@ -599,12 +593,12 @@ export class FeatureTool implements Extension {
       canvas.off("object:modified", this.handleModified);
       this.handleModified = null;
     }
-    if (this.handleDielineChange && this.context) {
+    if (this.handleSceneGeometryChange && this.context) {
       this.context.eventBus.off(
-        "dieline:geometry:change",
-        this.handleDielineChange,
+        "scene:geometry:change",
+        this.handleSceneGeometryChange,
       );
-      this.handleDielineChange = null;
+      this.handleSceneGeometryChange = null;
     }
 
     const objects = canvas

@@ -5,6 +5,74 @@
       <button class="close-btn" @click="closePanel">×</button>
     </div>
 
+    <!-- Size Controls -->
+    <div v-if="currentMode === 'Size'" class="controls">
+      <div class="control-group">
+        <label>Actual Size</label>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+          <input
+            type="number"
+            min="10"
+            step="0.1"
+            v-model.number="sizeState.width"
+            @input="updateSizeByWidth"
+          />
+          <input
+            type="number"
+            min="10"
+            step="0.1"
+            v-model.number="sizeState.height"
+            @input="updateSizeByHeight"
+          />
+        </div>
+      </div>
+      <div class="control-group">
+        <label>Unit</label>
+        <select v-model="sizeState.unit" @change="updateSizeUnit">
+          <option value="mm">mm</option>
+          <option value="cm">cm</option>
+          <option value="in">in</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Constraint</label>
+        <select
+          v-model="sizeState.constraintMode"
+          @change="updateSizeConstraint"
+        >
+          <option value="free">Free</option>
+          <option value="lockAspect">Lock Aspect</option>
+          <option value="equal">Equal</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Cut Mode</label>
+        <select v-model="sizeState.cutMode" @change="updateSizeCut">
+          <option value="trim">Trim</option>
+          <option value="outset">Outset</option>
+          <option value="inset">Inset</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Cut Margin (mm)</label>
+        <input
+          type="number"
+          min="0"
+          step="0.1"
+          v-model.number="sizeState.cutMarginMm"
+          @input="updateSizeCut"
+        />
+      </div>
+      <div class="control-group">
+        <label>Image Size</label>
+        <div class="hint" v-if="selectedImageSize">
+          {{ selectedImageSize.width.toFixed(2) }} ×
+          {{ selectedImageSize.height.toFixed(2) }} {{ selectedImageSize.unit }}
+        </div>
+        <div class="hint" v-else>No image selected</div>
+      </div>
+    </div>
+
     <!-- Image Controls -->
     <div v-if="currentMode === 'Image'" class="controls">
       <div class="control-group" v-if="imageState.id">
@@ -84,8 +152,25 @@
             @change="toggleWhiteInkPrint"
             :disabled="!whiteInkState.id"
           />
-          Print with White Ink
+          Preview White Ink
         </label>
+      </div>
+      <div class="control-group" v-if="whiteInkState.id">
+        <label>White Ink Opacity</label>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          v-model.number="whiteInkState.opacity"
+          @input="updateWhiteInkOpacity"
+        />
+        <span>{{ whiteInkState.opacity.toFixed(2) }}</span>
+      </div>
+      <div class="control-group" v-if="whiteInkState.id">
+        <button @click="toggleWhiteInkPreviewImage">
+          {{ whiteInkState.previewImageVisible ? "Hide Image" : "Show Image" }}
+        </button>
       </div>
       <div class="control-group" v-if="whiteInkState.id">
         <button @click="completeWhiteInkWorking">Complete</button>
@@ -115,48 +200,6 @@
           <option value="circle">Circle</option>
           <option value="custom">Custom</option>
         </select>
-      </div>
-      <div
-        class="control-group"
-        :style="{ opacity: dielineState.shape === 'custom' ? 0.5 : 1 }"
-      >
-        <div
-          style="
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-          "
-        >
-          <label>Border length</label>
-          <span style="font-size: 12px; font-weight: bold">{{
-            dielineState.offset === 0 ? "full" : dielineState.offset + "mm"
-          }}</span>
-        </div>
-        <input
-          type="range"
-          min="0"
-          max="5"
-          step="1"
-          v-model.number="dielineState.offset"
-          @input="updateDielineConfig"
-          :disabled="dielineState.shape === 'custom'"
-        />
-        <div
-          style="
-            display: flex;
-            justify-content: space-between;
-            font-size: 10px;
-            color: #999;
-            margin-top: 2px;
-          "
-        >
-          <span>full</span>
-          <span>1mm</span>
-          <span>2mm</span>
-          <span>3mm</span>
-          <span>4mm</span>
-          <span>5mm</span>
-        </div>
       </div>
     </div>
 
@@ -255,11 +298,24 @@ const imageCompleteStatus = reactive({
 const whiteInkState = reactive({
   id: null,
   printWithWhiteInk: true,
+  opacity: 0.45,
+  previewImageVisible: true,
 });
 
 const whiteInkActionStatus = reactive({
   message: "",
 });
+
+const sizeState = reactive({
+  width: 50,
+  height: 50,
+  unit: "mm",
+  constraintMode: "free",
+  cutMode: "trim",
+  cutMarginMm: 0,
+});
+
+const selectedImageSize = ref(null);
 
 const imageOriginalMm = computed(() => {
   const w = imageState.originalWidth;
@@ -274,7 +330,6 @@ const imageOriginalMm = computed(() => {
 
 const dielineState = reactive({
   shape: "rect",
-  offset: 0,
 });
 
 const featuresList = ref([]);
@@ -451,7 +506,17 @@ const resetPanelState = () => {
 
   whiteInkState.id = null;
   whiteInkState.printWithWhiteInk = true;
+  whiteInkState.opacity = 0.45;
+  whiteInkState.previewImageVisible = true;
   whiteInkActionStatus.message = "";
+
+  sizeState.width = 50;
+  sizeState.height = 50;
+  sizeState.unit = "mm";
+  sizeState.constraintMode = "free";
+  sizeState.cutMode = "trim";
+  sizeState.cutMarginMm = 0;
+  selectedImageSize.value = null;
 
   featureState.groupId = null;
   featureState.x = 0;
@@ -497,6 +562,81 @@ const closePanel = async () => {
 const triggerImageUpload = () => imageInput.value.click();
 const triggerWhiteInkUpload = () => whiteInkInput.value.click();
 const triggerDielineUpload = () => dielineInput.value.click();
+
+const syncSizeState = async () => {
+  if (!editor.value) return;
+  try {
+    const next = await editor.value.executeCommand("getSizeState");
+    if (!next) return;
+    sizeState.width = Number(next.actualWidth ?? 0);
+    sizeState.height = Number(next.actualHeight ?? 0);
+    sizeState.unit = next.unit || "mm";
+    sizeState.constraintMode = next.constraintMode || "free";
+    sizeState.cutMode = next.cutMode || "trim";
+    sizeState.cutMarginMm = Number(next.cutMarginMm ?? 0);
+  } catch (e) {}
+};
+
+const refreshSelectedImageSize = async () => {
+  if (!editor.value) return;
+  try {
+    selectedImageSize.value = await editor.value.executeCommand(
+      "getSelectedImageSize",
+    );
+  } catch (e) {
+    selectedImageSize.value = null;
+  }
+};
+
+const updateSizeByWidth = async () => {
+  if (!editor.value) return;
+  await editor.value.executeCommand("updateSizeDimensions", {
+    width: sizeState.width,
+    unit: sizeState.unit,
+    changed: "width",
+  });
+  await syncSizeState();
+  await refreshSelectedImageSize();
+};
+
+const updateSizeByHeight = async () => {
+  if (!editor.value) return;
+  await editor.value.executeCommand("updateSizeDimensions", {
+    height: sizeState.height,
+    unit: sizeState.unit,
+    changed: "height",
+  });
+  await syncSizeState();
+  await refreshSelectedImageSize();
+};
+
+const updateSizeUnit = async () => {
+  if (!editor.value) return;
+  await editor.value.executeCommand("setSizeDisplayUnit", sizeState.unit);
+  await syncSizeState();
+  await refreshSelectedImageSize();
+};
+
+const updateSizeConstraint = async () => {
+  if (!editor.value) return;
+  await editor.value.executeCommand(
+    "setSizeConstraintMode",
+    sizeState.constraintMode,
+  );
+  await syncSizeState();
+  await refreshSelectedImageSize();
+};
+
+const updateSizeCut = async () => {
+  if (!editor.value) return;
+  await editor.value.executeCommand(
+    "setSizeCut",
+    sizeState.cutMode,
+    sizeState.cutMarginMm,
+  );
+  await syncSizeState();
+  await refreshSelectedImageSize();
+};
 
 const handleImageReplace = async (e) => {
   const file = e.target.files[0];
@@ -562,11 +702,15 @@ const syncWhiteInkSettings = async () => {
     const settings = await editor.value.executeCommand("getWhiteInkSettings");
     whiteInkState.id = settings?.id || null;
     whiteInkState.printWithWhiteInk = settings?.printWithWhiteInk !== false;
+    whiteInkState.opacity = Number(settings?.opacity ?? 0.45);
+    whiteInkState.previewImageVisible = settings?.previewImageVisible !== false;
     return;
   } catch (e) {}
 
   whiteInkState.id = null;
   whiteInkState.printWithWhiteInk = true;
+  whiteInkState.opacity = 0.45;
+  whiteInkState.previewImageVisible = true;
 };
 
 const toggleWhiteInkPrint = async () => {
@@ -578,11 +722,32 @@ const toggleWhiteInkPrint = async () => {
   );
 };
 
+const updateWhiteInkOpacity = async () => {
+  if (!editor.value || !whiteInkState.id) return;
+  whiteInkActionStatus.message = "";
+  await editor.value.executeCommand(
+    "setWhiteInkOpacity",
+    Number(whiteInkState.opacity || 0),
+  );
+};
+
+const toggleWhiteInkPreviewImage = async () => {
+  if (!editor.value || !whiteInkState.id) return;
+  whiteInkActionStatus.message = "";
+  const nextVisible = !whiteInkState.previewImageVisible;
+  await editor.value.executeCommand(
+    "setWhiteInkPreviewImageVisible",
+    nextVisible,
+  );
+  whiteInkState.previewImageVisible = nextVisible;
+};
+
 const completeWhiteInkWorking = async () => {
   if (!editor.value || !whiteInkState.id) return;
   whiteInkActionStatus.message = "";
   const res = await editor.value.executeCommand("completeWhiteInks");
-  whiteInkActionStatus.message = res && res.ok ? "Completed" : "Complete failed";
+  whiteInkActionStatus.message =
+    res && res.ok ? "Completed" : "Complete failed";
   await syncWhiteInkSettings();
 };
 
@@ -622,7 +787,6 @@ const detectDielineFromFrame = async () => {
 
 const updateDielineConfig = () => {
   editor.value.updateConfig("dieline.shape", dielineState.shape);
-  editor.value.updateConfig("dieline.offset", -dielineState.offset);
 };
 
 const syncFeatureStateFromWorking = async (groupId) => {
@@ -652,7 +816,7 @@ const loadPreset = () => {
 
   const features = JSON.parse(JSON.stringify(preset.features || []));
   if (preset.name === "Standee Tab") {
-    const dielineHeight = editor.value.getConfig("dieline.height") || 50;
+    const dielineHeight = editor.value.getConfig("size.actualHeightMm") || 50;
     const tab = features[0];
     const tabHeight = tab.height || 0;
     tab.y = 1 + tabHeight / 2 / dielineHeight;
@@ -726,13 +890,14 @@ const updateGroupPosition = () => {
 const syncDielineState = () => {
   if (!editor.value) return;
   dielineState.shape = editor.value.getConfig("dieline.shape") || "rect";
-  dielineState.offset = Math.abs(editor.value.getConfig("dieline.offset")) || 0;
 };
 
 const onSelectionCreated = async (e) => {
   const selection = e.selected ? e.selected[0] : null;
+  const activeId = editor.value?.services?.workbench?.activeToolId;
   if (!selection) {
     // Fallback to active tool
+    await refreshSelectedImageSize();
     return;
   }
 
@@ -752,12 +917,14 @@ const onSelectionCreated = async (e) => {
 
   // Check if image
   if (selection.data?.layerId === "image.user" && selection.data?.id) {
-    currentMode.value = "Image";
-    imageState.id = selection.data.id;
-    imageState.originalWidth = Math.round(selection.width || 0);
-    imageState.originalHeight = Math.round(selection.height || 0);
-
-    await syncImageStateFromWorking(imageState.id);
+    if (activeId === "pooder.kit.image") {
+      currentMode.value = "Image";
+      imageState.id = selection.data.id;
+      imageState.originalWidth = Math.round(selection.width || 0);
+      imageState.originalHeight = Math.round(selection.height || 0);
+      await syncImageStateFromWorking(imageState.id);
+    }
+    await refreshSelectedImageSize();
     return;
   }
 
@@ -766,6 +933,7 @@ const onSelectionCreated = async (e) => {
   // Assuming feature marker has some identification
   // If not, we can't edit it easily.
   // But let's assume active tool 'Hole' handles it if we can't select.
+  await refreshSelectedImageSize();
 };
 
 const onSelectionCleared = () => {
@@ -791,6 +959,7 @@ const onSelectionCleared = () => {
       void syncWhiteInkSettings();
     }
   }
+  void refreshSelectedImageSize();
   // For Hole/Dieline, they are activated by ActivityBar, so we keep them open until tool changes?
   // User said: "panel opened but cannot close".
   // If I click empty space, active tool might remain Dieline, but no selection.
@@ -802,7 +971,11 @@ const onSelectionCleared = () => {
 };
 
 const onToolActivated = ({ id }) => {
-  if (id === "pooder.kit.image") {
+  if (id === "pooder.kit.size") {
+    currentMode.value = "Size";
+    void syncSizeState();
+    void refreshSelectedImageSize();
+  } else if (id === "pooder.kit.image") {
     // Wait for selection to show panel? Or show generic image settings?
     // Usually Image tool requires selection to edit.
     // If we just activate tool "Image", maybe we show nothing or "Select an image".
@@ -838,6 +1011,17 @@ const onWorkingChange = (e) => {
   }
 };
 
+const onSizeStateChanged = (state) => {
+  if (!state) return;
+  sizeState.width = Number(state.actualWidth ?? 0);
+  sizeState.height = Number(state.actualHeight ?? 0);
+  sizeState.unit = state.unit || "mm";
+  sizeState.constraintMode = state.constraintMode || "free";
+  sizeState.cutMode = state.cutMode || "trim";
+  sizeState.cutMarginMm = Number(state.cutMarginMm ?? 0);
+  void refreshSelectedImageSize();
+};
+
 const completeWorking = async () => {
   completeStatus.message = "";
   completeStatus.issues = [];
@@ -859,6 +1043,7 @@ watch(
       editor.on("selection:cleared", onSelectionCleared);
       editor.on("tool:activated", onToolActivated);
       editor.on("feature:working:change", onWorkingChange);
+      editor.on("size:state:changed", onSizeStateChanged);
 
       // Initial sync
       if (editor.services && editor.services.workbench) {
@@ -877,6 +1062,7 @@ onUnmounted(() => {
     props.editor.off("selection:cleared", onSelectionCleared);
     props.editor.off("tool:activated", onToolActivated);
     props.editor.off("feature:working:change", onWorkingChange);
+    props.editor.off("size:state:changed", onSizeStateChanged);
   }
 });
 </script>

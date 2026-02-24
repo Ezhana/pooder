@@ -79,6 +79,12 @@ class CanvasService {
     requestRenderAll() {
         this.canvas.requestRenderAll();
     }
+    resize(width, height) {
+        this.canvas.setDimensions({ width, height });
+        this.viewport.updateContainer(width, height);
+        this.eventBus?.emit("canvas:resized", { width, height });
+        this.requestRenderAll();
+    }
     async applyLayerSpec(spec) {
         const layer = this.createLayer(spec.id, spec.props || {});
         await this.applyObjectSpecsToContainer(layer, spec.objects);

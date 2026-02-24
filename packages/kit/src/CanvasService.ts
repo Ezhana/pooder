@@ -95,6 +95,13 @@ export default class CanvasService implements Service {
     this.canvas.requestRenderAll();
   }
 
+  resize(width: number, height: number) {
+    this.canvas.setDimensions({ width, height });
+    this.viewport.updateContainer(width, height);
+    this.eventBus?.emit("canvas:resized", { width, height });
+    this.requestRenderAll();
+  }
+
   async applyLayerSpec(spec: RenderLayerSpec): Promise<void> {
     const layer = this.createLayer(spec.id, spec.props || {});
     await this.applyObjectSpecsToContainer(layer, spec.objects);

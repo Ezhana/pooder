@@ -4,11 +4,12 @@ import {
   ContributionPointIds,
   CommandContribution,
   ConfigurationContribution,
+  ConfigurationService,
 } from "@pooder/core";
 import { Rect, Line, Text, Group, Polygon } from "fabric";
 import CanvasService from "./CanvasService";
-import { Unit } from "./coordinate";
 import { formatMm } from "./units";
+import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
 
 export class RulerTool implements Extension {
   id = "pooder.kit.ruler";
@@ -24,14 +25,11 @@ export class RulerTool implements Extension {
   private lineColor: string = "#999999";
   private fontSize: number = 10;
 
-  // Dieline context for sync
-  private dielineWidth: number = 500;
-  private dielineHeight: number = 500;
-  private dielineDisplayUnit: Unit = "mm";
-  private dielinePadding: number | string = 40;
-  private dielineOffset: number = 0;
-
   private canvasService?: CanvasService;
+  private context?: ExtensionContext;
+  private onCanvasResized = () => {
+    this.updateRuler();
+  };
 
   constructor(
     options?: Partial<{
@@ -48,13 +46,16 @@ export class RulerTool implements Extension {
   }
 
   activate(context: ExtensionContext) {
+    this.context = context;
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
       console.warn("CanvasService not found for RulerTool");
       return;
     }
 
-    const configService = context.services.get<any>("ConfigurationService");
+    const configService = context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
     if (configService) {
       // Load initial config
       this.thickness = configService.get("ruler.thickness", this.thickness);
@@ -67,25 +68,6 @@ export class RulerTool implements Extension {
       this.lineColor = configService.get("ruler.lineColor", this.lineColor);
       this.fontSize = configService.get("ruler.fontSize", this.fontSize);
 
-      // Load Dieline Config
-      this.dielineDisplayUnit = configService.get(
-        "dieline.displayUnit",
-        this.dielineDisplayUnit,
-      );
-      this.dielineWidth = configService.get("dieline.width", this.dielineWidth);
-      this.dielineHeight = configService.get(
-        "dieline.height",
-        this.dielineHeight,
-      );
-      this.dielinePadding = configService.get(
-        "dieline.padding",
-        this.dielinePadding,
-      );
-      this.dielineOffset = configService.get(
-        "dieline.offset",
-        this.dielineOffset,
-      );
-
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
         let shouldUpdate = false;
@@ -95,13 +77,7 @@ export class RulerTool implements Extension {
             (this as any)[prop] = e.value;
             shouldUpdate = true;
           }
-        } else if (e.key.startsWith("dieline.")) {
-          if (e.key === "dieline.displayUnit")
-            this.dielineDisplayUnit = e.value;
-          if (e.key === "dieline.width") this.dielineWidth = e.value;
-          if (e.key === "dieline.height") this.dielineHeight = e.value;
-          if (e.key === "dieline.padding") this.dielinePadding = e.value;
-          if (e.key === "dieline.offset") this.dielineOffset = e.value;
+        } else if (e.key.startsWith("size.")) {
           shouldUpdate = true;
         }
 
@@ -112,12 +88,15 @@ export class RulerTool implements Extension {
     }
 
     this.createLayer();
+    context.eventBus.on("canvas:resized", this.onCanvasResized);
     this.updateRuler();
   }
 
   deactivate(context: ExtensionContext) {
+    context.eventBus.off("canvas:resized", this.onCanvasResized);
     this.destroyLayer();
     this.canvasService = undefined;
+    this.context = undefined;
   }
 
   contribute() {
@@ -294,23 +273,6 @@ export class RulerTool implements Extension {
     });
   }
 
-  private resolvePadding(
-    containerWidth: number,
-    containerHeight: number,
-  ): number {
-    if (typeof this.dielinePadding === "number") {
-      return this.dielinePadding;
-    }
-    if (typeof this.dielinePadding === "string") {
-      if (this.dielinePadding.endsWith("%")) {
-        const percent = parseFloat(this.dielinePadding) / 100;
-        return Math.min(containerWidth, containerHeight) * percent;
-      }
-      return parseFloat(this.dielinePadding) || 0;
-    }
-    return 0;
-  }
-
   private updateRuler() {
     if (!this.canvasService) return;
     const layer = this.getLayer();
@@ -318,56 +280,35 @@ export class RulerTool implements Extension {
 
     layer.remove(...layer.getObjects());
 
-    const { thickness, backgroundColor, lineColor, textColor, fontSize } = this;
-    const width = this.canvasService.canvas.width || 800;
-    const height = this.canvasService.canvas.height || 600;
+    const { backgroundColor, lineColor, textColor, fontSize } = this;
 
-    // Calculate Layout using Dieline properties
-    // Add padding to match DielineTool
-    const paddingPx = this.resolvePadding(width, height);
-
-    // Sync Viewport (in case DielineTool hasn't updated it yet, or purely for consistency)
-    this.canvasService.viewport.setPadding(paddingPx);
-    this.canvasService.viewport.updatePhysical(
-      this.dielineWidth,
-      this.dielineHeight,
+    const configService = this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
     );
+    if (!configService) return;
+    const sizeState = readSizeState(configService);
+    const layout = computeSceneLayout(this.canvasService, sizeState);
+    if (!layout) return;
 
-    const layout = this.canvasService.viewport.layout;
-
-    const scale = layout.scale;
-    const offsetX = layout.offsetX;
-    const offsetY = layout.offsetY;
-    const visualWidth = layout.width;
-    const visualHeight = layout.height;
-
-    // Logic for Bleed Offset:
-    // 1. If offset > 0 (Expand):
-    //    - Ruler expands to cover the bleed area.
-    //    - Dimensions show expanded size.
-    // 2. If offset < 0 (Shrink/Cut):
-    //    - Ruler stays at original Dieline boundary (does not shrink).
-    //    - Dimensions show original size.
-    //    - Bleed area is internal, so we ignore it for ruler placement.
-
-    const rawOffsetMm = this.dielineOffset || 0;
-    // Effective offset for ruler calculations (only positive offset expands the ruler)
-    const effectiveOffsetMm = rawOffsetMm > 0 ? rawOffsetMm : 0;
-
-    // Pixel expansion based on effective offset
-    const expandPixels = effectiveOffsetMm * scale;
+    const trimRect = layout.trimRect;
+    const cutRect = layout.cutRect;
+    const useCutAsRuler = layout.cutMode === "outset";
+    const rulerRect = useCutAsRuler ? cutRect : trimRect;
     // Use gap configuration
     const gap = this.gap || 15;
 
     // New Bounding Box for Ruler
-    const rulerLeft = offsetX - expandPixels;
-    const rulerTop = offsetY - expandPixels;
-    const rulerRight = offsetX + visualWidth + expandPixels;
-    const rulerBottom = offsetY + visualHeight + expandPixels;
+    const rulerLeft = rulerRect.left;
+    const rulerTop = rulerRect.top;
+    const rulerRight = rulerRect.left + rulerRect.width;
+    const rulerBottom = rulerRect.top + rulerRect.height;
 
     // Display Dimensions (Physical)
-    const displayWidthMm = this.dielineWidth + effectiveOffsetMm * 2;
-    const displayHeightMm = this.dielineHeight + effectiveOffsetMm * 2;
+    const displayWidthMm = useCutAsRuler ? layout.cutWidthMm : layout.trimWidthMm;
+    const displayHeightMm = useCutAsRuler
+      ? layout.cutHeightMm
+      : layout.trimHeightMm;
+    const displayUnit = sizeState.unit;
 
     // Ruler Placement Coordinates
     // Top Ruler: Above the top boundary
@@ -421,8 +362,8 @@ export class RulerTool implements Extension {
     );
 
     // Top Text (Centered)
-    const widthStr = formatMm(displayWidthMm, this.dielineDisplayUnit);
-    const topTextContent = `${widthStr} ${this.dielineDisplayUnit}`;
+    const widthStr = formatMm(displayWidthMm, displayUnit);
+    const topTextContent = `${widthStr} ${displayUnit}`;
     const topText = new Text(topTextContent, {
       left: topRulerXStart + (rulerRight - rulerLeft) / 2,
       top: topRulerY,
@@ -484,8 +425,8 @@ export class RulerTool implements Extension {
     );
 
     // Left Text (Centered, Rotated)
-    const heightStr = formatMm(displayHeightMm, this.dielineDisplayUnit);
-    const leftTextContent = `${heightStr} ${this.dielineDisplayUnit}`;
+    const heightStr = formatMm(displayHeightMm, displayUnit);
+    const leftTextContent = `${heightStr} ${displayUnit}`;
     const leftText = new Text(leftTextContent, {
       left: leftRulerX,
       top: leftRulerYStart + (rulerBottom - rulerTop) / 2,

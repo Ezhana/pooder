@@ -34,7 +34,9 @@ import {
   ImageTool,
   WhiteInkTool,
   MirrorTool,
-  SceneViewService,
+  SceneVisibilityService,
+  SizeTool,
+  SceneLayoutService,
 } from "@pooder/kit";
 import ToolPanel from "./components/ToolPanel.vue";
 import CanvasArea from "./components/CanvasArea.vue";
@@ -147,29 +149,24 @@ const clampNormalized = (value: number): number => {
   return Math.max(-1, Math.min(2, value));
 };
 
-const toFrameRect = (geo: any): FrameRect | null => {
-  const width = Number(geo?.width);
-  const height = Number(geo?.height);
-  const centerX = Number(geo?.x);
-  const centerY = Number(geo?.y);
-
+const toFrameRect = (layout: any): FrameRect | null => {
+  const cut = layout?.cutRect;
+  if (!cut) return null;
+  const width = Number(cut.width);
+  const height = Number(cut.height);
+  const left = Number(cut.left);
+  const top = Number(cut.top);
   if (
     !Number.isFinite(width) ||
     !Number.isFinite(height) ||
-    !Number.isFinite(centerX) ||
-    !Number.isFinite(centerY) ||
+    !Number.isFinite(left) ||
+    !Number.isFinite(top) ||
     width <= 0 ||
     height <= 0
   ) {
     return null;
   }
-
-  return {
-    left: centerX - width / 2,
-    top: centerY - height / 2,
-    width,
-    height,
-  };
+  return { left, top, width, height };
 };
 
 const snapshotImageRenderStates = (
@@ -220,7 +217,8 @@ const snapshotImageRenderStates = (
 const applyDetectedDielineConfig = (result: DetectEdgeResult) => {
   cfgSvc.update("dieline.shape", "custom");
   cfgSvc.update("dieline.pathData", result.pathData);
-  cfgSvc.update("dieline.offset", 0);
+  cfgSvc.update("size.cutMode", "trim");
+  cfgSvc.update("size.cutMarginMm", 0);
 };
 
 const computeDetectAlignmentShift = (
@@ -268,8 +266,8 @@ const compensateImagesForDetectedDieline = async (
 ) => {
   if (!snapshots.length) return;
 
-  const geo = await cmdSvc.executeCommand("getGeometry");
-  const frame = toFrameRect(geo);
+  const layout = await cmdSvc.executeCommand("getSceneLayout");
+  const frame = toFrameRect(layout);
   if (!frame) return;
 
   const { shiftX, shiftY } = computeDetectAlignmentShift(result, frame);
@@ -441,7 +439,9 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
 
   const tools = [
     new BackgroundTool(),
-    new SceneViewService(),
+    new SizeTool(),
+    new SceneLayoutService(),
+    new SceneVisibilityService(),
     new ImageTool(),
     // new FilmTool(),
     new WhiteInkTool(),
@@ -459,7 +459,7 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
 const onResize = (width: number, height: number) => {
   const canvasService = pooder.getService<CanvasService>("CanvasService");
   if (canvasService) {
-    canvasService.canvas.setDimensions({ width, height });
+    canvasService.resize(width, height);
   }
 };
 

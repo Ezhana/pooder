@@ -1,11 +1,11 @@
 import { Extension, ExtensionContext } from "@pooder/core";
 import CanvasService from "./CanvasService";
 
-export class SceneViewService implements Extension {
-  id = "pooder.kit.sceneView";
+export class SceneVisibilityService implements Extension {
+  id = "pooder.kit.sceneVisibility";
 
   metadata = {
-    name: "SceneViewService",
+    name: "SceneVisibilityService",
   };
 
   private canvasService?: CanvasService;

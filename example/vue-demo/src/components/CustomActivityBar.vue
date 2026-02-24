@@ -22,6 +22,7 @@ const props = defineProps({
 const activeTool = ref('');
 
 const tools = [
+  { id: 'pooder.kit.size', label: 'Size' },
   { id: 'pooder.kit.image', label: 'Image' },
   { id: 'pooder.kit.white-ink', label: 'White Ink' },
   { id: 'pooder.kit.dieline', label: 'Dieline' },

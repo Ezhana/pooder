@@ -10,8 +10,8 @@ onMounted(() => {
   if (editorRef.value) {
     editorRef.value.updateConfig("dieline.showBleedLines", false);
     editorRef.value.updateConfig("dieline.offsetStyle", "hidden");
-    editorRef.value.updateConfig("dieline.width", 50);
-    editorRef.value.updateConfig("dieline.height", 50);
+    editorRef.value.updateConfig("size.actualWidthMm", 50);
+    editorRef.value.updateConfig("size.actualHeightMm", 50);
   }
 });
 

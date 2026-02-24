@@ -4,6 +4,7 @@ exports.RulerTool = void 0;
 const core_1 = require("@pooder/core");
 const fabric_1 = require("fabric");
 const units_1 = require("./units");
+const sceneLayoutModel_1 = require("./sceneLayoutModel");
 class RulerTool {
     constructor(options) {
         this.id = "pooder.kit.ruler";
@@ -16,17 +17,15 @@ class RulerTool {
         this.textColor = "#333333";
         this.lineColor = "#999999";
         this.fontSize = 10;
-        // Dieline context for sync
-        this.dielineWidth = 500;
-        this.dielineHeight = 500;
-        this.dielineDisplayUnit = "mm";
-        this.dielinePadding = 40;
-        this.dielineOffset = 0;
+        this.onCanvasResized = () => {
+            this.updateRuler();
+        };
         if (options) {
             Object.assign(this, options);
         }
     }
     activate(context) {
+        this.context = context;
         this.canvasService = context.services.get("CanvasService");
         if (!this.canvasService) {
             console.warn("CanvasService not found for RulerTool");
@@ -41,12 +40,6 @@ class RulerTool {
             this.textColor = configService.get("ruler.textColor", this.textColor);
             this.lineColor = configService.get("ruler.lineColor", this.lineColor);
             this.fontSize = configService.get("ruler.fontSize", this.fontSize);
-            // Load Dieline Config
-            this.dielineDisplayUnit = configService.get("dieline.displayUnit", this.dielineDisplayUnit);
-            this.dielineWidth = configService.get("dieline.width", this.dielineWidth);
-            this.dielineHeight = configService.get("dieline.height", this.dielineHeight);
-            this.dielinePadding = configService.get("dieline.padding", this.dielinePadding);
-            this.dielineOffset = configService.get("dieline.offset", this.dielineOffset);
             // Listen for changes
             configService.onAnyChange((e) => {
                 let shouldUpdate = false;
@@ -57,17 +50,7 @@ class RulerTool {
                         shouldUpdate = true;
                     }
                 }
-                else if (e.key.startsWith("dieline.")) {
-                    if (e.key === "dieline.displayUnit")
-                        this.dielineDisplayUnit = e.value;
-                    if (e.key === "dieline.width")
-                        this.dielineWidth = e.value;
-                    if (e.key === "dieline.height")
-                        this.dielineHeight = e.value;
-                    if (e.key === "dieline.padding")
-                        this.dielinePadding = e.value;
-                    if (e.key === "dieline.offset")
-                        this.dielineOffset = e.value;
+                else if (e.key.startsWith("size.")) {
                     shouldUpdate = true;
                 }
                 if (shouldUpdate) {
@@ -76,11 +59,14 @@ class RulerTool {
             });
         }
         this.createLayer();
+        context.eventBus.on("canvas:resized", this.onCanvasResized);
         this.updateRuler();
     }
     deactivate(context) {
+        context.eventBus.off("canvas:resized", this.onCanvasResized);
         this.destroyLayer();
         this.canvasService = undefined;
+        this.context = undefined;
     }
     contribute() {
         return {
@@ -225,19 +211,6 @@ class RulerTool {
             evented: false,
         });
     }
-    resolvePadding(containerWidth, containerHeight) {
-        if (typeof this.dielinePadding === "number") {
-            return this.dielinePadding;
-        }
-        if (typeof this.dielinePadding === "string") {
-            if (this.dielinePadding.endsWith("%")) {
-                const percent = parseFloat(this.dielinePadding) / 100;
-                return Math.min(containerWidth, containerHeight) * percent;
-            }
-            return parseFloat(this.dielinePadding) || 0;
-        }
-        return 0;
-    }
     updateRuler() {
         if (!this.canvasService)
             return;
@@ -245,44 +218,31 @@ class RulerTool {
         if (!layer)
             return;
         layer.remove(...layer.getObjects());
-        const { thickness, backgroundColor, lineColor, textColor, fontSize } = this;
-        const width = this.canvasService.canvas.width || 800;
-        const height = this.canvasService.canvas.height || 600;
-        // Calculate Layout using Dieline properties
-        // Add padding to match DielineTool
-        const paddingPx = this.resolvePadding(width, height);
-        // Sync Viewport (in case DielineTool hasn't updated it yet, or purely for consistency)
-        this.canvasService.viewport.setPadding(paddingPx);
-        this.canvasService.viewport.updatePhysical(this.dielineWidth, this.dielineHeight);
-        const layout = this.canvasService.viewport.layout;
-        const scale = layout.scale;
-        const offsetX = layout.offsetX;
-        const offsetY = layout.offsetY;
-        const visualWidth = layout.width;
-        const visualHeight = layout.height;
-        // Logic for Bleed Offset:
-        // 1. If offset > 0 (Expand):
-        //    - Ruler expands to cover the bleed area.
-        //    - Dimensions show expanded size.
-        // 2. If offset < 0 (Shrink/Cut):
-        //    - Ruler stays at original Dieline boundary (does not shrink).
-        //    - Dimensions show original size.
-        //    - Bleed area is internal, so we ignore it for ruler placement.
-        const rawOffsetMm = this.dielineOffset || 0;
-        // Effective offset for ruler calculations (only positive offset expands the ruler)
-        const effectiveOffsetMm = rawOffsetMm > 0 ? rawOffsetMm : 0;
-        // Pixel expansion based on effective offset
-        const expandPixels = effectiveOffsetMm * scale;
+        const { backgroundColor, lineColor, textColor, fontSize } = this;
+        const configService = this.context?.services.get("ConfigurationService");
+        if (!configService)
+            return;
+        const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
+        const layout = (0, sceneLayoutModel_1.computeSceneLayout)(this.canvasService, sizeState);
+        if (!layout)
+            return;
+        const trimRect = layout.trimRect;
+        const cutRect = layout.cutRect;
+        const useCutAsRuler = layout.cutMode === "outset";
+        const rulerRect = useCutAsRuler ? cutRect : trimRect;
         // Use gap configuration
         const gap = this.gap || 15;
         // New Bounding Box for Ruler
-        const rulerLeft = offsetX - expandPixels;
-        const rulerTop = offsetY - expandPixels;
-        const rulerRight = offsetX + visualWidth + expandPixels;
-        const rulerBottom = offsetY + visualHeight + expandPixels;
+        const rulerLeft = rulerRect.left;
+        const rulerTop = rulerRect.top;
+        const rulerRight = rulerRect.left + rulerRect.width;
+        const rulerBottom = rulerRect.top + rulerRect.height;
         // Display Dimensions (Physical)
-        const displayWidthMm = this.dielineWidth + effectiveOffsetMm * 2;
-        const displayHeightMm = this.dielineHeight + effectiveOffsetMm * 2;
+        const displayWidthMm = useCutAsRuler ? layout.cutWidthMm : layout.trimWidthMm;
+        const displayHeightMm = useCutAsRuler
+            ? layout.cutHeightMm
+            : layout.trimHeightMm;
+        const displayUnit = sizeState.unit;
         // Ruler Placement Coordinates
         // Top Ruler: Above the top boundary
         const topRulerY = rulerTop - gap;
@@ -315,8 +275,8 @@ class RulerTool {
             evented: false,
         }));
         // Top Text (Centered)
-        const widthStr = (0, units_1.formatMm)(displayWidthMm, this.dielineDisplayUnit);
-        const topTextContent = `${widthStr} ${this.dielineDisplayUnit}`;
+        const widthStr = (0, units_1.formatMm)(displayWidthMm, displayUnit);
+        const topTextContent = `${widthStr} ${displayUnit}`;
         const topText = new fabric_1.Text(topTextContent, {
             left: topRulerXStart + (rulerRight - rulerLeft) / 2,
             top: topRulerY,
@@ -359,8 +319,8 @@ class RulerTool {
             evented: false,
         }));
         // Left Text (Centered, Rotated)
-        const heightStr = (0, units_1.formatMm)(displayHeightMm, this.dielineDisplayUnit);
-        const leftTextContent = `${heightStr} ${this.dielineDisplayUnit}`;
+        const heightStr = (0, units_1.formatMm)(displayHeightMm, displayUnit);
+        const leftTextContent = `${heightStr} ${displayUnit}`;
         const leftText = new fabric_1.Text(leftTextContent, {
             left: leftRulerX,
             top: leftRulerYStart + (rulerBottom - rulerTop) / 2,

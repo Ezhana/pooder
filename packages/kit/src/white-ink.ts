@@ -10,16 +10,13 @@ import {
 } from "@pooder/core";
 import { Image as FabricImage } from "fabric";
 import CanvasService from "./CanvasService";
-import { parseLengthToMm } from "./units";
+import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
 
 export interface WhiteInkItem {
   id: string;
-  url: string;
+  sourceUrl?: string;
+  url?: string;
   opacity: number;
-  scale?: number;
-  angle?: number;
-  left?: number;
-  top?: number;
 }
 
 interface SourceSize {
@@ -36,10 +33,6 @@ interface FrameRect {
 
 interface RenderWhiteInkState {
   src: string;
-  left: number;
-  top: number;
-  scale: number;
-  angle: number;
   opacity: number;
 }
 
@@ -55,7 +48,10 @@ interface UpdateWhiteInkOptions {
 }
 
 const WHITE_INK_OBJECT_LAYER_ID = "white-ink.user";
+const IMAGE_OBJECT_LAYER_ID = "image.user";
 const WHITE_INK_DEBUG_KEY = "whiteInk.debug";
+const WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY = "whiteInk.previewImageVisible";
+const WHITE_INK_DEFAULT_OPACITY = 0.85;
 
 export class WhiteInkTool implements Extension {
   id = "pooder.kit.white-ink";
@@ -67,15 +63,16 @@ export class WhiteInkTool implements Extension {
   private items: WhiteInkItem[] = [];
   private workingItems: WhiteInkItem[] = [];
   private hasWorkingChanges = false;
-  private loadResolvers: Map<string, () => void> = new Map();
   private sourceSizeBySrc: Map<string, SourceSize> = new Map();
+  private previewMaskBySource: Map<string, string> = new Map();
+  private pendingPreviewMaskBySource: Map<string, Promise<string | null>> =
+    new Map();
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isToolActive = false;
-  private isSelectionActive = false;
-  private focusedItemId: string | null = null;
   private printWithWhiteInk = true;
+  private previewImageVisible = true;
   private renderSeq = 0;
   private dirtyTrackerDisposable?: { dispose(): void };
 
@@ -88,14 +85,8 @@ export class WhiteInkTool implements Extension {
     }
 
     context.eventBus.on("tool:activated", this.onToolActivated);
-    context.eventBus.on("object:modified", this.onObjectModified);
-    context.eventBus.on("selection:created", this.onSelectionChanged);
-    context.eventBus.on("selection:updated", this.onSelectionChanged);
-    context.eventBus.on("selection:cleared", this.onSelectionCleared);
-    context.eventBus.on(
-      "dieline:geometry:change",
-      this.onDielineGeometryChanged,
-    );
+    context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
+    context.eventBus.on("object:added", this.onObjectAdded);
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -108,6 +99,10 @@ export class WhiteInkTool implements Extension {
       this.hasWorkingChanges = false;
       this.printWithWhiteInk = !!configService.get(
         "whiteInk.printWithWhiteInk",
+        true,
+      );
+      this.previewImageVisible = !!configService.get(
+        WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
         true,
       );
 
@@ -132,11 +127,17 @@ export class WhiteInkTool implements Extension {
           return;
         }
 
+        if (e.key === WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY) {
+          this.previewImageVisible = !!e.value;
+          this.updateWhiteInks();
+          return;
+        }
+
         if (e.key === WHITE_INK_DEBUG_KEY) {
           return;
         }
 
-        if (e.key === "dieline.width" || e.key === "dieline.height") {
+        if (e.key.startsWith("size.")) {
           this.updateWhiteInks();
         }
       });
@@ -154,18 +155,13 @@ export class WhiteInkTool implements Extension {
 
   deactivate(context: ExtensionContext) {
     context.eventBus.off("tool:activated", this.onToolActivated);
-    context.eventBus.off("object:modified", this.onObjectModified);
-    context.eventBus.off("selection:created", this.onSelectionChanged);
-    context.eventBus.off("selection:updated", this.onSelectionChanged);
-    context.eventBus.off("selection:cleared", this.onSelectionCleared);
-    context.eventBus.off(
-      "dieline:geometry:change",
-      this.onDielineGeometryChanged,
-    );
+    context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
+    context.eventBus.off("object:added", this.onObjectAdded);
 
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
     this.clearRenderedWhiteInks();
+    this.applyImagePreviewVisibility(false);
     this.canvasService = undefined;
     this.context = undefined;
   }
@@ -198,7 +194,13 @@ export class WhiteInkTool implements Extension {
         {
           id: "whiteInk.printWithWhiteInk",
           type: "boolean",
-          label: "Print with White Ink",
+          label: "Preview White Ink",
+          default: true,
+        },
+        {
+          id: WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
+          type: "boolean",
+          label: "Show Image During White Ink Preview",
           default: true,
         },
         {
@@ -219,10 +221,7 @@ export class WhiteInkTool implements Extension {
         {
           command: "upsertWhiteInk",
           title: "Upsert White Ink",
-          handler: async (
-            url: string,
-            options: UpsertWhiteInkOptions = {},
-          ) => {
+          handler: async (url: string, options: UpsertWhiteInkOptions = {}) => {
             return await this.upsertWhiteInkEntry(url, options);
           },
         },
@@ -236,27 +235,66 @@ export class WhiteInkTool implements Extension {
           title: "Get White Ink Settings",
           handler: () => {
             const first = this.items[0] || null;
+            const sourceUrl = this.resolveSourceUrl(first);
             return {
               id: first?.id || null,
-              url: first?.url || "",
+              url: sourceUrl,
+              sourceUrl,
+              opacity: first?.opacity ?? WHITE_INK_DEFAULT_OPACITY,
               printWithWhiteInk: this.printWithWhiteInk,
+              previewImageVisible: this.previewImageVisible,
             };
           },
         },
         {
           command: "setWhiteInkPrintEnabled",
-          title: "Set White Ink Print Enabled",
+          title: "Set White Ink Preview Enabled",
           handler: (enabled: boolean) => {
             this.printWithWhiteInk = !!enabled;
-            const configService = this.context?.services.get<ConfigurationService>(
-              "ConfigurationService",
-            );
+            const configService =
+              this.context?.services.get<ConfigurationService>(
+                "ConfigurationService",
+              );
             configService?.update(
               "whiteInk.printWithWhiteInk",
               this.printWithWhiteInk,
             );
             this.updateWhiteInks();
             return { ok: true };
+          },
+        },
+        {
+          command: "setWhiteInkPreviewImageVisible",
+          title: "Set White Ink Preview Image Visible",
+          handler: (visible: boolean) => {
+            this.previewImageVisible = !!visible;
+            const configService =
+              this.context?.services.get<ConfigurationService>(
+                "ConfigurationService",
+              );
+            configService?.update(
+              WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
+              this.previewImageVisible,
+            );
+            this.updateWhiteInks();
+            return { ok: true };
+          },
+        },
+        {
+          command: "setWhiteInkOpacity",
+          title: "Set White Ink Opacity",
+          handler: async (opacity: number) => {
+            const targetId = this.resolveReplaceTargetId(null);
+            if (!targetId) {
+              return { ok: false, reason: "no-white-ink-item" };
+            }
+            const nextOpacity = this.clampOpacity(opacity);
+            await this.updateWhiteInkItem(
+              targetId,
+              { opacity: nextOpacity },
+              { target: "config" },
+            );
+            return { ok: true, id: targetId, opacity: nextOpacity };
           },
         },
         {
@@ -322,8 +360,9 @@ export class WhiteInkTool implements Extension {
             }
 
             const resolvedOpacity = Number.isFinite(opacity as any)
-              ? Number(opacity)
-              : 1;
+              ? this.clampOpacity(Number(opacity))
+              : WHITE_INK_DEFAULT_OPACITY;
+
             const targetId = this.resolveReplaceTargetId(null);
             const upsertResult = await this.upsertWhiteInkEntry(url, {
               id: targetId || undefined,
@@ -351,10 +390,6 @@ export class WhiteInkTool implements Extension {
   }) => {
     const before = this.isToolActive;
     this.syncToolActiveFromWorkbench(event.id);
-    if (!this.isToolActive) {
-      this.isSelectionActive = false;
-      this.focusedItemId = null;
-    }
     this.debug("tool:activated", {
       id: event.id,
       previous: event.previous,
@@ -364,73 +399,12 @@ export class WhiteInkTool implements Extension {
     this.updateWhiteInks();
   };
 
-  private onSelectionChanged = (e: any) => {
-    const list: any[] = [];
-    if (Array.isArray(e?.selected)) list.push(...e.selected);
-    if (Array.isArray(e?.target?._objects)) list.push(...e.target._objects);
-    if (e?.target && !Array.isArray(e?.target?._objects)) {
-      list.push(e.target);
-    }
-
-    const selectedItem = list.find(
-      (obj: any) => obj?.data?.layerId === WHITE_INK_OBJECT_LAYER_ID,
-    );
-    this.isSelectionActive = !!selectedItem;
-    if (selectedItem?.data?.id) {
-      this.focusedItemId = selectedItem.data.id;
-    } else if (list.length > 0) {
-      this.focusedItemId = null;
-    }
+  private onSceneLayoutChanged = () => {
     this.updateWhiteInks();
   };
 
-  private onSelectionCleared = () => {
-    this.isSelectionActive = false;
-    this.focusedItemId = null;
-    this.updateWhiteInks();
-  };
-
-  private onDielineGeometryChanged = () => {
-    this.updateWhiteInks();
-  };
-
-  private onObjectModified = (e: any) => {
-    const target = e?.target as any;
-    if (!target || target?.data?.layerId !== WHITE_INK_OBJECT_LAYER_ID) return;
-    if (typeof target?.data?.id !== "string") return;
-
-    const id = target.data.id as string;
-    const frame = this.getFrameRect();
-    if (frame.width <= 0 || frame.height <= 0) return;
-
-    const center = target.getCenterPoint ? target.getCenterPoint() : undefined;
-    const centerX = Number(center?.x ?? target.left ?? 0);
-    const centerY = Number(center?.y ?? target.top ?? 0);
-    const scaleX = Number(target.scaleX ?? 1);
-    const sourceWidth = Number(target.width ?? 1);
-    const sourceHeight = Number(target.height ?? 1);
-    const coverScale = this.getCoverScale(frame, {
-      width: Math.max(1, sourceWidth),
-      height: Math.max(1, sourceHeight),
-    });
-    const updates: Partial<WhiteInkItem> = {
-      left: this.clampNormalized(
-        (centerX - frame.left) / Math.max(1, frame.width),
-      ),
-      top: this.clampNormalized(
-        (centerY - frame.top) / Math.max(1, frame.height),
-      ),
-      scale: Math.max(0.05, scaleX / Math.max(0.0001, coverScale)),
-      angle: Number(target.angle ?? 0),
-      opacity: Math.max(0, Math.min(1, Number(target.opacity ?? 1))),
-    };
-
-    this.syncToolActiveFromWorkbench();
-    if (this.isToolActive) {
-      this.updateWhiteInkInWorking(id, updates);
-    } else {
-      this.updateWhiteInkInConfig(id, updates);
-    }
+  private onObjectAdded = () => {
+    this.applyImagePreviewVisibility(this.isPreviewActive());
   };
 
   private migrateLegacyConfigIfNeeded(configService: ConfigurationService) {
@@ -438,13 +412,18 @@ export class WhiteInkTool implements Extension {
     const legacyMask = configService.get("whiteInk.customMask", "");
     if (typeof legacyMask !== "string" || legacyMask.length === 0) return;
 
-    const legacyOpacityRaw = configService.get("whiteInk.opacity", 1);
+    const legacyOpacityRaw = configService.get(
+      "whiteInk.opacity",
+      WHITE_INK_DEFAULT_OPACITY,
+    );
     const legacyOpacity = Number(legacyOpacityRaw);
     const item = this.normalizeItem({
       id: this.generateId(),
-      url: legacyMask,
-      opacity: Number.isFinite(legacyOpacity) ? legacyOpacity : 1,
-    } as WhiteInkItem);
+      sourceUrl: legacyMask,
+      opacity: Number.isFinite(legacyOpacity)
+        ? legacyOpacity
+        : WHITE_INK_DEFAULT_OPACITY,
+    });
 
     this.items = [item];
     this.workingItems = this.cloneItems(this.items);
@@ -465,8 +444,8 @@ export class WhiteInkTool implements Extension {
     this.isToolActive = fallbackId === this.id;
   }
 
-  private isWhiteInkEditingVisible(): boolean {
-    return this.isToolActive || this.isSelectionActive || !!this.focusedItemId;
+  private isPreviewActive(): boolean {
+    return this.isToolActive && this.printWithWhiteInk;
   }
 
   private isDebugEnabled(): boolean {
@@ -482,25 +461,36 @@ export class WhiteInkTool implements Extension {
     console.log(`[WhiteInkTool] ${message}`, payload);
   }
 
-  private normalizeItem(item: WhiteInkItem): WhiteInkItem {
+  private resolveSourceUrl(item?: Partial<WhiteInkItem> | null): string {
+    if (!item) return "";
+    if (typeof item.sourceUrl === "string" && item.sourceUrl.length > 0) {
+      return item.sourceUrl;
+    }
+    if (typeof item.url === "string" && item.url.length > 0) {
+      return item.url;
+    }
+    return "";
+  }
+
+  private clampOpacity(value: number): number {
+    if (!Number.isFinite(value as any)) return WHITE_INK_DEFAULT_OPACITY;
+    return Math.max(0, Math.min(1, Number(value)));
+  }
+
+  private normalizeItem(item: Partial<WhiteInkItem>): WhiteInkItem {
+    const sourceUrl = this.resolveSourceUrl(item);
     return {
-      ...item,
       id: String(item.id || this.generateId()),
-      url: typeof item.url === "string" ? item.url : "",
-      opacity: Number.isFinite(item.opacity as any)
-        ? Math.max(0, Math.min(1, item.opacity))
-        : 1,
-      scale: Number.isFinite(item.scale as any) ? Math.max(0.05, item.scale!) : 1,
-      angle: Number.isFinite(item.angle as any) ? item.angle : 0,
-      left: Number.isFinite(item.left as any) ? item.left : 0.5,
-      top: Number.isFinite(item.top as any) ? item.top : 0.5,
+      sourceUrl,
+      url: sourceUrl,
+      opacity: this.clampOpacity(item.opacity as number),
     };
   }
 
   private normalizeItems(items: WhiteInkItem[]): WhiteInkItem[] {
     return (items || [])
-      .filter((item) => !!item?.url)
-      .map((item) => this.normalizeItem(item));
+      .map((item) => this.normalizeItem(item))
+      .filter((item) => !!this.resolveSourceUrl(item));
   }
 
   private cloneItems(items: WhiteInkItem[]): WhiteInkItem[] {
@@ -520,27 +510,13 @@ export class WhiteInkTool implements Extension {
     return (configService.get(key, fallback) as T) ?? fallback;
   }
 
-  private getWhiteInkIdFromActiveObject(): string | null {
-    const active = this.canvasService?.canvas.getActiveObject() as any;
-    if (
-      active?.data?.layerId === WHITE_INK_OBJECT_LAYER_ID &&
-      typeof active?.data?.id === "string"
-    ) {
-      return active.data.id;
-    }
-    return null;
-  }
-
   private resolveReplaceTargetId(explicitId?: string | null): string | null {
     const has = (id: string | null | undefined) =>
       !!id && this.items.some((item) => item.id === id);
-
     if (has(explicitId)) return explicitId as string;
-    if (has(this.focusedItemId)) return this.focusedItemId as string;
-
-    const activeId = this.getWhiteInkIdFromActiveObject();
-    if (has(activeId)) return activeId;
-    if (this.items.length === 1) return this.items[0].id;
+    if (this.items.length >= 1) {
+      return this.items[0].id;
+    }
     return null;
   }
 
@@ -575,19 +551,14 @@ export class WhiteInkTool implements Extension {
     const id = this.generateId();
     const item = this.normalizeItem({
       id,
-      url,
-      opacity: 1,
+      sourceUrl: url,
+      opacity: WHITE_INK_DEFAULT_OPACITY,
       ...options,
-    } as WhiteInkItem);
+    });
 
-    this.focusedItemId = id;
-    this.isSelectionActive = true;
     const sessionDirtyBeforeAdd = this.isToolActive && this.hasWorkingChanges;
-    const waitLoaded = this.waitWhiteInkLoaded(id);
     this.updateConfig([...this.items, item]);
     this.addItemToWorkingSessionIfNeeded(item, sessionDirtyBeforeAdd);
-    const loaded = await waitLoaded;
-    if (loaded) this.focusWhiteInkSelection(id);
     return id;
   }
 
@@ -605,6 +576,7 @@ export class WhiteInkTool implements Extension {
     if (targetId) {
       this.updateWhiteInkInConfig(targetId, {
         ...(options.addOptions || {}),
+        sourceUrl: url,
         url,
       });
       return { id: targetId, mode: "replace" };
@@ -628,37 +600,6 @@ export class WhiteInkTool implements Extension {
     this.updateWhiteInks();
   }
 
-  private waitWhiteInkLoaded(id: string): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const onLoaded = () => {
-        if (settled) return;
-        settled = true;
-        if (this.loadResolvers.get(id) === onLoaded) {
-          this.loadResolvers.delete(id);
-        }
-        resolve(true);
-      };
-      this.loadResolvers.set(id, onLoaded);
-      setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        if (this.loadResolvers.get(id) === onLoaded) {
-          this.loadResolvers.delete(id);
-        }
-        resolve(false);
-      }, 3000);
-    });
-  }
-
-  private focusWhiteInkSelection(id: string) {
-    if (!this.canvasService) return;
-    const obj = this.getWhiteInkObject(id);
-    if (!obj) return;
-    this.canvasService.canvas.setActiveObject(obj);
-    this.canvasService.requestRenderAll();
-  }
-
   private async updateWhiteInkItem(
     id: string,
     updates: Partial<WhiteInkItem>,
@@ -679,12 +620,14 @@ export class WhiteInkTool implements Extension {
     const next = this.workingItems.map((item) => {
       if (item.id !== id) return item;
       changed = true;
-      return this.normalizeItem({ ...item, ...updates });
+      return this.normalizeItem({
+        ...item,
+        ...updates,
+      });
     });
     if (!changed) return;
 
     this.workingItems = this.cloneItems(next);
-    this.focusedItemId = id;
     this.hasWorkingChanges = true;
     this.updateWhiteInks();
   }
@@ -694,11 +637,17 @@ export class WhiteInkTool implements Extension {
     const next = this.items.map((item) => {
       if (item.id !== id) return item;
       changed = true;
-      return this.normalizeItem({ ...item, ...updates });
+      const merged = this.normalizeItem({
+        ...item,
+        ...updates,
+      });
+      if (this.resolveSourceUrl(item) !== this.resolveSourceUrl(merged)) {
+        this.purgeSourceCaches(item);
+      }
+      return merged;
     });
     if (!changed) return;
 
-    this.focusedItemId = id;
     this.updateConfig(next);
   }
 
@@ -707,18 +656,14 @@ export class WhiteInkTool implements Extension {
     const next = this.items.filter((item) => item.id !== id);
     if (next.length === this.items.length) return;
 
-    this.purgeSourceSizeCacheForItem(removed);
-    if (this.focusedItemId === id) {
-      this.focusedItemId = null;
-      this.isSelectionActive = false;
-    }
+    this.purgeSourceCaches(removed);
     this.updateConfig(next);
   }
 
   private clearWhiteInks() {
     this.sourceSizeBySrc.clear();
-    this.focusedItemId = null;
-    this.isSelectionActive = false;
+    this.previewMaskBySource.clear();
+    this.pendingPreviewMaskBySource.clear();
     this.updateConfig([]);
   }
 
@@ -732,47 +677,24 @@ export class WhiteInkTool implements Extension {
     if (!this.canvasService) {
       return { left: 0, top: 0, width: 0, height: 0 };
     }
-
-    const canvasW = this.canvasService.canvas.width || 0;
-    const canvasH = this.canvasService.canvas.height || 0;
-    const rawW = this.getConfig<any>("dieline.width", 0) ?? 0;
-    const rawH = this.getConfig<any>("dieline.height", 0) ?? 0;
-    const dielineWidth = parseLengthToMm(rawW, "mm");
-    const dielineHeight = parseLengthToMm(rawH, "mm");
-
-    if (
-      !Number.isFinite(dielineWidth) ||
-      !Number.isFinite(dielineHeight) ||
-      dielineWidth <= 0 ||
-      dielineHeight <= 0
-    ) {
-      return { left: 0, top: 0, width: canvasW, height: canvasH };
+    const configService = this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
+    if (!configService) {
+      return { left: 0, top: 0, width: 0, height: 0 };
     }
-
-    this.canvasService.viewport.updateContainer(canvasW, canvasH);
-    this.canvasService.viewport.updatePhysical(dielineWidth, dielineHeight);
-    const layout = this.canvasService.viewport.layout;
-    if (
-      !Number.isFinite(layout.offsetX) ||
-      !Number.isFinite(layout.offsetY) ||
-      !Number.isFinite(layout.width) ||
-      !Number.isFinite(layout.height) ||
-      layout.width <= 0 ||
-      layout.height <= 0
-    ) {
-      return { left: 0, top: 0, width: canvasW, height: canvasH };
+    const sizeState = readSizeState(configService);
+    const layout = computeSceneLayout(this.canvasService, sizeState);
+    if (!layout) {
+      return { left: 0, top: 0, width: 0, height: 0 };
     }
 
     return {
-      left: layout.offsetX,
-      top: layout.offsetY,
-      width: layout.width,
-      height: layout.height,
+      left: layout.cutRect.left,
+      top: layout.cutRect.top,
+      width: layout.cutRect.width,
+      height: layout.cutRect.height,
     };
-  }
-
-  private clampNormalized(value: number): number {
-    return Math.max(-1, Math.min(2, value));
   }
 
   private getWhiteInkObjects(): any[] {
@@ -793,9 +715,12 @@ export class WhiteInkTool implements Extension {
     this.canvasService.requestRenderAll();
   }
 
-  private purgeSourceSizeCacheForItem(item?: WhiteInkItem) {
-    if (!item?.url) return;
-    this.sourceSizeBySrc.delete(item.url);
+  private purgeSourceCaches(item?: WhiteInkItem) {
+    const sourceUrl = this.resolveSourceUrl(item);
+    if (!sourceUrl) return;
+    this.sourceSizeBySrc.delete(sourceUrl);
+    this.previewMaskBySource.delete(sourceUrl);
+    this.pendingPreviewMaskBySource.delete(sourceUrl);
   }
 
   private rememberSourceSize(src: string, obj: any) {
@@ -829,14 +754,13 @@ export class WhiteInkTool implements Extension {
     return Math.max(fw / sw, fh / sh);
   }
 
-  private resolveRenderState(item: WhiteInkItem): RenderWhiteInkState {
+  private resolveRenderState(
+    item: WhiteInkItem,
+    src: string,
+  ): RenderWhiteInkState {
     return {
-      src: item.url,
-      left: Number.isFinite(item.left as any) ? (item.left as number) : 0.5,
-      top: Number.isFinite(item.top as any) ? (item.top as number) : 0.5,
-      scale: Math.max(0.05, item.scale ?? 1),
-      angle: Number.isFinite(item.angle as any) ? (item.angle as number) : 0,
-      opacity: Math.max(0, Math.min(1, item.opacity)),
+      src,
+      opacity: this.clampOpacity(item.opacity),
     };
   }
 
@@ -845,26 +769,26 @@ export class WhiteInkTool implements Extension {
     size: SourceSize,
     frame: FrameRect,
   ) {
-    const centerX = frame.left + render.left * frame.width;
-    const centerY = frame.top + render.top * frame.height;
-    const scale = this.getCoverScale(frame, size) * render.scale;
-    const editable = this.isWhiteInkEditingVisible();
+    const centerX = frame.left + frame.width / 2;
+    const centerY = frame.top + frame.height / 2;
+    const scale = this.getCoverScale(frame, size);
 
     return {
       left: centerX,
       top: centerY,
       scaleX: scale,
       scaleY: scale,
-      angle: render.angle,
+      angle: 0,
       originX: "center" as const,
       originY: "center" as const,
       uniformScaling: true,
       lockScalingFlip: true,
-      selectable: editable,
-      evented: editable,
-      hasControls: editable,
-      hasBorders: editable,
+      selectable: false,
+      evented: false,
+      hasControls: false,
+      hasBorders: false,
       opacity: render.opacity,
+      excludeFromExport: true,
     };
   }
 
@@ -881,7 +805,13 @@ export class WhiteInkTool implements Extension {
   ) {
     if (!this.canvasService) return;
     const canvas = this.canvasService.canvas;
-    const render = this.resolveRenderState(item);
+    const sourceUrl = this.resolveSourceUrl(item);
+    if (!sourceUrl) return;
+
+    const previewSrc = await this.getPreviewMaskSource(sourceUrl);
+    if (seq !== this.renderSeq) return;
+
+    const render = this.resolveRenderState(item, previewSrc);
     if (!render.src) return;
 
     let obj = this.getWhiteInkObject(item.id);
@@ -899,6 +829,7 @@ export class WhiteInkTool implements Extension {
       if (seq !== this.renderSeq) return;
 
       created.set({
+        excludeFromExport: true,
         data: {
           id: item.id,
           layerId: WHITE_INK_OBJECT_LAYER_ID,
@@ -923,12 +854,6 @@ export class WhiteInkTool implements Extension {
       },
     });
     obj.setCoords();
-
-    const resolver = this.loadResolvers.get(item.id);
-    if (resolver) {
-      resolver();
-      this.loadResolvers.delete(item.id);
-    }
   }
 
   private syncZOrder(items: WhiteInkItem[]) {
@@ -939,12 +864,12 @@ export class WhiteInkTool implements Extension {
 
     const imageIndexes = objects
       .map((obj: any, index: number) =>
-        obj?.data?.layerId === "image.user" ? index : -1,
+        obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID ? index : -1,
       )
       .filter((index: number) => index >= 0);
 
     if (imageIndexes.length > 0) {
-      insertIndex = Math.max(...imageIndexes) + 1;
+      insertIndex = Math.min(...imageIndexes);
     } else {
       const backgroundLayer = this.canvasService.getLayer("background");
       if (backgroundLayer) {
@@ -971,6 +896,24 @@ export class WhiteInkTool implements Extension {
     }
   }
 
+  private applyImagePreviewVisibility(previewActive: boolean) {
+    if (!this.canvasService) return;
+    const visible = previewActive ? this.previewImageVisible : true;
+    let changed = false;
+
+    this.canvasService.canvas.getObjects().forEach((obj: any) => {
+      if (obj?.data?.layerId !== IMAGE_OBJECT_LAYER_ID) return;
+      if (obj.visible === visible) return;
+      obj.set({ visible });
+      obj.setCoords?.();
+      changed = true;
+    });
+
+    if (changed) {
+      this.canvasService.requestRenderAll();
+    }
+  }
+
   private updateWhiteInks() {
     void this.updateWhiteInksAsync();
   }
@@ -980,18 +923,11 @@ export class WhiteInkTool implements Extension {
     this.syncToolActiveFromWorkbench();
     const seq = ++this.renderSeq;
 
-    const renderItems = this.printWithWhiteInk
-      ? this.isToolActive
-        ? this.workingItems
-        : this.items
-      : [];
+    const previewActive = this.isPreviewActive();
+    this.applyImagePreviewVisibility(previewActive);
+    const renderItems = previewActive ? this.workingItems : [];
     const frame = this.getFrameRect();
     const desiredIds = new Set(renderItems.map((item) => item.id));
-
-    if (this.focusedItemId && !desiredIds.has(this.focusedItemId)) {
-      this.focusedItemId = null;
-      this.isSelectionActive = false;
-    }
 
     this.getWhiteInkObjects().forEach((obj: any) => {
       const id = obj?.data?.id;
@@ -1008,5 +944,75 @@ export class WhiteInkTool implements Extension {
 
     this.syncZOrder(renderItems);
     this.canvasService.requestRenderAll();
+  }
+
+  private async getPreviewMaskSource(sourceUrl: string): Promise<string> {
+    if (!sourceUrl) return "";
+    if (typeof document === "undefined" || typeof Image === "undefined") {
+      return sourceUrl;
+    }
+
+    const cached = this.previewMaskBySource.get(sourceUrl);
+    if (cached) return cached;
+
+    const pending = this.pendingPreviewMaskBySource.get(sourceUrl);
+    if (pending) {
+      const loaded = await pending;
+      return loaded || sourceUrl;
+    }
+
+    const task = this.createOpaqueMaskSource(sourceUrl);
+    this.pendingPreviewMaskBySource.set(sourceUrl, task);
+    const loaded = await task;
+    this.pendingPreviewMaskBySource.delete(sourceUrl);
+
+    if (!loaded) return sourceUrl;
+    this.previewMaskBySource.set(sourceUrl, loaded);
+    return loaded;
+  }
+
+  private async createOpaqueMaskSource(
+    sourceUrl: string,
+  ): Promise<string | null> {
+    try {
+      const img = await this.loadImageElement(sourceUrl);
+      const width = Math.max(1, Number(img.naturalWidth || img.width || 0));
+      const height = Math.max(1, Number(img.naturalHeight || img.height || 0));
+      if (width <= 0 || height <= 0) return null;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+
+      ctx.drawImage(img, 0, 0, width, height);
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const alpha = data[i + 3];
+        data[i] = 255;
+        data[i + 1] = 255;
+        data[i + 2] = 255;
+        data[i + 3] = alpha;
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      return canvas.toDataURL("image/png");
+    } catch (error) {
+      this.debug("mask:extract:failed", { sourceUrl, error });
+      return null;
+    }
+  }
+
+  private loadImageElement(sourceUrl: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.crossOrigin = "anonymous";
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("white-ink-image-load-failed"));
+      image.src = sourceUrl;
+    });
   }
 }

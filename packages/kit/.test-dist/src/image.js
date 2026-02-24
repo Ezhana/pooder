@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ImageTool = void 0;
 const core_1 = require("@pooder/core");
 const fabric_1 = require("fabric");
-const units_1 = require("./units");
+const sceneLayoutModel_1 = require("./sceneLayoutModel");
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
 const IMAGE_REPLACE_GUARD_MS = 2500;
@@ -92,7 +92,7 @@ class ImageTool {
             this.debug("selection:cleared applied");
             this.updateImages();
         };
-        this.onDielineGeometryChanged = () => {
+        this.onSceneLayoutChanged = () => {
             this.updateImages();
         };
         this.onObjectModified = (e) => {
@@ -136,7 +136,7 @@ class ImageTool {
         context.eventBus.on("selection:created", this.onSelectionChanged);
         context.eventBus.on("selection:updated", this.onSelectionChanged);
         context.eventBus.on("selection:cleared", this.onSelectionCleared);
-        context.eventBus.on("dieline:geometry:change", this.onDielineGeometryChanged);
+        context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
         const configService = context.services.get("ConfigurationService");
         if (configService) {
             this.items = this.normalizeItems(configService.get("image.items", []) || []);
@@ -154,9 +154,7 @@ class ImageTool {
                     this.updateImages();
                     return;
                 }
-                if (e.key === "dieline.width" ||
-                    e.key === "dieline.height" ||
-                    e.key.startsWith("image.frame.")) {
+                if (e.key.startsWith("size.") || e.key.startsWith("image.frame.")) {
                     this.updateImages();
                 }
             });
@@ -171,7 +169,7 @@ class ImageTool {
         context.eventBus.off("selection:created", this.onSelectionChanged);
         context.eventBus.off("selection:updated", this.onSelectionChanged);
         context.eventBus.off("selection:cleared", this.onSelectionCleared);
-        context.eventBus.off("dieline:geometry:change", this.onDielineGeometryChanged);
+        context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
         this.dirtyTrackerDisposable?.dispose();
         this.dirtyTrackerDisposable = undefined;
         this.clearRenderedImages();
@@ -551,34 +549,20 @@ class ImageTool {
         if (!this.canvasService) {
             return { left: 0, top: 0, width: 0, height: 0 };
         }
-        const canvasW = this.canvasService.canvas.width || 0;
-        const canvasH = this.canvasService.canvas.height || 0;
-        const rawW = this.getConfig("dieline.width", 0) ?? 0;
-        const rawH = this.getConfig("dieline.height", 0) ?? 0;
-        const dielineWidth = (0, units_1.parseLengthToMm)(rawW, "mm");
-        const dielineHeight = (0, units_1.parseLengthToMm)(rawH, "mm");
-        if (!Number.isFinite(dielineWidth) ||
-            !Number.isFinite(dielineHeight) ||
-            dielineWidth <= 0 ||
-            dielineHeight <= 0) {
-            return { left: 0, top: 0, width: canvasW, height: canvasH };
+        const configService = this.context?.services.get("ConfigurationService");
+        if (!configService) {
+            return { left: 0, top: 0, width: 0, height: 0 };
         }
-        this.canvasService.viewport.updateContainer(canvasW, canvasH);
-        this.canvasService.viewport.updatePhysical(dielineWidth, dielineHeight);
-        const layout = this.canvasService.viewport.layout;
-        if (!Number.isFinite(layout.offsetX) ||
-            !Number.isFinite(layout.offsetY) ||
-            !Number.isFinite(layout.width) ||
-            !Number.isFinite(layout.height) ||
-            layout.width <= 0 ||
-            layout.height <= 0) {
-            return { left: 0, top: 0, width: canvasW, height: canvasH };
+        const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
+        const layout = (0, sceneLayoutModel_1.computeSceneLayout)(this.canvasService, sizeState);
+        if (!layout) {
+            return { left: 0, top: 0, width: 0, height: 0 };
         }
         return {
-            left: layout.offsetX,
-            top: layout.offsetY,
-            width: layout.width,
-            height: layout.height,
+            left: layout.cutRect.left,
+            top: layout.cutRect.top,
+            width: layout.cutRect.width,
+            height: layout.cutRect.height,
         };
     }
     async resolveDefaultFitArea() {
@@ -588,23 +572,23 @@ class ImageTool {
         if (!commandService)
             return null;
         try {
-            const geometry = await Promise.resolve(commandService.executeCommand("getGeometry"));
-            const width = Number(geometry?.width);
-            const height = Number(geometry?.height);
-            const centerX = Number(geometry?.x);
-            const centerY = Number(geometry?.y);
-            const offset = Number(geometry?.offset ?? 0);
+            const layout = await Promise.resolve(commandService.executeCommand("getSceneLayout"));
+            const cutRect = layout?.cutRect;
+            const width = Number(cutRect?.width);
+            const height = Number(cutRect?.height);
+            const left = Number(cutRect?.left);
+            const top = Number(cutRect?.top);
             if (!Number.isFinite(width) ||
                 !Number.isFinite(height) ||
-                !Number.isFinite(centerX) ||
-                !Number.isFinite(centerY)) {
+                !Number.isFinite(left) ||
+                !Number.isFinite(top)) {
                 return null;
             }
             return {
-                width: Math.max(1, width + offset * 2),
-                height: Math.max(1, height + offset * 2),
-                left: centerX,
-                top: centerY,
+                width: Math.max(1, width),
+                height: Math.max(1, height),
+                left: left + width / 2,
+                top: top + height / 2,
             };
         }
         catch {

@@ -11,7 +11,7 @@ import {
 import { Canvas as FabricCanvas, Image as FabricImage, Point } from "fabric";
 import CanvasService from "./CanvasService";
 import type { RenderObjectSpec } from "./renderSpec";
-import { parseLengthToMm } from "./units";
+import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
 
 export interface ImageItem {
   id: string;
@@ -149,8 +149,8 @@ export class ImageTool implements Extension {
     context.eventBus.on("selection:updated", this.onSelectionChanged);
     context.eventBus.on("selection:cleared", this.onSelectionCleared);
     context.eventBus.on(
-      "dieline:geometry:change",
-      this.onDielineGeometryChanged,
+      "scene:layout:change",
+      this.onSceneLayoutChanged,
     );
 
     const configService = context.services.get<ConfigurationService>(
@@ -176,11 +176,7 @@ export class ImageTool implements Extension {
           return;
         }
 
-        if (
-          e.key === "dieline.width" ||
-          e.key === "dieline.height" ||
-          e.key.startsWith("image.frame.")
-        ) {
+        if (e.key.startsWith("size.") || e.key.startsWith("image.frame.")) {
           this.updateImages();
         }
       });
@@ -203,8 +199,8 @@ export class ImageTool implements Extension {
     context.eventBus.off("selection:updated", this.onSelectionChanged);
     context.eventBus.off("selection:cleared", this.onSelectionCleared);
     context.eventBus.off(
-      "dieline:geometry:change",
-      this.onDielineGeometryChanged,
+      "scene:layout:change",
+      this.onSceneLayoutChanged,
     );
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
@@ -295,7 +291,7 @@ export class ImageTool implements Extension {
     this.updateImages();
   };
 
-  private onDielineGeometryChanged = () => {
+  private onSceneLayoutChanged = () => {
     this.updateImages();
   };
 
@@ -729,41 +725,24 @@ export class ImageTool implements Extension {
     if (!this.canvasService) {
       return { left: 0, top: 0, width: 0, height: 0 };
     }
-
-    const canvasW = this.canvasService.canvas.width || 0;
-    const canvasH = this.canvasService.canvas.height || 0;
-    const rawW = this.getConfig<any>("dieline.width", 0) ?? 0;
-    const rawH = this.getConfig<any>("dieline.height", 0) ?? 0;
-    const dielineWidth = parseLengthToMm(rawW, "mm");
-    const dielineHeight = parseLengthToMm(rawH, "mm");
-
-    if (
-      !Number.isFinite(dielineWidth) ||
-      !Number.isFinite(dielineHeight) ||
-      dielineWidth <= 0 ||
-      dielineHeight <= 0
-    ) {
-      return { left: 0, top: 0, width: canvasW, height: canvasH };
+    const configService = this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
+    if (!configService) {
+      return { left: 0, top: 0, width: 0, height: 0 };
     }
 
-    this.canvasService.viewport.updateContainer(canvasW, canvasH);
-    this.canvasService.viewport.updatePhysical(dielineWidth, dielineHeight);
-    const layout = this.canvasService.viewport.layout;
-    if (
-      !Number.isFinite(layout.offsetX) ||
-      !Number.isFinite(layout.offsetY) ||
-      !Number.isFinite(layout.width) ||
-      !Number.isFinite(layout.height) ||
-      layout.width <= 0 ||
-      layout.height <= 0
-    ) {
-      return { left: 0, top: 0, width: canvasW, height: canvasH };
+    const sizeState = readSizeState(configService);
+    const layout = computeSceneLayout(this.canvasService, sizeState);
+    if (!layout) {
+      return { left: 0, top: 0, width: 0, height: 0 };
     }
+
     return {
-      left: layout.offsetX,
-      top: layout.offsetY,
-      width: layout.width,
-      height: layout.height,
+      left: layout.cutRect.left,
+      top: layout.cutRect.top,
+      width: layout.cutRect.width,
+      height: layout.cutRect.height,
     };
   }
 
@@ -773,29 +752,29 @@ export class ImageTool implements Extension {
     if (!commandService) return null;
 
     try {
-      const geometry = await Promise.resolve(
-        commandService.executeCommand("getGeometry"),
+      const layout = await Promise.resolve(
+        commandService.executeCommand("getSceneLayout"),
       );
-      const width = Number(geometry?.width);
-      const height = Number(geometry?.height);
-      const centerX = Number(geometry?.x);
-      const centerY = Number(geometry?.y);
-      const offset = Number(geometry?.offset ?? 0);
+      const cutRect = layout?.cutRect;
+      const width = Number(cutRect?.width);
+      const height = Number(cutRect?.height);
+      const left = Number(cutRect?.left);
+      const top = Number(cutRect?.top);
 
       if (
         !Number.isFinite(width) ||
         !Number.isFinite(height) ||
-        !Number.isFinite(centerX) ||
-        !Number.isFinite(centerY)
+        !Number.isFinite(left) ||
+        !Number.isFinite(top)
       ) {
         return null;
       }
 
       return {
-        width: Math.max(1, width + offset * 2),
-        height: Math.max(1, height + offset * 2),
-        left: centerX,
-        top: centerY,
+        width: Math.max(1, width),
+        height: Math.max(1, height),
+        left: left + width / 2,
+        top: top + height / 2,
       };
     } catch {
       return null;

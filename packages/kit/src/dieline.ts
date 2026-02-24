@@ -4,6 +4,7 @@ import {
   ContributionPointIds,
   CommandContribution,
   ConfigurationContribution,
+  ConfigurationService,
 } from "@pooder/core";
 import { Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
@@ -16,6 +17,11 @@ import {
   generateBleedZonePath,
   DielineFeature,
 } from "./geometry";
+import {
+  buildSceneGeometry,
+  computeSceneLayout,
+  readSizeState,
+} from "./sceneLayoutModel";
 
 export interface DielineGeometry {
   shape: "rect" | "circle" | "ellipse" | "custom";
@@ -91,6 +97,9 @@ export class DielineTool implements Extension {
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
+  private onCanvasResized = () => {
+    this.updateDieline();
+  };
 
   constructor(options?: Partial<DielineState>) {
     if (options) {
@@ -115,29 +124,28 @@ export class DielineTool implements Extension {
       return;
     }
 
-    const configService = context.services.get<any>("ConfigurationService");
+    const configService = context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
     if (configService) {
       // Load initial config
       const s = this.state;
-      s.displayUnit = configService.get("dieline.displayUnit", s.displayUnit);
+      const sizeState = readSizeState(configService);
+      s.displayUnit = sizeState.unit;
       s.shape = configService.get("dieline.shape", s.shape);
-      s.width = parseLengthToMm(
-        configService.get("dieline.width", s.width),
-        "mm",
-      );
-      s.height = parseLengthToMm(
-        configService.get("dieline.height", s.height),
-        "mm",
-      );
+      s.width = sizeState.actualWidthMm;
+      s.height = sizeState.actualHeightMm;
       s.radius = parseLengthToMm(
         configService.get("dieline.radius", s.radius),
         "mm",
       );
-      s.padding = configService.get("dieline.padding", s.padding);
-      s.offset = parseLengthToMm(
-        configService.get("dieline.offset", s.offset),
-        "mm",
-      );
+      s.padding = sizeState.viewPadding;
+      s.offset =
+        sizeState.cutMode === "outset"
+          ? sizeState.cutMarginMm
+          : sizeState.cutMode === "inset"
+            ? -sizeState.cutMarginMm
+            : 0;
 
       // Main Line
       s.mainLine.width = configService.get(
@@ -186,28 +194,29 @@ export class DielineTool implements Extension {
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
+        if (e.key.startsWith("size.")) {
+          const nextSize = readSizeState(configService);
+          s.displayUnit = nextSize.unit;
+          s.width = nextSize.actualWidthMm;
+          s.height = nextSize.actualHeightMm;
+          s.padding = nextSize.viewPadding;
+          s.offset =
+            nextSize.cutMode === "outset"
+              ? nextSize.cutMarginMm
+              : nextSize.cutMode === "inset"
+                ? -nextSize.cutMarginMm
+                : 0;
+          this.updateDieline();
+          return;
+        }
+
         if (e.key.startsWith("dieline.")) {
           switch (e.key) {
-            case "dieline.displayUnit":
-              s.displayUnit = e.value;
-              break;
             case "dieline.shape":
               s.shape = e.value;
               break;
-            case "dieline.width":
-              s.width = parseLengthToMm(e.value, "mm");
-              break;
-            case "dieline.height":
-              s.height = parseLengthToMm(e.value, "mm");
-              break;
             case "dieline.radius":
               s.radius = parseLengthToMm(e.value, "mm");
-              break;
-            case "dieline.padding":
-              s.padding = e.value;
-              break;
-            case "dieline.offset":
-              s.offset = parseLengthToMm(e.value, "mm");
               break;
 
             case "dieline.strokeWidth":
@@ -257,11 +266,13 @@ export class DielineTool implements Extension {
       });
     }
 
+    context.eventBus.on("canvas:resized", this.onCanvasResized);
     this.createLayer();
     this.updateDieline();
   }
 
   deactivate(context: ExtensionContext) {
+    context.eventBus.off("canvas:resized", this.onCanvasResized);
     this.destroyLayer();
     this.canvasService = undefined;
     this.context = undefined;
@@ -283,34 +294,11 @@ export class DielineTool implements Extension {
       ],
       [ContributionPointIds.CONFIGURATIONS]: [
         {
-          id: "dieline.displayUnit",
-          type: "select",
-          label: "Display Unit",
-          options: ["mm", "cm", "in"],
-          default: s.displayUnit,
-        },
-        {
           id: "dieline.shape",
           type: "select",
           label: "Shape",
           options: ["rect", "circle", "ellipse", "custom"],
           default: s.shape,
-        },
-        {
-          id: "dieline.width",
-          type: "number",
-          label: "Width (mm)",
-          min: 10,
-          max: 2000,
-          default: s.width,
-        },
-        {
-          id: "dieline.height",
-          type: "number",
-          label: "Height (mm)",
-          min: 10,
-          max: 2000,
-          default: s.height,
         },
         {
           id: "dieline.radius",
@@ -319,21 +307,6 @@ export class DielineTool implements Extension {
           min: 0,
           max: 500,
           default: s.radius,
-        },
-        {
-          id: "dieline.padding",
-          type: "select",
-          label: "View Padding",
-          options: [0, 10, 20, 40, 60, 100, "2%", "5%", "10%", "15%", "20%"],
-          default: s.padding,
-        },
-        {
-          id: "dieline.offset",
-          type: "number",
-          label: "Bleed Offset (mm)",
-          min: -100,
-          max: 100,
-          default: s.offset,
         },
         {
           id: "dieline.showBleedLines",
@@ -446,13 +419,6 @@ export class DielineTool implements Extension {
             if (changed) {
               configService.update("dieline.features", newFeatures);
             }
-          },
-        },
-        {
-          command: "getGeometry",
-          title: "Get Geometry",
-          handler: () => {
-            return this.getGeometry();
           },
         },
         {
@@ -583,33 +549,41 @@ export class DielineTool implements Extension {
     return new Pattern({ source: canvas, repetition: "repeat" });
   }
 
-  private resolvePadding(
-    containerWidth: number,
-    containerHeight: number,
-  ): number {
-    if (typeof this.state.padding === "number") {
-      return this.state.padding;
-    }
-    if (typeof this.state.padding === "string") {
-      if (this.state.padding.endsWith("%")) {
-        const percent = parseFloat(this.state.padding) / 100;
-        return Math.min(containerWidth, containerHeight) * percent;
-      }
-      return parseFloat(this.state.padding) || 0;
-    }
-    return 0;
+  private getConfigService(): ConfigurationService | undefined {
+    return this.context?.services.get<ConfigurationService>("ConfigurationService");
   }
 
-  public updateDieline(emitEvent: boolean = true) {
+  private syncSizeState(configService: ConfigurationService) {
+    const sizeState = readSizeState(configService);
+    this.state.displayUnit = sizeState.unit;
+    this.state.width = sizeState.actualWidthMm;
+    this.state.height = sizeState.actualHeightMm;
+    this.state.padding = sizeState.viewPadding;
+    this.state.offset =
+      sizeState.cutMode === "outset"
+        ? sizeState.cutMarginMm
+        : sizeState.cutMode === "inset"
+          ? -sizeState.cutMarginMm
+          : 0;
+  }
+
+  public updateDieline(_emitEvent: boolean = true) {
     if (!this.canvasService) return;
     const layer = this.getLayer();
     if (!layer) return;
+    const configService = this.getConfigService();
+    if (!configService) return;
+
+    this.syncSizeState(configService);
+    const sceneLayout = computeSceneLayout(
+      this.canvasService,
+      readSizeState(configService),
+    );
+    if (!sceneLayout) return;
 
     const {
-      displayUnit,
       shape,
       radius,
-      offset,
       mainLine,
       offsetLine,
       insideColor,
@@ -617,58 +591,34 @@ export class DielineTool implements Extension {
       showBleedLines,
       features,
     } = this.state;
-    const { width, height } = this.state;
 
-    const canvasW = this.canvasService.canvas.width || 800;
-    const canvasH = this.canvasService.canvas.height || 600;
+    const canvasW = sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
+    const canvasH = sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
+    const scale = sceneLayout.scale;
+    const cx = sceneLayout.trimRect.centerX;
+    const cy = sceneLayout.trimRect.centerY;
 
-    // Calculate Layout based on Physical Dimensions and Canvas Size
-    // Add padding to avoid edge hugging
-    const paddingPx = this.resolvePadding(canvasW, canvasH);
-
-    // Update Viewport System
-    this.canvasService.viewport.setPadding(paddingPx);
-    this.canvasService.viewport.updatePhysical(width, height);
-
-    const layout = this.canvasService.viewport.layout;
-
-    const scale = layout.scale;
-    const cx = layout.offsetX + layout.width / 2;
-    const cy = layout.offsetY + layout.height / 2;
-
-    // Scaled dimensions for rendering (Pixels)
-    const visualWidth = layout.width;
-    const visualHeight = layout.height;
+    const visualWidth = sceneLayout.trimRect.width;
+    const visualHeight = sceneLayout.trimRect.height;
     const visualRadius = radius * scale;
-    const visualOffset = offset * scale;
-
-    // Clear existing objects
-    layer.remove(...layer.getObjects());
-
-    // Scale Features for Geometry Generation
-    const absoluteFeatures = (features || []).map((f) => {
-      const featureScale = scale;
-
-      return {
-        ...f,
-        x: f.x,
-        y: f.y,
-        width: (f.width || 0) * featureScale,
-        height: (f.height || 0) * featureScale,
-        radius: (f.radius || 0) * featureScale,
-      };
-    });
-
-    // Split features into Cut (Physical) and Visual (All)
-    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
-
-    // 1. Draw Mask (Outside)
-    const cutW = Math.max(0, visualWidth + visualOffset * 2);
-    const cutH = Math.max(0, visualHeight + visualOffset * 2);
+    const cutW = sceneLayout.cutRect.width;
+    const cutH = sceneLayout.cutRect.height;
+    const visualOffset = (cutW - visualWidth) / 2;
     const cutR =
       visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
 
-    // Use Paper.js to generate the complex mask path
+    layer.remove(...layer.getObjects());
+
+    const absoluteFeatures = (features || []).map((f) => ({
+      ...f,
+      x: f.x,
+      y: f.y,
+      width: (f.width || 0) * scale,
+      height: (f.height || 0) * scale,
+      radius: (f.radius || 0) * scale,
+    }));
+    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
+
     const maskPathData = generateMaskPath({
       canvasWidth: canvasW,
       canvasHeight: canvasH,
@@ -681,7 +631,6 @@ export class DielineTool implements Extension {
       features: cutFeatures,
       pathData: this.state.pathData,
     });
-
     const mask = new Path(maskPathData, {
       fill: outsideColor,
       stroke: null,
@@ -694,13 +643,11 @@ export class DielineTool implements Extension {
     });
     layer.add(mask);
 
-    // 2. Draw Inside Fill (Dieline Shape itself, merged with features if needed)
     if (
       insideColor &&
       insideColor !== "transparent" &&
       insideColor !== "rgba(0,0,0,0)"
     ) {
-      // Generate path for the product shape (Paper) = Dieline +/- Features
       const productPathData = generateDielinePath({
         shape,
         width: cutW,
@@ -708,7 +655,7 @@ export class DielineTool implements Extension {
         radius: cutR,
         x: cx,
         y: cy,
-        features: cutFeatures, // Use same features as mask for consistency
+        features: cutFeatures,
         pathData: this.state.pathData,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
@@ -719,14 +666,13 @@ export class DielineTool implements Extension {
         stroke: null,
         selectable: false,
         evented: false,
-        originX: "left", // paper.js paths are absolute
+        originX: "left",
         originY: "top",
       });
       layer.add(insideObj);
     }
 
-    // 3. Draw Bleed Zone (Hatch Fill) and Offset Border
-    if (offset !== 0) {
+    if (Math.abs(visualOffset) > 0.0001) {
       const bleedPathData = generateBleedZonePath(
         {
           shape,
@@ -755,7 +701,6 @@ export class DielineTool implements Extension {
         visualOffset,
       );
 
-      // Use solid red for hatch lines to match dieline, background is transparent
       if (showBleedLines !== false) {
         const pattern = this.createHatchPattern(mainLine.color);
         if (pattern) {
@@ -772,7 +717,6 @@ export class DielineTool implements Extension {
         }
       }
 
-      // Offset Dieline Border
       const offsetPathData = generateDielinePath({
         shape,
         width: cutW,
@@ -802,7 +746,6 @@ export class DielineTool implements Extension {
       layer.add(offsetBorderObj);
     }
 
-    // 4. Draw Dieline (Visual Border)
     const borderPathData = generateDielinePath({
       shape,
       width: visualWidth,
@@ -815,7 +758,6 @@ export class DielineTool implements Extension {
       canvasWidth: canvasW,
       canvasHeight: canvasH,
     });
-
     const borderObj = new Path(borderPathData, {
       fill: "transparent",
       stroke: mainLine.style === "hidden" ? null : mainLine.color,
@@ -829,10 +771,8 @@ export class DielineTool implements Extension {
       originX: "left",
       originY: "top",
     });
-
     layer.add(borderObj);
 
-    // Enforce z-index: Dieline > User
     const userLayer = this.canvasService.getLayer("user");
     if (layer && userLayer) {
       const layerIndex = this.canvasService.canvas.getObjects().indexOf(layer);
@@ -843,11 +783,9 @@ export class DielineTool implements Extension {
         this.canvasService.canvas.moveObjectTo(layer, userIndex + 1);
       }
     } else {
-      // If no user layer, just bring to front (safe default)
       this.canvasService.canvas.bringObjectToFront(layer);
     }
 
-    // Ensure Ruler is above Dieline if it exists
     const rulerLayer = this.canvasService.getLayer("ruler-overlay");
     if (rulerLayer) {
       this.canvasService.canvas.bringObjectToFront(rulerLayer);
@@ -855,108 +793,67 @@ export class DielineTool implements Extension {
 
     layer.dirty = true;
     this.canvasService.requestRenderAll();
-
-    // Emit change event so other tools (like FeatureTool) can react
-    if (emitEvent && this.context) {
-      const geometry = this.getGeometry();
-      if (geometry) {
-        this.context.eventBus.emit("dieline:geometry:change", geometry);
-      }
-    }
   }
 
   public getGeometry(): DielineGeometry | null {
     if (!this.canvasService) return null;
-    const {
-      displayUnit,
-      shape,
-      width,
-      height,
-      radius,
-      offset,
-      mainLine,
-      pathData,
-    } = this.state;
-    const canvasW = this.canvasService.canvas.width || 800;
-    const canvasH = this.canvasService.canvas.height || 600;
-
-    const paddingPx = this.resolvePadding(canvasW, canvasH);
-
-    // Update Viewport System (Ensure it's up to date)
-    this.canvasService.viewport.setPadding(paddingPx);
-    this.canvasService.viewport.updatePhysical(width, height);
-
-    const layout = this.canvasService.viewport.layout;
-
-    const scale = layout.scale;
-    const cx = layout.offsetX + layout.width / 2;
-    const cy = layout.offsetY + layout.height / 2;
-
-    const visualWidth = layout.width;
-    const visualHeight = layout.height;
-
+    const configService = this.getConfigService();
+    if (!configService) return null;
+    const sceneLayout = computeSceneLayout(
+      this.canvasService,
+      readSizeState(configService),
+    );
+    if (!sceneLayout) return null;
+    const sceneGeometry = buildSceneGeometry(configService, sceneLayout);
     return {
-      shape,
-      unit: "mm",
-      displayUnit,
-      x: cx,
-      y: cy,
-      width: visualWidth,
-      height: visualHeight,
-      radius: radius * scale,
-      offset: offset * scale,
-      scale,
-      strokeWidth: mainLine.width,
-      pathData,
+      ...sceneGeometry,
+      strokeWidth: this.state.mainLine.width,
+      pathData: this.state.pathData,
     } as DielineGeometry;
   }
 
   public async exportCutImage() {
     if (!this.canvasService) return null;
+    const configService = this.getConfigService();
+    if (!configService) return null;
     const userLayer = this.canvasService.getLayer("user");
-
     if (!userLayer) return null;
 
-    // 1. Generate Path Data
-    const { shape, width, height, radius, features, pathData } = this.state;
-    const canvasW = this.canvasService.canvas.width || 800;
-    const canvasH = this.canvasService.canvas.height || 600;
+    this.syncSizeState(configService);
+    const sceneLayout = computeSceneLayout(
+      this.canvasService,
+      readSizeState(configService),
+    );
+    if (!sceneLayout) return null;
 
-    const paddingPx = this.resolvePadding(canvasW, canvasH);
-
-    // Update Viewport System
-    this.canvasService.viewport.setPadding(paddingPx);
-    this.canvasService.viewport.updatePhysical(width, height);
-
-    const layout = this.canvasService.viewport.layout;
-    const scale = layout.scale;
-    const cx = layout.offsetX + layout.width / 2;
-    const cy = layout.offsetY + layout.height / 2;
-    const visualWidth = layout.width;
-    const visualHeight = layout.height;
+    const { shape, radius, features, pathData } = this.state;
+    const canvasW = sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
+    const canvasH = sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
+    const scale = sceneLayout.scale;
+    const cx = sceneLayout.trimRect.centerX;
+    const cy = sceneLayout.trimRect.centerY;
+    const cutW = sceneLayout.cutRect.width;
+    const cutH = sceneLayout.cutRect.height;
     const visualRadius = radius * scale;
+    const visualOffset = (cutW - sceneLayout.trimRect.width) / 2;
+    const cutR =
+      visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
 
-    // Scale Features
-    const absoluteFeatures = (features || []).map((f) => {
-      const featureScale = scale;
-
-      return {
-        ...f,
-        x: f.x,
-        y: f.y,
-        width: (f.width || 0) * featureScale,
-        height: (f.height || 0) * featureScale,
-        radius: (f.radius || 0) * featureScale,
-      };
-    });
-
+    const absoluteFeatures = (features || []).map((f) => ({
+      ...f,
+      x: f.x,
+      y: f.y,
+      width: (f.width || 0) * scale,
+      height: (f.height || 0) * scale,
+      radius: (f.radius || 0) * scale,
+    }));
     const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
 
     const generatedPathData = generateDielinePath({
       shape,
-      width: visualWidth,
-      height: visualHeight,
-      radius: visualRadius,
+      width: cutW,
+      height: cutH,
+      radius: cutR,
       x: cx,
       y: cy,
       features: cutFeatures,
@@ -965,9 +862,7 @@ export class DielineTool implements Extension {
       canvasHeight: canvasH,
     });
 
-    // 2. Prepare for Export
     const clonedLayer = await userLayer.clone();
-
     const clipPath = new Path(generatedPathData, {
       originX: "left",
       originY: "top",
@@ -975,14 +870,10 @@ export class DielineTool implements Extension {
       top: 0,
       absolutePositioned: true,
     });
-
     clonedLayer.clipPath = clipPath;
 
-    // 3. Calculate Crop Area (The Dieline Bounds)
     const bounds = clipPath.getBoundingRect();
-
-    // 4. Export
-    const dataUrl = clonedLayer.toDataURL({
+    return clonedLayer.toDataURL({
       format: "png",
       multiplier: 2,
       left: bounds.left,
@@ -990,7 +881,5 @@ export class DielineTool implements Extension {
       width: bounds.width,
       height: bounds.height,
     });
-
-    return dataUrl;
   }
 }

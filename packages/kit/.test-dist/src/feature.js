@@ -6,7 +6,7 @@ const fabric_1 = require("fabric");
 const geometry_1 = require("./geometry");
 const constraints_1 = require("./constraints");
 const featureComplete_1 = require("./featureComplete");
-const units_1 = require("./units");
+const sceneLayoutModel_1 = require("./sceneLayoutModel");
 class FeatureTool {
     constructor(options) {
         this.id = "pooder.kit.feature";
@@ -19,7 +19,7 @@ class FeatureTool {
         this.hasWorkingChanges = false;
         this.handleMoving = null;
         this.handleModified = null;
-        this.handleDielineChange = null;
+        this.handleSceneGeometryChange = null;
         this.currentGeometry = null;
         this.onToolActivated = (event) => {
             this.isToolActive = event.id === this.id;
@@ -95,7 +95,9 @@ class FeatureTool {
                     name: "Feature",
                     interaction: "session",
                     commands: {
+                        begin: "resetWorkingFeatures",
                         commit: "completeFeatures",
+                        rollback: "resetWorkingFeatures",
                     },
                     session: {
                         autoBegin: false,
@@ -156,6 +158,21 @@ class FeatureTool {
                     },
                 },
                 {
+                    command: "resetWorkingFeatures",
+                    title: "Reset Working Features",
+                    handler: async () => {
+                        const configService = this.context?.services.get("ConfigurationService");
+                        const next = (configService?.get("dieline.features", []) ||
+                            []);
+                        await this.refreshGeometry();
+                        this.setWorkingFeatures(this.cloneFeatures(next));
+                        this.hasWorkingChanges = false;
+                        this.redraw();
+                        this.emitWorkingChange();
+                        return { ok: true };
+                    },
+                },
+                {
                     command: "updateWorkingGroupPosition",
                     title: "Update Working Group Position",
                     handler: (groupId, x, y) => {
@@ -187,7 +204,7 @@ class FeatureTool {
         if (!commandService)
             return;
         try {
-            const g = await Promise.resolve(commandService.executeCommand("getGeometry"));
+            const g = await Promise.resolve(commandService.executeCommand("getSceneGeometry"));
             if (g)
                 this.currentGeometry = g;
         }
@@ -202,8 +219,9 @@ class FeatureTool {
         const configService = this.context?.services.get("ConfigurationService");
         if (!configService)
             return { ok: false };
-        const dielineWidth = (0, units_1.parseLengthToMm)(configService.get("dieline.width") ?? 500, "mm");
-        const dielineHeight = (0, units_1.parseLengthToMm)(configService.get("dieline.height") ?? 500, "mm");
+        const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
+        const dielineWidth = sizeState.actualWidthMm;
+        const dielineHeight = sizeState.actualHeightMm;
         let changed = false;
         const next = this.workingFeatures.map((f) => {
             if (f.groupId !== groupId)
@@ -243,8 +261,9 @@ class FeatureTool {
                 ],
             };
         }
-        const dielineWidth = (0, units_1.parseLengthToMm)(configService.get("dieline.width") ?? 500, "mm");
-        const dielineHeight = (0, units_1.parseLengthToMm)(configService.get("dieline.height") ?? 500, "mm");
+        const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
+        const dielineWidth = sizeState.actualWidthMm;
+        const dielineHeight = sizeState.actualHeightMm;
         const result = (0, featureComplete_1.completeFeaturesStrict)(this.workingFeatures, { dielineWidth, dielineHeight }, (next) => {
             this.isUpdatingConfig = true;
             try {
@@ -334,20 +353,20 @@ class FeatureTool {
         if (!this.canvasService || !this.context)
             return;
         const canvas = this.canvasService.canvas;
-        // 1. Listen for Dieline Geometry Changes
-        if (!this.handleDielineChange) {
-            this.handleDielineChange = (geometry) => {
+        // 1. Listen for Scene Geometry Changes
+        if (!this.handleSceneGeometryChange) {
+            this.handleSceneGeometryChange = (geometry) => {
                 this.currentGeometry = geometry;
                 this.redraw();
                 this.enforceConstraints();
             };
-            this.context.eventBus.on("dieline:geometry:change", this.handleDielineChange);
+            this.context.eventBus.on("scene:geometry:change", this.handleSceneGeometryChange);
         }
         // 2. Initial Fetch of Geometry
         const commandService = this.context.services.get("CommandService");
         if (commandService) {
             try {
-                Promise.resolve(commandService.executeCommand("getGeometry")).then((g) => {
+                Promise.resolve(commandService.executeCommand("getSceneGeometry")).then((g) => {
                     if (g) {
                         this.currentGeometry = g;
                         this.redraw();
@@ -466,9 +485,9 @@ class FeatureTool {
             canvas.off("object:modified", this.handleModified);
             this.handleModified = null;
         }
-        if (this.handleDielineChange && this.context) {
-            this.context.eventBus.off("dieline:geometry:change", this.handleDielineChange);
-            this.handleDielineChange = null;
+        if (this.handleSceneGeometryChange && this.context) {
+            this.context.eventBus.off("scene:geometry:change", this.handleSceneGeometryChange);
+            this.handleSceneGeometryChange = null;
         }
         const objects = canvas
             .getObjects()
