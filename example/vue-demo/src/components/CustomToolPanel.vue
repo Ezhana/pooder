@@ -369,11 +369,17 @@ const completeStatus = reactive({
 watch(
   availablePresets,
   (newPresets) => {
-    if (newPresets.length > 0) {
-      selectedPreset.value = newPresets[0].name;
+    if (newPresets.length === 0) {
+      selectedPreset.value = "";
       return;
     }
-    selectedPreset.value = "";
+
+    const hasSelected = newPresets.some(
+      (preset) => preset.name === selectedPreset.value,
+    );
+    if (!hasSelected) {
+      selectedPreset.value = newPresets[0].name;
+    }
   },
   { immediate: true },
 );
@@ -687,13 +693,13 @@ const syncFeatureStateFromWorking = async (groupId) => {
   } catch (e) {}
 };
 
-const loadPreset = () => {
-  if (!selectedPreset.value) {
+const loadPreset = async (presetName = selectedPreset.value) => {
+  if (!editor.value || !presetName) {
     return;
   }
 
   const preset = availablePresets.value.find(
-    (p) => p.name === selectedPreset.value,
+    (p) => p.name === presetName,
   );
   if (!preset) return;
 
@@ -701,12 +707,12 @@ const loadPreset = () => {
   const groupId = features[0]?.groupId || null;
   if (!groupId) return;
 
-  editor.value.executeCommand("setWorkingFeatures", features);
+  await editor.value.executeCommand("setWorkingFeatures", features);
 
   // Select it for editing
   featureState.groupId = groupId;
 
-  syncFeatureStateFromWorking(groupId);
+  await syncFeatureStateFromWorking(groupId);
 };
 
 const isXDisabled = computed(() => {
@@ -870,7 +876,14 @@ const onToolActivated = ({ id }) => {
     syncDielineState();
   } else if (id === "pooder.kit.feature") {
     currentMode.value = "Hole";
-    // syncFeaturesList(); // Not needed as we use presets now
+    if (!featureState.groupId) {
+      if (!selectedPreset.value && availablePresets.value.length > 0) {
+        selectedPreset.value = availablePresets.value[0].name;
+      }
+      if (selectedPreset.value) {
+        void loadPreset(selectedPreset.value);
+      }
+    }
   } else {
     currentMode.value = "";
   }

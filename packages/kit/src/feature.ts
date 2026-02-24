@@ -355,6 +355,8 @@ export class FeatureTool implements Extension {
     }
 
     this.hasWorkingChanges = false;
+    // Keep feature markers above dieline overlay after config-driven redraw.
+    this.redraw();
     return { ok: true };
   }
 

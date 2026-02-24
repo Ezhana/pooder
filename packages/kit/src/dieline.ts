@@ -567,6 +567,15 @@ export class DielineTool implements Extension {
           : 0;
   }
 
+  private bringFeatureMarkersToFront() {
+    if (!this.canvasService) return;
+    const canvas = this.canvasService.canvas;
+    canvas
+      .getObjects()
+      .filter((obj: any) => obj?.data?.type === "feature-marker")
+      .forEach((obj: any) => canvas.bringObjectToFront(obj));
+  }
+
   public updateDieline(_emitEvent: boolean = true) {
     if (!this.canvasService) return;
     const layer = this.getLayer();
@@ -785,6 +794,9 @@ export class DielineTool implements Extension {
     } else {
       this.canvasService.canvas.bringObjectToFront(layer);
     }
+
+    // Feature tool markers can extend outside trim. Keep them above dieline mask.
+    this.bringFeatureMarkersToFront();
 
     const rulerLayer = this.canvasService.getLayer("ruler-overlay");
     if (rulerLayer) {
