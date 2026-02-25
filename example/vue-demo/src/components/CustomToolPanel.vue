@@ -26,7 +26,7 @@
           />
         </div>
       </div>
-      <div class="control-group">
+      <div class="control-group" v-show="false">
         <label>Unit</label>
         <select v-model="sizeState.unit" @change="updateSizeUnit">
           <option value="mm">mm</option>
@@ -34,7 +34,7 @@
           <option value="in">in</option>
         </select>
       </div>
-      <div class="control-group">
+      <div class="control-group" v-show="false">
         <label>Constraint</label>
         <select
           v-model="sizeState.constraintMode"
@@ -45,7 +45,7 @@
           <option value="equal">Equal</option>
         </select>
       </div>
-      <div class="control-group">
+      <div class="control-group" v-show="false">
         <label>Cut Mode</label>
         <select v-model="sizeState.cutMode" @change="updateSizeCut">
           <option value="trim">Trim</option>
@@ -53,7 +53,7 @@
           <option value="inset">Inset</option>
         </select>
       </div>
-      <div class="control-group">
+      <div class="control-group" v-show="false">
         <label>Cut Margin (mm)</label>
         <input
           type="number"
@@ -184,7 +184,9 @@
     <!-- Dieline Controls -->
     <div v-if="currentMode === 'Dieline'" class="controls">
       <div class="control-group">
-        <button @click="triggerDielineUpload">Upload Image to Detect</button>
+        <button @click="triggerDielineUpload" disabled>
+          Upload Image to Detect
+        </button>
         <input
           type="file"
           ref="dielineInput"
@@ -195,7 +197,11 @@
       </div>
       <div class="control-group">
         <label>Shape</label>
-        <select v-model="dielineState.shape" @change="updateDielineConfig">
+        <select
+          v-model="dielineState.shape"
+          @change="updateDielineConfig"
+          disabled
+        >
           <option value="rect">Rectangle</option>
           <option value="circle">Circle</option>
           <option value="custom">Custom</option>
@@ -698,9 +704,7 @@ const loadPreset = async (presetName = selectedPreset.value) => {
     return;
   }
 
-  const preset = availablePresets.value.find(
-    (p) => p.name === presetName,
-  );
+  const preset = availablePresets.value.find((p) => p.name === presetName);
   if (!preset) return;
 
   const features = JSON.parse(JSON.stringify(preset.features || []));
