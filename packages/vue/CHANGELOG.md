@@ -1,5 +1,17 @@
 # @pooder/vue
 
+## 4.2.0
+
+### Minor Changes
+
+- white ink tool and size tool
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/kit@5.0.0
+  - @pooder/core@2.1.0
+
 ## 4.1.2
 
 ### Patch Changes

@@ -1,5 +1,16 @@
 # @pooder/kit
 
+## 5.0.0
+
+### Major Changes
+
+- white ink tool and size tool
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/core@2.1.0
+
 ## 4.3.1
 
 ### Patch Changes

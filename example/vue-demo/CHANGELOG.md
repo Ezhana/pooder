@@ -1,5 +1,16 @@
 # vue-demo
 
+## 3.0.0
+
+### Major Changes
+
+- white ink tool and size tool
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/vue@4.2.0
+
 ## 2.0.4
 
 ### Patch Changes
