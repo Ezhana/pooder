@@ -6,7 +6,7 @@ import CustomToolPanel from "./components/CustomToolPanel.vue";
 import { getTemplateConfig } from "./constants/productTemplates";
 
 const editorRef = ref<any>(null);
-const currentCategory = ref("Acrylic Keychain");
+const currentCategory = ref("Thick Acrylic Keychains");
 
 const cloneConfigValue = (value: any) => {
   if (value && typeof value === "object") {

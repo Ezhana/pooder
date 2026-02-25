@@ -6,7 +6,7 @@ import {
   ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
-import { Path, Pattern } from "fabric";
+import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
 import CanvasService from "./CanvasService";
 import { ImageTracer } from "./tracer";
 import { Unit } from "./coordinate";
@@ -62,6 +62,8 @@ export interface DielineState {
   features: DielineFeature[];
   pathData?: string;
 }
+
+const IMAGE_OBJECT_LAYER_ID = "image.user";
 
 export class DielineTool implements Extension {
   id = "pooder.kit.dieline";
@@ -424,8 +426,8 @@ export class DielineTool implements Extension {
         {
           command: "exportCutImage",
           title: "Export Cut Image",
-          handler: () => {
-            return this.exportCutImage();
+          handler: (options?: { debug?: boolean }) => {
+            return this.exportCutImage(options);
           },
         },
         {
@@ -824,19 +826,30 @@ export class DielineTool implements Extension {
     } as DielineGeometry;
   }
 
-  public async exportCutImage() {
-    if (!this.canvasService) return null;
+  public async exportCutImage(options?: { debug?: boolean }) {
+    const debug = options?.debug === true;
+
+    if (!this.canvasService) {
+      console.warn("[DielineTool] exportCutImage returned null: canvas-not-ready");
+      return null;
+    }
     const configService = this.getConfigService();
-    if (!configService) return null;
-    const userLayer = this.canvasService.getLayer("user");
-    if (!userLayer) return null;
+    if (!configService) {
+      console.warn(
+        "[DielineTool] exportCutImage returned null: config-service-not-ready",
+      );
+      return null;
+    }
 
     this.syncSizeState(configService);
     const sceneLayout = computeSceneLayout(
       this.canvasService,
       readSizeState(configService),
     );
-    if (!sceneLayout) return null;
+    if (!sceneLayout) {
+      console.warn("[DielineTool] exportCutImage returned null: scene-layout-null");
+      return null;
+    }
 
     const { shape, radius, features, pathData } = this.state;
     const canvasW = sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
@@ -874,24 +887,119 @@ export class DielineTool implements Extension {
       canvasHeight: canvasH,
     });
 
-    const clonedLayer = await userLayer.clone();
     const clipPath = new Path(generatedPathData, {
-      originX: "left",
-      originY: "top",
-      left: 0,
-      top: 0,
+      originX: "center",
+      originY: "center",
+      left: cx,
+      top: cy,
       absolutePositioned: true,
     });
-    clonedLayer.clipPath = clipPath;
-
-    const bounds = clipPath.getBoundingRect();
-    return clonedLayer.toDataURL({
-      format: "png",
-      multiplier: 2,
-      left: bounds.left,
-      top: bounds.top,
-      width: bounds.width,
-      height: bounds.height,
+    const pathOffsetX = Number((clipPath as any)?.pathOffset?.x);
+    const pathOffsetY = Number((clipPath as any)?.pathOffset?.y);
+    const centerX = Number.isFinite(pathOffsetX) ? pathOffsetX : cx;
+    const centerY = Number.isFinite(pathOffsetY) ? pathOffsetY : cy;
+    clipPath.set({
+      originX: "center",
+      originY: "center",
+      left: centerX,
+      top: centerY,
+      absolutePositioned: true,
     });
+    clipPath.setCoords();
+
+    const pathBounds = clipPath.getBoundingRect();
+    if (
+      !Number.isFinite(pathBounds.left) ||
+      !Number.isFinite(pathBounds.top) ||
+      !Number.isFinite(pathBounds.width) ||
+      !Number.isFinite(pathBounds.height) ||
+      pathBounds.width <= 0 ||
+      pathBounds.height <= 0
+    ) {
+      console.warn("[DielineTool] exportCutImage returned null: invalid-cut-bounds", {
+        bounds: pathBounds,
+      });
+      return null;
+    }
+    const exportBounds = pathBounds;
+
+    const sourceImages = this.canvasService.canvas.getObjects().filter((obj: any) => {
+      return obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID;
+    });
+    if (!sourceImages.length) {
+      console.warn(
+        "[DielineTool] exportCutImage returned null: no-image-objects-on-canvas",
+      );
+      return null;
+    }
+
+    const sourceCanvasWidth = Number(
+      this.canvasService.canvas.width || sceneLayout.canvasWidth || canvasW,
+    );
+    const sourceCanvasHeight = Number(
+      this.canvasService.canvas.height || sceneLayout.canvasHeight || canvasH,
+    );
+
+    const el = document.createElement("canvas");
+    const exportCanvas = new FabricCanvas(el, {
+      renderOnAddRemove: false,
+      selection: false,
+      enableRetinaScaling: false,
+      preserveObjectStacking: true,
+    } as any);
+    exportCanvas.setDimensions({
+      width: Math.max(1, sourceCanvasWidth),
+      height: Math.max(1, sourceCanvasHeight),
+    });
+
+    try {
+      for (const source of sourceImages as any[]) {
+        const clone = await source.clone();
+        clone.set({
+          selectable: false,
+          evented: false,
+        });
+        clone.setCoords();
+        exportCanvas.add(clone);
+      }
+
+      exportCanvas.clipPath = clipPath;
+      exportCanvas.renderAll();
+
+      const dataUrl = exportCanvas.toDataURL({
+        format: "png",
+        multiplier: 2,
+        left: exportBounds.left,
+        top: exportBounds.top,
+        width: exportBounds.width,
+        height: exportBounds.height,
+      });
+
+      if (debug) {
+        console.info("[DielineTool] exportCutImage success", {
+          sourceCount: sourceImages.length,
+          bounds: exportBounds,
+          rawPathBounds: pathBounds,
+          pathOffset: {
+            x: Number.isFinite(pathOffsetX) ? pathOffsetX : null,
+            y: Number.isFinite(pathOffsetY) ? pathOffsetY : null,
+          },
+          clipPathCenter: {
+            x: centerX,
+            y: centerY,
+          },
+          cutRect: sceneLayout.cutRect,
+          canvasSize: {
+            width: Math.max(1, sourceCanvasWidth),
+            height: Math.max(1, sourceCanvasHeight),
+          },
+        });
+      }
+
+      return dataUrl;
+    } finally {
+      exportCanvas.dispose();
+    }
   }
+
 }

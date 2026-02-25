@@ -26,7 +26,7 @@
           />
         </div>
       </div>
-      <div class="control-group" v-show="false">
+      <div class="control-group">
         <label>Unit</label>
         <select v-model="sizeState.unit" @change="updateSizeUnit">
           <option value="mm">mm</option>
@@ -34,7 +34,7 @@
           <option value="in">in</option>
         </select>
       </div>
-      <div class="control-group" v-show="false">
+      <div class="control-group">
         <label>Constraint</label>
         <select
           v-model="sizeState.constraintMode"
@@ -45,7 +45,7 @@
           <option value="equal">Equal</option>
         </select>
       </div>
-      <div class="control-group" v-show="false">
+      <div class="control-group">
         <label>Cut Mode</label>
         <select v-model="sizeState.cutMode" @change="updateSizeCut">
           <option value="trim">Trim</option>
@@ -53,7 +53,7 @@
           <option value="inset">Inset</option>
         </select>
       </div>
-      <div class="control-group" v-show="false">
+      <div class="control-group">
         <label>Cut Margin (mm)</label>
         <input
           type="number"

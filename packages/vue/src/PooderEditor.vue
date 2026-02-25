@@ -69,8 +69,24 @@ const getImages = () => {
   return cfgSvc.get("image.items", []);
 };
 
-const generateCutImage = async () => {
-  return await cmdSvc.executeCommand("exportCutImage");
+const generateCutImage = async (options?: { debug?: boolean }) => {
+  try {
+    const result = await cmdSvc.executeCommand<string | null>(
+      "exportCutImage",
+      options,
+    );
+    if (!result) {
+      console.warn("[PooderEditor] generateCutImage returned null", {
+        options,
+        imageCount: (cfgSvc.get("image.items") || []).length,
+        hasCanvasService: !!pooder.getService<CanvasService>("CanvasService"),
+      });
+    }
+    return result;
+  } catch (error) {
+    console.error("[PooderEditor] generateCutImage failed", error);
+    throw error;
+  }
 };
 
 const upsertImage = async (
