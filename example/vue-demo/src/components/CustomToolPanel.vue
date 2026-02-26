@@ -435,7 +435,7 @@ const rollbackWorkingByTool = async (toolId) => {
     return;
   }
   if (toolId === "pooder.kit.feature") {
-    await editor.value.executeCommand("resetWorkingFeatures");
+    await editor.value.executeCommand("rollbackFeatureSession");
   }
 };
 
@@ -880,14 +880,23 @@ const onToolActivated = ({ id }) => {
     syncDielineState();
   } else if (id === "pooder.kit.feature") {
     currentMode.value = "Hole";
-    if (!featureState.groupId) {
-      if (!selectedPreset.value && availablePresets.value.length > 0) {
-        selectedPreset.value = availablePresets.value[0].name;
+    completeStatus.message = "";
+    completeStatus.issues = [];
+    void (async () => {
+      try {
+        await editor.value.executeCommand("beginFeatureSession");
+      } catch (e) {}
+      if (!featureState.groupId) {
+        if (!selectedPreset.value && availablePresets.value.length > 0) {
+          selectedPreset.value = availablePresets.value[0].name;
+        }
+        if (selectedPreset.value) {
+          await loadPreset(selectedPreset.value);
+        }
+      } else {
+        await syncFeatureStateFromWorking(featureState.groupId);
       }
-      if (selectedPreset.value) {
-        void loadPreset(selectedPreset.value);
-      }
-    }
+    })();
   } else {
     currentMode.value = "";
   }

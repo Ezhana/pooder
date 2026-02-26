@@ -16,6 +16,8 @@ class FeatureTool {
         this.workingFeatures = [];
         this.isUpdatingConfig = false;
         this.isToolActive = false;
+        this.isFeatureSessionActive = false;
+        this.sessionOriginalFeatures = null;
         this.hasWorkingChanges = false;
         this.handleMoving = null;
         this.handleModified = null;
@@ -23,6 +25,9 @@ class FeatureTool {
         this.currentGeometry = null;
         this.onToolActivated = (event) => {
             this.isToolActive = event.id === this.id;
+            if (!this.isToolActive) {
+                this.restoreSessionFeaturesToConfig();
+            }
             this.updateVisibility();
         };
         if (options) {
@@ -46,6 +51,8 @@ class FeatureTool {
                 if (this.isUpdatingConfig)
                     return;
                 if (e.key === "dieline.features") {
+                    if (this.isFeatureSessionActive)
+                        return;
                     const next = (e.value || []);
                     this.workingFeatures = this.cloneFeatures(next);
                     this.hasWorkingChanges = false;
@@ -62,6 +69,7 @@ class FeatureTool {
     }
     deactivate(context) {
         context.eventBus.off("tool:activated", this.onToolActivated);
+        this.restoreSessionFeaturesToConfig();
         this.dirtyTrackerDisposable?.dispose();
         this.dirtyTrackerDisposable = undefined;
         this.teardown();
@@ -95,9 +103,9 @@ class FeatureTool {
                     name: "Feature",
                     interaction: "session",
                     commands: {
-                        begin: "resetWorkingFeatures",
+                        begin: "beginFeatureSession",
                         commit: "completeFeatures",
-                        rollback: "resetWorkingFeatures",
+                        rollback: "rollbackFeatureSession",
                     },
                     session: {
                         autoBegin: false,
@@ -106,6 +114,25 @@ class FeatureTool {
                 },
             ],
             [core_1.ContributionPointIds.COMMANDS]: [
+                {
+                    command: "beginFeatureSession",
+                    title: "Begin Feature Session",
+                    handler: async () => {
+                        if (this.isFeatureSessionActive) {
+                            return { ok: true };
+                        }
+                        const original = this.getCommittedFeatures();
+                        this.sessionOriginalFeatures = this.cloneFeatures(original);
+                        this.isFeatureSessionActive = true;
+                        await this.refreshGeometry();
+                        this.setWorkingFeatures(this.cloneFeatures(original));
+                        this.hasWorkingChanges = false;
+                        this.redraw();
+                        this.emitWorkingChange();
+                        this.updateCommittedFeatures([]);
+                        return { ok: true };
+                    },
+                },
                 {
                     command: "addFeature",
                     title: "Add Edge Feature",
@@ -158,17 +185,25 @@ class FeatureTool {
                     },
                 },
                 {
-                    command: "resetWorkingFeatures",
-                    title: "Reset Working Features",
+                    command: "rollbackFeatureSession",
+                    title: "Rollback Feature Session",
                     handler: async () => {
-                        const configService = this.context?.services.get("ConfigurationService");
-                        const next = (configService?.get("dieline.features", []) ||
-                            []);
+                        const original = this.cloneFeatures(this.sessionOriginalFeatures || this.getCommittedFeatures());
                         await this.refreshGeometry();
-                        this.setWorkingFeatures(this.cloneFeatures(next));
+                        this.setWorkingFeatures(original);
                         this.hasWorkingChanges = false;
                         this.redraw();
                         this.emitWorkingChange();
+                        this.updateCommittedFeatures(original);
+                        this.clearFeatureSessionState();
+                        return { ok: true };
+                    },
+                },
+                {
+                    command: "resetWorkingFeatures",
+                    title: "Reset Working Features",
+                    handler: async () => {
+                        await this.resetWorkingFeaturesFromSource();
                         return { ok: true };
                     },
                 },
@@ -192,6 +227,38 @@ class FeatureTool {
     cloneFeatures(features) {
         return JSON.parse(JSON.stringify(features || []));
     }
+    getConfigService() {
+        return this.context?.services.get("ConfigurationService");
+    }
+    getCommittedFeatures() {
+        const configService = this.getConfigService();
+        const committed = (configService?.get("dieline.features", []) ||
+            []);
+        return this.cloneFeatures(committed);
+    }
+    updateCommittedFeatures(next) {
+        const configService = this.getConfigService();
+        if (!configService)
+            return;
+        this.isUpdatingConfig = true;
+        try {
+            configService.update("dieline.features", next);
+        }
+        finally {
+            this.isUpdatingConfig = false;
+        }
+    }
+    clearFeatureSessionState() {
+        this.isFeatureSessionActive = false;
+        this.sessionOriginalFeatures = null;
+    }
+    restoreSessionFeaturesToConfig() {
+        if (!this.isFeatureSessionActive)
+            return;
+        const original = this.cloneFeatures(this.sessionOriginalFeatures || this.getCommittedFeatures());
+        this.updateCommittedFeatures(original);
+        this.clearFeatureSessionState();
+    }
     emitWorkingChange() {
         this.context?.eventBus.emit("feature:working:change", {
             features: this.cloneFeatures(this.workingFeatures),
@@ -209,6 +276,16 @@ class FeatureTool {
                 this.currentGeometry = g;
         }
         catch (e) { }
+    }
+    async resetWorkingFeaturesFromSource() {
+        const next = this.cloneFeatures(this.isFeatureSessionActive && this.sessionOriginalFeatures
+            ? this.sessionOriginalFeatures
+            : this.getCommittedFeatures());
+        await this.refreshGeometry();
+        this.setWorkingFeatures(next);
+        this.hasWorkingChanges = false;
+        this.redraw();
+        this.emitWorkingChange();
     }
     setWorkingFeatures(next) {
         this.workingFeatures = next;
@@ -265,13 +342,7 @@ class FeatureTool {
         const dielineWidth = sizeState.actualWidthMm;
         const dielineHeight = sizeState.actualHeightMm;
         const result = (0, featureComplete_1.completeFeaturesStrict)(this.workingFeatures, { dielineWidth, dielineHeight }, (next) => {
-            this.isUpdatingConfig = true;
-            try {
-                configService.update("dieline.features", next);
-            }
-            finally {
-                this.isUpdatingConfig = false;
-            }
+            this.updateCommittedFeatures(next);
             this.workingFeatures = this.cloneFeatures(next);
             this.emitWorkingChange();
         });
@@ -282,6 +353,7 @@ class FeatureTool {
             };
         }
         this.hasWorkingChanges = false;
+        this.clearFeatureSessionState();
         // Keep feature markers above dieline overlay after config-driven redraw.
         this.redraw();
         return { ok: true };

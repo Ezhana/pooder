@@ -275,7 +275,7 @@ class ImageTool {
                     id: "image.frame.outerBackground",
                     type: "color",
                     label: "Image Frame Outer Background",
-                    default: "rgba(0,0,0,0.18)",
+                    default: "#f5f5f5",
                 },
             ],
             [core_1.ContributionPointIds.COMMANDS]: [
@@ -318,6 +318,7 @@ class ImageTool {
                         this.workingItems = this.cloneItems(this.items);
                         this.hasWorkingChanges = false;
                         this.updateImages();
+                        this.emitWorkingChange();
                     },
                 },
                 {
@@ -436,6 +437,12 @@ class ImageTool {
     cloneItems(items) {
         return this.normalizeItems((items || []).map((i) => ({ ...i })));
     }
+    emitWorkingChange(changedId = null) {
+        this.context?.eventBus.emit("image:working:change", {
+            changedId,
+            items: this.cloneItems(this.workingItems),
+        });
+    }
     generateId() {
         return Math.random().toString(36).substring(2, 9);
     }
@@ -509,6 +516,7 @@ class ImageTool {
             return;
         this.workingItems = this.cloneItems([...this.workingItems, item]);
         this.updateImages();
+        this.emitWorkingChange(item.id);
     }
     async updateImage(id, updates, options = {}) {
         this.syncToolActiveFromWorkbench();
@@ -681,7 +689,7 @@ class ImageTool {
             strokeStyle,
             dashLength: Number.isFinite(dashLength) ? Math.max(1, dashLength) : 8,
             innerBackground: this.getConfig("image.frame.innerBackground", "rgba(0,0,0,0)") || "rgba(0,0,0,0)",
-            outerBackground: this.getConfig("image.frame.outerBackground", "rgba(0,0,0,0.18)") || "rgba(0,0,0,0.18)",
+            outerBackground: "#f5f5f5",
         };
     }
     resolveRenderImageState(item) {
@@ -833,10 +841,15 @@ class ImageTool {
         const canvasW = this.canvasService.canvas.width || 0;
         const canvasH = this.canvasService.canvas.height || 0;
         const visual = this.getFrameVisualConfig();
-        const topH = Math.max(0, frame.top);
-        const bottomH = Math.max(0, canvasH - (frame.top + frame.height));
-        const leftW = Math.max(0, frame.left);
-        const rightW = Math.max(0, canvasW - (frame.left + frame.width));
+        const frameLeft = Math.max(0, Math.min(canvasW, frame.left));
+        const frameTop = Math.max(0, Math.min(canvasH, frame.top));
+        const frameRight = Math.max(frameLeft, Math.min(canvasW, frame.left + frame.width));
+        const frameBottom = Math.max(frameTop, Math.min(canvasH, frame.top + frame.height));
+        const visibleFrameH = Math.max(0, frameBottom - frameTop);
+        const topH = frameTop;
+        const bottomH = Math.max(0, canvasH - frameBottom);
+        const leftW = frameLeft;
+        const rightW = Math.max(0, canvasW - frameRight);
         const mask = [
             {
                 id: "image.cropMask.top",
@@ -860,7 +873,7 @@ class ImageTool {
                 data: { id: "image.cropMask.bottom", zIndex: 2 },
                 props: {
                     left: canvasW / 2,
-                    top: frame.top + frame.height + bottomH / 2,
+                    top: frameBottom + bottomH / 2,
                     width: canvasW,
                     height: bottomH,
                     originX: "center",
@@ -876,9 +889,9 @@ class ImageTool {
                 data: { id: "image.cropMask.left", zIndex: 3 },
                 props: {
                     left: leftW / 2,
-                    top: frame.top + frame.height / 2,
+                    top: frameTop + visibleFrameH / 2,
                     width: leftW,
-                    height: frame.height,
+                    height: visibleFrameH,
                     originX: "center",
                     originY: "center",
                     fill: visual.outerBackground,
@@ -891,10 +904,10 @@ class ImageTool {
                 type: "rect",
                 data: { id: "image.cropMask.right", zIndex: 4 },
                 props: {
-                    left: frame.left + frame.width + rightW / 2,
-                    top: frame.top + frame.height / 2,
+                    left: frameRight + rightW / 2,
+                    top: frameTop + visibleFrameH / 2,
                     width: rightW,
-                    height: frame.height,
+                    height: visibleFrameH,
                     originX: "center",
                     originY: "center",
                     fill: visual.outerBackground,
@@ -988,6 +1001,7 @@ class ImageTool {
         if (this.isToolActive) {
             this.updateImages();
         }
+        this.emitWorkingChange(id);
     }
     async updateImageInConfig(id, updates) {
         const index = this.items.findIndex((item) => item.id === id);
@@ -1073,6 +1087,7 @@ class ImageTool {
         this.isImageSelectionActive = true;
         this.focusedImageId = id;
         this.updateImages();
+        this.emitWorkingChange(id);
     }
     focusImageSelection(id) {
         if (!this.canvasService)
@@ -1162,6 +1177,7 @@ class ImageTool {
         this.hasWorkingChanges = false;
         this.workingItems = this.cloneItems(next);
         this.updateConfig(next);
+        this.emitWorkingChange(focusId);
         if (focusId) {
             this.focusedImageId = focusId;
             this.isImageSelectionActive = true;
