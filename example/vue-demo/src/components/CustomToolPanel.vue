@@ -907,6 +907,19 @@ const onWorkingChange = (e) => {
   }
 };
 
+const onImageWorkingChange = (e) => {
+  if (currentMode.value !== "Image") return;
+  if (!imageState.id && typeof e?.changedId === "string") {
+    imageState.id = e.changedId;
+  }
+  const targetId = imageState.id;
+  if (!targetId) return;
+  const item = (e?.items || []).find((i) => i.id === targetId);
+  if (!item) return;
+  imageState.scale = Number(item.scale ?? 1);
+  imageState.angle = Number(item.angle ?? 0);
+};
+
 const onSizeStateChanged = (state) => {
   if (!state) return;
   sizeState.width = Number(state.actualWidth ?? 0);
@@ -939,6 +952,7 @@ watch(
       editor.on("selection:cleared", onSelectionCleared);
       editor.on("tool:activated", onToolActivated);
       editor.on("feature:working:change", onWorkingChange);
+      editor.on("image:working:change", onImageWorkingChange);
       editor.on("size:state:changed", onSizeStateChanged);
 
       // Initial sync
@@ -958,6 +972,7 @@ onUnmounted(() => {
     props.editor.off("selection:cleared", onSelectionCleared);
     props.editor.off("tool:activated", onToolActivated);
     props.editor.off("feature:working:change", onWorkingChange);
+    props.editor.off("image:working:change", onImageWorkingChange);
     props.editor.off("size:state:changed", onSizeStateChanged);
   }
 });

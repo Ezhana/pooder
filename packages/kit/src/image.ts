@@ -148,10 +148,7 @@ export class ImageTool implements Extension {
     context.eventBus.on("selection:created", this.onSelectionChanged);
     context.eventBus.on("selection:updated", this.onSelectionChanged);
     context.eventBus.on("selection:cleared", this.onSelectionCleared);
-    context.eventBus.on(
-      "scene:layout:change",
-      this.onSceneLayoutChanged,
-    );
+    context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -198,10 +195,7 @@ export class ImageTool implements Extension {
     context.eventBus.off("selection:created", this.onSelectionChanged);
     context.eventBus.off("selection:updated", this.onSelectionChanged);
     context.eventBus.off("selection:cleared", this.onSelectionCleared);
-    context.eventBus.off(
-      "scene:layout:change",
-      this.onSceneLayoutChanged,
-    );
+    context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
 
@@ -396,7 +390,7 @@ export class ImageTool implements Extension {
           id: "image.frame.outerBackground",
           type: "color",
           label: "Image Frame Outer Background",
-          default: "rgba(0,0,0,0.18)",
+          default: "#f5f5f5",
         },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
@@ -439,6 +433,7 @@ export class ImageTool implements Extension {
             this.workingItems = this.cloneItems(this.items);
             this.hasWorkingChanges = false;
             this.updateImages();
+            this.emitWorkingChange();
           },
         },
         {
@@ -578,6 +573,13 @@ export class ImageTool implements Extension {
     return this.normalizeItems((items || []).map((i) => ({ ...i })));
   }
 
+  private emitWorkingChange(changedId: string | null = null) {
+    this.context?.eventBus.emit("image:working:change", {
+      changedId,
+      items: this.cloneItems(this.workingItems),
+    });
+  }
+
   private generateId(): string {
     return Math.random().toString(36).substring(2, 9);
   }
@@ -670,6 +672,7 @@ export class ImageTool implements Extension {
     if (this.workingItems.some((existing) => existing.id === item.id)) return;
     this.workingItems = this.cloneItems([...this.workingItems, item]);
     this.updateImages();
+    this.emitWorkingChange(item.id);
   }
 
   private async updateImage(
@@ -893,11 +896,7 @@ export class ImageTool implements Extension {
           "image.frame.innerBackground",
           "rgba(0,0,0,0)",
         ) || "rgba(0,0,0,0)",
-      outerBackground:
-        this.getConfig<string>(
-          "image.frame.outerBackground",
-          "rgba(0,0,0,0.18)",
-        ) || "rgba(0,0,0,0.18)",
+      outerBackground: "#f5f5f5",
     };
   }
 
@@ -1074,10 +1073,22 @@ export class ImageTool implements Extension {
     const canvasH = this.canvasService.canvas.height || 0;
     const visual = this.getFrameVisualConfig();
 
-    const topH = Math.max(0, frame.top);
-    const bottomH = Math.max(0, canvasH - (frame.top + frame.height));
-    const leftW = Math.max(0, frame.left);
-    const rightW = Math.max(0, canvasW - (frame.left + frame.width));
+    const frameLeft = Math.max(0, Math.min(canvasW, frame.left));
+    const frameTop = Math.max(0, Math.min(canvasH, frame.top));
+    const frameRight = Math.max(
+      frameLeft,
+      Math.min(canvasW, frame.left + frame.width),
+    );
+    const frameBottom = Math.max(
+      frameTop,
+      Math.min(canvasH, frame.top + frame.height),
+    );
+    const visibleFrameH = Math.max(0, frameBottom - frameTop);
+
+    const topH = frameTop;
+    const bottomH = Math.max(0, canvasH - frameBottom);
+    const leftW = frameLeft;
+    const rightW = Math.max(0, canvasW - frameRight);
 
     const mask: RenderObjectSpec[] = [
       {
@@ -1102,7 +1113,7 @@ export class ImageTool implements Extension {
         data: { id: "image.cropMask.bottom", zIndex: 2 },
         props: {
           left: canvasW / 2,
-          top: frame.top + frame.height + bottomH / 2,
+          top: frameBottom + bottomH / 2,
           width: canvasW,
           height: bottomH,
           originX: "center",
@@ -1118,9 +1129,9 @@ export class ImageTool implements Extension {
         data: { id: "image.cropMask.left", zIndex: 3 },
         props: {
           left: leftW / 2,
-          top: frame.top + frame.height / 2,
+          top: frameTop + visibleFrameH / 2,
           width: leftW,
-          height: frame.height,
+          height: visibleFrameH,
           originX: "center",
           originY: "center",
           fill: visual.outerBackground,
@@ -1133,10 +1144,10 @@ export class ImageTool implements Extension {
         type: "rect",
         data: { id: "image.cropMask.right", zIndex: 4 },
         props: {
-          left: frame.left + frame.width + rightW / 2,
-          top: frame.top + frame.height / 2,
+          left: frameRight + rightW / 2,
+          top: frameTop + visibleFrameH / 2,
           width: rightW,
-          height: frame.height,
+          height: visibleFrameH,
           originX: "center",
           originY: "center",
           fill: visual.outerBackground,
@@ -1275,6 +1286,7 @@ export class ImageTool implements Extension {
     if (this.isToolActive) {
       this.updateImages();
     }
+    this.emitWorkingChange(id);
   }
 
   private async updateImageInConfig(id: string, updates: Partial<ImageItem>) {
@@ -1371,6 +1383,7 @@ export class ImageTool implements Extension {
     this.isImageSelectionActive = true;
     this.focusedImageId = id;
     this.updateImages();
+    this.emitWorkingChange(id);
   }
 
   private focusImageSelection(id: string) {
@@ -1489,6 +1502,7 @@ export class ImageTool implements Extension {
     this.hasWorkingChanges = false;
     this.workingItems = this.cloneItems(next);
     this.updateConfig(next);
+    this.emitWorkingChange(focusId);
     if (focusId) {
       this.focusedImageId = focusId;
       this.isImageSelectionActive = true;
