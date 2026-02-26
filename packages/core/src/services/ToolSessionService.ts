@@ -1,8 +1,9 @@
 import { ToolContribution } from "../contribution";
 import Disposable from "../disposable";
-import { Service } from "../service";
+import { Service, ServiceContext } from "../service";
 import CommandService from "./CommandService";
 import ToolRegistryService from "./ToolRegistryService";
+import { COMMAND_SERVICE, TOOL_REGISTRY_SERVICE } from "./tokens";
 
 export type ToolSessionStatus = "idle" | "active";
 
@@ -21,10 +22,32 @@ export interface LeaveResult {
   reason?: string;
 }
 
+interface ToolSessionServiceDependencies {
+  commandService?: CommandService;
+  toolRegistry?: ToolRegistryService;
+}
+
 export default class ToolSessionService implements Service {
   private readonly sessions = new Map<string, ToolSessionState>();
   private commandService?: CommandService;
   private toolRegistry?: ToolRegistryService;
+
+  constructor(dependencies: ToolSessionServiceDependencies = {}) {
+    this.commandService = dependencies.commandService;
+    this.toolRegistry = dependencies.toolRegistry;
+  }
+
+  init(context: ServiceContext) {
+    this.commandService ??= context.get(COMMAND_SERVICE);
+    this.toolRegistry ??= context.get(TOOL_REGISTRY_SERVICE);
+
+    if (!this.commandService) {
+      throw new Error("ToolSessionService requires CommandService.");
+    }
+    if (!this.toolRegistry) {
+      throw new Error("ToolSessionService requires ToolRegistryService.");
+    }
+  }
 
   setCommandService(commandService: CommandService) {
     this.commandService = commandService;
@@ -84,12 +107,26 @@ export default class ToolSessionService implements Service {
   }
 
   private resolveTool(toolId: string): ToolContribution | undefined {
-    return this.toolRegistry?.getTool(toolId);
+    return this.getToolRegistry().getTool(toolId);
   }
 
   private async runCommand(commandId: string | undefined, ...args: any[]) {
-    if (!commandId || !this.commandService) return undefined;
-    return await this.commandService.executeCommand(commandId, ...args);
+    if (!commandId) return undefined;
+    return await this.getCommandService().executeCommand(commandId, ...args);
+  }
+
+  private getCommandService(): CommandService {
+    if (!this.commandService) {
+      throw new Error("ToolSessionService is not initialized.");
+    }
+    return this.commandService;
+  }
+
+  private getToolRegistry(): ToolRegistryService {
+    if (!this.toolRegistry) {
+      throw new Error("ToolSessionService is not initialized.");
+    }
+    return this.toolRegistry;
   }
 
   async begin(toolId: string): Promise<void> {

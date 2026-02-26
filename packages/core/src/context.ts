@@ -1,12 +1,17 @@
 import EventBus from "./event";
 import { Contribution } from "./contribution";
-import { Service } from "./service";
+import { Service, ServiceIdentifier } from "./service";
 import Disposable from "./disposable";
 
 interface ExtensionContext {
   readonly eventBus: EventBus;
   readonly services: {
-    get<T extends Service>(serviceName: string): T | undefined;
+    get<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined;
+    getOrThrow<T extends Service>(
+      identifier: ServiceIdentifier<T>,
+      errorMessage?: string,
+    ): T;
+    has(identifier: ServiceIdentifier<Service>): boolean;
   };
   readonly contributions: {
     get<T>(pointId: string): Contribution<T>[];

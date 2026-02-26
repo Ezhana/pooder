@@ -4,6 +4,11 @@ import Disposable from "./disposable";
 import CommandService from "./services/CommandService";
 import { ConfigurationService } from "./services";
 import ToolRegistryService from "./services/ToolRegistryService";
+import {
+  COMMAND_SERVICE,
+  CONFIGURATION_SERVICE,
+  TOOL_REGISTRY_SERVICE,
+} from "./services";
 
 interface ExtensionMetadata {
   name: string;
@@ -101,19 +106,20 @@ class ExtensionManager {
     // If registering configurations, update ConfigurationService defaults
     if (pointId === ContributionPointIds.CONFIGURATIONS) {
       const configService = this.context.services.get<ConfigurationService>(
-        "ConfigurationService",
+        CONFIGURATION_SERVICE,
       );
       configService?.initializeDefaults([item.data]);
     }
     if (pointId === ContributionPointIds.COMMANDS && item.data.handler) {
       const commandService =
-        this.context.services.get<CommandService>("CommandService")!;
+        this.context.services.get<CommandService>(COMMAND_SERVICE)!;
 
       return commandService.registerCommand(item.id, item.data.handler);
     }
     if (pointId === ContributionPointIds.TOOLS) {
-      const toolRegistry =
-        this.context.services.get<ToolRegistryService>("ToolRegistryService");
+      const toolRegistry = this.context.services.get<ToolRegistryService>(
+        TOOL_REGISTRY_SERVICE,
+      );
       if (!toolRegistry) return;
       return toolRegistry.registerTool(item.data);
     }

@@ -1,8 +1,9 @@
 import Disposable from "../disposable";
 import EventBus from "../event";
-import { Service } from "../service";
+import { Service, ServiceContext } from "../service";
 import ToolRegistryService from "./ToolRegistryService";
 import ToolSessionService from "./ToolSessionService";
+import { TOOL_REGISTRY_SERVICE, TOOL_SESSION_SERVICE } from "./tokens";
 
 export interface ToolSwitchContext {
   from: string | null;
@@ -26,6 +27,12 @@ interface GuardItem {
   priority: number;
 }
 
+interface WorkbenchServiceDependencies {
+  eventBus?: EventBus;
+  toolRegistry?: ToolRegistryService;
+  sessionService?: ToolSessionService;
+}
+
 export default class WorkbenchService implements Service {
   private _activeToolId: string | null = null;
   private eventBus?: EventBus;
@@ -33,7 +40,27 @@ export default class WorkbenchService implements Service {
   private sessionService?: ToolSessionService;
   private guards: GuardItem[] = [];
 
-  init() {}
+  constructor(dependencies: WorkbenchServiceDependencies = {}) {
+    this.eventBus = dependencies.eventBus;
+    this.toolRegistry = dependencies.toolRegistry;
+    this.sessionService = dependencies.sessionService;
+  }
+
+  init(context: ServiceContext) {
+    this.eventBus ??= context.eventBus;
+    this.toolRegistry ??= context.get(TOOL_REGISTRY_SERVICE);
+    this.sessionService ??= context.get(TOOL_SESSION_SERVICE);
+
+    if (!this.eventBus) {
+      throw new Error("WorkbenchService requires EventBus.");
+    }
+    if (!this.toolRegistry) {
+      throw new Error("WorkbenchService requires ToolRegistryService.");
+    }
+    if (!this.sessionService) {
+      throw new Error("WorkbenchService requires ToolSessionService.");
+    }
+  }
 
   dispose() {
     this.guards = [];
@@ -82,11 +109,15 @@ export default class WorkbenchService implements Service {
     id: string | null,
     options?: { reason?: string },
   ): Promise<ToolSwitchResult> {
+    const eventBus = this.getEventBus();
+    const toolRegistry = this.getToolRegistry();
+    const sessionService = this.getSessionService();
+
     if (this._activeToolId === id) {
       return { ok: true, from: this._activeToolId, to: id };
     }
 
-    if (id && this.toolRegistry && !this.toolRegistry.hasTool(id)) {
+    if (id && !toolRegistry.hasTool(id)) {
       return {
         ok: false,
         from: this._activeToolId,
@@ -103,7 +134,7 @@ export default class WorkbenchService implements Service {
 
     const guardAllowed = await this.runGuards(context);
     if (!guardAllowed) {
-      this.eventBus?.emit("tool:switch:blocked", {
+      eventBus.emit("tool:switch:blocked", {
         ...context,
         reason: "blocked-by-guard",
       });
@@ -115,12 +146,10 @@ export default class WorkbenchService implements Service {
       };
     }
 
-    if (context.from && this.sessionService) {
-      const leaveResult = await this.sessionService.handleBeforeLeave(
-        context.from,
-      );
+    if (context.from) {
+      const leaveResult = await sessionService.handleBeforeLeave(context.from);
       if (leaveResult.decision === "blocked") {
-        this.eventBus?.emit("tool:switch:blocked", {
+        eventBus.emit("tool:switch:blocked", {
           ...context,
           reason: leaveResult.reason || "session-blocked",
         });
@@ -131,21 +160,21 @@ export default class WorkbenchService implements Service {
           reason: leaveResult.reason || "session-blocked",
         };
       }
-      this.sessionService.deactivateSession(context.from);
+      sessionService.deactivateSession(context.from);
     }
 
-    if (id && this.sessionService && this.toolRegistry) {
-      const tool = this.toolRegistry.getTool(id);
+    if (id) {
+      const tool = toolRegistry.getTool(id);
       if (tool?.interaction === "session" && tool.session?.autoBegin !== false) {
-        await this.sessionService.begin(id);
+        await sessionService.begin(id);
       }
     }
 
     const previous = this._activeToolId;
     this._activeToolId = id;
     const reason = options?.reason;
-    this.eventBus?.emit("tool:activated", { id, previous, reason });
-    this.eventBus?.emit("tool:switch", { from: previous, to: id, reason });
+    eventBus.emit("tool:activated", { id, previous, reason });
+    eventBus.emit("tool:switch", { from: previous, to: id, reason });
     return { ok: true, from: previous, to: id };
   }
 
@@ -155,5 +184,26 @@ export default class WorkbenchService implements Service {
 
   async deactivate(): Promise<ToolSwitchResult> {
     return await this.switchTool(null, { reason: "deactivate" });
+  }
+
+  private getEventBus(): EventBus {
+    if (!this.eventBus) {
+      throw new Error("WorkbenchService is not initialized.");
+    }
+    return this.eventBus;
+  }
+
+  private getToolRegistry(): ToolRegistryService {
+    if (!this.toolRegistry) {
+      throw new Error("WorkbenchService is not initialized.");
+    }
+    return this.toolRegistry;
+  }
+
+  private getSessionService(): ToolSessionService {
+    if (!this.sessionService) {
+      throw new Error("WorkbenchService is not initialized.");
+    }
+    return this.sessionService;
   }
 }
