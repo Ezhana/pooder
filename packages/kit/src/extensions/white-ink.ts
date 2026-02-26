@@ -9,7 +9,7 @@ import {
   WorkbenchService,
 } from "@pooder/core";
 import { Image as FabricImage } from "fabric";
-import CanvasService from "./CanvasService";
+import { CanvasService } from "../services";
 import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
 
 export interface WhiteInkItem {

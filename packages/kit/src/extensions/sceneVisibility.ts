@@ -1,5 +1,5 @@
 import { Extension, ExtensionContext } from "@pooder/core";
-import CanvasService from "./CanvasService";
+import { CanvasService } from "../services";
 
 export class SceneVisibilityService implements Extension {
   id = "pooder.kit.sceneVisibility";

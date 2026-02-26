@@ -5,7 +5,7 @@ import {
   Extension,
   ExtensionContext,
 } from "@pooder/core";
-import CanvasService from "./CanvasService";
+import { CanvasService } from "../services";
 import {
   buildSceneGeometry,
   computeSceneLayout,
@@ -118,4 +118,3 @@ export class SceneLayoutService implements Extension {
     return geometry;
   }
 }
-

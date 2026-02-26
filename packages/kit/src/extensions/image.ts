@@ -9,8 +9,7 @@ import {
   WorkbenchService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Image as FabricImage, Point } from "fabric";
-import CanvasService from "./CanvasService";
-import type { RenderObjectSpec } from "./renderSpec";
+import { CanvasService, RenderObjectSpec } from "../services";
 import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
 
 export interface ImageItem {

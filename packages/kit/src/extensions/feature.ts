@@ -7,16 +7,14 @@ import {
   ToolSessionService,
 } from "@pooder/core";
 import { Circle, Group, Point, Rect } from "fabric";
-import CanvasService from "./CanvasService";
+import { CanvasService } from "../services";
 import {
   getNearestPointOnDieline,
   DielineFeature,
   resolveFeaturePosition,
 } from "./geometry";
 import { ConstraintRegistry, ConstraintFeature } from "./constraints";
-import {
-  completeFeaturesStrict,
-} from "./featureComplete";
+import { completeFeaturesStrict } from "./featureComplete";
 import {
   readSizeState,
   type SceneGeometrySnapshot as DielineGeometry,
@@ -41,8 +39,9 @@ export class FeatureTool implements Extension {
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
-  private handleSceneGeometryChange: ((geometry: DielineGeometry) => void) | null =
-    null;
+  private handleSceneGeometryChange:
+    | ((geometry: DielineGeometry) => void)
+    | null = null;
 
   private currentGeometry: DielineGeometry | null = null;
 
@@ -125,16 +124,16 @@ export class FeatureTool implements Extension {
     const markers = canvas
       .getObjects()
       .filter((obj: any) => obj.data?.type === "feature-marker");
-    
+
     markers.forEach((marker: any) => {
-        // If tool active, allow selection. If not, disable selection.
-        // Also might want to hide them entirely or just disable interaction.
-        // Assuming we only want to see/edit holes when tool is active.
-        marker.set({
-            visible: this.isToolActive, // Or just selectable: false if we want them visible but locked
-            selectable: this.isToolActive,
-            evented: this.isToolActive
-        });
+      // If tool active, allow selection. If not, disable selection.
+      // Also might want to hide them entirely or just disable interaction.
+      // Assuming we only want to see/edit holes when tool is active.
+      marker.set({
+        visible: this.isToolActive, // Or just selectable: false if we want them visible but locked
+        selectable: this.isToolActive,
+        evented: this.isToolActive,
+      });
     });
     canvas.requestRenderAll();
   }
@@ -276,7 +275,9 @@ export class FeatureTool implements Extension {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>("ConfigurationService");
+    return this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
   }
 
   private getCommittedFeatures(): ConstraintFeature[] {
@@ -349,8 +350,9 @@ export class FeatureTool implements Extension {
   private updateWorkingGroupPosition(groupId: string, x: number, y: number) {
     if (!groupId) return { ok: false };
 
-    const configService =
-      this.context?.services.get<ConfigurationService>("ConfigurationService");
+    const configService = this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
     if (!configService) return { ok: false };
 
     const sizeState = readSizeState(configService);
@@ -397,8 +399,9 @@ export class FeatureTool implements Extension {
       reason: string;
     }>;
   } {
-    const configService =
-      this.context?.services.get<ConfigurationService>("ConfigurationService");
+    const configService = this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
     if (!configService) {
       return {
         ok: false,
@@ -573,14 +576,18 @@ export class FeatureTool implements Extension {
         // For Group, target.left/top is group center (or top-left depending on origin)
         // We snap the target position itself.
         const p = new Point(target.left, target.top);
-        
+
         // Calculate limit based on target size (min dimension / 2 ensures overlap)
         // Also subtract stroke width to ensure visual overlap (not just tangent)
         // target.strokeWidth for group is usually 0, need a safe default (e.g. 2 for markers)
-        const markerStrokeWidth = (target.strokeWidth || 2) * (target.scaleX || 1);
-        const minDim = Math.min(target.getScaledWidth(), target.getScaledHeight());
+        const markerStrokeWidth =
+          (target.strokeWidth || 2) * (target.scaleX || 1);
+        const minDim = Math.min(
+          target.getScaledWidth(),
+          target.getScaledHeight(),
+        );
         const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
-        
+
         const snapped = this.constrainPosition(p, geometry, limit, feature);
 
         target.set({
@@ -691,7 +698,7 @@ export class FeatureTool implements Extension {
     p: Point,
     geometry: DielineGeometry,
     limit: number,
-    feature?: ConstraintFeature
+    feature?: ConstraintFeature,
   ): { x: number; y: number } {
     if (!feature) {
       return { x: p.x, y: p.y };
@@ -709,7 +716,9 @@ export class FeatureTool implements Extension {
     const dielineHeight = geometry.height / scale;
 
     // Filter constraints: only apply those that are NOT validateOnly
-    const activeConstraints = feature.constraints?.filter((c) => !c.validateOnly);
+    const activeConstraints = feature.constraints?.filter(
+      (c) => !c.validateOnly,
+    );
 
     const constrained = ConstraintRegistry.apply(
       nx,
@@ -788,8 +797,9 @@ export class FeatureTool implements Extension {
     const finalScale = scale;
 
     // Group features by groupId
-    const groups: { [key: string]: { feature: ConstraintFeature; index: number }[] } =
-      {};
+    const groups: {
+      [key: string]: { feature: ConstraintFeature; index: number }[];
+    } = {};
     const singles: { feature: ConstraintFeature; index: number }[] = [];
 
     this.workingFeatures.forEach((f: ConstraintFeature, i: number) => {
@@ -812,8 +822,7 @@ export class FeatureTool implements Extension {
       const visualHeight = (feature.height || 10) * featureScale;
       const visualRadius = (feature.radius || 0) * featureScale;
       const color =
-        feature.color ||
-        (feature.operation === "add" ? "#00FF00" : "#FF0000");
+        feature.color || (feature.operation === "add" ? "#00FF00" : "#FF0000");
       const strokeDash =
         feature.strokeDash ||
         (feature.operation === "subtract" ? [4, 4] : undefined);
@@ -850,42 +859,42 @@ export class FeatureTool implements Extension {
       if (feature.rotation) {
         shape.rotate(feature.rotation);
       }
-      
+
       // Handle Indicator for Bridge
       if (feature.bridge && feature.bridge.type === "vertical") {
-         // Create a visual indicator for the bridge
-         // A dashed rectangle extending upwards
-         const bridgeIndicator = new Rect({
-           width: visualWidth,
-           height: 100 * featureScale, // Arbitrary long length to show direction
-           fill: "transparent",
-           stroke: "#888",
-           strokeWidth: 1,
-           strokeDashArray: [2, 2],
-           originX: "center",
-           originY: "bottom", // Anchor at bottom so it extends up
-           left: pos.x,
-           top: pos.y - visualHeight / 2, // Start from top of feature
-           opacity: 0.5,
-           selectable: false,
-           evented: false
-         });
-         
-         // We need to return a group containing both shape and indicator
-         // But createMarkerShape is expected to return one object.
-         // If we return a Group, Fabric handles it.
-         // But the caller might wrap this in another Group if it's part of a feature group.
-         // Fabric supports nested groups.
-         
-         const group = new Group([bridgeIndicator, shape], {
-            originX: "center",
-            originY: "center",
-            left: pos.x,
-            top: pos.y
-         });
-         return group;
+        // Create a visual indicator for the bridge
+        // A dashed rectangle extending upwards
+        const bridgeIndicator = new Rect({
+          width: visualWidth,
+          height: 100 * featureScale, // Arbitrary long length to show direction
+          fill: "transparent",
+          stroke: "#888",
+          strokeWidth: 1,
+          strokeDashArray: [2, 2],
+          originX: "center",
+          originY: "bottom", // Anchor at bottom so it extends up
+          left: pos.x,
+          top: pos.y - visualHeight / 2, // Start from top of feature
+          opacity: 0.5,
+          selectable: false,
+          evented: false,
+        });
+
+        // We need to return a group containing both shape and indicator
+        // But createMarkerShape is expected to return one object.
+        // If we return a Group, Fabric handles it.
+        // But the caller might wrap this in another Group if it's part of a feature group.
+        // Fabric supports nested groups.
+
+        const group = new Group([bridgeIndicator, shape], {
+          originX: "center",
+          originY: "center",
+          left: pos.x,
+          top: pos.y,
+        });
+        return group;
       }
-      
+
       return shape;
     };
 
@@ -990,15 +999,19 @@ export class FeatureTool implements Extension {
         feature,
       );
 
-      const markerStrokeWidth = (marker.strokeWidth || 2) * (marker.scaleX || 1);
-      const minDim = Math.min(marker.getScaledWidth(), marker.getScaledHeight());
+      const markerStrokeWidth =
+        (marker.strokeWidth || 2) * (marker.scaleX || 1);
+      const minDim = Math.min(
+        marker.getScaledWidth(),
+        marker.getScaledHeight(),
+      );
       const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
-      
+
       const snapped = this.constrainPosition(
         new Point(marker.left, marker.top),
         geometry,
         limit,
-        feature
+        feature,
       );
       marker.set({ left: snapped.x, top: snapped.y });
       marker.setCoords();

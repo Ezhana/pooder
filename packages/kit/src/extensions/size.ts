@@ -6,7 +6,7 @@ import {
   Extension,
   ExtensionContext,
 } from "@pooder/core";
-import CanvasService from "./CanvasService";
+import { CanvasService } from "../services";
 import {
   fromMm,
   normalizeConstraintMode,
@@ -18,7 +18,7 @@ import {
   type SizeConstraintMode,
   computeSceneLayout,
 } from "./sceneLayoutModel";
-import type { Unit } from "./coordinate";
+import type { Unit } from "../coordinate";
 
 type ChangedField = "width" | "height" | "both";
 
@@ -194,7 +194,9 @@ export class SizeTool implements Extension {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>("ConfigurationService");
+    return this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
   }
 
   private ensureDefaults(configService: ConfigurationService) {
@@ -264,7 +266,7 @@ export class SizeTool implements Extension {
           ? nextHeightMm
           : changed === "width"
             ? nextWidthMm
-            : providedWidthMm ?? providedHeightMm ?? nextWidthMm;
+            : (providedWidthMm ?? providedHeightMm ?? nextWidthMm);
       nextWidthMm = anchor;
       nextHeightMm = anchor;
     } else if (state.constraintMode === "lockAspect") {
@@ -311,11 +313,14 @@ export class SizeTool implements Extension {
       configService.update("size.aspectRatio", ratio);
     }
     if (mode === "equal") {
-      const value = sanitizeMmValue(Math.max(state.actualWidthMm, state.actualHeightMm), {
-        minMm: state.minMm,
-        maxMm: state.maxMm,
-        stepMm: state.stepMm,
-      });
+      const value = sanitizeMmValue(
+        Math.max(state.actualWidthMm, state.actualHeightMm),
+        {
+          minMm: state.minMm,
+          maxMm: state.maxMm,
+          stepMm: state.stepMm,
+        },
+      );
       configService.update("size.actualWidthMm", value);
       configService.update("size.actualHeightMm", value);
       configService.update("size.aspectRatio", 1);
@@ -353,15 +358,20 @@ export class SizeTool implements Extension {
 
     const all = this.canvasService.canvas.getObjects() as any[];
     const active = this.canvasService.canvas.getActiveObject() as any;
-    const activeId = active?.data?.layerId === "image.user" ? active?.data?.id : null;
+    const activeId =
+      active?.data?.layerId === "image.user" ? active?.data?.id : null;
     const targetId = id || activeId;
     const target =
-      all.find((obj) => obj?.data?.layerId === "image.user" && obj?.data?.id === targetId) ||
-      all.find((obj) => obj?.data?.layerId === "image.user");
+      all.find(
+        (obj) =>
+          obj?.data?.layerId === "image.user" && obj?.data?.id === targetId,
+      ) || all.find((obj) => obj?.data?.layerId === "image.user");
     if (!target) return null;
 
     const objectWidthPx = Math.abs((target.width || 0) * (target.scaleX || 1));
-    const objectHeightPx = Math.abs((target.height || 0) * (target.scaleY || 1));
+    const objectHeightPx = Math.abs(
+      (target.height || 0) * (target.scaleY || 1),
+    );
     if (objectWidthPx <= 0 || objectHeightPx <= 0) return null;
 
     const widthMm = objectWidthPx / layout.scale;

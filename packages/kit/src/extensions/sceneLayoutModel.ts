@@ -1,7 +1,7 @@
 import type { ConfigurationService } from "@pooder/core";
-import type CanvasService from "./CanvasService";
-import { Coordinate, Unit } from "./coordinate";
-import { parseLengthToMm } from "./units";
+import type { CanvasService } from "../services";
+import { Coordinate, Unit } from "../coordinate";
+import { parseLengthToMm } from "../units";
 
 export type SizeConstraintMode = "free" | "lockAspect" | "equal";
 export type CutMode = "trim" | "outset" | "inset";
@@ -158,17 +158,17 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   );
   const actualHeightMm = sanitizeMmValue(
     parseLengthToMm(
-      configService.get("size.actualHeightMm", DEFAULT_SIZE_STATE.actualHeightMm),
+      configService.get(
+        "size.actualHeightMm",
+        DEFAULT_SIZE_STATE.actualHeightMm,
+      ),
       "mm",
     ),
     { minMm, maxMm, stepMm },
   );
 
   const aspectRaw = Number(
-    configService.get(
-      "size.aspectRatio",
-      DEFAULT_SIZE_STATE.aspectRatio,
-    ),
+    configService.get("size.aspectRatio", DEFAULT_SIZE_STATE.aspectRatio),
   );
   const aspectRatio =
     Number.isFinite(aspectRaw) && aspectRaw > 0
@@ -265,7 +265,11 @@ export function computeSceneLayout(
     return null;
   }
 
-  const paddingPx = resolvePaddingPx(size.viewPadding, canvasWidth, canvasHeight);
+  const paddingPx = resolvePaddingPx(
+    size.viewPadding,
+    canvasWidth,
+    canvasHeight,
+  );
   canvasService.viewport.updateContainer(canvasWidth, canvasHeight);
   canvasService.viewport.setPadding(paddingPx);
   canvasService.viewport.updatePhysical(viewWidthMm, viewHeightMm);
@@ -316,7 +320,10 @@ export function buildSceneGeometry(
   configService: ConfigurationService,
   layout: SceneLayoutSnapshot,
 ): SceneGeometrySnapshot {
-  const radiusMm = parseLengthToMm(configService.get("dieline.radius", 0), "mm");
+  const radiusMm = parseLengthToMm(
+    configService.get("dieline.radius", 0),
+    "mm",
+  );
   const offset = (layout.cutRect.width - layout.trimRect.width) / 2;
 
   return {

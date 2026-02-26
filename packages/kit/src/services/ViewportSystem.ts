@@ -1,4 +1,4 @@
-import { Coordinate, Layout, Point, Size } from "./coordinate";
+import { Coordinate, Layout, Point, Size } from "../coordinate";
 
 export class ViewportSystem {
   private _containerSize: Size = { width: 0, height: 0 };
@@ -46,7 +46,10 @@ export class ViewportSystem {
   }
 
   updatePhysical(width: number, height: number) {
-    if (this._physicalSize.width === width && this._physicalSize.height === height)
+    if (
+      this._physicalSize.width === width &&
+      this._physicalSize.height === height
+    )
       return;
     this._physicalSize = { width, height };
     this.updateLayout();

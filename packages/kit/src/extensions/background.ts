@@ -6,7 +6,7 @@ import {
   ConfigurationContribution,
 } from "@pooder/core";
 import { Rect, FabricImage as Image } from "fabric";
-import CanvasService from "./CanvasService";
+import { CanvasService } from "../services";
 
 export class BackgroundTool implements Extension {
   id = "pooder.kit.background";

@@ -7,8 +7,8 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { Rect, Line, Text, Group, Polygon } from "fabric";
-import CanvasService from "./CanvasService";
-import { formatMm } from "./units";
+import { CanvasService } from "../services";
+import { formatMm } from "../units";
 import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
 
 export class RulerTool implements Extension {
@@ -304,7 +304,9 @@ export class RulerTool implements Extension {
     const rulerBottom = rulerRect.top + rulerRect.height;
 
     // Display Dimensions (Physical)
-    const displayWidthMm = useCutAsRuler ? layout.cutWidthMm : layout.trimWidthMm;
+    const displayWidthMm = useCutAsRuler
+      ? layout.cutWidthMm
+      : layout.trimWidthMm;
     const displayHeightMm = useCutAsRuler
       ? layout.cutHeightMm
       : layout.trimHeightMm;

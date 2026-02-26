@@ -7,10 +7,10 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
-import CanvasService from "./CanvasService";
+import { CanvasService } from "../services";
 import { ImageTracer } from "./tracer";
-import { Unit } from "./coordinate";
-import { parseLengthToMm } from "./units";
+import { Unit } from "../coordinate";
+import { parseLengthToMm } from "../units";
 import {
   generateDielinePath,
   generateMaskPath,
@@ -552,7 +552,9 @@ export class DielineTool implements Extension {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>("ConfigurationService");
+    return this.context?.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
   }
 
   private syncSizeState(configService: ConfigurationService) {
@@ -603,8 +605,10 @@ export class DielineTool implements Extension {
       features,
     } = this.state;
 
-    const canvasW = sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
-    const canvasH = sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
+    const canvasW =
+      sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
+    const canvasH =
+      sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
     const scale = sceneLayout.scale;
     const cx = sceneLayout.trimRect.centerX;
     const cy = sceneLayout.trimRect.centerY;
@@ -830,7 +834,9 @@ export class DielineTool implements Extension {
     const debug = options?.debug === true;
 
     if (!this.canvasService) {
-      console.warn("[DielineTool] exportCutImage returned null: canvas-not-ready");
+      console.warn(
+        "[DielineTool] exportCutImage returned null: canvas-not-ready",
+      );
       return null;
     }
     const configService = this.getConfigService();
@@ -847,13 +853,17 @@ export class DielineTool implements Extension {
       readSizeState(configService),
     );
     if (!sceneLayout) {
-      console.warn("[DielineTool] exportCutImage returned null: scene-layout-null");
+      console.warn(
+        "[DielineTool] exportCutImage returned null: scene-layout-null",
+      );
       return null;
     }
 
     const { shape, radius, features, pathData } = this.state;
-    const canvasW = sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
-    const canvasH = sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
+    const canvasW =
+      sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
+    const canvasH =
+      sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
     const scale = sceneLayout.scale;
     const cx = sceneLayout.trimRect.centerX;
     const cy = sceneLayout.trimRect.centerY;
@@ -916,16 +926,21 @@ export class DielineTool implements Extension {
       pathBounds.width <= 0 ||
       pathBounds.height <= 0
     ) {
-      console.warn("[DielineTool] exportCutImage returned null: invalid-cut-bounds", {
-        bounds: pathBounds,
-      });
+      console.warn(
+        "[DielineTool] exportCutImage returned null: invalid-cut-bounds",
+        {
+          bounds: pathBounds,
+        },
+      );
       return null;
     }
     const exportBounds = pathBounds;
 
-    const sourceImages = this.canvasService.canvas.getObjects().filter((obj: any) => {
-      return obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID;
-    });
+    const sourceImages = this.canvasService.canvas
+      .getObjects()
+      .filter((obj: any) => {
+        return obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID;
+      });
     if (!sourceImages.length) {
       console.warn(
         "[DielineTool] exportCutImage returned null: no-image-objects-on-canvas",
@@ -1001,5 +1016,4 @@ export class DielineTool implements Extension {
       exportCanvas.dispose();
     }
   }
-
 }
