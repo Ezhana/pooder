@@ -93,8 +93,7 @@ const upsertImage = async (
   url: string,
   options?: {
     id?: string;
-    mode?: "auto" | "replace" | "add";
-    createIfMissing?: boolean;
+    mode?: "replace" | "add";
     addOptions?: any;
     fitOnAdd?: boolean;
   },
@@ -102,7 +101,6 @@ const upsertImage = async (
   const result = await cmdSvc.executeCommand("upsertImage", url, {
     id: options?.id,
     mode: options?.mode,
-    createIfMissing: options?.createIfMissing,
     addOptions: options?.addOptions,
     fitOnAdd: options?.fitOnAdd,
   });
@@ -126,6 +124,13 @@ const updateImage = async (id: string, options?: any) => {
 
 const clearImages = async () => {
   return await cmdSvc.executeCommand("clearImages");
+};
+
+const focusImage = async (
+  id: string | null,
+  options?: { syncCanvasSelection?: boolean },
+) => {
+  return await cmdSvc.executeCommand("focusImage", id, options);
 };
 
 interface DetectBounds {
@@ -427,6 +432,7 @@ defineExpose({
   upsertImage,
   updateImage,
   clearImages,
+  focusImage,
   detectDieline,
   detectDielineFromFrame,
   uploadAndDetectEdge,

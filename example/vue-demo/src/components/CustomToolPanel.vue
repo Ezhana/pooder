@@ -75,6 +75,35 @@
 
     <!-- Image Controls -->
     <div v-if="currentMode === 'Image'" class="controls">
+      <div class="control-group">
+        <label>Images</label>
+        <div class="image-list" v-if="imageRows.length">
+          <button
+            v-for="item in imageRows"
+            :key="item.id"
+            class="image-item"
+            :class="{ active: item.id === imageState.id }"
+            @click="focusImageById(item.id)"
+          >
+            <div class="image-item-head">
+              <span>{{ item.id }}</span>
+            </div>
+            <div class="hint">
+              scale {{ item.scale.toFixed(2) }} · angle
+              {{ item.angle.toFixed(1) }}°
+            </div>
+            <div class="hint">
+              left {{ item.left.toFixed(2) }} · top {{ item.top.toFixed(2) }}
+            </div>
+            <div class="hint">
+              opacity {{ item.opacity.toFixed(2) }} ·
+              {{ item.originalWidth || 0 }} × {{ item.originalHeight || 0 }} px
+            </div>
+          </button>
+        </div>
+        <div class="hint" v-else>No images</div>
+      </div>
+
       <div class="control-group" v-if="imageState.id">
         <label>Original size</label>
         <div class="hint">
@@ -84,6 +113,7 @@
           {{ imageOriginalMm.width }} × {{ imageOriginalMm.height }} mm
         </div>
       </div>
+
       <div class="control-group">
         <label>Scale</label>
         <input
@@ -97,6 +127,7 @@
         />
         <span>{{ imageState.scale.toFixed(1) }}</span>
       </div>
+
       <div class="control-group">
         <label>Rotate</label>
         <input
@@ -107,23 +138,38 @@
           @input="updateImageState"
           :disabled="!imageState.id"
         />
-        <span>{{ imageState.angle }}°</span>
+        <span>{{ imageState.angle.toFixed(1) }}°</span>
       </div>
-      <div class="control-group">
-        <button @click="triggerImageUpload">Replace Image</button>
-        <input
-          type="file"
-          ref="imageInput"
-          style="display: none"
-          @change="handleImageReplace"
-          accept="image/*"
-        />
+
+      <div
+        class="control-group"
+        style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px"
+      >
+        <button @click="triggerImageUpload('add')">Add Image</button>
+        <button
+          @click="triggerImageUpload('replace')"
+          :disabled="!imageState.id"
+        >
+          Replace Focused
+        </button>
+        <button @click="clearImageFocus" :disabled="!imageState.id">
+          Clear Focus
+        </button>
       </div>
+
+      <input
+        type="file"
+        ref="imageInput"
+        style="display: none"
+        @change="handleImageUpload"
+        accept="image/*"
+      />
+
       <div class="control-group">
-        <button @click="completeImageWorking" :disabled="!imageState.id">
+        <button @click="completeImageWorking" :disabled="!imageRows.length">
           Complete
         </button>
-        <button @click="detectDielineFromFrame" :disabled="!imageState.id">
+        <button @click="detectDielineFromFrame" :disabled="!imageRows.length">
           Detect Dieline
         </button>
         <div v-if="imageCompleteStatus.message" class="hint">
@@ -293,6 +339,10 @@ const currentMode = ref("");
 const imageInput = ref(null);
 const whiteInkInput = ref(null);
 const dielineInput = ref(null);
+const pendingImageUploadMode = ref("add");
+const imageItems = ref([]);
+const imageNaturalSizeById = reactive({});
+const imageSizeCacheByUrl = new Map();
 
 const imageState = reactive({
   id: null,
@@ -338,6 +388,17 @@ const imageOriginalMm = computed(() => {
     width: parseFloat((w * pxToMm).toFixed(1)),
     height: parseFloat((h * pxToMm).toFixed(1)),
   };
+});
+
+const imageRows = computed(() => {
+  return (imageItems.value || []).map((item) => {
+    const sourceSize = imageNaturalSizeById[item.id];
+    return {
+      ...item,
+      originalWidth: Number(sourceSize?.width ?? 0),
+      originalHeight: Number(sourceSize?.height ?? 0),
+    };
+  });
 });
 
 const dielineState = reactive({
@@ -390,8 +451,150 @@ watch(
   { immediate: true },
 );
 
+const normalizeImageItem = (item) => ({
+  id: String(item?.id || ""),
+  url: typeof item?.url === "string" ? item.url : "",
+  sourceUrl: typeof item?.sourceUrl === "string" ? item.sourceUrl : "",
+  opacity: Number.isFinite(Number(item?.opacity)) ? Number(item.opacity) : 1,
+  scale: Number.isFinite(Number(item?.scale)) ? Number(item.scale) : 1,
+  angle: Number.isFinite(Number(item?.angle)) ? Number(item.angle) : 0,
+  left: Number.isFinite(Number(item?.left)) ? Number(item.left) : 0.5,
+  top: Number.isFinite(Number(item?.top)) ? Number(item.top) : 0.5,
+});
+
+const syncFocusedImageState = () => {
+  const focused = imageItems.value.find((item) => item.id === imageState.id);
+  if (!focused) {
+    imageState.id = null;
+    imageState.scale = 1;
+    imageState.angle = 0;
+    imageState.originalWidth = 0;
+    imageState.originalHeight = 0;
+    return;
+  }
+
+  imageState.scale = Number(focused.scale ?? 1);
+  imageState.angle = Number(focused.angle ?? 0);
+  const sourceSize = imageNaturalSizeById[focused.id];
+  imageState.originalWidth = Number(sourceSize?.width ?? 0);
+  imageState.originalHeight = Number(sourceSize?.height ?? 0);
+};
+
+const readImageNaturalSize = (url) => {
+  if (!url) return Promise.resolve(null);
+  if (imageSizeCacheByUrl.has(url)) {
+    return Promise.resolve(imageSizeCacheByUrl.get(url));
+  }
+
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const width = Number(img.naturalWidth || 0);
+      const height = Number(img.naturalHeight || 0);
+      const size =
+        width > 0 && height > 0
+          ? {
+              width,
+              height,
+            }
+          : null;
+      imageSizeCacheByUrl.set(url, size);
+      resolve(size);
+    };
+    img.onerror = () => {
+      imageSizeCacheByUrl.set(url, null);
+      resolve(null);
+    };
+    img.src = url;
+  });
+};
+
+const syncImageNaturalSizes = (items) => {
+  const idSet = new Set((items || []).map((item) => item.id));
+  Object.keys(imageNaturalSizeById).forEach((id) => {
+    if (!idSet.has(id)) {
+      delete imageNaturalSizeById[id];
+    }
+  });
+
+  for (const item of items || []) {
+    const source = item.sourceUrl || item.url || "";
+    if (!source) continue;
+    void readImageNaturalSize(source).then((size) => {
+      if (!size) return;
+      const current = imageItems.value.find((currentItem) => {
+        return currentItem.id === item.id;
+      });
+      const currentSource = current?.sourceUrl || current?.url || "";
+      if (!current || currentSource !== source) return;
+      imageNaturalSizeById[item.id] = size;
+      if (item.id === imageState.id) {
+        imageState.originalWidth = size.width;
+        imageState.originalHeight = size.height;
+      }
+    });
+  }
+};
+
+const applyImageItems = (items) => {
+  imageItems.value = (items || [])
+    .map(normalizeImageItem)
+    .filter((item) => !!item.id);
+  syncImageNaturalSizes(imageItems.value);
+  syncFocusedImageState();
+};
+
+const syncImageItems = async () => {
+  if (!editor.value) {
+    applyImageItems([]);
+    return;
+  }
+
+  try {
+    const items = await editor.value.executeCommand("getWorkingImages");
+    applyImageItems(items || []);
+    return;
+  } catch (e) {}
+
+  try {
+    const items =
+      typeof editor.value.getImages === "function"
+        ? editor.value.getImages()
+        : [];
+    applyImageItems(items || []);
+  } catch (e) {
+    applyImageItems([]);
+  }
+};
+
+const focusImageById = async (
+  id,
+  options = {
+    syncCanvasSelection: true,
+  },
+) => {
+  if (!editor.value) return;
+  if (id && !imageItems.value.some((item) => item.id === id)) return;
+
+  await editor.value.focusImage(id, options);
+  imageState.id = id;
+  syncFocusedImageState();
+  await refreshSelectedImageSize();
+};
+
+const clearImageFocus = async () => {
+  await focusImageById(null, {
+    syncCanvasSelection: true,
+  });
+};
+
 const resetPanelState = () => {
   currentMode.value = "";
+  pendingImageUploadMode.value = "add";
+  imageItems.value = [];
+  Object.keys(imageNaturalSizeById).forEach((id) => {
+    delete imageNaturalSizeById[id];
+  });
   imageState.id = null;
   imageState.scale = 1;
   imageState.angle = 0;
@@ -455,7 +658,11 @@ const closePanel = async () => {
   resetPanelState();
 };
 
-const triggerImageUpload = () => imageInput.value.click();
+const triggerImageUpload = (mode = "add") => {
+  pendingImageUploadMode.value = mode;
+  if (!imageInput.value) return;
+  imageInput.value.click();
+};
 const triggerWhiteInkUpload = () => whiteInkInput.value.click();
 const triggerDielineUpload = () => dielineInput.value.click();
 
@@ -534,21 +741,46 @@ const updateSizeCut = async () => {
   await refreshSelectedImageSize();
 };
 
-const handleImageReplace = async (e) => {
+const handleImageUpload = async (e) => {
   const file = e.target.files[0];
-  if (!file) return;
+  if (!file || !editor.value) return;
   const url = URL.createObjectURL(file);
+  imageCompleteStatus.message = "";
+  imageCompleteStatus.issues = [];
 
-  const result = await editor.value.upsertImage(url, {
-    id: imageState.id || undefined,
-    mode: "auto",
-    createIfMissing: true,
-  });
-  imageState.id = result?.id || imageState.id;
+  try {
+    const mode = pendingImageUploadMode.value;
+    const isReplace = mode === "replace";
+    if (isReplace && !imageState.id) {
+      throw new Error("replace-target-id-required");
+    }
 
-  await editor.value.executeCommand("resetWorkingImages");
-  await syncImageStateFromWorking(imageState.id);
-  e.target.value = "";
+    const result = await editor.value.upsertImage(
+      url,
+      isReplace
+        ? {
+            mode: "replace",
+            id: imageState.id,
+          }
+        : {
+            mode: "add",
+          },
+    );
+
+    await editor.value.executeCommand("resetWorkingImages");
+    await syncImageItems();
+    if (result?.id) {
+      await focusImageById(result.id, {
+        syncCanvasSelection: true,
+      });
+    }
+  } catch (error) {
+    imageCompleteStatus.message = error?.message || "Image upload failed";
+  } finally {
+    URL.revokeObjectURL(url);
+    pendingImageUploadMode.value = "add";
+    e.target.value = "";
+  }
 };
 
 const handleWhiteInkReplace = async (e) => {
@@ -571,25 +803,13 @@ const handleDielineDetect = async (e) => {
 };
 
 const updateImageState = () => {
-  if (!imageState.id) return;
+  if (!editor.value || !imageState.id) return;
   imageCompleteStatus.message = "";
   imageCompleteStatus.issues = [];
   editor.value.executeCommand("setWorkingImage", imageState.id, {
     scale: imageState.scale,
     angle: imageState.angle,
   });
-};
-
-const syncImageStateFromWorking = async (id) => {
-  if (!editor.value || !id) return;
-  try {
-    const items = await editor.value.executeCommand("getWorkingImages");
-    const item = (items || []).find((i) => i.id === id);
-    if (item) {
-      imageState.scale = item.scale || 1;
-      imageState.angle = item.angle || 0;
-    }
-  } catch (e) {}
 };
 
 const syncWhiteInkSettings = async () => {
@@ -656,12 +876,14 @@ const clearWhiteInk = async () => {
 };
 
 const completeImageWorking = async () => {
+  if (!editor.value) return;
   imageCompleteStatus.message = "";
   imageCompleteStatus.issues = [];
-  if (!imageState.id) return;
+  if (!imageRows.value.length) return;
   const res = await editor.value.executeCommand("completeImages");
   if (res && res.ok) {
     imageCompleteStatus.message = "Completed";
+    await syncImageItems();
     return;
   }
   imageCompleteStatus.message = "Complete failed";
@@ -669,9 +891,10 @@ const completeImageWorking = async () => {
 };
 
 const detectDielineFromFrame = async () => {
+  if (!editor.value) return;
   imageCompleteStatus.message = "";
   imageCompleteStatus.issues = [];
-  if (!imageState.id) return;
+  if (!imageRows.value.length) return;
   await completeImageWorking();
   const res = await editor.value.detectDielineFromFrame();
   if (res && res.pathData) {
@@ -782,10 +1005,12 @@ const syncDielineState = () => {
 };
 
 const onSelectionCreated = async (e) => {
-  const selection = e.selected ? e.selected[0] : null;
+  const selection = e.selected ? e.selected[0] : e.target || null;
   const activeId = editor.value?.services?.workbench?.activeToolId;
   if (!selection) {
-    // Fallback to active tool
+    if (activeId === "pooder.kit.image") {
+      await syncImageItems();
+    }
     await refreshSelectedImageSize();
     return;
   }
@@ -808,10 +1033,10 @@ const onSelectionCreated = async (e) => {
   if (selection.data?.layerId === "image.user" && selection.data?.id) {
     if (activeId === "pooder.kit.image") {
       currentMode.value = "Image";
-      imageState.id = selection.data.id;
-      imageState.originalWidth = Math.round(selection.width || 0);
-      imageState.originalHeight = Math.round(selection.height || 0);
-      await syncImageStateFromWorking(imageState.id);
+      await syncImageItems();
+      await focusImageById(selection.data.id, {
+        syncCanvasSelection: false,
+      });
     }
     await refreshSelectedImageSize();
     return;
@@ -825,18 +1050,22 @@ const onSelectionCreated = async (e) => {
   await refreshSelectedImageSize();
 };
 
-const onSelectionCleared = () => {
+const onSelectionCleared = async () => {
   // Only clear if we are not in a specific tool mode that persists (like Hole/Dieline)
   // Actually, usually panels close on deselect.
   // But if we are in "Dieline" mode (tool active), we shouldn't close just because no object selected.
   // However, Image mode depends on selection.
   if (currentMode.value === "Image") {
-    imageState.id = null;
-    imageState.originalWidth = 0;
-    imageState.originalHeight = 0;
     const activeId = editor.value?.services?.workbench?.activeToolId;
     if (activeId !== "pooder.kit.image") {
+      imageState.id = null;
+      syncFocusedImageState();
       currentMode.value = "";
+    } else {
+      await focusImageById(null, {
+        syncCanvasSelection: false,
+      });
+      await syncImageItems();
     }
   }
   if (currentMode.value === "White Ink") {
@@ -848,7 +1077,7 @@ const onSelectionCleared = () => {
       void syncWhiteInkSettings();
     }
   }
-  void refreshSelectedImageSize();
+  await refreshSelectedImageSize();
   // For Hole/Dieline, they are activated by ActivityBar, so we keep them open until tool changes?
   // User said: "panel opened but cannot close".
   // If I click empty space, active tool might remain Dieline, but no selection.
@@ -865,13 +1094,10 @@ const onToolActivated = ({ id }) => {
     void syncSizeState();
     void refreshSelectedImageSize();
   } else if (id === "pooder.kit.image") {
-    // Wait for selection to show panel? Or show generic image settings?
-    // Usually Image tool requires selection to edit.
-    // If we just activate tool "Image", maybe we show nothing or "Select an image".
-    // Current logic sets 'Image'.
     currentMode.value = "Image";
     imageCompleteStatus.message = "";
     imageCompleteStatus.issues = [];
+    void syncImageItems();
   } else if (id === "pooder.kit.white-ink") {
     currentMode.value = "White Ink";
     syncWhiteInkSettings();
@@ -918,15 +1144,11 @@ const onWorkingChange = (e) => {
 
 const onImageWorkingChange = (e) => {
   if (currentMode.value !== "Image") return;
-  if (!imageState.id && typeof e?.changedId === "string") {
-    imageState.id = e.changedId;
+  if (Array.isArray(e?.items)) {
+    applyImageItems(e.items);
+    return;
   }
-  const targetId = imageState.id;
-  if (!targetId) return;
-  const item = (e?.items || []).find((i) => i.id === targetId);
-  if (!item) return;
-  imageState.scale = Number(item.scale ?? 1);
-  imageState.angle = Number(item.angle ?? 0);
+  void syncImageItems();
 };
 
 const onSizeStateChanged = (state) => {
@@ -1064,6 +1286,45 @@ button:hover {
   max-height: 150px;
   overflow-y: auto;
   margin-bottom: 10px;
+}
+
+.image-list {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.image-item {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #eee;
+  border-radius: 0;
+  background: #fff;
+  padding: 8px;
+  text-align: left;
+}
+
+.image-item:last-child {
+  border-bottom: 0;
+}
+
+.image-item:hover {
+  background: #f8f9fa;
+}
+
+.image-item.active {
+  background: #e7f1ff;
+  box-shadow: inset 2px 0 0 #007bff;
+}
+
+.image-item-head {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  margin-bottom: 4px;
 }
 
 .feature-item {

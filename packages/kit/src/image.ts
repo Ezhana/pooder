@@ -57,8 +57,7 @@ interface FrameVisualConfig {
 
 interface UpsertImageOptions {
   id?: string;
-  mode?: "auto" | "replace" | "add";
-  createIfMissing?: boolean;
+  mode?: "replace" | "add";
   addOptions?: Partial<ImageItem>;
   fitOnAdd?: boolean;
 }
@@ -108,7 +107,6 @@ interface DetectFromFrameOptions {
 
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
-const IMAGE_REPLACE_GUARD_MS = 2500;
 const IMAGE_DETECT_EXPAND_DEFAULT = 30;
 const IMAGE_DETECT_SIMPLIFY_TOLERANCE_DEFAULT = 2;
 const IMAGE_DETECT_MULTIPLIER_DEFAULT = 2;
@@ -131,7 +129,6 @@ export class ImageTool implements Extension {
   private isToolActive = false;
   private isImageSelectionActive = false;
   private focusedImageId: string | null = null;
-  private suppressSelectionClearUntil = 0;
   private renderSeq = 0;
   private dirtyTrackerDisposable?: { dispose(): void };
 
@@ -218,13 +215,10 @@ export class ImageTool implements Extension {
     const before = this.isToolActive;
     this.syncToolActiveFromWorkbench(event.id);
     if (!this.isToolActive) {
-      const now = Date.now();
-      const inGuardWindow =
-        now <= this.suppressSelectionClearUntil && !!this.focusedImageId;
-      if (!inGuardWindow) {
-        this.isImageSelectionActive = false;
-        this.focusedImageId = null;
-      }
+      this.setImageFocus(null, {
+        syncCanvasSelection: true,
+        skipRender: true,
+      });
     }
     this.debug("tool:activated", {
       id: event.id,
@@ -233,7 +227,6 @@ export class ImageTool implements Extension {
       before,
       isToolActive: this.isToolActive,
       focusedImageId: this.focusedImageId,
-      suppressSelectionClearUntil: this.suppressSelectionClearUntil,
     });
     if (!this.isToolActive && this.isDebugEnabled()) {
       console.trace("[ImageTool] tool deactivated trace");
@@ -271,16 +264,10 @@ export class ImageTool implements Extension {
   };
 
   private onSelectionCleared = () => {
-    const now = Date.now();
-    if (now <= this.suppressSelectionClearUntil && this.focusedImageId) {
-      this.debug("selection:cleared ignored", {
-        suppressUntil: this.suppressSelectionClearUntil,
-        focusedImageId: this.focusedImageId,
-      });
-      return;
-    }
-    this.isImageSelectionActive = false;
-    this.focusedImageId = null;
+    this.setImageFocus(null, {
+      syncCanvasSelection: false,
+      skipRender: true,
+    });
     this.debug("selection:cleared applied");
     this.updateImages();
   };
@@ -353,7 +340,7 @@ export class ImageTool implements Extension {
           id: "image.frame.strokeColor",
           type: "color",
           label: "Image Frame Stroke Color",
-          default: "#FF0000",
+          default: "#808080",
         },
         {
           id: "image.frame.strokeWidth",
@@ -369,7 +356,7 @@ export class ImageTool implements Extension {
           type: "select",
           label: "Image Frame Stroke Style",
           options: ["solid", "dashed", "hidden"],
-          default: "solid",
+          default: "dashed",
         },
         {
           id: "image.frame.dashLength",
@@ -475,6 +462,16 @@ export class ImageTool implements Extension {
           },
         },
         {
+          command: "focusImage",
+          title: "Focus Image",
+          handler: (
+            id: string | null,
+            options: { syncCanvasSelection?: boolean } = {},
+          ) => {
+            return this.setImageFocus(id, options);
+          },
+        },
+        {
           command: "removeImage",
           title: "Remove Image",
           handler: (id: string) => {
@@ -483,8 +480,10 @@ export class ImageTool implements Extension {
             if (next.length !== this.items.length) {
               this.purgeSourceSizeCacheForItem(removed);
               if (this.focusedImageId === id) {
-                this.focusedImageId = null;
-                this.isImageSelectionActive = false;
+                this.setImageFocus(null, {
+                  syncCanvasSelection: true,
+                  skipRender: true,
+                });
               }
               this.updateConfig(next);
             }
@@ -506,8 +505,10 @@ export class ImageTool implements Extension {
           title: "Clear Images",
           handler: () => {
             this.sourceSizeBySrc.clear();
-            this.focusedImageId = null;
-            this.isImageSelectionActive = false;
+            this.setImageFocus(null, {
+              syncCanvasSelection: true,
+              skipRender: true,
+            });
             this.updateConfig([]);
           },
         },
@@ -584,29 +585,50 @@ export class ImageTool implements Extension {
     return Math.random().toString(36).substring(2, 9);
   }
 
-  private getImageIdFromActiveObject(): string | null {
-    const active = this.canvasService?.canvas.getActiveObject() as any;
-    if (
-      active?.data?.layerId === IMAGE_OBJECT_LAYER_ID &&
-      typeof active?.data?.id === "string"
-    ) {
-      return active.data.id;
-    }
-    return null;
+  private hasImageItem(id: string): boolean {
+    return (
+      this.items.some((item) => item.id === id) ||
+      this.workingItems.some((item) => item.id === id)
+    );
   }
 
-  private resolveReplaceTargetId(explicitId?: string | null): string | null {
-    const has = (id: string | null | undefined) =>
-      !!id && this.items.some((item) => item.id === id);
+  private setImageFocus(
+    id: string | null,
+    options: { syncCanvasSelection?: boolean; skipRender?: boolean } = {},
+  ) {
+    const syncCanvasSelection = options.syncCanvasSelection !== false;
 
-    if (has(explicitId)) return explicitId as string;
-    if (has(this.focusedImageId)) return this.focusedImageId as string;
+    if (id && !this.hasImageItem(id)) {
+      return { ok: false, reason: "image-not-found" as const };
+    }
 
-    const activeId = this.getImageIdFromActiveObject();
-    if (has(activeId)) return activeId;
+    this.focusedImageId = id;
+    this.isImageSelectionActive = !!id;
 
-    if (this.items.length === 1) return this.items[0].id;
-    return null;
+    if (syncCanvasSelection && this.canvasService) {
+      const canvas = this.canvasService.canvas;
+      if (!id) {
+        canvas.discardActiveObject();
+      } else {
+        const obj = this.getImageObject(id);
+        if (obj) {
+          obj.set({
+            selectable: true,
+            evented: true,
+            hasControls: true,
+            hasBorders: true,
+          });
+          canvas.setActiveObject(obj);
+        }
+      }
+      this.canvasService.requestRenderAll();
+    }
+
+    if (!options.skipRender) {
+      this.updateImages();
+    }
+
+    return { ok: true, id };
   }
 
   private async addImageEntry(
@@ -622,9 +644,6 @@ export class ImageTool implements Extension {
       ...options,
     } as ImageItem);
 
-    this.focusedImageId = id;
-    this.isImageSelectionActive = true;
-    this.suppressSelectionClearUntil = Date.now() + IMAGE_REPLACE_GUARD_MS;
     const sessionDirtyBeforeAdd = this.isToolActive && this.hasWorkingChanges;
     const waitLoaded = this.waitImageLoaded(id, true);
     this.updateConfig([...this.items, newItem]);
@@ -634,7 +653,7 @@ export class ImageTool implements Extension {
       await this.fitImageToDefaultArea(id);
     }
     if (loaded) {
-      this.focusImageSelection(id);
+      this.setImageFocus(id);
     }
     return id;
   }
@@ -643,21 +662,18 @@ export class ImageTool implements Extension {
     url: string,
     options: UpsertImageOptions = {},
   ): Promise<{ id: string; mode: "replace" | "add" }> {
-    const mode = options.mode || "auto";
+    const mode = options.mode || (options.id ? "replace" : "add");
     const fitOnAdd = options.fitOnAdd !== false;
-    if (mode === "add") {
-      const id = await this.addImageEntry(url, options.addOptions, fitOnAdd);
-      return { id, mode: "add" };
-    }
-
-    const targetId = this.resolveReplaceTargetId(options.id ?? null);
-    if (targetId) {
+    if (mode === "replace") {
+      if (!options.id) {
+        throw new Error("replace-target-id-required");
+      }
+      const targetId = options.id;
+      if (!this.hasImageItem(targetId)) {
+        throw new Error("replace-target-not-found");
+      }
       await this.updateImageInConfig(targetId, { url });
       return { id: targetId, mode: "replace" };
-    }
-
-    if (mode === "replace" || options.createIfMissing === false) {
-      throw new Error("replace-target-not-found");
     }
 
     const id = await this.addImageEntry(url, options.addOptions, fitOnAdd);
@@ -870,12 +886,12 @@ export class ImageTool implements Extension {
   private getFrameVisualConfig(): FrameVisualConfig {
     const strokeStyleRaw = (this.getConfig<string>(
       "image.frame.strokeStyle",
-      "solid",
-    ) || "solid") as string;
+      "dashed",
+    ) || "dashed") as string;
     const strokeStyle: "solid" | "dashed" | "hidden" =
       strokeStyleRaw === "dashed" || strokeStyleRaw === "hidden"
         ? strokeStyleRaw
-        : "solid";
+        : "dashed";
 
     const strokeWidth = Number(
       this.getConfig<number>("image.frame.strokeWidth", 2) ?? 2,
@@ -886,8 +902,8 @@ export class ImageTool implements Extension {
 
     return {
       strokeColor:
-        this.getConfig<string>("image.frame.strokeColor", "#FF0000") ||
-        "#FF0000",
+        this.getConfig<string>("image.frame.strokeColor", "#808080") ||
+        "#808080",
       strokeWidth: Number.isFinite(strokeWidth) ? Math.max(0, strokeWidth) : 2,
       strokeStyle,
       dashLength: Number.isFinite(dashLength) ? Math.max(1, dashLength) : 8,
@@ -1199,8 +1215,10 @@ export class ImageTool implements Extension {
     const frame = this.getFrameRect();
     const desiredIds = new Set(renderItems.map((item) => item.id));
     if (this.focusedImageId && !desiredIds.has(this.focusedImageId)) {
-      this.focusedImageId = null;
-      this.isImageSelectionActive = false;
+      this.setImageFocus(null, {
+        syncCanvasSelection: false,
+        skipRender: true,
+      });
     }
 
     this.getImageObjects().forEach((obj: any) => {
@@ -1281,8 +1299,10 @@ export class ImageTool implements Extension {
     next[index] = this.normalizeItem({ ...next[index], ...updates });
     this.workingItems = next;
     this.hasWorkingChanges = true;
-    this.isImageSelectionActive = true;
-    this.focusedImageId = id;
+    this.setImageFocus(id, {
+      syncCanvasSelection: false,
+      skipRender: true,
+    });
     if (this.isToolActive) {
       this.updateImages();
     }
@@ -1318,16 +1338,13 @@ export class ImageTool implements Extension {
     this.updateConfig(next);
 
     if (replacingSource) {
-      this.focusedImageId = id;
-      this.isImageSelectionActive = true;
-      this.suppressSelectionClearUntil = Date.now() + IMAGE_REPLACE_GUARD_MS;
       this.debug("replace:image:begin", { id, replacingUrl });
       this.purgeSourceSizeCacheForItem(base);
       const loaded = await this.waitImageLoaded(id, true);
       this.debug("replace:image:loaded", { id, loaded });
       if (loaded) {
         await this.refitImageToFrame(id);
-        this.focusImageSelection(id);
+        this.setImageFocus(id);
       }
     }
   }
@@ -1380,30 +1397,8 @@ export class ImageTool implements Extension {
     this.updateConfig(next);
     this.workingItems = this.cloneItems(next);
     this.hasWorkingChanges = false;
-    this.isImageSelectionActive = true;
-    this.focusedImageId = id;
     this.updateImages();
     this.emitWorkingChange(id);
-  }
-
-  private focusImageSelection(id: string) {
-    if (!this.canvasService) return;
-    const obj = this.getImageObject(id);
-    if (!obj) return;
-
-    this.isImageSelectionActive = true;
-    this.focusedImageId = id;
-    this.suppressSelectionClearUntil = Date.now() + 700;
-    obj.set({
-      selectable: true,
-      evented: true,
-      hasControls: true,
-      hasBorders: true,
-    });
-    this.canvasService.canvas.setActiveObject(obj);
-    this.debug("focus:image", { id });
-    this.canvasService.requestRenderAll();
-    this.updateImages();
   }
 
   private async fitImageToArea(
@@ -1473,10 +1468,6 @@ export class ImageTool implements Extension {
       return { ok: false, reason: "frame-not-ready" };
     }
 
-    const focusId =
-      this.resolveReplaceTargetId(this.focusedImageId) ||
-      (this.workingItems.length === 1 ? this.workingItems[0].id : null);
-
     const next: ImageItem[] = [];
     for (const item of this.workingItems) {
       const url = await this.exportCroppedImageByIds([item.id], {
@@ -1502,13 +1493,7 @@ export class ImageTool implements Extension {
     this.hasWorkingChanges = false;
     this.workingItems = this.cloneItems(next);
     this.updateConfig(next);
-    this.emitWorkingChange(focusId);
-    if (focusId) {
-      this.focusedImageId = focusId;
-      this.isImageSelectionActive = true;
-      this.suppressSelectionClearUntil = Date.now() + IMAGE_REPLACE_GUARD_MS;
-      this.focusImageSelection(focusId);
-    }
+    this.emitWorkingChange(this.focusedImageId);
     return { ok: true };
   }
 
