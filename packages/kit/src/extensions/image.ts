@@ -72,43 +72,8 @@ interface UpdateImageOptions {
   target?: "auto" | "config" | "working";
 }
 
-interface DetectBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface DetectEdgeResult {
-  pathData: string;
-  rawBounds?: DetectBounds;
-  baseBounds?: DetectBounds;
-  imageWidth?: number;
-  imageHeight?: number;
-}
-
-interface ImageRenderSnapshot {
-  id: string;
-  centerX: number;
-  centerY: number;
-  objectScale: number;
-  sourceWidth: number;
-  sourceHeight: number;
-}
-
-interface DetectFromFrameOptions {
-  expand?: number;
-  smoothing?: boolean;
-  simplifyTolerance?: number;
-  multiplier?: number;
-  debug?: boolean;
-}
-
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
-const IMAGE_DETECT_EXPAND_DEFAULT = 30;
-const IMAGE_DETECT_SIMPLIFY_TOLERANCE_DEFAULT = 2;
-const IMAGE_DETECT_MULTIPLIER_DEFAULT = 2;
 
 export class ImageTool implements Extension {
   id = "pooder.kit.image";
