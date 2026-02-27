@@ -1,25 +1,38 @@
-import { Extension, ExtensionContext } from "@pooder/core";
+import { Service, ServiceContext, WORKBENCH_SERVICE } from "@pooder/core";
 import { CanvasService } from "../services";
 
-export class SceneVisibilityService implements Extension {
-  id = "pooder.kit.sceneVisibility";
+const CANVAS_SERVICE_ID = "CanvasService";
+const HIDDEN_DIELINE_TOOLS = new Set(["pooder.kit.image", "pooder.kit.white-ink"]);
 
-  metadata = {
-    name: "SceneVisibilityService",
-  };
-
-  private canvasService?: CanvasService;
+export class SceneVisibilityService implements Service {
+  private context?: ServiceContext;
   private activeToolId: string | null = null;
+  private canvasService?: CanvasService;
 
-  activate(context: ExtensionContext) {
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
+  init(context: ServiceContext) {
+    if (this.context) {
+      this.dispose(this.context);
+    }
+
+    const canvasService =
+      context.get<CanvasService>(CANVAS_SERVICE_ID);
+    if (!canvasService) {
+      throw new Error("[SceneVisibilityService] CanvasService is required.");
+    }
+
+    this.context = context;
+    this.canvasService = canvasService;
+    this.activeToolId = context.get(WORKBENCH_SERVICE)?.activeToolId ?? null;
     context.eventBus.on("tool:activated", this.onToolActivated);
     context.eventBus.on("object:added", this.onObjectAdded);
+    this.apply();
   }
 
-  deactivate(context: ExtensionContext) {
-    context.eventBus.off("tool:activated", this.onToolActivated);
-    context.eventBus.off("object:added", this.onObjectAdded);
+  dispose(context: ServiceContext) {
+    const activeContext = this.context ?? context;
+    activeContext.eventBus.off("tool:activated", this.onToolActivated);
+    activeContext.eventBus.off("object:added", this.onObjectAdded);
+    this.context = undefined;
     this.activeToolId = null;
     this.canvasService = undefined;
   }
@@ -38,10 +51,10 @@ export class SceneVisibilityService implements Extension {
 
     const dielineLayer = this.canvasService.getLayer("dieline-overlay");
     if (dielineLayer) {
-      const visible =
-        this.activeToolId !== "pooder.kit.image" &&
-        this.activeToolId !== "pooder.kit.white-ink";
-      (dielineLayer as any).set({ visible });
+      const visible = !HIDDEN_DIELINE_TOOLS.has(this.activeToolId || "");
+      if (dielineLayer.visible !== visible) {
+        dielineLayer.set({ visible });
+      }
     }
 
     this.canvasService.requestRenderAll();

@@ -41,6 +41,9 @@ import {
 import ToolPanel from "./components/ToolPanel.vue";
 import CanvasArea from "./components/CanvasArea.vue";
 
+const SCENE_LAYOUT_SERVICE_ID = "SceneLayoutService";
+const SCENE_VISIBILITY_SERVICE_ID = "SceneVisibilityService";
+
 const pooder = new Pooder();
 provide("pooder", pooder);
 const cmdSvc = pooder.getService<CommandService>("CommandService")!;
@@ -458,12 +461,15 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
   });
 
   pooder.registerService(canvasService, "CanvasService");
+  pooder.registerService(new SceneLayoutService(), SCENE_LAYOUT_SERVICE_ID);
+  pooder.registerService(
+    new SceneVisibilityService(),
+    SCENE_VISIBILITY_SERVICE_ID,
+  );
 
   const tools = [
     new BackgroundTool(),
     new SizeTool(),
-    new SceneLayoutService(),
-    new SceneVisibilityService(),
     new ImageTool(),
     // new FilmTool(),
     new WhiteInkTool(),
@@ -486,13 +492,11 @@ const onResize = (width: number, height: number) => {
 };
 
 onUnmounted(() => {
-  const canvasService = pooder.getService<CanvasService>("CanvasService");
-  if (canvasService) {
-    canvasService.dispose();
-  }
-
   configDisposable.dispose();
   pooder.extensionManager.destroy();
+  pooder.unregisterService(SCENE_VISIBILITY_SERVICE_ID);
+  pooder.unregisterService(SCENE_LAYOUT_SERVICE_ID);
+  pooder.unregisterService("CanvasService");
 });
 </script>
 

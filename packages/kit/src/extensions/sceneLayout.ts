@@ -1,9 +1,10 @@
 import {
-  CommandContribution,
+  COMMAND_SERVICE,
+  CONFIGURATION_SERVICE,
+  CommandService,
   ConfigurationService,
-  ContributionPointIds,
-  Extension,
-  ExtensionContext,
+  Service,
+  ServiceContext,
 } from "@pooder/core";
 import { CanvasService } from "../services";
 import {
@@ -14,48 +15,68 @@ import {
   type SceneLayoutSnapshot,
 } from "./sceneLayoutModel";
 
-const GEOMETRY_KEYS = new Set([
-  "dieline.shape",
-  "dieline.radius",
-  "dieline.pathData",
-  "size.unit",
-]);
+interface ConfigChangeEvent {
+  key: string;
+  value: unknown;
+  oldValue: unknown;
+}
 
-export class SceneLayoutService implements Extension {
-  id = "pooder.kit.sceneLayout";
-  metadata = {
-    name: "SceneLayoutService",
-  };
+const CONFIG_WATCH_PREFIXES = ["size.", "dieline."] as const;
+const CANVAS_SERVICE_ID = "CanvasService";
+const GET_SCENE_LAYOUT_COMMAND = "getSceneLayout";
+const GET_SCENE_GEOMETRY_COMMAND = "getSceneGeometry";
 
-  private context?: ExtensionContext;
+export class SceneLayoutService implements Service {
+  private context?: ServiceContext;
   private canvasService?: CanvasService;
   private configService?: ConfigurationService;
   private lastLayout: SceneLayoutSnapshot | null = null;
   private lastGeometry: SceneGeometrySnapshot | null = null;
   private onConfigChange?: { dispose(): void };
+  private commandDisposables: Array<{ dispose(): void }> = [];
 
-  activate(context: ExtensionContext) {
+  init(context: ServiceContext) {
+    if (this.context) {
+      this.dispose(this.context);
+    }
+
+    const canvasService =
+      context.get<CanvasService>(CANVAS_SERVICE_ID);
+    const configService =
+      context.get<ConfigurationService>(CONFIGURATION_SERVICE);
+    const commandService = context.get<CommandService>(COMMAND_SERVICE);
+
+    if (!canvasService || !configService || !commandService) {
+      throw new Error(
+        "[SceneLayoutService] CanvasService, ConfigurationService and CommandService are required.",
+      );
+    }
+
     this.context = context;
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    this.configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    this.canvasService = canvasService;
+    this.configService = configService;
+
+    this.commandDisposables.push(
+      commandService.registerCommand(GET_SCENE_LAYOUT_COMMAND, () =>
+        this.getLayout(),
+      ),
+      commandService.registerCommand(GET_SCENE_GEOMETRY_COMMAND, () =>
+        this.getGeometry(),
+      ),
     );
 
-    if (!this.canvasService || !this.configService) return;
-
-    this.onConfigChange = this.configService.onAnyChange((e) => {
-      if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
-        this.refresh(GEOMETRY_KEYS.has(e.key));
-      }
-    });
+    this.onConfigChange = configService.onAnyChange(this.onConfigChanged);
     context.eventBus.on("canvas:resized", this.onCanvasResized);
-    this.refresh(true);
+    this.refresh();
   }
 
-  deactivate(context: ExtensionContext) {
-    context.eventBus.off("canvas:resized", this.onCanvasResized);
+  dispose(context: ServiceContext) {
+    const activeContext = this.context ?? context;
+    activeContext.eventBus.off("canvas:resized", this.onCanvasResized);
     this.onConfigChange?.dispose();
     this.onConfigChange = undefined;
+    this.commandDisposables.forEach((item) => item.dispose());
+    this.commandDisposables = [];
     this.context = undefined;
     this.canvasService = undefined;
     this.configService = undefined;
@@ -63,54 +84,53 @@ export class SceneLayoutService implements Extension {
     this.lastGeometry = null;
   }
 
-  contribute() {
-    return {
-      [ContributionPointIds.COMMANDS]: [
-        {
-          command: "getSceneLayout",
-          title: "Get Scene Layout",
-          handler: () => this.getLayout(),
-        },
-        {
-          command: "getSceneGeometry",
-          title: "Get Scene Geometry",
-          handler: () => this.getGeometry(),
-        },
-      ] as CommandContribution[],
-    };
-  }
-
   private onCanvasResized = () => {
-    this.refresh(true);
+    this.refresh();
   };
 
-  private refresh(forceGeometry = false) {
+  private onConfigChanged = (e: ConfigChangeEvent) => {
+    if (CONFIG_WATCH_PREFIXES.some((prefix) => e.key.startsWith(prefix))) {
+      this.refresh();
+    }
+  };
+
+  private refresh() {
     const layout = this.getLayout(true);
-    if (!layout) return;
+    if (!layout) {
+      this.lastGeometry = null;
+      return;
+    }
+
     this.context?.eventBus.emit("scene:layout:change", layout);
 
-    if (forceGeometry || !this.lastGeometry) {
-      const geometry = this.getGeometry(true);
-      if (geometry) {
-        this.context?.eventBus.emit("scene:geometry:change", geometry);
-      }
+    const geometry = this.getGeometry(true);
+    if (geometry) {
+      this.context?.eventBus.emit("scene:geometry:change", geometry);
     }
   }
 
-  private getLayout(forceRefresh = false): SceneLayoutSnapshot | null {
+  getLayout(forceRefresh = false): SceneLayoutSnapshot | null {
     if (!this.canvasService || !this.configService) return null;
     if (!forceRefresh && this.lastLayout) return this.lastLayout;
 
     const state = readSizeState(this.configService);
     const layout = computeSceneLayout(this.canvasService, state);
+    if (!layout) {
+      this.lastLayout = null;
+      return null;
+    }
+
     this.lastLayout = layout;
     return layout;
   }
 
-  private getGeometry(forceRefresh = false): SceneGeometrySnapshot | null {
+  getGeometry(forceRefresh = false): SceneGeometrySnapshot | null {
     if (!this.configService) return null;
     const layout = this.getLayout(forceRefresh);
-    if (!layout) return null;
+    if (!layout) {
+      this.lastGeometry = null;
+      return null;
+    }
     if (!forceRefresh && this.lastGeometry) return this.lastGeometry;
 
     const geometry = buildSceneGeometry(this.configService, layout);
