@@ -1,5 +1,16 @@
 # @pooder/kit
 
+## 5.1.0
+
+### Minor Changes
+
+- service
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/core@2.2.0
+
 ## 5.0.4
 
 ### Patch Changes
