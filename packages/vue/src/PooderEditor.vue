@@ -129,6 +129,17 @@ const clearImages = async () => {
   return await cmdSvc.executeCommand("clearImages");
 };
 
+const exportUserCroppedImage = async (options?: {
+  multiplier?: number;
+  format?: "png" | "jpeg";
+  imageIds?: string[];
+}) => {
+  return (await cmdSvc.executeCommand(
+    "exportUserCroppedImage",
+    options,
+  )) as ExportUserCroppedImageResult;
+};
+
 const focusImage = async (
   id: string | null,
   options?: { syncCanvasSelection?: boolean },
@@ -151,6 +162,25 @@ interface DetectEdgeResult {
   imageHeight?: number;
 }
 
+interface DetectFrameDiagnostics {
+  sourceWidth: number;
+  sourceHeight: number;
+  detectedBounds: DetectBounds | null;
+  centerOffsetX: number;
+  centerOffsetY: number;
+  coverageX: number;
+  coverageY: number;
+}
+
+interface ExportUserCroppedImageResult {
+  url: string;
+  width: number;
+  height: number;
+  multiplier: number;
+  format: "png" | "jpeg";
+  imageIds: string[];
+}
+
 interface ImageRenderSnapshot {
   id: string;
   centerX: number;
@@ -166,6 +196,8 @@ interface FrameRect {
   width: number;
   height: number;
 }
+
+type ImageUpdateTarget = "auto" | "config" | "working";
 
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 
@@ -241,8 +273,42 @@ const snapshotImageRenderStates = (
 const applyDetectedDielineConfig = (result: DetectEdgeResult) => {
   cfgSvc.update("dieline.shape", "custom");
   cfgSvc.update("dieline.pathData", result.pathData);
+  cfgSvc.update("dieline.features", []);
   cfgSvc.update("size.cutMode", "trim");
   cfgSvc.update("size.cutMarginMm", 0);
+};
+
+const buildDetectFrameDiagnostics = (
+  result: DetectEdgeResult,
+  sourceImage: ExportUserCroppedImageResult,
+): DetectFrameDiagnostics => {
+  const bounds = result.rawBounds || result.baseBounds || null;
+  if (!bounds) {
+    return {
+      sourceWidth: sourceImage.width,
+      sourceHeight: sourceImage.height,
+      detectedBounds: null,
+      centerOffsetX: 0,
+      centerOffsetY: 0,
+      coverageX: 0,
+      coverageY: 0,
+    };
+  }
+
+  const sourceCenterX = sourceImage.width / 2;
+  const sourceCenterY = sourceImage.height / 2;
+  const boundsCenterX = bounds.x + bounds.width / 2;
+  const boundsCenterY = bounds.y + bounds.height / 2;
+
+  return {
+    sourceWidth: sourceImage.width,
+    sourceHeight: sourceImage.height,
+    detectedBounds: bounds,
+    centerOffsetX: boundsCenterX - sourceCenterX,
+    centerOffsetY: boundsCenterY - sourceCenterY,
+    coverageX: sourceImage.width > 0 ? bounds.width / sourceImage.width : 0,
+    coverageY: sourceImage.height > 0 ? bounds.height / sourceImage.height : 0,
+  };
 };
 
 const computeDetectAlignmentShift = (
@@ -287,6 +353,7 @@ const compensateImagesForDetectedDieline = async (
   result: DetectEdgeResult,
   snapshots: ImageRenderSnapshot[],
   debug = false,
+  target: ImageUpdateTarget = "auto",
 ) => {
   if (!snapshots.length) return;
 
@@ -325,11 +392,18 @@ const compensateImagesForDetectedDieline = async (
       (targetCenterY - frame.top) / Math.max(1, frame.height),
     );
 
-    await cmdSvc.executeCommand("updateImage", snapshot.id, {
-      scale: targetScale,
-      left,
-      top,
-    });
+    await cmdSvc.executeCommand(
+      "updateImage",
+      snapshot.id,
+      {
+        scale: targetScale,
+        left,
+        top,
+      },
+      {
+        target,
+      },
+    );
   }
 };
 
@@ -364,39 +438,96 @@ const detectDielineFromFrame = async (options?: {
     expand?: number;
     smoothing?: boolean;
     simplifyTolerance?: number;
+    threshold?: number;
+    morphologyRadius?: number;
+    connectRadiusMax?: number;
+    maskMode?: "auto" | "alpha" | "whitebg";
+    whiteThreshold?: number;
+    alphaOpaqueCutoff?: number;
+    noChannels?: boolean;
+    componentMode?: "largest" | "all";
+    minComponentArea?: number;
+    forceConnected?: boolean;
     debug?: boolean;
+  };
+  export?: {
+    multiplier?: number;
+    format?: "png" | "jpeg";
+    imageIds?: string[];
+  };
+  inspect?: {
+    includeCroppedImage?: boolean;
+    includeDiagnostics?: boolean;
   };
   commit?: boolean;
 }) => {
   const debug = options?.detect?.debug === true;
-  const canvasService = pooder.getService<CanvasService>("CanvasService");
-  const snapshots = snapshotImageRenderStates(canvasService);
-
-  const { url } = await cmdSvc.executeCommand("exportImageFrameUrl", {
-    multiplier: 2,
-    format: "png",
+  const includeCroppedImage = options?.inspect?.includeCroppedImage === true;
+  const includeDiagnostics = options?.inspect?.includeDiagnostics === true;
+  const sourceImage = await exportUserCroppedImage({
+    multiplier: options?.export?.multiplier ?? 2,
+    format: options?.export?.format ?? "png",
+    imageIds: options?.export?.imageIds,
   });
+  const sourceUrl = sourceImage?.url;
+  if (!sourceUrl) return null;
 
   try {
-    const result = (await cmdSvc.executeCommand("detectEdge", url, {
-      expand: options?.detect?.expand ?? 30,
+    if (debug) {
+      console.info("[PooderEditor] detectDielineFromFrame sourceImage", {
+        width: sourceImage.width,
+        height: sourceImage.height,
+        format: sourceImage.format,
+        multiplier: sourceImage.multiplier,
+        imageCount: sourceImage.imageIds.length,
+      });
+    }
+
+    const result = (await cmdSvc.executeCommand("detectEdge", sourceUrl, {
+      expand: options?.detect?.expand ?? 0,
       smoothing: options?.detect?.smoothing ?? true,
       simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
+      threshold: options?.detect?.threshold,
+      morphologyRadius: options?.detect?.morphologyRadius,
+      connectRadiusMax: options?.detect?.connectRadiusMax,
+      maskMode: options?.detect?.maskMode,
+      whiteThreshold: options?.detect?.whiteThreshold,
+      alphaOpaqueCutoff: options?.detect?.alphaOpaqueCutoff,
+      noChannels: options?.detect?.noChannels,
+      componentMode: options?.detect?.componentMode ?? "all",
+      minComponentArea: options?.detect?.minComponentArea,
+      forceConnected: options?.detect?.forceConnected ?? true,
       debug,
     })) as DetectEdgeResult | null;
 
     if (!result) return null;
+    const diagnostics = buildDetectFrameDiagnostics(result, sourceImage);
+
+    if (debug) {
+      console.info(
+        "[PooderEditor] detectDielineFromFrame diagnostics",
+        diagnostics,
+      );
+    }
 
     if (options?.commit === false) {
-      return result;
+      return {
+        ...result,
+        ...(includeCroppedImage ? { sourceImage } : {}),
+        ...(includeDiagnostics ? { diagnostics } : {}),
+      };
     }
 
     applyDetectedDielineConfig(result);
-    await compensateImagesForDetectedDieline(result, snapshots, debug);
-
-    return result;
+    return {
+      ...result,
+      ...(includeCroppedImage ? { sourceImage } : {}),
+      ...(includeDiagnostics ? { diagnostics } : {}),
+    };
   } finally {
-    if (url) URL.revokeObjectURL(url);
+    if (sourceUrl && !includeCroppedImage) {
+      URL.revokeObjectURL(sourceUrl);
+    }
   }
 };
 
@@ -435,6 +566,7 @@ defineExpose({
   upsertImage,
   updateImage,
   clearImages,
+  exportUserCroppedImage,
   focusImage,
   detectDieline,
   detectDielineFromFrame,

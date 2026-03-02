@@ -466,9 +466,17 @@ export class DielineTool implements Extension {
                   options: {
                     expand: detectOptions.expand ?? 0,
                     morphologyRadius: detectOptions.morphologyRadius,
+                    connectRadiusMax: detectOptions.connectRadiusMax,
                     smoothing: detectOptions.smoothing,
                     simplifyTolerance: detectOptions.simplifyTolerance,
                     threshold: detectOptions.threshold,
+                    maskMode: detectOptions.maskMode,
+                    whiteThreshold: detectOptions.whiteThreshold,
+                    alphaOpaqueCutoff: detectOptions.alphaOpaqueCutoff,
+                    noChannels: detectOptions.noChannels,
+                    componentMode: detectOptions.componentMode,
+                    minComponentArea: detectOptions.minComponentArea,
+                    forceConnected: detectOptions.forceConnected,
                   },
                 });
               }

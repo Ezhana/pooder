@@ -72,6 +72,24 @@ interface UpdateImageOptions {
   target?: "auto" | "config" | "working";
 }
 
+interface ExportCroppedImageOptions {
+  multiplier?: number;
+  format?: "png" | "jpeg";
+}
+
+interface ExportUserCroppedImageOptions extends ExportCroppedImageOptions {
+  imageIds?: string[];
+}
+
+interface ExportUserCroppedImageResult {
+  url: string;
+  width: number;
+  height: number;
+  multiplier: number;
+  format: "png" | "jpeg";
+  imageIds: string[];
+}
+
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
 
@@ -395,12 +413,12 @@ export class ImageTool implements Extension {
           },
         },
         {
-          command: "exportImageFrameUrl",
-          title: "Export Image Frame Url",
+          command: "exportUserCroppedImage",
+          title: "Export User Cropped Image",
           handler: async (
-            options: { multiplier?: number; format?: "png" | "jpeg" } = {},
+            options: ExportUserCroppedImageOptions = {},
           ) => {
-            return await this.exportImageFrameUrl(options);
+            return await this.exportUserCroppedImage(options);
           },
         },
         {
@@ -1434,10 +1452,11 @@ export class ImageTool implements Extension {
 
     const next: ImageItem[] = [];
     for (const item of this.workingItems) {
-      const url = await this.exportCroppedImageByIds([item.id], {
+      const exported = await this.exportCroppedImageByIds([item.id], {
         multiplier: 2,
         format: "png",
       });
+      const url = exported.url;
 
       const sourceUrl = item.sourceUrl || item.url;
       const previousCommitted = item.committedUrl;
@@ -1463,15 +1482,22 @@ export class ImageTool implements Extension {
 
   private async exportCroppedImageByIds(
     imageIds: string[],
-    options: { multiplier?: number; format?: "png" | "jpeg" },
-  ): Promise<string> {
+    options: ExportCroppedImageOptions,
+  ): Promise<ExportUserCroppedImageResult> {
     if (!this.canvasService) {
       throw new Error("CanvasService not initialized");
     }
 
+    const normalizedIds = [...new Set(imageIds)].filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
+    if (!normalizedIds.length) {
+      throw new Error("image-ids-required");
+    }
+
     const frame = this.getFrameRect();
     const multiplier = Math.max(1, options.multiplier ?? 2);
-    const format = options.format ?? "png";
+    const format: "png" | "jpeg" = options.format === "jpeg" ? "jpeg" : "png";
 
     const width = Math.max(1, Math.round(frame.width * multiplier));
     const height = Math.max(1, Math.round(frame.height * multiplier));
@@ -1485,61 +1511,84 @@ export class ImageTool implements Extension {
     } as any);
     tempCanvas.setDimensions({ width, height });
 
-    const idSet = new Set(imageIds);
-    const sourceObjects = this.canvasService.canvas
-      .getObjects()
-      .filter((obj: any) => {
-        return (
-          obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID &&
-          typeof obj?.data?.id === "string" &&
-          idSet.has(obj.data.id)
-        );
-      });
+    try {
+      const idSet = new Set(normalizedIds);
+      const sourceObjects = this.canvasService.canvas
+        .getObjects()
+        .filter((obj: any) => {
+          return (
+            obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID &&
+            typeof obj?.data?.id === "string" &&
+            idSet.has(obj.data.id)
+          );
+        });
 
-    for (const source of sourceObjects as any[]) {
-      const clone = await source.clone();
-      const center = source.getCenterPoint
-        ? source.getCenterPoint()
-        : new Point(source.left ?? 0, source.top ?? 0);
+      if (!sourceObjects.length) {
+        throw new Error("image-objects-not-found");
+      }
 
-      clone.set({
-        originX: "center",
-        originY: "center",
-        left: (center.x - frame.left) * multiplier,
-        top: (center.y - frame.top) * multiplier,
-        scaleX: (source.scaleX || 1) * multiplier,
-        scaleY: (source.scaleY || 1) * multiplier,
-        angle: source.angle || 0,
-        selectable: false,
-        evented: false,
-      });
-      clone.setCoords();
-      tempCanvas.add(clone);
+      for (const source of sourceObjects as any[]) {
+        const clone = await source.clone();
+        const center = source.getCenterPoint
+          ? source.getCenterPoint()
+          : new Point(source.left ?? 0, source.top ?? 0);
+
+        clone.set({
+          originX: "center",
+          originY: "center",
+          left: (center.x - frame.left) * multiplier,
+          top: (center.y - frame.top) * multiplier,
+          scaleX: (source.scaleX || 1) * multiplier,
+          scaleY: (source.scaleY || 1) * multiplier,
+          angle: source.angle || 0,
+          selectable: false,
+          evented: false,
+        });
+        clone.setCoords();
+        tempCanvas.add(clone);
+      }
+
+      tempCanvas.renderAll();
+      const blob = await tempCanvas.toBlob({ format, multiplier: 1 });
+      if (!blob) {
+        throw new Error("image-export-failed");
+      }
+
+      return {
+        url: URL.createObjectURL(blob),
+        width,
+        height,
+        multiplier,
+        format,
+        imageIds: (sourceObjects as any[])
+          .map((obj: any) => obj?.data?.id)
+          .filter((id: any): id is string => typeof id === "string"),
+      };
+    } finally {
+      tempCanvas.dispose();
     }
-
-    tempCanvas.renderAll();
-    const dataUrl = tempCanvas.toDataURL({ format, multiplier: 1 });
-    tempCanvas.dispose();
-
-    const blob = await (await fetch(dataUrl)).blob();
-    return URL.createObjectURL(blob);
   }
 
-  private async exportImageFrameUrl(
-    options: { multiplier?: number; format?: "png" | "jpeg" } = {},
-  ): Promise<{ url: string }> {
+  private async exportUserCroppedImage(
+    options: ExportUserCroppedImageOptions = {},
+  ): Promise<ExportUserCroppedImageResult> {
     if (!this.canvasService) {
       throw new Error("CanvasService not initialized");
     }
 
-    const imageIds = this.getImageObjects()
-      .map((obj: any) => obj?.data?.id)
-      .filter((id: any) => typeof id === "string");
+    await this.updateImagesAsync();
+    this.syncToolActiveFromWorkbench();
 
-    const url = await this.exportCroppedImageByIds(
-      imageIds as string[],
-      options,
-    );
-    return { url };
+    const imageIds =
+      options.imageIds && options.imageIds.length > 0
+        ? options.imageIds
+        : (this.isToolActive ? this.workingItems : this.items).map(
+            (item) => item.id,
+          );
+    if (!imageIds.length) {
+      throw new Error("no-images-to-export");
+    }
+
+    return await this.exportCroppedImageByIds(imageIds, options);
   }
 }

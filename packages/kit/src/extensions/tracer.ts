@@ -5,10 +5,12 @@
 
 import paper from "paper";
 import {
+  analyzeAlpha,
   circularMorphology,
   createMask,
   fillHoles,
   findMinimalConnectRadius,
+  inferMaskMode,
   polygonSignedArea,
   type MaskMode,
 } from "./maskOps";
@@ -24,6 +26,8 @@ interface Bounds {
   width: number;
   height: number;
 }
+
+type ComponentMode = "largest" | "all";
 
 export class ImageTracer {
   /**
@@ -47,6 +51,9 @@ export class ImageTracer {
       expand?: number; // Expansion radius in pixels. Default 0.
       noChannels?: boolean;
       smoothing?: boolean; // Use Paper.js smoothing (curve fitting). Default true.
+      componentMode?: ComponentMode;
+      minComponentArea?: number;
+      forceConnected?: boolean;
       debug?: boolean;
     } = {},
   ): Promise<string> {
@@ -70,6 +77,9 @@ export class ImageTracer {
       expand?: number;
       noChannels?: boolean;
       smoothing?: boolean;
+      componentMode?: ComponentMode;
+      minComponentArea?: number;
+      forceConnected?: boolean;
       debug?: boolean;
     } = {},
   ): Promise<{ pathData: string; baseBounds: Bounds; bounds: Bounds }> {
@@ -98,6 +108,9 @@ export class ImageTracer {
 
     // 2. Morphology processing
     const threshold = options.threshold ?? 10;
+    const componentMode = options.componentMode ?? "largest";
+    const minComponentArea = Math.max(0, options.minComponentArea ?? 0);
+    const forceConnected = options.forceConnected === true;
     // Adaptive radius: 3% of the image's largest dimension, at least 5px
     const adaptiveRadius = Math.max(
       5,
@@ -106,6 +119,12 @@ export class ImageTracer {
     const radius = options.morphologyRadius ?? adaptiveRadius;
     const expand = options.expand ?? 0;
     const noChannels = options.noChannels !== false;
+    const alphaOpaqueCutoff = options.alphaOpaqueCutoff ?? 250;
+    const resolvedMaskMode =
+      (options.maskMode ?? "auto") === "auto"
+        ? inferMaskMode(imageData, alphaOpaqueCutoff)
+        : (options.maskMode as MaskMode);
+    const alphaAnalysis = analyzeAlpha(imageData, alphaOpaqueCutoff);
     debugLog("traceWithBounds:start", {
       width,
       height,
@@ -113,6 +132,19 @@ export class ImageTracer {
       radius,
       expand,
       noChannels,
+      maskMode: options.maskMode ?? "auto",
+      resolvedMaskMode,
+      alphaOpaqueCutoff,
+      alpha: {
+        minAlpha: alphaAnalysis.minAlpha,
+        belowOpaqueRatio: Number(alphaAnalysis.belowOpaqueRatio.toFixed(4)),
+        veryTransparentRatio: Number(
+          alphaAnalysis.veryTransparentRatio.toFixed(4),
+        ),
+      },
+      componentMode,
+      minComponentArea,
+      forceConnected,
       simplifyTolerance: options.simplifyTolerance ?? 2.5,
       smoothing: options.smoothing !== false,
     });
@@ -130,22 +162,8 @@ export class ImageTracer {
       paddedHeight,
       maskMode: options.maskMode,
       whiteThreshold: options.whiteThreshold,
-      alphaOpaqueCutoff: options.alphaOpaqueCutoff,
+      alphaOpaqueCutoff,
     });
-
-    const connectRadiusMax =
-      options.connectRadiusMax ?? Math.max(10, Math.floor(Math.max(width, height) * 0.12));
-
-    const rConnect = findMinimalConnectRadius(
-      mask,
-      paddedWidth,
-      paddedHeight,
-      connectRadiusMax,
-    );
-
-    if (rConnect > 0) {
-      mask = circularMorphology(mask, paddedWidth, paddedHeight, rConnect, "closing");
-    }
 
     if (radius > 0) {
       mask = circularMorphology(mask, paddedWidth, paddedHeight, radius, "closing");
@@ -160,12 +178,63 @@ export class ImageTracer {
       mask = circularMorphology(mask, paddedWidth, paddedHeight, smoothRadius, "closing");
     }
 
+    const autoConnectRadiusMax = Math.max(
+      10,
+      Math.floor(Math.max(width, height) * 0.12),
+    );
+    const requestedConnectRadiusMax = options.connectRadiusMax;
+    const connectRadiusMax =
+      requestedConnectRadiusMax === undefined
+        ? autoConnectRadiusMax
+        : requestedConnectRadiusMax > 0
+          ? requestedConnectRadiusMax
+          : forceConnected
+            ? autoConnectRadiusMax
+            : 0;
+
+    let rConnect = 0;
+    if (connectRadiusMax > 0) {
+      rConnect = forceConnected
+        ? this.findMinimalMergeRadiusByContourCount(
+            mask,
+            paddedWidth,
+            paddedHeight,
+            connectRadiusMax,
+            minComponentArea,
+          )
+        : findMinimalConnectRadius(
+            mask,
+            paddedWidth,
+            paddedHeight,
+            connectRadiusMax,
+          );
+      if (rConnect > 0) {
+        mask = circularMorphology(
+          mask,
+          paddedWidth,
+          paddedHeight,
+          rConnect,
+          "closing",
+        );
+        if (noChannels) {
+          mask = fillHoles(mask, paddedWidth, paddedHeight);
+        }
+      }
+    }
+
     const baseMask = mask;
-    const baseContour = this.pickPrimaryContour(
-      this.traceAllContours(baseMask, paddedWidth, paddedHeight),
+    const baseContoursRaw = this.traceAllContours(
+      baseMask,
+      paddedWidth,
+      paddedHeight,
+    );
+    const baseContours = this.selectContours(
+      baseContoursRaw,
+      componentMode,
+      minComponentArea,
     );
 
-    if (!baseContour) {
+    if (!baseContours.length) {
       // Fallback: Return a rectangular outline matching dimensions
       const w = options.scaleToWidth ?? width;
       const h = options.scaleToHeight ?? height;
@@ -177,21 +246,56 @@ export class ImageTracer {
       };
     }
 
-    const baseUnpadded = baseContour.map(p => ({
-      x: p.x - padding,
-      y: p.y - padding,
-    }));
-    let baseBounds = this.boundsFromPoints(baseUnpadded);
+    const baseUnpaddedContours = baseContours
+      .map((contour) =>
+        this.clampPointsToImageBounds(
+          contour.map((p) => ({
+            x: p.x - padding,
+            y: p.y - padding,
+          })),
+          width,
+          height,
+        ),
+      )
+      .filter((contour) => contour.length > 2);
+
+    if (!baseUnpaddedContours.length) {
+      const w = options.scaleToWidth ?? width;
+      const h = options.scaleToHeight ?? height;
+      debugLog("fallback:empty-base-contours", { width: w, height: h });
+      return {
+        pathData: `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`,
+        baseBounds: { x: 0, y: 0, width: w, height: h },
+        bounds: { x: 0, y: 0, width: w, height: h },
+      };
+    }
+
+    let baseBounds = this.boundsFromPoints(
+      this.flattenContours(baseUnpaddedContours),
+    );
 
     let maskExpanded = baseMask;
     if (expand > 0) {
-      maskExpanded = circularMorphology(baseMask, paddedWidth, paddedHeight, expand, "dilate");
+      maskExpanded = circularMorphology(
+        baseMask,
+        paddedWidth,
+        paddedHeight,
+        expand,
+        "dilate",
+      );
     }
 
-    const expandedContour = this.pickPrimaryContour(
-      this.traceAllContours(maskExpanded, paddedWidth, paddedHeight),
+    const expandedContoursRaw = this.traceAllContours(
+      maskExpanded,
+      paddedWidth,
+      paddedHeight,
     );
-    if (!expandedContour) {
+    const expandedContours = this.selectContours(
+      expandedContoursRaw,
+      componentMode,
+      minComponentArea,
+    );
+    if (!expandedContours.length) {
       debugLog("fallback:no-expanded-contour", {
         baseBounds,
         width,
@@ -205,55 +309,92 @@ export class ImageTracer {
       };
     }
 
-    const expandedUnpadded = expandedContour.map(p => ({
-      x: p.x - padding,
-      y: p.y - padding,
-    }));
-    let globalBounds = this.boundsFromPoints(expandedUnpadded);
+    const expandedUnpaddedContours = expandedContours
+      .map((contour) =>
+        this.clampPointsToImageBounds(
+          contour.map((p) => ({
+            x: p.x - padding,
+            y: p.y - padding,
+          })),
+          width,
+          height,
+        ),
+      )
+      .filter((contour) => contour.length > 2);
+    if (!expandedUnpaddedContours.length) {
+      debugLog("fallback:empty-expanded-contours", {
+        baseBounds,
+        width,
+        height,
+        expand,
+      });
+      return {
+        pathData: `M 0 0 L ${width} 0 L ${width} ${height} L 0 ${height} Z`,
+        baseBounds,
+        bounds: baseBounds,
+      };
+    }
+
+    let globalBounds = this.boundsFromPoints(
+      this.flattenContours(expandedUnpaddedContours),
+    );
 
     // 9. Post-processing (Scale)
-    let finalPoints = expandedUnpadded;
+    let finalContours = expandedUnpaddedContours;
     if (options.scaleToWidth && options.scaleToHeight) {
-      finalPoints = this.scalePoints(
-        expandedUnpadded,
+      finalContours = this.scaleContours(
+        expandedUnpaddedContours,
         options.scaleToWidth,
         options.scaleToHeight,
         globalBounds,
       );
-      globalBounds = this.boundsFromPoints(finalPoints);
+      globalBounds = this.boundsFromPoints(this.flattenContours(finalContours));
 
-      const baseScaled = this.scalePoints(
-        baseUnpadded,
+      const baseScaledContours = this.scaleContours(
+        baseUnpaddedContours,
         options.scaleToWidth,
         options.scaleToHeight,
         baseBounds,
       );
-      baseBounds = this.boundsFromPoints(baseScaled);
+      baseBounds = this.boundsFromPoints(this.flattenContours(baseScaledContours));
     }
 
     // 10. Simplify and Generate SVG
     const useSmoothing = options.smoothing !== false; // Default true
     debugLog("traceWithBounds:contours", {
+      baseContourCount: baseContoursRaw.length,
+      baseSelectedCount: baseContours.length,
+      expandedContourCount: expandedContoursRaw.length,
+      expandedSelectedCount: expandedContours.length,
+      connectRadiusMax,
+      appliedConnectRadius: rConnect,
       baseBounds,
       expandedBounds: globalBounds,
       expandedDeltaX: globalBounds.width - baseBounds.width,
       expandedDeltaY: globalBounds.height - baseBounds.height,
       useSmoothing,
+      componentMode,
     });
 
     if (useSmoothing) {
       return {
-        pathData: this.pointsToSVGPaper(finalPoints, options.simplifyTolerance ?? 2.5),
+        pathData: this.contoursToSVGPaper(
+          finalContours,
+          options.simplifyTolerance ?? 2.5,
+        ),
         baseBounds,
         bounds: globalBounds,
       };
     } else {
-      const simplifiedPoints = this.douglasPeucker(
-        finalPoints,
-        options.simplifyTolerance ?? 2.0,
-      );
+      const simplifiedContours = finalContours
+        .map((points) =>
+          this.douglasPeucker(points, options.simplifyTolerance ?? 2.0),
+        )
+        .filter((points) => points.length > 2);
+      const pathData =
+        this.contoursToSVG(simplifiedContours) || this.contoursToSVG(finalContours);
       return {
-        pathData: this.pointsToSVG(simplifiedPoints),
+        pathData,
         baseBounds,
         bounds: globalBounds,
       };
@@ -269,6 +410,135 @@ export class ImageTracer {
       if (curArea !== bestArea) return curArea > bestArea ? cur : best;
       return cur.length > best.length ? cur : best;
     }, contours[0]);
+  }
+
+  private static flattenContours(contours: Point[][]): Point[] {
+    return contours.flatMap((contour) => contour);
+  }
+
+  private static contourCentroid(points: Point[]): Point {
+    if (!points.length) return { x: 0, y: 0 };
+    const sum = points.reduce(
+      (acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }),
+      { x: 0, y: 0 },
+    );
+    return {
+      x: sum.x / points.length,
+      y: sum.y / points.length,
+    };
+  }
+
+  private static pointInPolygon(point: Point, polygon: Point[]): boolean {
+    let inside = false;
+    const { x, y } = point;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const xi = polygon[i].x;
+      const yi = polygon[i].y;
+      const xj = polygon[j].x;
+      const yj = polygon[j].y;
+      const intersects =
+        yi > y !== yj > y &&
+        x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi;
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+
+  private static keepOutermostContours(contours: Point[][]): Point[][] {
+    if (contours.length <= 1) return contours;
+
+    const sorted = [...contours].sort(
+      (a, b) => Math.abs(polygonSignedArea(b)) - Math.abs(polygonSignedArea(a)),
+    );
+    const selected: Point[][] = [];
+    for (const contour of sorted) {
+      const centroid = this.contourCentroid(contour);
+      const isNested = selected.some((outer) =>
+        this.pointInPolygon(centroid, outer),
+      );
+      if (!isNested) {
+        selected.push(contour);
+      }
+    }
+    return selected;
+  }
+
+  private static countSelectedContours(
+    mask: Uint8Array,
+    width: number,
+    height: number,
+    minComponentArea: number,
+  ): number {
+    const contours = this.traceAllContours(mask, width, height);
+    return this.selectContours(contours, "all", minComponentArea).length;
+  }
+
+  private static findMinimalMergeRadiusByContourCount(
+    mask: Uint8Array,
+    width: number,
+    height: number,
+    maxRadius: number,
+    minComponentArea: number,
+  ): number {
+    if (maxRadius <= 0) return 0;
+    if (this.countSelectedContours(mask, width, height, minComponentArea) <= 1) {
+      return 0;
+    }
+
+    let low = 0;
+    let high = 1;
+    while (high <= maxRadius) {
+      const closed = circularMorphology(mask, width, height, high, "closing");
+      if (this.countSelectedContours(closed, width, height, minComponentArea) <= 1) {
+        break;
+      }
+      high *= 2;
+    }
+    if (high > maxRadius) high = maxRadius;
+
+    const highMask = circularMorphology(mask, width, height, high, "closing");
+    if (this.countSelectedContours(highMask, width, height, minComponentArea) > 1) {
+      return high;
+    }
+
+    while (low + 1 < high) {
+      const mid = Math.floor((low + high) / 2);
+      const midMask = circularMorphology(mask, width, height, mid, "closing");
+      if (this.countSelectedContours(midMask, width, height, minComponentArea) <= 1) {
+        high = mid;
+      } else {
+        low = mid;
+      }
+    }
+
+    return high;
+  }
+
+  private static selectContours(
+    contours: Point[][],
+    mode: ComponentMode,
+    minComponentArea: number,
+  ): Point[][] {
+    if (!contours.length) return [];
+    if (mode === "largest") {
+      const primary = this.pickPrimaryContour(contours);
+      return primary ? [primary] : [];
+    }
+
+    const threshold = Math.max(0, minComponentArea);
+    if (threshold <= 0) {
+      return this.keepOutermostContours(contours);
+    }
+
+    const filtered = contours.filter(
+      (contour) => Math.abs(polygonSignedArea(contour)) >= threshold,
+    );
+    if (filtered.length > 0) {
+      return this.keepOutermostContours(filtered);
+    }
+
+    const primary = this.pickPrimaryContour(contours);
+    return primary ? [primary] : [];
   }
 
   private static boundsFromPoints(points: Point[]): Bounds {
@@ -679,6 +949,30 @@ export class ImageTracer {
     }));
   }
 
+  private static scaleContours(
+    contours: Point[][],
+    targetWidth: number,
+    targetHeight: number,
+    bounds: { x: number; y: number; width: number; height: number },
+  ): Point[][] {
+    return contours.map((points) =>
+      this.scalePoints(points, targetWidth, targetHeight, bounds),
+    );
+  }
+
+  private static clampPointsToImageBounds(
+    points: Point[],
+    width: number,
+    height: number,
+  ): Point[] {
+    const maxX = Math.max(0, width);
+    const maxY = Math.max(0, height);
+    return points.map((p) => ({
+      x: Math.max(0, Math.min(maxX, p.x)),
+      y: Math.max(0, Math.min(maxY, p.y)),
+    }));
+  }
+
   private static pointsToSVG(points: Point[]): string {
     if (points.length === 0) return "";
     const head = points[0];
@@ -689,6 +983,14 @@ export class ImageTracer {
       tail.map((p) => `L ${p.x} ${p.y}`).join(" ") +
       " Z"
     );
+  }
+
+  private static contoursToSVG(contours: Point[][]): string {
+    return contours
+      .filter((points) => points.length > 2)
+      .map((points) => this.pointsToSVG(points))
+      .join(" ")
+      .trim();
   }
 
   private static ensurePaper() {
@@ -714,6 +1016,33 @@ export class ImageTracer {
     const data = path.pathData;
     path.remove();
     
+    return data;
+  }
+
+  private static contoursToSVGPaper(
+    contours: Point[][],
+    tolerance: number,
+  ): string {
+    const normalizedContours = contours.filter((points) => points.length > 2);
+    if (!normalizedContours.length) return "";
+    if (normalizedContours.length === 1) {
+      return this.pointsToSVGPaper(normalizedContours[0], tolerance);
+    }
+
+    this.ensurePaper();
+    const compound = new paper.CompoundPath({ insert: false });
+    for (const points of normalizedContours) {
+      const child = new paper.Path({
+        segments: points.map((p) => [p.x, p.y]),
+        closed: true,
+        insert: false,
+      });
+      child.simplify(tolerance);
+      compound.addChild(child);
+    }
+
+    const data = compound.pathData || this.contoursToSVG(normalizedContours);
+    compound.remove();
     return data;
   }
 }

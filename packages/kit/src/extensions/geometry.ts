@@ -212,8 +212,14 @@ function createBaseShape(options: GeometryOptions): paper.PathItem {
       radius: [Math.max(0, width / 2), Math.max(0, height / 2)],
     });
   } else if (shape === "custom" && pathData) {
-    const path = new paper.Path();
-    path.pathData = pathData;
+    const hasMultipleSubPaths = ((pathData.match(/[Mm]/g) || []).length ?? 0) > 1;
+    const path: paper.PathItem = hasMultipleSubPaths
+      ? new paper.CompoundPath(pathData)
+      : (() => {
+          const single = new paper.Path();
+          single.pathData = pathData;
+          return single;
+        })();
     // Align center
     path.position = center;
     if (
@@ -231,6 +237,37 @@ function createBaseShape(options: GeometryOptions): paper.PathItem {
       size: [Math.max(0, width), Math.max(0, height)],
     });
   }
+}
+
+function resolveBridgeBasePath(
+  shape: paper.PathItem,
+  anchor: paper.Point,
+): paper.Path | null {
+  if (shape instanceof paper.Path) {
+    return shape;
+  }
+
+  if (shape instanceof paper.CompoundPath) {
+    const children = (shape.children || []).filter(
+      (child): child is paper.Path => child instanceof paper.Path,
+    );
+    if (!children.length) return null;
+    let best = children[0];
+    let bestDistance = Infinity;
+    for (const child of children) {
+      const location = child.getNearestLocation(anchor);
+      const point = location?.point;
+      if (!point) continue;
+      const distance = point.getDistance(anchor);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = child;
+      }
+    }
+    return best;
+  }
+
+  return null;
 }
 
 /**
@@ -307,113 +344,122 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
           const inset = Math.min(1, Math.max(0, itemBounds.width * 0.01));
           const xLeft = itemBounds.left + inset;
           const xRight = itemBounds.right - inset;
+          const bridgeBasePath = resolveBridgeBasePath(mainShape, center);
+          const canBridge = !!bridgeBasePath && xRight - xLeft > eps;
 
-          if (!(mainShape instanceof paper.Path)) {
-            throw new Error("Geometry: Bridge requires base shape to be a Path");
+          if (canBridge && bridgeBasePath) {
+            const leftHit = getExitHit({
+              mainShape: bridgeBasePath,
+              x: xLeft,
+              bridgeBottom,
+              toY,
+              eps,
+              delta,
+              overlap,
+              op: f.operation,
+            });
+            const rightHit = getExitHit({
+              mainShape: bridgeBasePath,
+              x: xRight,
+              bridgeBottom,
+              toY,
+              eps,
+              delta,
+              overlap,
+              op: f.operation,
+            });
+
+            if (leftHit && rightHit) {
+              const pathLength = bridgeBasePath.length;
+              const leftOffset = leftHit.location.offset;
+              const rightOffset = rightHit.location.offset;
+
+              const distanceA = wrappedDistance(pathLength, leftOffset, rightOffset);
+              const distanceB = wrappedDistance(pathLength, rightOffset, leftOffset);
+              const countFor = (d: number) =>
+                Math.max(8, Math.min(80, Math.ceil(d / 6)));
+
+              const offsetsA = sampleWrappedOffsets(
+                pathLength,
+                leftOffset,
+                rightOffset,
+                countFor(distanceA),
+              );
+
+              const offsetsB = sampleWrappedOffsets(
+                pathLength,
+                rightOffset,
+                leftOffset,
+                countFor(distanceB),
+              );
+
+              const pointsA = offsetsA
+                .map((o) => bridgeBasePath.getPointAt(o))
+                .filter((p): p is paper.Point => Boolean(p));
+              const pointsB = offsetsB
+                .map((o) => bridgeBasePath.getPointAt(o))
+                .filter((p): p is paper.Point => Boolean(p));
+
+              if (pointsA.length >= 2 && pointsB.length >= 2) {
+                let topBase = selectOuterChain({
+                  mainShape: bridgeBasePath,
+                  pointsA,
+                  pointsB,
+                  delta,
+                  overlap,
+                  op: f.operation,
+                });
+
+                const dist2 = (a: paper.Point, b: paper.Point) => {
+                  const dx = a.x - b.x;
+                  const dy = a.y - b.y;
+                  return dx * dx + dy * dy;
+                };
+
+                if (
+                  dist2(topBase[0], leftHit.point) >
+                  dist2(topBase[0], rightHit.point)
+                ) {
+                  topBase = topBase.slice().reverse();
+                }
+
+                topBase = topBase.slice();
+                topBase[0] = leftHit.point;
+                topBase[topBase.length - 1] = rightHit.point;
+
+                const capShiftY =
+                  f.operation === "subtract"
+                    ? -Math.max(overlap * 2, delta)
+                    : overlap;
+                const topPoints = topBase.map((p) =>
+                  p.add(new paper.Point(0, capShiftY)),
+                );
+
+                const bridgeBottomY = bridgeBottom + overlap * 2;
+                const bridgePoly = new paper.Path({ insert: false });
+                for (const p of topPoints) bridgePoly.add(p);
+                bridgePoly.add(new paper.Point(xRight, bridgeBottomY));
+                bridgePoly.add(new paper.Point(xLeft, bridgeBottomY));
+                bridgePoly.closed = true;
+
+                const unitedItem = item.unite(bridgePoly);
+                item.remove();
+                bridgePoly.remove();
+
+                if (f.operation === "add") {
+                  adds.push(unitedItem);
+                } else {
+                  subtracts.push(unitedItem);
+                }
+                return;
+              }
+            }
           }
-
-          const leftHit = getExitHit({
-            mainShape,
-            x: xLeft,
-            bridgeBottom,
-            toY,
-            eps,
-            delta,
-            overlap,
-            op: f.operation,
-          });
-          const rightHit = getExitHit({
-            mainShape,
-            x: xRight,
-            bridgeBottom,
-            toY,
-            eps,
-            delta,
-            overlap,
-            op: f.operation,
-          });
-
-          if (!leftHit || !rightHit || xRight - xLeft <= eps) {
-            throw new Error("Geometry: Bridge ray intersection not found");
-          }
-
-          const path = mainShape as paper.Path;
-          const pathLength = path.length;
-          const leftOffset = leftHit.location.offset;
-          const rightOffset = rightHit.location.offset;
-
-          const distanceA = wrappedDistance(pathLength, leftOffset, rightOffset);
-          const distanceB = wrappedDistance(pathLength, rightOffset, leftOffset);
-          const countFor = (d: number) => Math.max(8, Math.min(80, Math.ceil(d / 6)));
-
-          const offsetsA = sampleWrappedOffsets(
-            pathLength,
-            leftOffset,
-            rightOffset,
-            countFor(distanceA),
-          );
-
-          const offsetsB = sampleWrappedOffsets(
-            pathLength,
-            rightOffset,
-            leftOffset,
-            countFor(distanceB),
-          );
-
-          const pointsA = offsetsA
-            .map((o) => path.getPointAt(o))
-            .filter((p): p is paper.Point => Boolean(p));
-          const pointsB = offsetsB
-            .map((o) => path.getPointAt(o))
-            .filter((p): p is paper.Point => Boolean(p));
-
-          if (pointsA.length < 2 || pointsB.length < 2) {
-            throw new Error("Geometry: Bridge contour sampling failed");
-          }
-
-          let topBase = selectOuterChain({
-            mainShape,
-            pointsA,
-            pointsB,
-            delta,
-            overlap,
-            op: f.operation,
-          });
-
-          const dist2 = (a: paper.Point, b: paper.Point) => {
-            const dx = a.x - b.x;
-            const dy = a.y - b.y;
-            return dx * dx + dy * dy;
-          };
-
-          if (dist2(topBase[0], leftHit.point) > dist2(topBase[0], rightHit.point)) {
-            topBase = topBase.slice().reverse();
-          }
-
-          topBase = topBase.slice();
-          topBase[0] = leftHit.point;
-          topBase[topBase.length - 1] = rightHit.point;
-
-          const capShiftY = f.operation === "subtract" ? -Math.max(overlap * 2, delta) : overlap;
-          const topPoints = topBase.map(
-            (p) => p.add(new paper.Point(0, capShiftY)),
-          );
-
-          const bridgeBottomY = bridgeBottom + overlap * 2;
-          const bridgePoly = new paper.Path({ insert: false });
-          for (const p of topPoints) bridgePoly.add(p);
-          bridgePoly.add(new paper.Point(xRight, bridgeBottomY));
-          bridgePoly.add(new paper.Point(xLeft, bridgeBottomY));
-          bridgePoly.closed = true;
-
-          const unitedItem = item.unite(bridgePoly);
-          item.remove();
-          bridgePoly.remove();
 
           if (f.operation === "add") {
-            adds.push(unitedItem);
+            adds.push(item);
           } else {
-            subtracts.push(unitedItem);
+            subtracts.push(item);
           }
         } else {
           if (f.operation === "add") {

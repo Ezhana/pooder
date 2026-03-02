@@ -10,6 +10,13 @@ export interface CreateMaskOptions {
   alphaOpaqueCutoff?: number;
 }
 
+export interface AlphaAnalysis {
+  total: number;
+  minAlpha: number;
+  belowOpaqueRatio: number;
+  veryTransparentRatio: number;
+}
+
 export function createMask(
   imageData: ImageData,
   options: CreateMaskOptions,
@@ -55,7 +62,21 @@ export function createMask(
   return mask;
 }
 
-function inferMaskMode(imageData: ImageData, alphaOpaqueCutoff: number): MaskMode {
+export function inferMaskMode(
+  imageData: ImageData,
+  alphaOpaqueCutoff: number,
+): MaskMode {
+  const analysis = analyzeAlpha(imageData, alphaOpaqueCutoff);
+  if (analysis.minAlpha === 255) return "whitebg";
+  if (analysis.veryTransparentRatio >= 0.0005) return "alpha";
+  if (analysis.belowOpaqueRatio >= 0.01) return "alpha";
+  return "whitebg";
+}
+
+export function analyzeAlpha(
+  imageData: ImageData,
+  alphaOpaqueCutoff: number,
+): AlphaAnalysis {
   const { data } = imageData;
   const total = data.length / 4;
 
@@ -70,15 +91,12 @@ function inferMaskMode(imageData: ImageData, alphaOpaqueCutoff: number): MaskMod
     if (a < 32) veryTransparent++;
   }
 
-  if (minAlpha === 255) return "whitebg";
-
-  const belowOpaqueRatio = belowOpaque / total;
-  const veryTransparentRatio = veryTransparent / total;
-
-  if (veryTransparentRatio >= 0.0005) return "alpha";
-  if (belowOpaqueRatio >= 0.01) return "alpha";
-
-  return "whitebg";
+  return {
+    total,
+    minAlpha,
+    belowOpaqueRatio: belowOpaque / total,
+    veryTransparentRatio: veryTransparent / total,
+  };
 }
 
 export function circularMorphology(
