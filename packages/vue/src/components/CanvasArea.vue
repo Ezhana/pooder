@@ -49,7 +49,7 @@ onUnmounted(() => {
   min-height: 650px;
   min-width: 650px;
   overflow: hidden;
-  background: #f5f5f5;
+  background: #ececec;
   position: relative;
 }
 

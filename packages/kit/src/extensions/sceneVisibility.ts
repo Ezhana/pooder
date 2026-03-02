@@ -3,6 +3,7 @@ import { CanvasService } from "../services";
 
 const CANVAS_SERVICE_ID = "CanvasService";
 const HIDDEN_DIELINE_TOOLS = new Set(["pooder.kit.image", "pooder.kit.white-ink"]);
+const HIDDEN_RULER_TOOLS = new Set(["pooder.kit.white-ink"]);
 
 export class SceneVisibilityService implements Service {
   private context?: ServiceContext;
@@ -54,6 +55,14 @@ export class SceneVisibilityService implements Service {
       const visible = !HIDDEN_DIELINE_TOOLS.has(this.activeToolId || "");
       if (dielineLayer.visible !== visible) {
         dielineLayer.set({ visible });
+      }
+    }
+
+    const rulerLayer = this.canvasService.getLayer("ruler-overlay");
+    if (rulerLayer) {
+      const visible = !HIDDEN_RULER_TOOLS.has(this.activeToolId || "");
+      if (rulerLayer.visible !== visible) {
+        rulerLayer.set({ visible });
       }
     }
 

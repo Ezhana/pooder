@@ -202,20 +202,8 @@
         </label>
       </div>
       <div class="control-group" v-if="whiteInkState.id">
-        <label>White Ink Opacity</label>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          v-model.number="whiteInkState.opacity"
-          @input="updateWhiteInkOpacity"
-        />
-        <span>{{ whiteInkState.opacity.toFixed(2) }}</span>
-      </div>
-      <div class="control-group" v-if="whiteInkState.id">
         <button @click="toggleWhiteInkPreviewImage">
-          {{ whiteInkState.previewImageVisible ? "Hide Image" : "Show Image" }}
+          {{ whiteInkState.previewImageVisible ? "Hide Cover" : "Show Cover" }}
         </button>
       </div>
       <div class="control-group" v-if="whiteInkState.id">
@@ -360,7 +348,6 @@ const imageCompleteStatus = reactive({
 const whiteInkState = reactive({
   id: null,
   printWithWhiteInk: true,
-  opacity: 0.45,
   previewImageVisible: true,
 });
 
@@ -605,7 +592,6 @@ const resetPanelState = () => {
 
   whiteInkState.id = null;
   whiteInkState.printWithWhiteInk = true;
-  whiteInkState.opacity = 0.45;
   whiteInkState.previewImageVisible = true;
   whiteInkActionStatus.message = "";
 
@@ -818,14 +804,12 @@ const syncWhiteInkSettings = async () => {
     const settings = await editor.value.executeCommand("getWhiteInkSettings");
     whiteInkState.id = settings?.id || null;
     whiteInkState.printWithWhiteInk = settings?.printWithWhiteInk !== false;
-    whiteInkState.opacity = Number(settings?.opacity ?? 0.45);
     whiteInkState.previewImageVisible = settings?.previewImageVisible !== false;
     return;
   } catch (e) {}
 
   whiteInkState.id = null;
   whiteInkState.printWithWhiteInk = true;
-  whiteInkState.opacity = 0.45;
   whiteInkState.previewImageVisible = true;
 };
 
@@ -835,15 +819,6 @@ const toggleWhiteInkPrint = async () => {
   await editor.value.executeCommand(
     "setWhiteInkPrintEnabled",
     !!whiteInkState.printWithWhiteInk,
-  );
-};
-
-const updateWhiteInkOpacity = async () => {
-  if (!editor.value || !whiteInkState.id) return;
-  whiteInkActionStatus.message = "";
-  await editor.value.executeCommand(
-    "setWhiteInkOpacity",
-    Number(whiteInkState.opacity || 0),
   );
 };
 
