@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 5.2.0
+
+### Minor Changes
+
+- image hatch overlay
+
 ## 5.1.0
 
 ### Minor Changes
