@@ -962,6 +962,21 @@ export class ImageTool implements Extension {
     return obj?._originalElement?.src;
   }
 
+  private applyImageControlVisibility(obj: any) {
+    if (typeof obj?.setControlsVisibility !== "function") return;
+    obj.setControlsVisibility({
+      mt: false,
+      mb: false,
+      ml: false,
+      mr: false,
+      tl: true,
+      tr: true,
+      bl: true,
+      br: true,
+      mtr: true,
+    });
+  }
+
   private async upsertImageObject(
     item: ImageItem,
     frame: FrameRect,
@@ -1010,6 +1025,7 @@ export class ImageTool implements Extension {
         type: "image-item",
       },
     });
+    this.applyImageControlVisibility(obj);
     obj.setCoords();
 
     const resolver = this.loadResolvers.get(item.id);
