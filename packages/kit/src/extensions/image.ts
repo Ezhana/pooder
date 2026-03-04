@@ -8,9 +8,19 @@ import {
   ToolSessionService,
   WorkbenchService,
 } from "@pooder/core";
-import { Canvas as FabricCanvas, Image as FabricImage, Point } from "fabric";
+import {
+  Canvas as FabricCanvas,
+  Image as FabricImage,
+  Pattern,
+  Point,
+} from "fabric";
 import { CanvasService, RenderObjectSpec } from "../services";
-import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
+import { generateDielinePath } from "./geometry";
+import {
+  buildSceneGeometry,
+  computeSceneLayout,
+  readSizeState,
+} from "./sceneLayoutModel";
 
 export interface ImageItem {
   id: string;
@@ -52,6 +62,15 @@ interface FrameVisualConfig {
   dashLength: number;
   innerBackground: string;
   outerBackground: string;
+}
+
+type DielineShape = "rect" | "circle" | "ellipse" | "custom";
+type ShapeOverlayShape = Exclude<DielineShape, "custom">;
+
+interface SceneGeometryLike {
+  shape: DielineShape;
+  radius: number;
+  offset: number;
 }
 
 interface UpsertImageOptions {
@@ -113,6 +132,8 @@ export class ImageTool implements Extension {
   private focusedImageId: string | null = null;
   private renderSeq = 0;
   private dirtyTrackerDisposable?: { dispose(): void };
+  private cropShapeHatchPattern?: Pattern;
+  private cropShapeHatchPatternColor?: string;
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -128,6 +149,7 @@ export class ImageTool implements Extension {
     context.eventBus.on("selection:updated", this.onSelectionChanged);
     context.eventBus.on("selection:cleared", this.onSelectionCleared);
     context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
+    context.eventBus.on("scene:geometry:change", this.onSceneGeometryChanged);
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -175,8 +197,11 @@ export class ImageTool implements Extension {
     context.eventBus.off("selection:updated", this.onSelectionChanged);
     context.eventBus.off("selection:cleared", this.onSelectionCleared);
     context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
+    context.eventBus.off("scene:geometry:change", this.onSceneGeometryChanged);
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
+    this.cropShapeHatchPattern = undefined;
+    this.cropShapeHatchPatternColor = undefined;
 
     this.clearRenderedImages();
     if (this.canvasService) {
@@ -255,6 +280,10 @@ export class ImageTool implements Extension {
   };
 
   private onSceneLayoutChanged = () => {
+    this.updateImages();
+  };
+
+  private onSceneGeometryChanged = () => {
     this.updateImages();
   };
 
@@ -415,9 +444,7 @@ export class ImageTool implements Extension {
         {
           command: "exportUserCroppedImage",
           title: "Export User Cropped Image",
-          handler: async (
-            options: ExportUserCroppedImageOptions = {},
-          ) => {
+          handler: async (options: ExportUserCroppedImageOptions = {}) => {
             return await this.exportUserCroppedImage(options);
           },
         },
@@ -894,8 +921,266 @@ export class ImageTool implements Extension {
           "image.frame.innerBackground",
           "rgba(0,0,0,0)",
         ) || "rgba(0,0,0,0)",
-      outerBackground: "#f5f5f5",
+      outerBackground:
+        this.getConfig<string>("image.frame.outerBackground", "#f5f5f5") ||
+        "#f5f5f5",
     };
+  }
+
+  private toSceneGeometryLike(raw: any): SceneGeometryLike | null {
+    const shape = raw?.shape;
+    if (
+      shape !== "rect" &&
+      shape !== "circle" &&
+      shape !== "ellipse" &&
+      shape !== "custom"
+    ) {
+      return null;
+    }
+
+    const radius = Number(raw?.radius);
+    const offset = Number(raw?.offset);
+    return {
+      shape,
+      radius: Number.isFinite(radius) ? radius : 0,
+      offset: Number.isFinite(offset) ? offset : 0,
+    };
+  }
+
+  private async resolveSceneGeometryForOverlay(): Promise<SceneGeometryLike | null> {
+    if (!this.context) return null;
+    const commandService = this.context.services.get<any>("CommandService");
+    if (commandService) {
+      try {
+        const raw = await Promise.resolve(
+          commandService.executeCommand("getSceneGeometry"),
+        );
+        const geometry = this.toSceneGeometryLike(raw);
+        if (geometry) {
+          this.debug("overlay:sceneGeometry:command", geometry);
+          return geometry;
+        }
+        this.debug("overlay:sceneGeometry:command:invalid", { raw });
+      } catch (error) {
+        this.debug("overlay:sceneGeometry:command:error", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (!this.canvasService) return null;
+    const configService = this.context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
+    if (!configService) return null;
+
+    const sizeState = readSizeState(configService);
+    const layout = computeSceneLayout(this.canvasService, sizeState);
+    if (!layout) {
+      this.debug("overlay:sceneGeometry:fallback:missing-layout");
+      return null;
+    }
+
+    const geometry = this.toSceneGeometryLike(
+      buildSceneGeometry(configService, layout),
+    );
+    if (geometry) {
+      this.debug("overlay:sceneGeometry:fallback", geometry);
+    }
+    return geometry;
+  }
+
+  private resolveCutShapeRadius(
+    geometry: SceneGeometryLike,
+    frame: FrameRect,
+  ): number {
+    const visualRadius = Number.isFinite(geometry.radius)
+      ? Math.max(0, geometry.radius)
+      : 0;
+    const visualOffset = Number.isFinite(geometry.offset) ? geometry.offset : 0;
+    const rawCutRadius =
+      visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
+    const maxRadius = Math.max(0, Math.min(frame.width, frame.height) / 2);
+    return Math.max(0, Math.min(maxRadius, rawCutRadius));
+  }
+
+  private getCropShapeHatchPattern(
+    color = "rgba(255, 0, 0, 0.6)",
+  ): Pattern | undefined {
+    if (typeof document === "undefined") return undefined;
+    if (
+      this.cropShapeHatchPattern &&
+      this.cropShapeHatchPatternColor === color
+    ) {
+      return this.cropShapeHatchPattern;
+    }
+
+    const size = 16;
+    const patternCanvas = document.createElement("canvas");
+    patternCanvas.width = size;
+    patternCanvas.height = size;
+    const ctx = patternCanvas.getContext("2d");
+    if (!ctx) return undefined;
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = "rgba(255, 0, 0, 0.08)";
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-size, size);
+    ctx.lineTo(size, -size);
+    ctx.moveTo(-size / 2, size + size / 2);
+    ctx.lineTo(size + size / 2, -size / 2);
+    ctx.moveTo(0, size);
+    ctx.lineTo(size, 0);
+    ctx.moveTo(size / 2, size + size / 2);
+    ctx.lineTo(size + size + size / 2, -size / 2);
+    ctx.stroke();
+
+    const pattern = new Pattern({
+      source: patternCanvas,
+      // @ts-ignore: Fabric Pattern accepts canvas source here.
+      repetition: "repeat",
+    });
+    this.cropShapeHatchPattern = pattern;
+    this.cropShapeHatchPatternColor = color;
+    return pattern;
+  }
+
+  private buildCropShapeOverlaySpecs(
+    frame: FrameRect,
+    sceneGeometry: SceneGeometryLike | null,
+  ): RenderObjectSpec[] {
+    if (!sceneGeometry) {
+      this.debug("overlay:shape:skip", { reason: "scene-geometry-missing" });
+      return [];
+    }
+    if (sceneGeometry.shape === "custom") {
+      this.debug("overlay:shape:skip", { reason: "shape-custom" });
+      return [];
+    }
+
+    const shape = sceneGeometry.shape as ShapeOverlayShape;
+    const inset = 0;
+    const shapeWidth = Math.max(1, frame.width);
+    const shapeHeight = Math.max(1, frame.height);
+    const radius = this.resolveCutShapeRadius(sceneGeometry, frame);
+
+    this.debug("overlay:shape:geometry", {
+      shape,
+      frameWidth: frame.width,
+      frameHeight: frame.height,
+      offset: sceneGeometry.offset,
+      inset,
+      shapeWidth,
+      shapeHeight,
+      baseRadius: sceneGeometry.radius,
+      radius,
+    });
+
+    const isSameAsFrame =
+      Math.abs(shapeWidth - frame.width) <= 0.0001 &&
+      Math.abs(shapeHeight - frame.height) <= 0.0001;
+    if (shape === "rect" && radius <= 0.0001 && isSameAsFrame) {
+      this.debug("overlay:shape:skip", {
+        reason: "shape-rect-no-radius",
+      });
+      return [];
+    }
+
+    const baseOptions = {
+      shape,
+      width: shapeWidth,
+      height: shapeHeight,
+      radius,
+      x: frame.width / 2,
+      y: frame.height / 2,
+      features: [],
+      canvasWidth: frame.width,
+      canvasHeight: frame.height,
+    };
+
+    try {
+      const shapePathData = generateDielinePath(baseOptions);
+      const outerRectPathData = `M 0 0 L ${frame.width} 0 L ${frame.width} ${frame.height} L 0 ${frame.height} Z`;
+      const hatchPathData = `${outerRectPathData} ${shapePathData}`;
+      if (!shapePathData || !hatchPathData) {
+        this.debug("overlay:shape:skip", {
+          reason: "path-generation-empty",
+          shape,
+          radius,
+        });
+        return [];
+      }
+
+      const patternFill = this.getCropShapeHatchPattern();
+      const hatchFill = patternFill || "rgba(255, 0, 0, 0.22)";
+      const hatchPathLength = hatchPathData.length;
+      const shapePathLength = shapePathData.length;
+      const specs: RenderObjectSpec[] = [
+        {
+          id: "image.cropShapeHatch",
+          type: "path",
+          data: { id: "image.cropShapeHatch", zIndex: 5 },
+          props: {
+            pathData: hatchPathData,
+            left: frame.left,
+            top: frame.top,
+            originX: "left",
+            originY: "top",
+            fill: hatchFill,
+            opacity: patternFill ? 1 : 0.8,
+            stroke: null,
+            fillRule: "evenodd",
+            selectable: false,
+            evented: false,
+            excludeFromExport: true,
+            objectCaching: false,
+          },
+        },
+        {
+          id: "image.cropShapePath",
+          type: "path",
+          data: { id: "image.cropShapePath", zIndex: 6 },
+          props: {
+            pathData: shapePathData,
+            left: frame.left,
+            top: frame.top,
+            originX: "left",
+            originY: "top",
+            fill: "rgba(0,0,0,0)",
+            stroke: "rgba(255, 0, 0, 0.9)",
+            strokeWidth: 1,
+            selectable: false,
+            evented: false,
+            excludeFromExport: true,
+            objectCaching: false,
+          },
+        },
+      ];
+      this.debug("overlay:shape:built", {
+        shape,
+        radius,
+        inset,
+        shapeWidth,
+        shapeHeight,
+        fillRule: "evenodd",
+        shapePathLength,
+        hatchPathLength,
+        hatchFillType:
+          hatchFill && typeof hatchFill === "object" ? "pattern" : "color",
+        ids: specs.map((spec) => spec.id),
+      });
+      return specs;
+    } catch (error) {
+      this.debug("overlay:shape:error", {
+        shape,
+        radius,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   private resolveRenderImageState(item: ImageItem): RenderImageState {
@@ -1063,9 +1348,25 @@ export class ImageTool implements Extension {
     overlayObjects.forEach((obj) => {
       canvas.bringObjectToFront(obj);
     });
+
+    if (this.isDebugEnabled()) {
+      const stack = canvas
+        .getObjects()
+        .map((obj: any, index: number) => ({
+          index,
+          id: obj?.data?.id,
+          layerId: obj?.data?.layerId,
+          zIndex: obj?.data?.zIndex,
+        }))
+        .filter((item) => item.layerId === IMAGE_OVERLAY_LAYER_ID);
+      this.debug("overlay:stack", stack);
+    }
   }
 
-  private buildOverlaySpecs(frame: FrameRect): RenderObjectSpec[] {
+  private buildOverlaySpecs(
+    frame: FrameRect,
+    sceneGeometry: SceneGeometryLike | null,
+  ): RenderObjectSpec[] {
     const visible = this.isImageEditingVisible();
     if (
       !visible ||
@@ -1103,6 +1404,7 @@ export class ImageTool implements Extension {
     const bottomH = Math.max(0, canvasH - frameBottom);
     const leftW = frameLeft;
     const rightW = Math.max(0, canvasW - frameRight);
+    const shapeOverlay = this.buildCropShapeOverlaySpecs(frame, sceneGeometry);
 
     const mask: RenderObjectSpec[] = [
       {
@@ -1174,7 +1476,7 @@ export class ImageTool implements Extension {
     const frameSpec: RenderObjectSpec = {
       id: "image.cropFrame",
       type: "rect",
-      data: { id: "image.cropFrame", zIndex: 5 },
+      data: { id: "image.cropFrame", zIndex: 7 },
       props: {
         left: frame.left + frame.width / 2,
         top: frame.top + frame.height / 2,
@@ -1197,7 +1499,16 @@ export class ImageTool implements Extension {
       },
     };
 
-    return [...mask, frameSpec];
+    const specs = [...mask, ...shapeOverlay, frameSpec];
+    this.debug("overlay:built", {
+      frame,
+      shape: sceneGeometry?.shape,
+      overlayIds: specs.map((spec) => ({
+        id: spec.id,
+        zIndex: spec.data?.zIndex,
+      })),
+    });
+    return specs;
   }
 
   private updateImages() {
@@ -1233,7 +1544,10 @@ export class ImageTool implements Extension {
     if (seq !== this.renderSeq) return;
 
     this.syncImageZOrder(renderItems);
-    const overlaySpecs = this.buildOverlaySpecs(frame);
+    const sceneGeometry = await this.resolveSceneGeometryForOverlay();
+    if (seq !== this.renderSeq) return;
+
+    const overlaySpecs = this.buildOverlaySpecs(frame, sceneGeometry);
     await this.canvasService.applyObjectSpecsToRootLayer(
       IMAGE_OVERLAY_LAYER_ID,
       overlaySpecs,
