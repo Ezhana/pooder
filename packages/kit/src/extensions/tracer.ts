@@ -36,7 +36,7 @@ interface ForceConnectResult {
 
 export interface ImageTraceOptions {
   threshold?: number;
-  simplifyTolerance?: number;
+  simplifyTolerance?: number; // 路径简化容差；越小越贴原始边界。
   expand?: number;
   smoothing?: boolean;
   scaleToWidth?: number;
@@ -133,7 +133,8 @@ export class ImageTracer {
     });
 
     // Padding must cover the largest possible morphology radius and expand.
-    const padding = Math.max(baseCloseRadius, connectSearchMaxRadius, expand) + 2;
+    const padding =
+      Math.max(baseCloseRadius, connectSearchMaxRadius, expand) + 2;
     const paddedWidth = width + padding * 2;
     const paddedHeight = height + padding * 2;
     const summarizeMaskContours = (m: Uint8Array) => {
@@ -145,8 +146,11 @@ export class ImageTracer {
           componentMode,
           minComponentArea,
         ).length,
-        allSelectedCount: this.selectContours(contoursRaw, "all", minComponentArea)
-          .length,
+        allSelectedCount: this.selectContours(
+          contoursRaw,
+          "all",
+          minComponentArea,
+        ).length,
       };
     };
 
@@ -160,7 +164,10 @@ export class ImageTracer {
       alphaOpaqueCutoff,
     });
     if (debug) {
-      debugLog("traceWithBounds:mask:after-create", summarizeMaskContours(mask));
+      debugLog(
+        "traceWithBounds:mask:after-create",
+        summarizeMaskContours(mask),
+      );
     }
 
     if (baseCloseRadius > 0) {
@@ -183,7 +190,10 @@ export class ImageTracer {
       mask = fillHoles(mask, paddedWidth, paddedHeight);
     }
     if (debug && fillChannels) {
-      debugLog("traceWithBounds:mask:after-fill-holes", summarizeMaskContours(mask));
+      debugLog(
+        "traceWithBounds:mask:after-fill-holes",
+        summarizeMaskContours(mask),
+      );
     }
 
     if (smoothCloseRadius > 0) {
@@ -392,10 +402,7 @@ export class ImageTracer {
 
     if (useSmoothing) {
       return {
-        pathData: this.contoursToSVGPaper(
-          finalContours,
-          simplifyTolerance,
-        ),
+        pathData: this.contoursToSVGPaper(finalContours, simplifyTolerance),
         baseBounds,
         bounds: globalBounds,
       };
@@ -497,7 +504,13 @@ export class ImageTracer {
     radius: number,
     fillChannels: boolean,
   ): Uint8Array {
-    let closed = circularMorphology(sourceMask, width, height, radius, "closing");
+    let closed = circularMorphology(
+      sourceMask,
+      width,
+      height,
+      radius,
+      "closing",
+    );
     if (fillChannels) {
       closed = fillHoles(closed, width, height);
     }
@@ -558,7 +571,10 @@ export class ImageTracer {
     let highResult = evaluate(high);
     while (high < normalizedMax && highResult.selectedCount > 1) {
       low = high;
-      high = Math.min(normalizedMax, Math.max(high + 1, Math.floor(high * 1.6)));
+      high = Math.min(
+        normalizedMax,
+        Math.max(high + 1, Math.floor(high * 1.6)),
+      );
       highResult = evaluate(high);
     }
 
