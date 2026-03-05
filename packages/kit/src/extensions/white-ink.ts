@@ -56,6 +56,16 @@ interface ImageSnapshot {
   height: number;
 }
 
+interface ImagePlacementState {
+  id: string;
+  sourceUrl: string;
+  committedUrl: string;
+  left: number;
+  top: number;
+  scale: number;
+  angle: number;
+}
+
 interface RenderSources {
   whiteSrc: string;
   coverSrc: string;
@@ -797,6 +807,116 @@ export class WhiteInkTool implements Extension {
     };
   }
 
+  private getImagePlacementState(id?: string): ImagePlacementState | null {
+    const rawItems = this.getConfig<any[]>("image.items", []);
+    if (!Array.isArray(rawItems) || rawItems.length === 0) return null;
+
+    const matched =
+      (id
+        ? rawItems.find(
+            (item: any) =>
+              item &&
+              typeof item === "object" &&
+              typeof item.id === "string" &&
+              item.id === id,
+          )
+        : undefined) || rawItems[0];
+
+    if (!matched || typeof matched !== "object") return null;
+
+    const sourceUrl =
+      typeof matched.sourceUrl === "string" && matched.sourceUrl.length > 0
+        ? matched.sourceUrl
+        : typeof matched.url === "string"
+          ? matched.url
+          : "";
+    const committedUrl =
+      typeof matched.committedUrl === "string" ? matched.committedUrl : "";
+
+    return {
+      id:
+        typeof matched.id === "string" && matched.id.length > 0
+          ? matched.id
+          : id || "image",
+      sourceUrl,
+      committedUrl,
+      left: Number.isFinite(matched.left) ? Number(matched.left) : 0.5,
+      top: Number.isFinite(matched.top) ? Number(matched.top) : 0.5,
+      scale: Number.isFinite(matched.scale) ? Math.max(0.05, matched.scale) : 1,
+      angle: Number.isFinite(matched.angle) ? matched.angle : 0,
+    };
+  }
+
+  private shouldRestoreSnapshotToSource(
+    snapshot: ImageSnapshot,
+    placement: ImagePlacementState,
+  ): boolean {
+    if (!placement.sourceUrl || !placement.committedUrl) return false;
+    if (placement.sourceUrl === placement.committedUrl) return false;
+    return snapshot.src === placement.committedUrl;
+  }
+
+  private getCoverScale(frame: FrameRect, source: SourceSize): number {
+    const frameW = Math.max(1, frame.width);
+    const frameH = Math.max(1, frame.height);
+    const sourceW = Math.max(1, source.width);
+    const sourceH = Math.max(1, source.height);
+    return Math.max(frameW / sourceW, frameH / sourceH);
+  }
+
+  private async ensureSourceSize(sourceUrl: string): Promise<SourceSize | null> {
+    if (!sourceUrl) return null;
+    const cached = this.getSourceSize(sourceUrl);
+    if (cached) return cached;
+
+    try {
+      const image = await this.loadImageElement(sourceUrl);
+      const size = this.getElementSize(image);
+      if (!size) return null;
+      this.rememberSourceSize(sourceUrl, size);
+      return {
+        width: size.width,
+        height: size.height,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveAlignedImageSnapshot(
+    snapshot: ImageSnapshot,
+  ): Promise<ImageSnapshot> {
+    const placement = this.getImagePlacementState(snapshot.id);
+    if (!placement) return snapshot;
+    if (!this.shouldRestoreSnapshotToSource(snapshot, placement)) {
+      return snapshot;
+    }
+
+    const frame = this.getFrameRect();
+    if (frame.width <= 0 || frame.height <= 0) {
+      return snapshot;
+    }
+
+    const sourceSize = await this.ensureSourceSize(placement.sourceUrl);
+    if (!sourceSize) return snapshot;
+
+    const coverScale = this.getCoverScale(frame, sourceSize);
+
+    return {
+      ...snapshot,
+      src: placement.sourceUrl,
+      element: undefined,
+      left: frame.left + placement.left * frame.width,
+      top: frame.top + placement.top * frame.height,
+      scaleX: coverScale * placement.scale,
+      scaleY: coverScale * placement.scale,
+      angle: placement.angle,
+      originX: "center",
+      originY: "center",
+      width: sourceSize.width,
+      height: sourceSize.height,
+    };
+  }
   private getImageElementFromObject(obj: any): any {
     if (!obj) return null;
     if (typeof obj.getElement === "function") {
@@ -1238,10 +1358,12 @@ export class WhiteInkTool implements Extension {
     let coverSpecs: RenderObjectSpec[] = [];
 
     if (previewActive) {
-      const snapshot = this.getImageSnapshot(this.getPrimaryImageObject());
+      const baseSnapshot = this.getImageSnapshot(this.getPrimaryImageObject());
       const item = this.getEffectiveWhiteInkItem(this.resolveRenderItems());
 
-      if (snapshot && item) {
+      if (baseSnapshot && item) {
+        const snapshot = await this.resolveAlignedImageSnapshot(baseSnapshot);
+        if (seq !== this.renderSeq) return;
         const sources = await this.resolveRenderSources(snapshot, item);
         if (seq !== this.renderSeq) return;
 
@@ -1400,3 +1522,4 @@ export class WhiteInkTool implements Extension {
     });
   }
 }
+
