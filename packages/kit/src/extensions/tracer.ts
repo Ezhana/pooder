@@ -35,21 +35,6 @@ interface ForceConnectResult {
   selectedContourCount: number;
 }
 
-interface TraceMorphologyPlan {
-  maskMode: MaskMode;
-  whiteThreshold: number;
-  alphaOpaqueCutoff: number;
-  fillHoles: boolean;
-  preprocessDilateRadius: number;
-  preprocessErodeRadius: number;
-  smoothDilateRadius: number;
-  smoothErodeRadius: number;
-  connectEnabled: boolean;
-  connectStartDilateRadius: number;
-  connectMaxDilateRadius: number;
-  connectErodeRatio: number;
-}
-
 export interface ImageTraceOptions {
   threshold?: number;
   simplifyTolerance?: number;
@@ -81,6 +66,15 @@ export class ImageTracer {
     const img = await this.loadImage(imageUrl);
     const width = img.width;
     const height = img.height;
+    if (width <= 0 || height <= 0) {
+      const w = options.scaleToWidth ?? 0;
+      const h = options.scaleToHeight ?? 0;
+      return {
+        pathData: `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`,
+        baseBounds: { x: 0, y: 0, width: w, height: h },
+        bounds: { x: 0, y: 0, width: w, height: h },
+      };
+    }
     const debug = options.debug === true;
     const debugLog = (message: string, payload?: Record<string, unknown>) => {
       if (!debug) return;
@@ -91,7 +85,7 @@ export class ImageTracer {
       console.info(`[ImageTracer] ${message}`);
     };
 
-    // 1. Draw to canvas and get pixel data
+    // Draw to canvas and get pixel data
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -101,14 +95,39 @@ export class ImageTracer {
     ctx.drawImage(img, 0, 0);
     const imageData = ctx.getImageData(0, 0, width, height);
 
-    // 2. Strategy: fixed internal morphology + single-component target.
+    // Strategy: fixed internal morphology + single-component target.
     const threshold = options.threshold ?? 10;
     const expand = Math.max(0, Math.floor(options.expand ?? 0));
     const simplifyTolerance = options.simplifyTolerance ?? 2.5;
     const useSmoothing = options.smoothing !== false;
     const componentMode: ComponentMode = "all";
     const minComponentArea = 0;
-    const plan = this.buildMorphologyPlan(Math.max(width, height), expand);
+    const maxDim = Math.max(width, height);
+    const maskMode: MaskMode = "auto";
+    const whiteThreshold = 240;
+    const alphaOpaqueCutoff = 250;
+    const preprocessDilateRadius = Math.max(
+      2,
+      Math.floor(Math.max(maxDim * 0.012, expand * 0.35)),
+    );
+    const preprocessErodeRadius = Math.max(
+      1,
+      Math.floor(preprocessDilateRadius * 0.65),
+    );
+    const smoothDilateRadius = Math.max(
+      1,
+      Math.floor(preprocessDilateRadius * 0.25),
+    );
+    const smoothErodeRadius = Math.max(1, Math.floor(smoothDilateRadius * 0.8));
+    const connectStartDilateRadius = Math.max(
+      1,
+      Math.floor(Math.max(maxDim * 0.006, expand * 0.2)),
+    );
+    const connectMaxDilateRadius = Math.max(
+      connectStartDilateRadius,
+      Math.floor(Math.max(maxDim * 0.2, expand * 2.5)),
+    );
+    const connectErodeRatio = 0.65;
 
     debugLog("traceWithBounds:start", {
       width,
@@ -117,15 +136,28 @@ export class ImageTracer {
       expand,
       simplifyTolerance,
       smoothing: useSmoothing,
-      strategy: plan,
+      strategy: {
+        maskMode,
+        whiteThreshold,
+        alphaOpaqueCutoff,
+        fillHoles: true,
+        preprocessDilateRadius,
+        preprocessErodeRadius,
+        smoothDilateRadius,
+        smoothErodeRadius,
+        connectEnabled: true,
+        connectStartDilateRadius,
+        connectMaxDilateRadius,
+        connectErodeRatio,
+      },
     });
 
     // Padding must cover morphology and expansion margins.
     const padding =
       Math.max(
-        plan.preprocessDilateRadius,
-        plan.smoothDilateRadius,
-        plan.connectMaxDilateRadius,
+        preprocessDilateRadius,
+        smoothDilateRadius,
+        connectMaxDilateRadius,
         expand,
       ) + 2;
     const paddedWidth = width + padding * 2;
@@ -148,9 +180,9 @@ export class ImageTracer {
       padding,
       paddedWidth,
       paddedHeight,
-      maskMode: plan.maskMode,
-      whiteThreshold: plan.whiteThreshold,
-      alphaOpaqueCutoff: plan.alphaOpaqueCutoff,
+      maskMode,
+      whiteThreshold,
+      alphaOpaqueCutoff,
     });
     if (debug) {
       debugLog(
@@ -159,51 +191,69 @@ export class ImageTracer {
       );
     }
 
-    mask = this.applyDilationErosionStage(
+    mask = circularMorphology(
       mask,
       paddedWidth,
       paddedHeight,
-      plan.preprocessDilateRadius,
-      plan.preprocessErodeRadius,
-      plan.fillHoles,
+      preprocessDilateRadius,
+      "dilate",
     );
+    mask = fillHoles(mask, paddedWidth, paddedHeight);
+    mask = circularMorphology(
+      mask,
+      paddedWidth,
+      paddedHeight,
+      preprocessErodeRadius,
+      "erode",
+    );
+    mask = fillHoles(mask, paddedWidth, paddedHeight);
     if (debug) {
       debugLog("traceWithBounds:mask:after-preprocess", {
-        dilateRadius: plan.preprocessDilateRadius,
-        erodeRadius: plan.preprocessErodeRadius,
+        dilateRadius: preprocessDilateRadius,
+        erodeRadius: preprocessErodeRadius,
         ...summarizeMaskContours(mask),
       });
     }
 
-    if (plan.smoothDilateRadius > 0 || plan.smoothErodeRadius > 0) {
-      mask = this.applyDilationErosionStage(
-        mask,
-        paddedWidth,
-        paddedHeight,
-        plan.smoothDilateRadius,
-        plan.smoothErodeRadius,
-        plan.fillHoles,
-      );
-      if (debug) {
-        debugLog("traceWithBounds:mask:after-smooth", {
-          dilateRadius: plan.smoothDilateRadius,
-          erodeRadius: plan.smoothErodeRadius,
-          ...summarizeMaskContours(mask),
-        });
-      }
+    mask = circularMorphology(
+      mask,
+      paddedWidth,
+      paddedHeight,
+      smoothDilateRadius,
+      "dilate",
+    );
+    mask = fillHoles(mask, paddedWidth, paddedHeight);
+    mask = circularMorphology(
+      mask,
+      paddedWidth,
+      paddedHeight,
+      smoothErodeRadius,
+      "erode",
+    );
+    mask = fillHoles(mask, paddedWidth, paddedHeight);
+    if (debug) {
+      debugLog("traceWithBounds:mask:after-smooth", {
+        dilateRadius: smoothDilateRadius,
+        erodeRadius: smoothErodeRadius,
+        ...summarizeMaskContours(mask),
+      });
     }
 
     const beforeConnectSummary = summarizeMaskContours(mask);
-    if (plan.connectEnabled && beforeConnectSummary.selectedContourCount > 1) {
+    if (beforeConnectSummary.selectedContourCount <= 1) {
+      debugLog("traceWithBounds:mask:connect-skipped", {
+        reason: "already-single-component",
+        before: beforeConnectSummary,
+      });
+    } else {
       const connectResult = this.findForceConnectResult(
         mask,
         paddedWidth,
         paddedHeight,
         minComponentArea,
-        plan.fillHoles,
-        plan.connectStartDilateRadius,
-        plan.connectMaxDilateRadius,
-        plan.connectErodeRatio,
+        connectStartDilateRadius,
+        connectMaxDilateRadius,
+        connectErodeRatio,
       );
       if (debug) {
         debugLog("traceWithBounds:mask:after-connect", {
@@ -218,17 +268,9 @@ export class ImageTracer {
         });
       }
       mask = connectResult.mask;
-    } else if (debug) {
-      const reason = !plan.connectEnabled
-        ? "connect-disabled"
-        : "already-single-component";
-      debugLog("traceWithBounds:mask:connect-skipped", {
-        reason,
-        before: beforeConnectSummary,
-      });
     }
 
-    if (debug && plan.fillHoles) {
+    if (debug) {
       const afterConnectSummary = summarizeMaskContours(mask);
       if (afterConnectSummary.selectedContourCount > 1) {
         debugLog("traceWithBounds:mask:connect-warning", {
@@ -354,7 +396,7 @@ export class ImageTracer {
       this.flattenContours(expandedUnpaddedContours),
     );
 
-    // 9. Post-processing (Scale)
+    // Post-processing (Scale)
     let finalContours = expandedUnpaddedContours;
     if (options.scaleToWidth && options.scaleToHeight) {
       finalContours = this.scaleContours(
@@ -376,7 +418,7 @@ export class ImageTracer {
       );
     }
 
-    // 10. Simplify and Generate SVG
+    // Simplify and Generate SVG
     debugLog("traceWithBounds:contours", {
       baseContourCount: baseContoursRaw.length,
       baseSelectedCount: baseContours.length,
@@ -474,72 +516,6 @@ export class ImageTracer {
     return selected;
   }
 
-  private static buildMorphologyPlan(
-    maxDim: number,
-    expand: number,
-  ): TraceMorphologyPlan {
-    const preprocessDilateRadius = Math.max(
-      2,
-      Math.floor(Math.max(maxDim * 0.012, expand * 0.35)),
-    );
-    const preprocessErodeRadius = Math.max(
-      1,
-      Math.floor(preprocessDilateRadius * 0.65),
-    );
-    const smoothDilateRadius = Math.max(
-      1,
-      Math.floor(preprocessDilateRadius * 0.25),
-    );
-    const smoothErodeRadius = Math.max(1, Math.floor(smoothDilateRadius * 0.8));
-    const connectStartDilateRadius = Math.max(
-      1,
-      Math.floor(Math.max(maxDim * 0.006, expand * 0.2)),
-    );
-    const connectMaxDilateRadius = Math.max(
-      connectStartDilateRadius,
-      Math.floor(Math.max(maxDim * 0.2, expand * 2.5)),
-    );
-
-    return {
-      maskMode: "auto",
-      whiteThreshold: 240,
-      alphaOpaqueCutoff: 250,
-      fillHoles: true,
-      preprocessDilateRadius,
-      preprocessErodeRadius,
-      smoothDilateRadius,
-      smoothErodeRadius,
-      connectEnabled: true,
-      connectStartDilateRadius,
-      connectMaxDilateRadius,
-      connectErodeRatio: 0.65,
-    };
-  }
-
-  private static applyDilationErosionStage(
-    sourceMask: Uint8Array,
-    width: number,
-    height: number,
-    dilateRadius: number,
-    erodeRadius: number,
-    fillChannels: boolean,
-  ): Uint8Array {
-    let next = sourceMask;
-    if (dilateRadius > 0) {
-      next = circularMorphology(next, width, height, dilateRadius, "dilate");
-    }
-    if (fillChannels) {
-      next = fillHoles(next, width, height);
-    }
-    if (erodeRadius > 0) {
-      next = circularMorphology(next, width, height, erodeRadius, "erode");
-    }
-    if (fillChannels) {
-      next = fillHoles(next, width, height);
-    }
-    return next;
-  }
-
   private static summarizeAllContours(
     mask: Uint8Array,
     width: number,
@@ -559,7 +535,6 @@ export class ImageTracer {
     width: number,
     height: number,
     minComponentArea: number,
-    fillChannels: boolean,
     startDilateRadius: number,
     maxDilateRadius: number,
     erodeRatio: number,
@@ -592,14 +567,11 @@ export class ImageTracer {
         1,
         Math.floor(dilateRadius * normalizedErodeRatio),
       );
-      const mask = this.applyDilationErosionStage(
-        sourceMask,
-        width,
-        height,
-        dilateRadius,
-        erodeRadius,
-        fillChannels,
-      );
+      let mask = sourceMask;
+      mask = circularMorphology(mask, width, height, dilateRadius, "dilate");
+      mask = fillHoles(mask, width, height);
+      mask = circularMorphology(mask, width, height, erodeRadius, "erode");
+      mask = fillHoles(mask, width, height);
       const summary = this.summarizeAllContours(
         mask,
         width,
