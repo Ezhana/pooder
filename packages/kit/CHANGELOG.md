@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 5.3.0
+
+### Minor Changes
+
+- refactor tracer and white ink bugfix
+
 ## 5.2.0
 
 ### Minor Changes
