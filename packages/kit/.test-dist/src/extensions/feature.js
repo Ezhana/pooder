@@ -1,0 +1,825 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.FeatureTool = void 0;
+const core_1 = require("@pooder/core");
+const fabric_1 = require("fabric");
+const geometry_1 = require("./geometry");
+const constraints_1 = require("./constraints");
+const featureComplete_1 = require("./featureComplete");
+const sceneLayoutModel_1 = require("./sceneLayoutModel");
+class FeatureTool {
+    constructor(options) {
+        this.id = "pooder.kit.feature";
+        this.metadata = {
+            name: "FeatureTool",
+        };
+        this.workingFeatures = [];
+        this.isUpdatingConfig = false;
+        this.isToolActive = false;
+        this.isFeatureSessionActive = false;
+        this.sessionOriginalFeatures = null;
+        this.hasWorkingChanges = false;
+        this.handleMoving = null;
+        this.handleModified = null;
+        this.handleSceneGeometryChange = null;
+        this.currentGeometry = null;
+        this.onToolActivated = (event) => {
+            this.isToolActive = event.id === this.id;
+            if (!this.isToolActive) {
+                this.restoreSessionFeaturesToConfig();
+            }
+            this.updateVisibility();
+        };
+        if (options) {
+            Object.assign(this, options);
+        }
+    }
+    activate(context) {
+        this.context = context;
+        this.canvasService = context.services.get("CanvasService");
+        if (!this.canvasService) {
+            console.warn("CanvasService not found for FeatureTool");
+            return;
+        }
+        const configService = context.services.get("ConfigurationService");
+        if (configService) {
+            const features = (configService.get("dieline.features", []) ||
+                []);
+            this.workingFeatures = this.cloneFeatures(features);
+            this.hasWorkingChanges = false;
+            configService.onAnyChange((e) => {
+                if (this.isUpdatingConfig)
+                    return;
+                if (e.key === "dieline.features") {
+                    if (this.isFeatureSessionActive)
+                        return;
+                    const next = (e.value || []);
+                    this.workingFeatures = this.cloneFeatures(next);
+                    this.hasWorkingChanges = false;
+                    this.redraw();
+                    this.emitWorkingChange();
+                }
+            });
+        }
+        const toolSessionService = context.services.get("ToolSessionService");
+        this.dirtyTrackerDisposable = toolSessionService?.registerDirtyTracker(this.id, () => this.hasWorkingChanges);
+        // Listen to tool activation
+        context.eventBus.on("tool:activated", this.onToolActivated);
+        this.setup();
+    }
+    deactivate(context) {
+        context.eventBus.off("tool:activated", this.onToolActivated);
+        this.restoreSessionFeaturesToConfig();
+        this.dirtyTrackerDisposable?.dispose();
+        this.dirtyTrackerDisposable = undefined;
+        this.teardown();
+        this.canvasService = undefined;
+        this.context = undefined;
+    }
+    updateVisibility() {
+        if (!this.canvasService)
+            return;
+        const canvas = this.canvasService.canvas;
+        const markers = canvas
+            .getObjects()
+            .filter((obj) => obj.data?.type === "feature-marker");
+        markers.forEach((marker) => {
+            // If tool active, allow selection. If not, disable selection.
+            // Also might want to hide them entirely or just disable interaction.
+            // Assuming we only want to see/edit holes when tool is active.
+            marker.set({
+                visible: this.isToolActive, // Or just selectable: false if we want them visible but locked
+                selectable: this.isToolActive,
+                evented: this.isToolActive,
+            });
+        });
+        canvas.requestRenderAll();
+    }
+    contribute() {
+        return {
+            [core_1.ContributionPointIds.TOOLS]: [
+                {
+                    id: this.id,
+                    name: "Feature",
+                    interaction: "session",
+                    commands: {
+                        begin: "beginFeatureSession",
+                        commit: "completeFeatures",
+                        rollback: "rollbackFeatureSession",
+                    },
+                    session: {
+                        autoBegin: false,
+                        leavePolicy: "block",
+                    },
+                },
+            ],
+            [core_1.ContributionPointIds.COMMANDS]: [
+                {
+                    command: "beginFeatureSession",
+                    title: "Begin Feature Session",
+                    handler: async () => {
+                        if (this.isFeatureSessionActive) {
+                            return { ok: true };
+                        }
+                        const original = this.getCommittedFeatures();
+                        this.sessionOriginalFeatures = this.cloneFeatures(original);
+                        this.isFeatureSessionActive = true;
+                        await this.refreshGeometry();
+                        this.setWorkingFeatures(this.cloneFeatures(original));
+                        this.hasWorkingChanges = false;
+                        this.redraw();
+                        this.emitWorkingChange();
+                        this.updateCommittedFeatures([]);
+                        return { ok: true };
+                    },
+                },
+                {
+                    command: "addFeature",
+                    title: "Add Edge Feature",
+                    handler: (type = "subtract") => {
+                        return this.addFeature(type);
+                    },
+                },
+                {
+                    command: "addHole",
+                    title: "Add Hole",
+                    handler: () => {
+                        return this.addFeature("subtract");
+                    },
+                },
+                {
+                    command: "addDoubleLayerHole",
+                    title: "Add Double Layer Hole",
+                    handler: () => {
+                        return this.addDoubleLayerHole();
+                    },
+                },
+                {
+                    command: "clearFeatures",
+                    title: "Clear Features",
+                    handler: () => {
+                        this.setWorkingFeatures([]);
+                        this.hasWorkingChanges = true;
+                        this.redraw();
+                        this.emitWorkingChange();
+                        return true;
+                    },
+                },
+                {
+                    command: "getWorkingFeatures",
+                    title: "Get Working Features",
+                    handler: () => {
+                        return this.cloneFeatures(this.workingFeatures);
+                    },
+                },
+                {
+                    command: "setWorkingFeatures",
+                    title: "Set Working Features",
+                    handler: async (features) => {
+                        await this.refreshGeometry();
+                        this.setWorkingFeatures(this.cloneFeatures(features || []));
+                        this.hasWorkingChanges = true;
+                        this.redraw();
+                        this.emitWorkingChange();
+                        return { ok: true };
+                    },
+                },
+                {
+                    command: "rollbackFeatureSession",
+                    title: "Rollback Feature Session",
+                    handler: async () => {
+                        const original = this.cloneFeatures(this.sessionOriginalFeatures || this.getCommittedFeatures());
+                        await this.refreshGeometry();
+                        this.setWorkingFeatures(original);
+                        this.hasWorkingChanges = false;
+                        this.redraw();
+                        this.emitWorkingChange();
+                        this.updateCommittedFeatures(original);
+                        this.clearFeatureSessionState();
+                        return { ok: true };
+                    },
+                },
+                {
+                    command: "resetWorkingFeatures",
+                    title: "Reset Working Features",
+                    handler: async () => {
+                        await this.resetWorkingFeaturesFromSource();
+                        return { ok: true };
+                    },
+                },
+                {
+                    command: "updateWorkingGroupPosition",
+                    title: "Update Working Group Position",
+                    handler: (groupId, x, y) => {
+                        return this.updateWorkingGroupPosition(groupId, x, y);
+                    },
+                },
+                {
+                    command: "completeFeatures",
+                    title: "Complete Features",
+                    handler: () => {
+                        return this.completeFeatures();
+                    },
+                },
+            ],
+        };
+    }
+    cloneFeatures(features) {
+        return JSON.parse(JSON.stringify(features || []));
+    }
+    getConfigService() {
+        return this.context?.services.get("ConfigurationService");
+    }
+    getCommittedFeatures() {
+        const configService = this.getConfigService();
+        const committed = (configService?.get("dieline.features", []) ||
+            []);
+        return this.cloneFeatures(committed);
+    }
+    updateCommittedFeatures(next) {
+        const configService = this.getConfigService();
+        if (!configService)
+            return;
+        this.isUpdatingConfig = true;
+        try {
+            configService.update("dieline.features", next);
+        }
+        finally {
+            this.isUpdatingConfig = false;
+        }
+    }
+    clearFeatureSessionState() {
+        this.isFeatureSessionActive = false;
+        this.sessionOriginalFeatures = null;
+    }
+    restoreSessionFeaturesToConfig() {
+        if (!this.isFeatureSessionActive)
+            return;
+        const original = this.cloneFeatures(this.sessionOriginalFeatures || this.getCommittedFeatures());
+        this.updateCommittedFeatures(original);
+        this.clearFeatureSessionState();
+    }
+    emitWorkingChange() {
+        this.context?.eventBus.emit("feature:working:change", {
+            features: this.cloneFeatures(this.workingFeatures),
+        });
+    }
+    async refreshGeometry() {
+        if (!this.context)
+            return;
+        const commandService = this.context.services.get("CommandService");
+        if (!commandService)
+            return;
+        try {
+            const g = await Promise.resolve(commandService.executeCommand("getSceneGeometry"));
+            if (g)
+                this.currentGeometry = g;
+        }
+        catch (e) { }
+    }
+    async resetWorkingFeaturesFromSource() {
+        const next = this.cloneFeatures(this.isFeatureSessionActive && this.sessionOriginalFeatures
+            ? this.sessionOriginalFeatures
+            : this.getCommittedFeatures());
+        await this.refreshGeometry();
+        this.setWorkingFeatures(next);
+        this.hasWorkingChanges = false;
+        this.redraw();
+        this.emitWorkingChange();
+    }
+    setWorkingFeatures(next) {
+        this.workingFeatures = next;
+    }
+    updateWorkingGroupPosition(groupId, x, y) {
+        if (!groupId)
+            return { ok: false };
+        const configService = this.context?.services.get("ConfigurationService");
+        if (!configService)
+            return { ok: false };
+        const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
+        const dielineWidth = sizeState.actualWidthMm;
+        const dielineHeight = sizeState.actualHeightMm;
+        let changed = false;
+        const next = this.workingFeatures.map((f) => {
+            if (f.groupId !== groupId)
+                return f;
+            let nx = x;
+            let ny = y;
+            if (f.constraints && dielineWidth > 0 && dielineHeight > 0) {
+                const constrained = constraints_1.ConstraintRegistry.apply(nx, ny, f, {
+                    dielineWidth,
+                    dielineHeight,
+                });
+                nx = constrained.x;
+                ny = constrained.y;
+            }
+            if (f.x !== nx || f.y !== ny) {
+                changed = true;
+                return { ...f, x: nx, y: ny };
+            }
+            return f;
+        });
+        if (!changed)
+            return { ok: true };
+        this.setWorkingFeatures(next);
+        this.hasWorkingChanges = true;
+        this.redraw();
+        this.enforceConstraints();
+        this.emitWorkingChange();
+        return { ok: true };
+    }
+    completeFeatures() {
+        const configService = this.context?.services.get("ConfigurationService");
+        if (!configService) {
+            return {
+                ok: false,
+                issues: [
+                    { featureId: "unknown", reason: "ConfigurationService not found" },
+                ],
+            };
+        }
+        const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
+        const dielineWidth = sizeState.actualWidthMm;
+        const dielineHeight = sizeState.actualHeightMm;
+        const result = (0, featureComplete_1.completeFeaturesStrict)(this.workingFeatures, { dielineWidth, dielineHeight }, (next) => {
+            this.updateCommittedFeatures(next);
+            this.workingFeatures = this.cloneFeatures(next);
+            this.emitWorkingChange();
+        });
+        if (!result.ok) {
+            return {
+                ok: false,
+                issues: result.issues,
+            };
+        }
+        this.hasWorkingChanges = false;
+        this.clearFeatureSessionState();
+        // Keep feature markers above dieline overlay after config-driven redraw.
+        this.redraw();
+        return { ok: true };
+    }
+    addFeature(type) {
+        if (!this.canvasService)
+            return false;
+        // Default to top edge center
+        const newFeature = {
+            id: Date.now().toString(),
+            operation: type,
+            shape: "rect",
+            x: 0.5,
+            y: 0, // Top edge
+            width: 10,
+            height: 10,
+            rotation: 0,
+            renderBehavior: "edge",
+            // Default constraint: path (snap to edge)
+            constraints: [{ type: "path" }],
+        };
+        this.setWorkingFeatures([...(this.workingFeatures || []), newFeature]);
+        this.hasWorkingChanges = true;
+        this.redraw();
+        this.emitWorkingChange();
+        return true;
+    }
+    addDoubleLayerHole() {
+        if (!this.canvasService)
+            return false;
+        const groupId = Date.now().toString();
+        const timestamp = Date.now();
+        // 1. Lug (Outer) - Add
+        const lug = {
+            id: `${timestamp}-lug`,
+            groupId,
+            operation: "add",
+            shape: "circle",
+            x: 0.5,
+            y: 0,
+            radius: 20,
+            rotation: 0,
+            renderBehavior: "edge",
+            constraints: [{ type: "path" }],
+        };
+        // 2. Hole (Inner) - Subtract
+        const hole = {
+            id: `${timestamp}-hole`,
+            groupId,
+            operation: "subtract",
+            shape: "circle",
+            x: 0.5,
+            y: 0,
+            radius: 15,
+            rotation: 0,
+            renderBehavior: "edge",
+            constraints: [{ type: "path" }],
+        };
+        this.setWorkingFeatures([...(this.workingFeatures || []), lug, hole]);
+        this.hasWorkingChanges = true;
+        this.redraw();
+        this.emitWorkingChange();
+        return true;
+    }
+    getGeometryForFeature(geometry, feature) {
+        // Legacy support or specialized scaling can go here if needed
+        // Currently all features operate on the base geometry (or scaled version of it)
+        return geometry;
+    }
+    setup() {
+        if (!this.canvasService || !this.context)
+            return;
+        const canvas = this.canvasService.canvas;
+        // 1. Listen for Scene Geometry Changes
+        if (!this.handleSceneGeometryChange) {
+            this.handleSceneGeometryChange = (geometry) => {
+                this.currentGeometry = geometry;
+                this.redraw();
+                this.enforceConstraints();
+            };
+            this.context.eventBus.on("scene:geometry:change", this.handleSceneGeometryChange);
+        }
+        // 2. Initial Fetch of Geometry
+        const commandService = this.context.services.get("CommandService");
+        if (commandService) {
+            try {
+                Promise.resolve(commandService.executeCommand("getSceneGeometry")).then((g) => {
+                    if (g) {
+                        this.currentGeometry = g;
+                        this.redraw();
+                    }
+                });
+            }
+            catch (e) { }
+        }
+        // 3. Setup Canvas Interaction
+        if (!this.handleMoving) {
+            this.handleMoving = (e) => {
+                const target = e.target;
+                if (!target || target.data?.type !== "feature-marker")
+                    return;
+                if (!this.currentGeometry)
+                    return;
+                // Determine feature to use for snapping context
+                let feature;
+                if (target.data?.isGroup) {
+                    const indices = target.data?.indices;
+                    if (indices && indices.length > 0) {
+                        feature = this.workingFeatures[indices[0]];
+                    }
+                }
+                else {
+                    const index = target.data?.index;
+                    if (index !== undefined) {
+                        feature = this.workingFeatures[index];
+                    }
+                }
+                const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+                // Snap to edge during move
+                // For Group, target.left/top is group center (or top-left depending on origin)
+                // We snap the target position itself.
+                const p = new fabric_1.Point(target.left, target.top);
+                // Calculate limit based on target size (min dimension / 2 ensures overlap)
+                // Also subtract stroke width to ensure visual overlap (not just tangent)
+                // target.strokeWidth for group is usually 0, need a safe default (e.g. 2 for markers)
+                const markerStrokeWidth = (target.strokeWidth || 2) * (target.scaleX || 1);
+                const minDim = Math.min(target.getScaledWidth(), target.getScaledHeight());
+                const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
+                const snapped = this.constrainPosition(p, geometry, limit, feature);
+                target.set({
+                    left: snapped.x,
+                    top: snapped.y,
+                });
+            };
+            canvas.on("object:moving", this.handleMoving);
+        }
+        if (!this.handleModified) {
+            this.handleModified = (e) => {
+                const target = e.target;
+                if (!target || target.data?.type !== "feature-marker")
+                    return;
+                if (target.data?.isGroup) {
+                    // It's a Group object
+                    const groupObj = target;
+                    // @ts-ignore
+                    const indices = groupObj.data?.indices;
+                    if (!indices)
+                        return;
+                    // We need to update all features in the group based on their new absolute positions.
+                    // Fabric Group children positions are relative to group center.
+                    // We need to calculate absolute position for each child.
+                    // Note: groupObj has already been moved to new position (target.left, target.top)
+                    const groupCenter = new fabric_1.Point(groupObj.left, groupObj.top);
+                    // Get group matrix to transform children
+                    // Simplified: just add relative coordinates if no rotation/scaling on group
+                    // We locked rotation/scaling, so it's safe.
+                    const newFeatures = [...this.workingFeatures];
+                    const { x, y } = this.currentGeometry; // Center is same
+                    // Fabric Group objects have .getObjects() which returns children
+                    // But children inside group have coordinates relative to group center.
+                    // center is (0,0) inside the group local coordinate system.
+                    groupObj.getObjects().forEach((child, i) => {
+                        const originalIndex = indices[i];
+                        const feature = this.workingFeatures[originalIndex];
+                        const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+                        const { width, height } = geometry;
+                        const layoutLeft = x - width / 2;
+                        const layoutTop = y - height / 2;
+                        // Calculate absolute position
+                        // child.left/top are relative to group center
+                        const absX = groupCenter.x + (child.left || 0);
+                        const absY = groupCenter.y + (child.top || 0);
+                        // Normalize
+                        const normalizedX = width > 0 ? (absX - layoutLeft) / width : 0.5;
+                        const normalizedY = height > 0 ? (absY - layoutTop) / height : 0.5;
+                        newFeatures[originalIndex] = {
+                            ...newFeatures[originalIndex],
+                            x: normalizedX,
+                            y: normalizedY,
+                        };
+                    });
+                    this.setWorkingFeatures(newFeatures);
+                    this.hasWorkingChanges = true;
+                    this.emitWorkingChange();
+                }
+                else {
+                    // Single object
+                    this.syncFeatureFromCanvas(target);
+                }
+            };
+            canvas.on("object:modified", this.handleModified);
+        }
+    }
+    teardown() {
+        if (!this.canvasService)
+            return;
+        const canvas = this.canvasService.canvas;
+        if (this.handleMoving) {
+            canvas.off("object:moving", this.handleMoving);
+            this.handleMoving = null;
+        }
+        if (this.handleModified) {
+            canvas.off("object:modified", this.handleModified);
+            this.handleModified = null;
+        }
+        if (this.handleSceneGeometryChange && this.context) {
+            this.context.eventBus.off("scene:geometry:change", this.handleSceneGeometryChange);
+            this.handleSceneGeometryChange = null;
+        }
+        const objects = canvas
+            .getObjects()
+            .filter((obj) => obj.data?.type === "feature-marker");
+        objects.forEach((obj) => canvas.remove(obj));
+        this.canvasService.requestRenderAll();
+    }
+    constrainPosition(p, geometry, limit, feature) {
+        if (!feature) {
+            return { x: p.x, y: p.y };
+        }
+        const minX = geometry.x - geometry.width / 2;
+        const minY = geometry.y - geometry.height / 2;
+        // Normalize
+        const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
+        const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
+        const scale = geometry.scale || 1;
+        const dielineWidth = geometry.width / scale;
+        const dielineHeight = geometry.height / scale;
+        // Filter constraints: only apply those that are NOT validateOnly
+        const activeConstraints = feature.constraints?.filter((c) => !c.validateOnly);
+        const constrained = constraints_1.ConstraintRegistry.apply(nx, ny, feature, {
+            dielineWidth,
+            dielineHeight,
+            geometry,
+        }, activeConstraints);
+        // Denormalize
+        return {
+            x: minX + constrained.x * geometry.width,
+            y: minY + constrained.y * geometry.height,
+        };
+    }
+    syncFeatureFromCanvas(target) {
+        if (!this.currentGeometry || !this.context)
+            return;
+        const index = target.data?.index;
+        if (index === undefined ||
+            index < 0 ||
+            index >= this.workingFeatures.length)
+            return;
+        const feature = this.workingFeatures[index];
+        const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+        const { width, height, x, y } = geometry;
+        // Calculate Normalized Position
+        // The geometry x/y is the CENTER.
+        const left = x - width / 2;
+        const top = y - height / 2;
+        const normalizedX = width > 0 ? (target.left - left) / width : 0.5;
+        const normalizedY = height > 0 ? (target.top - top) / height : 0.5;
+        // Update feature
+        const updatedFeature = {
+            ...feature,
+            x: normalizedX,
+            y: normalizedY,
+            // Could also update rotation if we allowed rotating markers
+        };
+        const newFeatures = [...this.workingFeatures];
+        newFeatures[index] = updatedFeature;
+        this.setWorkingFeatures(newFeatures);
+        this.hasWorkingChanges = true;
+        this.emitWorkingChange();
+    }
+    redraw() {
+        if (!this.canvasService || !this.currentGeometry)
+            return;
+        const canvas = this.canvasService.canvas;
+        const geometry = this.currentGeometry;
+        // Remove existing markers
+        const existing = canvas
+            .getObjects()
+            .filter((obj) => obj.data?.type === "feature-marker");
+        existing.forEach((obj) => canvas.remove(obj));
+        if (!this.workingFeatures || this.workingFeatures.length === 0) {
+            this.canvasService.requestRenderAll();
+            return;
+        }
+        const scale = geometry.scale || 1;
+        const finalScale = scale;
+        // Group features by groupId
+        const groups = {};
+        const singles = [];
+        this.workingFeatures.forEach((f, i) => {
+            if (f.groupId) {
+                if (!groups[f.groupId])
+                    groups[f.groupId] = [];
+                groups[f.groupId].push({ feature: f, index: i });
+            }
+            else {
+                singles.push({ feature: f, index: i });
+            }
+        });
+        // Helper to create marker shape
+        const createMarkerShape = (feature, pos) => {
+            const featureScale = scale;
+            const visualWidth = (feature.width || 10) * featureScale;
+            const visualHeight = (feature.height || 10) * featureScale;
+            const visualRadius = (feature.radius || 0) * featureScale;
+            const color = feature.color || (feature.operation === "add" ? "#00FF00" : "#FF0000");
+            const strokeDash = feature.strokeDash ||
+                (feature.operation === "subtract" ? [4, 4] : undefined);
+            let shape;
+            if (feature.shape === "rect") {
+                shape = new fabric_1.Rect({
+                    width: visualWidth,
+                    height: visualHeight,
+                    rx: visualRadius,
+                    ry: visualRadius,
+                    fill: "transparent",
+                    stroke: color,
+                    strokeWidth: 2,
+                    strokeDashArray: strokeDash,
+                    originX: "center",
+                    originY: "center",
+                    left: pos.x,
+                    top: pos.y,
+                });
+            }
+            else {
+                shape = new fabric_1.Circle({
+                    radius: visualRadius || 5 * finalScale,
+                    fill: "transparent",
+                    stroke: color,
+                    strokeWidth: 2,
+                    strokeDashArray: strokeDash,
+                    originX: "center",
+                    originY: "center",
+                    left: pos.x,
+                    top: pos.y,
+                });
+            }
+            if (feature.rotation) {
+                shape.rotate(feature.rotation);
+            }
+            // Handle Indicator for Bridge
+            if (feature.bridge && feature.bridge.type === "vertical") {
+                // Create a visual indicator for the bridge
+                // A dashed rectangle extending upwards
+                const bridgeIndicator = new fabric_1.Rect({
+                    width: visualWidth,
+                    height: 100 * featureScale, // Arbitrary long length to show direction
+                    fill: "transparent",
+                    stroke: "#888",
+                    strokeWidth: 1,
+                    strokeDashArray: [2, 2],
+                    originX: "center",
+                    originY: "bottom", // Anchor at bottom so it extends up
+                    left: pos.x,
+                    top: pos.y - visualHeight / 2, // Start from top of feature
+                    opacity: 0.5,
+                    selectable: false,
+                    evented: false,
+                });
+                // We need to return a group containing both shape and indicator
+                // But createMarkerShape is expected to return one object.
+                // If we return a Group, Fabric handles it.
+                // But the caller might wrap this in another Group if it's part of a feature group.
+                // Fabric supports nested groups.
+                const group = new fabric_1.Group([bridgeIndicator, shape], {
+                    originX: "center",
+                    originY: "center",
+                    left: pos.x,
+                    top: pos.y,
+                });
+                return group;
+            }
+            return shape;
+        };
+        // Render Singles
+        singles.forEach(({ feature, index }) => {
+            const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+            const pos = (0, geometry_1.resolveFeaturePosition)(feature, geometry);
+            const marker = createMarkerShape(feature, pos);
+            marker.set({
+                visible: this.isToolActive,
+                selectable: this.isToolActive,
+                evented: this.isToolActive,
+                hasControls: false,
+                hasBorders: false,
+                hoverCursor: "move",
+                lockRotation: true,
+                lockScalingX: true,
+                lockScalingY: true,
+                data: { type: "feature-marker", index, isGroup: false },
+            });
+            canvas.add(marker);
+            canvas.bringObjectToFront(marker);
+        });
+        // Render Groups
+        Object.keys(groups).forEach((groupId) => {
+            const members = groups[groupId];
+            if (members.length === 0)
+                return;
+            // Calculate group center (average position) to position the group correctly
+            // But Fabric Group uses relative coordinates.
+            // Easiest way: Create shapes at absolute positions, then Group them.
+            // Fabric will auto-calculate group center and adjust children.
+            const shapes = members.map(({ feature }) => {
+                const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+                const pos = (0, geometry_1.resolveFeaturePosition)(feature, geometry);
+                return createMarkerShape(feature, pos);
+            });
+            const groupObj = new fabric_1.Group(shapes, {
+                visible: this.isToolActive,
+                selectable: this.isToolActive,
+                evented: this.isToolActive,
+                hasControls: false,
+                hasBorders: false,
+                hoverCursor: "move",
+                lockRotation: true,
+                lockScalingX: true,
+                lockScalingY: true,
+                subTargetCheck: true, // Allow events to pass through if needed, but we treat as one
+                interactive: false, // Children not interactive
+                // @ts-ignore
+                data: {
+                    type: "feature-marker",
+                    isGroup: true,
+                    groupId,
+                    indices: members.map((m) => m.index),
+                },
+            });
+            canvas.add(groupObj);
+            canvas.bringObjectToFront(groupObj);
+        });
+        this.canvasService.requestRenderAll();
+    }
+    enforceConstraints() {
+        if (!this.canvasService || !this.currentGeometry)
+            return;
+        // Iterate markers and snap them if geometry changed
+        const canvas = this.canvasService.canvas;
+        const markers = canvas
+            .getObjects()
+            .filter((obj) => obj.data?.type === "feature-marker");
+        markers.forEach((marker) => {
+            // Find associated feature
+            let feature;
+            if (marker.data?.isGroup) {
+                const indices = marker.data?.indices;
+                if (indices && indices.length > 0) {
+                    feature = this.workingFeatures[indices[0]];
+                }
+            }
+            else {
+                const index = marker.data?.index;
+                if (index !== undefined) {
+                    feature = this.workingFeatures[index];
+                }
+            }
+            const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+            const markerStrokeWidth = (marker.strokeWidth || 2) * (marker.scaleX || 1);
+            const minDim = Math.min(marker.getScaledWidth(), marker.getScaledHeight());
+            const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
+            const snapped = this.constrainPosition(new fabric_1.Point(marker.left, marker.top), geometry, limit, feature);
+            marker.set({ left: snapped.x, top: snapped.y });
+            marker.setCoords();
+        });
+        canvas.requestRenderAll();
+    }
+}
+exports.FeatureTool = FeatureTool;

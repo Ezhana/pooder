@@ -5,12 +5,9 @@
 
 import paper from "paper";
 import {
-  analyzeAlpha,
   circularMorphology,
   createMask,
   fillHoles,
-  findMinimalConnectRadius,
-  inferMaskMode,
   polygonSignedArea,
   type MaskMode,
 } from "./maskOps";
@@ -29,6 +26,24 @@ interface Bounds {
 
 type ComponentMode = "largest" | "all";
 
+interface ForceConnectResult {
+  mask: Uint8Array;
+  appliedRadius: number;
+  reachedSingleContour: boolean;
+  rawContourCount: number;
+  selectedContourCount: number;
+}
+
+export interface ImageTraceOptions {
+  threshold?: number;
+  simplifyTolerance?: number;
+  expand?: number;
+  smoothing?: boolean;
+  scaleToWidth?: number;
+  scaleToHeight?: number;
+  debug?: boolean;
+}
+
 export class ImageTracer {
   /**
    * Main entry point: Traces an image URL to an SVG path string.
@@ -37,25 +52,7 @@ export class ImageTracer {
    */
   public static async trace(
     imageUrl: string,
-    options: {
-      threshold?: number; // 0-255, default 10
-      simplifyTolerance?: number; // default 2.5
-      scale?: number; // Scale factor for the processing canvas, default 1.0
-      scaleToWidth?: number;
-      scaleToHeight?: number;
-      morphologyRadius?: number; // Default 10.
-      connectRadiusMax?: number;
-      maskMode?: MaskMode;
-      whiteThreshold?: number;
-      alphaOpaqueCutoff?: number;
-      expand?: number; // Expansion radius in pixels. Default 0.
-      noChannels?: boolean;
-      smoothing?: boolean; // Use Paper.js smoothing (curve fitting). Default true.
-      componentMode?: ComponentMode;
-      minComponentArea?: number;
-      forceConnected?: boolean;
-      debug?: boolean;
-    } = {},
+    options: ImageTraceOptions = {},
   ): Promise<string> {
     const { pathData } = await this.traceWithBounds(imageUrl, options);
     return pathData;
@@ -63,25 +60,7 @@ export class ImageTracer {
 
   public static async traceWithBounds(
     imageUrl: string,
-    options: {
-      threshold?: number;
-      simplifyTolerance?: number;
-      scale?: number;
-      scaleToWidth?: number;
-      scaleToHeight?: number;
-      morphologyRadius?: number;
-      connectRadiusMax?: number;
-      maskMode?: MaskMode;
-      whiteThreshold?: number;
-      alphaOpaqueCutoff?: number;
-      expand?: number;
-      noChannels?: boolean;
-      smoothing?: boolean;
-      componentMode?: ComponentMode;
-      minComponentArea?: number;
-      forceConnected?: boolean;
-      debug?: boolean;
-    } = {},
+    options: ImageTraceOptions = {},
   ): Promise<{ pathData: string; baseBounds: Bounds; bounds: Bounds }> {
     const img = await this.loadImage(imageUrl);
     const width = img.width;
@@ -106,119 +85,155 @@ export class ImageTracer {
     ctx.drawImage(img, 0, 0);
     const imageData = ctx.getImageData(0, 0, width, height);
 
-    // 2. Morphology processing
+    // 2. Mask and contour strategy (single connected silhouette by default)
     const threshold = options.threshold ?? 10;
-    const componentMode = options.componentMode ?? "largest";
-    const minComponentArea = Math.max(0, options.minComponentArea ?? 0);
-    const forceConnected = options.forceConnected === true;
-    // Adaptive radius: 3% of the image's largest dimension, at least 5px
-    const adaptiveRadius = Math.max(
-      5,
-      Math.floor(Math.max(width, height) * 0.02),
+    const expand = Math.max(0, Math.floor(options.expand ?? 0));
+    const componentMode: ComponentMode = "all";
+    const minComponentArea = 0;
+    const forceConnected = true;
+    const fillChannels = true;
+    const simplifyTolerance = options.simplifyTolerance ?? 2.5;
+    const useSmoothing = options.smoothing !== false;
+    const maxDim = Math.max(width, height);
+
+    // Internal morphology strategy; not exposed externally.
+    const maskMode: MaskMode = "auto";
+    const whiteThreshold = 240;
+    const alphaOpaqueCutoff = 250;
+    const baseCloseRadius = Math.max(
+      2,
+      Math.floor(Math.max(maxDim * 0.012, expand * 0.35)),
     );
-    const radius = options.morphologyRadius ?? adaptiveRadius;
-    const expand = options.expand ?? 0;
-    const noChannels = options.noChannels !== false;
-    const alphaOpaqueCutoff = options.alphaOpaqueCutoff ?? 250;
-    const resolvedMaskMode =
-      (options.maskMode ?? "auto") === "auto"
-        ? inferMaskMode(imageData, alphaOpaqueCutoff)
-        : (options.maskMode as MaskMode);
-    const alphaAnalysis = analyzeAlpha(imageData, alphaOpaqueCutoff);
+    const smoothCloseRadius = Math.max(1, Math.floor(baseCloseRadius * 0.25));
+    const connectSearchStartRadius = Math.max(
+      1,
+      Math.floor(Math.max(maxDim * 0.006, expand * 0.2)),
+    );
+    const connectSearchMaxRadius = Math.max(
+      connectSearchStartRadius,
+      Math.floor(Math.max(maxDim * 0.2, expand * 2.5)),
+    );
+
     debugLog("traceWithBounds:start", {
       width,
       height,
       threshold,
-      radius,
       expand,
-      noChannels,
-      maskMode: options.maskMode ?? "auto",
-      resolvedMaskMode,
-      alphaOpaqueCutoff,
-      alpha: {
-        minAlpha: alphaAnalysis.minAlpha,
-        belowOpaqueRatio: Number(alphaAnalysis.belowOpaqueRatio.toFixed(4)),
-        veryTransparentRatio: Number(
-          alphaAnalysis.veryTransparentRatio.toFixed(4),
-        ),
+      simplifyTolerance,
+      smoothing: useSmoothing,
+      strategy: {
+        maskMode,
+        fillChannels,
+        forceConnected,
+        baseCloseRadius,
+        smoothCloseRadius,
+        connectSearchStartRadius,
+        connectSearchMaxRadius,
       },
-      componentMode,
-      minComponentArea,
-      forceConnected,
-      simplifyTolerance: options.simplifyTolerance ?? 2.5,
-      smoothing: options.smoothing !== false,
     });
 
-    // Add padding to the processing canvas to avoid edge clipping during dilation
-    // Padding should be at least the radius + expansion size
-    const padding = radius + expand + 2;
+    // Padding must cover the largest possible morphology radius and expand.
+    const padding = Math.max(baseCloseRadius, connectSearchMaxRadius, expand) + 2;
     const paddedWidth = width + padding * 2;
     const paddedHeight = height + padding * 2;
+    const summarizeMaskContours = (m: Uint8Array) => {
+      const contoursRaw = this.traceAllContours(m, paddedWidth, paddedHeight);
+      return {
+        rawContourCount: contoursRaw.length,
+        modeSelectedCount: this.selectContours(
+          contoursRaw,
+          componentMode,
+          minComponentArea,
+        ).length,
+        allSelectedCount: this.selectContours(contoursRaw, "all", minComponentArea)
+          .length,
+      };
+    };
 
     let mask = createMask(imageData, {
       threshold,
       padding,
       paddedWidth,
       paddedHeight,
-      maskMode: options.maskMode,
-      whiteThreshold: options.whiteThreshold,
+      maskMode,
+      whiteThreshold,
       alphaOpaqueCutoff,
     });
-
-    if (radius > 0) {
-      mask = circularMorphology(mask, paddedWidth, paddedHeight, radius, "closing");
+    if (debug) {
+      debugLog("traceWithBounds:mask:after-create", summarizeMaskContours(mask));
     }
 
-    if (noChannels) {
+    if (baseCloseRadius > 0) {
+      mask = circularMorphology(
+        mask,
+        paddedWidth,
+        paddedHeight,
+        baseCloseRadius,
+        "closing",
+      );
+    }
+    if (debug && baseCloseRadius > 0) {
+      debugLog("traceWithBounds:mask:after-main-close", {
+        radius: baseCloseRadius,
+        ...summarizeMaskContours(mask),
+      });
+    }
+
+    if (fillChannels) {
       mask = fillHoles(mask, paddedWidth, paddedHeight);
     }
-
-    if (radius > 0) {
-      const smoothRadius = Math.max(2, Math.floor(radius * 0.3));
-      mask = circularMorphology(mask, paddedWidth, paddedHeight, smoothRadius, "closing");
+    if (debug && fillChannels) {
+      debugLog("traceWithBounds:mask:after-fill-holes", summarizeMaskContours(mask));
     }
 
-    const autoConnectRadiusMax = Math.max(
-      10,
-      Math.floor(Math.max(width, height) * 0.12),
-    );
-    const requestedConnectRadiusMax = options.connectRadiusMax;
-    const connectRadiusMax =
-      requestedConnectRadiusMax === undefined
-        ? autoConnectRadiusMax
-        : requestedConnectRadiusMax > 0
-          ? requestedConnectRadiusMax
-          : forceConnected
-            ? autoConnectRadiusMax
-            : 0;
+    if (smoothCloseRadius > 0) {
+      mask = circularMorphology(
+        mask,
+        paddedWidth,
+        paddedHeight,
+        smoothCloseRadius,
+        "closing",
+      );
+    }
+    if (fillChannels && smoothCloseRadius > 0) {
+      mask = fillHoles(mask, paddedWidth, paddedHeight);
+    }
+    if (debug && smoothCloseRadius > 0) {
+      debugLog("traceWithBounds:mask:after-smooth-close", {
+        smoothRadius: smoothCloseRadius,
+        ...summarizeMaskContours(mask),
+      });
+    }
 
-    let rConnect = 0;
-    if (connectRadiusMax > 0) {
-      rConnect = forceConnected
-        ? this.findMinimalMergeRadiusByContourCount(
-            mask,
-            paddedWidth,
-            paddedHeight,
-            connectRadiusMax,
-            minComponentArea,
-          )
-        : findMinimalConnectRadius(
-            mask,
-            paddedWidth,
-            paddedHeight,
-            connectRadiusMax,
-          );
-      if (rConnect > 0) {
-        mask = circularMorphology(
+    if (forceConnected) {
+      const beforeForceConnect = summarizeMaskContours(mask);
+      if (beforeForceConnect.allSelectedCount > 1) {
+        const forceConnectedResult = this.findForceConnectResult(
           mask,
           paddedWidth,
           paddedHeight,
-          rConnect,
-          "closing",
+          minComponentArea,
+          fillChannels,
+          connectSearchStartRadius,
+          connectSearchMaxRadius,
         );
-        if (noChannels) {
-          mask = fillHoles(mask, paddedWidth, paddedHeight);
+        if (debug) {
+          debugLog("traceWithBounds:mask:force-connect", {
+            before: beforeForceConnect,
+            appliedRadius: forceConnectedResult.appliedRadius,
+            reachedSingleContour: forceConnectedResult.reachedSingleContour,
+            after: {
+              rawContourCount: forceConnectedResult.rawContourCount,
+              allSelectedCount: forceConnectedResult.selectedContourCount,
+            },
+          });
         }
+        mask = forceConnectedResult.mask;
+      } else if (debug) {
+        debugLog("traceWithBounds:mask:force-connect-skipped", {
+          reason: "already-single-component",
+          before: beforeForceConnect,
+        });
       }
     }
 
@@ -309,16 +324,15 @@ export class ImageTracer {
       };
     }
 
+    // Keep expanded coordinates in the unpadded space without clamping to
+    // original image bounds. If the shape touches an edge, clamping would
+    // drop one-sided expand distance (e.g. bottom/right expansion).
     const expandedUnpaddedContours = expandedContours
       .map((contour) =>
-        this.clampPointsToImageBounds(
-          contour.map((p) => ({
-            x: p.x - padding,
-            y: p.y - padding,
-          })),
-          width,
-          height,
-        ),
+        contour.map((p) => ({
+          x: p.x - padding,
+          y: p.y - padding,
+        })),
       )
       .filter((contour) => contour.length > 2);
     if (!expandedUnpaddedContours.length) {
@@ -356,22 +370,22 @@ export class ImageTracer {
         options.scaleToHeight,
         baseBounds,
       );
-      baseBounds = this.boundsFromPoints(this.flattenContours(baseScaledContours));
+      baseBounds = this.boundsFromPoints(
+        this.flattenContours(baseScaledContours),
+      );
     }
 
     // 10. Simplify and Generate SVG
-    const useSmoothing = options.smoothing !== false; // Default true
     debugLog("traceWithBounds:contours", {
       baseContourCount: baseContoursRaw.length,
       baseSelectedCount: baseContours.length,
       expandedContourCount: expandedContoursRaw.length,
       expandedSelectedCount: expandedContours.length,
-      connectRadiusMax,
-      appliedConnectRadius: rConnect,
       baseBounds,
       expandedBounds: globalBounds,
       expandedDeltaX: globalBounds.width - baseBounds.width,
       expandedDeltaY: globalBounds.height - baseBounds.height,
+      expandedMayOverflowImageBounds: expand > 0,
       useSmoothing,
       componentMode,
     });
@@ -380,19 +394,18 @@ export class ImageTracer {
       return {
         pathData: this.contoursToSVGPaper(
           finalContours,
-          options.simplifyTolerance ?? 2.5,
+          simplifyTolerance,
         ),
         baseBounds,
         bounds: globalBounds,
       };
     } else {
       const simplifiedContours = finalContours
-        .map((points) =>
-          this.douglasPeucker(points, options.simplifyTolerance ?? 2.0),
-        )
+        .map((points) => this.douglasPeucker(points, simplifyTolerance))
         .filter((points) => points.length > 2);
       const pathData =
-        this.contoursToSVG(simplifiedContours) || this.contoursToSVG(finalContours);
+        this.contoursToSVG(simplifiedContours) ||
+        this.contoursToSVG(finalContours);
       return {
         pathData,
         baseBounds,
@@ -438,7 +451,7 @@ export class ImageTracer {
       const yj = polygon[j].y;
       const intersects =
         yi > y !== yj > y &&
-        x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi;
+        x < ((xj - xi) * (y - yi)) / (yj - yi || Number.EPSILON) + xi;
       if (intersects) inside = !inside;
     }
     return inside;
@@ -463,55 +476,121 @@ export class ImageTracer {
     return selected;
   }
 
-  private static countSelectedContours(
+  private static summarizeAllContours(
     mask: Uint8Array,
     width: number,
     height: number,
     minComponentArea: number,
-  ): number {
-    const contours = this.traceAllContours(mask, width, height);
-    return this.selectContours(contours, "all", minComponentArea).length;
+  ): { rawCount: number; selectedCount: number } {
+    const raw = this.traceAllContours(mask, width, height);
+    const selected = this.selectContours(raw, "all", minComponentArea);
+    return {
+      rawCount: raw.length,
+      selectedCount: selected.length,
+    };
   }
 
-  private static findMinimalMergeRadiusByContourCount(
-    mask: Uint8Array,
+  private static closeMaskForConnectivity(
+    sourceMask: Uint8Array,
     width: number,
     height: number,
-    maxRadius: number,
+    radius: number,
+    fillChannels: boolean,
+  ): Uint8Array {
+    let closed = circularMorphology(sourceMask, width, height, radius, "closing");
+    if (fillChannels) {
+      closed = fillHoles(closed, width, height);
+    }
+    return closed;
+  }
+
+  private static findForceConnectResult(
+    sourceMask: Uint8Array,
+    width: number,
+    height: number,
     minComponentArea: number,
-  ): number {
-    if (maxRadius <= 0) return 0;
-    if (this.countSelectedContours(mask, width, height, minComponentArea) <= 1) {
-      return 0;
+    fillChannels: boolean,
+    startRadius: number,
+    maxRadius: number,
+  ): ForceConnectResult {
+    const initial = this.summarizeAllContours(
+      sourceMask,
+      width,
+      height,
+      minComponentArea,
+    );
+    if (initial.selectedCount <= 1) {
+      return {
+        mask: sourceMask,
+        appliedRadius: 0,
+        reachedSingleContour: true,
+        rawContourCount: initial.rawCount,
+        selectedContourCount: initial.selectedCount,
+      };
     }
 
-    let low = 0;
-    let high = 1;
-    while (high <= maxRadius) {
-      const closed = circularMorphology(mask, width, height, high, "closing");
-      if (this.countSelectedContours(closed, width, height, minComponentArea) <= 1) {
-        break;
-      }
-      high *= 2;
-    }
-    if (high > maxRadius) high = maxRadius;
+    const normalizedStart = Math.max(1, Math.floor(startRadius));
+    const normalizedMax = Math.max(normalizedStart, Math.floor(maxRadius));
+    const evaluate = (radius: number) => {
+      const mask = this.closeMaskForConnectivity(
+        sourceMask,
+        width,
+        height,
+        radius,
+        fillChannels,
+      );
+      const summary = this.summarizeAllContours(
+        mask,
+        width,
+        height,
+        minComponentArea,
+      );
+      return {
+        radius,
+        mask,
+        rawCount: summary.rawCount,
+        selectedCount: summary.selectedCount,
+      };
+    };
 
-    const highMask = circularMorphology(mask, width, height, high, "closing");
-    if (this.countSelectedContours(highMask, width, height, minComponentArea) > 1) {
-      return high;
+    let low = normalizedStart - 1;
+    let high = normalizedStart;
+    let highResult = evaluate(high);
+    while (high < normalizedMax && highResult.selectedCount > 1) {
+      low = high;
+      high = Math.min(normalizedMax, Math.max(high + 1, Math.floor(high * 1.6)));
+      highResult = evaluate(high);
     }
 
+    if (highResult.selectedCount > 1) {
+      return {
+        mask: highResult.mask,
+        appliedRadius: highResult.radius,
+        reachedSingleContour: false,
+        rawContourCount: highResult.rawCount,
+        selectedContourCount: highResult.selectedCount,
+      };
+    }
+
+    let best = highResult;
     while (low + 1 < high) {
       const mid = Math.floor((low + high) / 2);
-      const midMask = circularMorphology(mask, width, height, mid, "closing");
-      if (this.countSelectedContours(midMask, width, height, minComponentArea) <= 1) {
+      const midResult = evaluate(mid);
+      if (midResult.selectedCount <= 1) {
+        best = midResult;
         high = mid;
       } else {
         low = mid;
       }
     }
 
-    return high;
+    return {
+      mask: best.mask,
+      appliedRadius: best.radius,
+      reachedSingleContour: true,
+      rawContourCount: best.rawCount,
+      selectedContourCount: best.selectedCount,
+    };
   }
 
   private static selectContours(
@@ -564,192 +643,6 @@ export class ImageTracer {
       width: maxX - minX,
       height: maxY - minY,
     };
-  }
-
-  private static createMask(
-    imageData: ImageData,
-    threshold: number,
-    padding: number,
-    paddedWidth: number,
-    paddedHeight: number,
-  ): Uint8Array {
-    const { width, height, data } = imageData;
-    const mask = new Uint8Array(paddedWidth * paddedHeight);
-
-    // 1. Detect if the image has transparency (any pixel with alpha < 255)
-    let hasTransparency = false;
-    for (let i = 3; i < data.length; i += 4) {
-      if (data[i] < 255) {
-        hasTransparency = true;
-        break;
-      }
-    }
-
-    // 2. Binarize based on alpha or luminance
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const srcIdx = (y * width + x) * 4;
-        const r = data[srcIdx];
-        const g = data[srcIdx + 1];
-        const b = data[srcIdx + 2];
-        const a = data[srcIdx + 3];
-
-        const destIdx = (y + padding) * paddedWidth + (x + padding);
-
-        if (hasTransparency) {
-          if (a > threshold) {
-            mask[destIdx] = 1;
-          }
-        } else {
-          if (!(r > 240 && g > 240 && b > 240)) {
-            mask[destIdx] = 1;
-          }
-        }
-      }
-    }
-    return mask;
-  }
-
-  /**
-   * Fast circular morphology using a distance-transform inspired separable approach.
-   * O(N * R) complexity, where R is the radius.
-   */
-  private static circularMorphology(
-    mask: Uint8Array,
-    width: number,
-    height: number,
-    radius: number,
-    op: "dilate" | "erode" | "closing" | "opening",
-  ): Uint8Array {
-    const dilate = (m: Uint8Array, r: number) => {
-      const horizontalDist = new Int32Array(width * height);
-      // Horizontal pass: dist to nearest solid pixel in row
-      for (let y = 0; y < height; y++) {
-        let lastSolid = -r * 2;
-        for (let x = 0; x < width; x++) {
-          if (m[y * width + x]) lastSolid = x;
-          horizontalDist[y * width + x] = x - lastSolid;
-        }
-        lastSolid = width + r * 2;
-        for (let x = width - 1; x >= 0; x--) {
-          if (m[y * width + x]) lastSolid = x;
-          horizontalDist[y * width + x] = Math.min(
-            horizontalDist[y * width + x],
-            lastSolid - x,
-          );
-        }
-      }
-
-      const result = new Uint8Array(width * height);
-      const r2 = r * r;
-      // Vertical pass: check Euclidean distance using precomputed horizontal distances
-      for (let x = 0; x < width; x++) {
-        for (let y = 0; y < height; y++) {
-          let found = false;
-          const minY = Math.max(0, y - r);
-          const maxY = Math.min(height - 1, y + r);
-          for (let dy = minY; dy <= maxY; dy++) {
-            const dY = dy - y;
-            const hDist = horizontalDist[dy * width + x];
-            if (hDist * hDist + dY * dY <= r2) {
-              found = true;
-              break;
-            }
-          }
-          if (found) result[y * width + x] = 1;
-        }
-      }
-      return result;
-    };
-
-    const erode = (m: Uint8Array, r: number) => {
-      // Erosion is dilation of the inverted mask
-      const inverted = new Uint8Array(m.length);
-      for (let i = 0; i < m.length; i++) inverted[i] = m[i] ? 0 : 1;
-      const dilatedInverted = dilate(inverted, r);
-      const result = new Uint8Array(m.length);
-      for (let i = 0; i < m.length; i++) result[i] = dilatedInverted[i] ? 0 : 1;
-      return result;
-    };
-
-    switch (op) {
-      case "dilate":
-        return dilate(mask, radius);
-      case "erode":
-        return erode(mask, radius);
-      case "closing":
-        return erode(dilate(mask, radius), radius);
-      case "opening":
-        return dilate(erode(mask, radius), radius);
-      default:
-        return mask;
-    }
-  }
-
-  /**
-   * Fills internal holes in the binary mask using flood fill from edges.
-   */
-  private static fillHoles(
-    mask: Uint8Array,
-    width: number,
-    height: number,
-  ): Uint8Array {
-    const background = new Uint8Array(width * height);
-    const queue: [number, number][] = [];
-
-    // Add all edge pixels that are 0 to the queue
-    for (let x = 0; x < width; x++) {
-      if (mask[x] === 0) {
-        background[x] = 1;
-        queue.push([x, 0]);
-      }
-      const lastRow = (height - 1) * width + x;
-      if (mask[lastRow] === 0) {
-        background[lastRow] = 1;
-        queue.push([x, height - 1]);
-      }
-    }
-    for (let y = 1; y < height - 1; y++) {
-      if (mask[y * width] === 0) {
-        background[y * width] = 1;
-        queue.push([0, y]);
-      }
-      if (mask[y * width + width - 1] === 0) {
-        background[y * width + width - 1] = 1;
-        queue.push([width - 1, y]);
-      }
-    }
-
-    // Flood fill from the edges to find all background pixels
-    const dirs = [
-      [0, 1],
-      [0, -1],
-      [1, 0],
-      [-1, 0],
-    ];
-    let head = 0;
-    while (head < queue.length) {
-      const [cx, cy] = queue[head++];
-      for (const [dx, dy] of dirs) {
-        const nx = cx + dx;
-        const ny = cy + dy;
-        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-          const nidx = ny * width + nx;
-          if (mask[nidx] === 0 && background[nidx] === 0) {
-            background[nidx] = 1;
-            queue.push([nx, ny]);
-          }
-        }
-      }
-    }
-
-    // Any pixel that is NOT reachable from the background is part of the "filled" mask
-    const filledMask = new Uint8Array(width * height);
-    for (let i = 0; i < width * height; i++) {
-      filledMask[i] = background[i] === 0 ? 1 : 0;
-    }
-
-    return filledMask;
   }
 
   /**
@@ -1001,21 +894,21 @@ export class ImageTracer {
 
   private static pointsToSVGPaper(points: Point[], tolerance: number): string {
     if (points.length < 3) return this.pointsToSVG(points);
-    
+
     this.ensurePaper();
-    
+
     // Create Path
     const path = new paper.Path({
-      segments: points.map(p => [p.x, p.y]),
-      closed: true
+      segments: points.map((p) => [p.x, p.y]),
+      closed: true,
     });
-    
+
     // Simplify
     path.simplify(tolerance);
-    
+
     const data = path.pathData;
     path.remove();
-    
+
     return data;
   }
 

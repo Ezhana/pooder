@@ -433,10 +433,26 @@ export class DielineTool implements Extension {
         {
           command: "detectEdge",
           title: "Detect Edge from Image",
-          handler: async (imageUrl: string, options?: any) => {
+          handler: async (
+            imageUrl: string,
+            options?: {
+              expand?: number;
+              smoothing?: boolean;
+              simplifyTolerance?: number;
+              threshold?: number;
+              debug?: boolean;
+            },
+          ) => {
             try {
               const detectOptions = options || {};
               const debug = detectOptions.debug === true;
+              const tracerOptions = {
+                expand: detectOptions.expand ?? 0,
+                smoothing: detectOptions.smoothing ?? true,
+                simplifyTolerance: detectOptions.simplifyTolerance ?? 2,
+                threshold: detectOptions.threshold,
+                debug,
+              };
 
               // Helper to get image dimensions
               const loadImage = (url: string): Promise<HTMLImageElement> => {
@@ -451,7 +467,7 @@ export class DielineTool implements Extension {
 
               const [img, traced] = await Promise.all([
                 loadImage(imageUrl),
-                ImageTracer.traceWithBounds(imageUrl, detectOptions),
+                ImageTracer.traceWithBounds(imageUrl, tracerOptions),
               ]);
               const { pathData, baseBounds, bounds } = traced;
 
@@ -463,21 +479,8 @@ export class DielineTool implements Extension {
                   expandedBounds: bounds,
                   currentDielineWidth: s.width,
                   currentDielineHeight: s.height,
-                  options: {
-                    expand: detectOptions.expand ?? 0,
-                    morphologyRadius: detectOptions.morphologyRadius,
-                    connectRadiusMax: detectOptions.connectRadiusMax,
-                    smoothing: detectOptions.smoothing,
-                    simplifyTolerance: detectOptions.simplifyTolerance,
-                    threshold: detectOptions.threshold,
-                    maskMode: detectOptions.maskMode,
-                    whiteThreshold: detectOptions.whiteThreshold,
-                    alphaOpaqueCutoff: detectOptions.alphaOpaqueCutoff,
-                    noChannels: detectOptions.noChannels,
-                    componentMode: detectOptions.componentMode,
-                    minComponentArea: detectOptions.minComponentArea,
-                    forceConnected: detectOptions.forceConnected,
-                  },
+                  options: tracerOptions,
+                  strategy: "single-connected-silhouette",
                 });
               }
 

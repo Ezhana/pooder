@@ -106,15 +106,21 @@ export function circularMorphology(
   radius: number,
   op: "dilate" | "erode" | "closing" | "opening",
 ): Uint8Array {
-  const dilate = (m: Uint8Array, r: number) => {
+  const r = Math.max(0, Math.floor(radius));
+  if (r <= 0) {
+    return mask.slice();
+  }
+
+  // Disk kernel dilation (Euclidean metric).
+  const dilateDisk = (m: Uint8Array, radiusPx: number) => {
     const horizontalDist = new Int32Array(width * height);
     for (let y = 0; y < height; y++) {
-      let lastSolid = -r * 2;
+      let lastSolid = -radiusPx * 2;
       for (let x = 0; x < width; x++) {
         if (m[y * width + x]) lastSolid = x;
         horizontalDist[y * width + x] = x - lastSolid;
       }
-      lastSolid = width + r * 2;
+      lastSolid = width + radiusPx * 2;
       for (let x = width - 1; x >= 0; x--) {
         if (m[y * width + x]) lastSolid = x;
         horizontalDist[y * width + x] = Math.min(
@@ -125,12 +131,12 @@ export function circularMorphology(
     }
 
     const result = new Uint8Array(width * height);
-    const r2 = r * r;
+    const r2 = radiusPx * radiusPx;
     for (let x = 0; x < width; x++) {
       for (let y = 0; y < height; y++) {
         let found = false;
-        const minY = Math.max(0, y - r);
-        const maxY = Math.min(height - 1, y + r);
+        const minY = Math.max(0, y - radiusPx);
+        const maxY = Math.min(height - 1, y + radiusPx);
         for (let dy = minY; dy <= maxY; dy++) {
           const dY = dy - y;
           const hDist = horizontalDist[dy * width + x];
@@ -145,24 +151,84 @@ export function circularMorphology(
     return result;
   };
 
-  const erode = (m: Uint8Array, r: number) => {
-    const inverted = new Uint8Array(m.length);
-    for (let i = 0; i < m.length; i++) inverted[i] = m[i] ? 0 : 1;
-    const dilatedInverted = dilate(inverted, r);
-    const result = new Uint8Array(m.length);
-    for (let i = 0; i < m.length; i++) result[i] = dilatedInverted[i] ? 0 : 1;
-    return result;
+  // Diamond kernel erosion (L1 metric), implemented as radius iterations of
+  // 4-neighbor erosion. This is intentionally different from dilation kernel.
+  const erodeDiamond = (m: Uint8Array, radiusPx: number) => {
+    if (radiusPx <= 0) return m.slice();
+
+    let current = m;
+    for (let step = 0; step < radiusPx; step++) {
+      const next = new Uint8Array(width * height);
+      for (let y = 1; y < height - 1; y++) {
+        const row = y * width;
+        for (let x = 1; x < width - 1; x++) {
+          const idx = row + x;
+          if (
+            current[idx] &&
+            current[idx - 1] &&
+            current[idx + 1] &&
+            current[idx - width] &&
+            current[idx + width]
+          ) {
+            next[idx] = 1;
+          }
+        }
+      }
+      current = next;
+    }
+
+    return current;
+  };
+
+  // Restore thin bridges removed by erosion: if a removed pixel links two
+  // opposite neighbors in the source mask, bring it back.
+  const restoreBridgePixels = (source: Uint8Array, eroded: Uint8Array) => {
+    const restored = eroded.slice();
+    for (let y = 1; y < height - 1; y++) {
+      const row = y * width;
+      for (let x = 1; x < width - 1; x++) {
+        const idx = row + x;
+        if (!source[idx] || restored[idx]) continue;
+
+        const up = source[idx - width] === 1;
+        const down = source[idx + width] === 1;
+        const left = source[idx - 1] === 1;
+        const right = source[idx + 1] === 1;
+        const upLeft = source[idx - width - 1] === 1;
+        const upRight = source[idx - width + 1] === 1;
+        const downLeft = source[idx + width - 1] === 1;
+        const downRight = source[idx + width + 1] === 1;
+
+        const keepsBridge =
+          (left && right) ||
+          (up && down) ||
+          (upLeft && downRight) ||
+          (upRight && downLeft);
+        if (keepsBridge) {
+          restored[idx] = 1;
+        }
+      }
+    }
+
+    return restored;
+  };
+
+  const erodePreservingBridges = (m: Uint8Array, radiusPx: number) => {
+    const eroded = erodeDiamond(m, radiusPx);
+    return restoreBridgePixels(m, eroded);
   };
 
   switch (op) {
     case "dilate":
-      return dilate(mask, radius);
+      return dilateDisk(mask, r);
     case "erode":
-      return erode(mask, radius);
-    case "closing":
-      return erode(dilate(mask, radius), radius);
+      return erodePreservingBridges(mask, r);
+    case "closing": {
+      const erodeRadius = Math.max(1, Math.floor(r * 0.65));
+      return erodePreservingBridges(dilateDisk(mask, r), erodeRadius);
+    }
     case "opening":
-      return dilate(erode(mask, radius), radius);
+      return dilateDisk(erodePreservingBridges(mask, r), r);
     default:
       return mask;
   }
