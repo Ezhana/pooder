@@ -1,18 +1,6 @@
 <template>
   <div class="pooder-editor">
-    <!--    <ToolPanel />-->
     <CanvasArea @canvas-ready="onCanvasReady" @resize="onResize" />
-    <!--    <div>-->
-    <!--      <button-->
-    <!--        @click="-->
-    <!--          console.log(cfgSvc.export());-->
-    <!--          console.log(JSON.stringify(cfgSvc.export()));-->
-    <!--        "-->
-    <!--      >-->
-    <!--        export-->
-    <!--      </button>-->
-    <!--      &lt;!&ndash;          <button @click="handleImport">import</button>&ndash;&gt;-->
-    <!--    </div>-->
   </div>
 </template>
 
@@ -323,7 +311,10 @@ const computeDetectSizeByLongEdge = (
   const currentHeightMm = Number(cfgSvc.get("size.actualHeightMm", 0));
   const sizeLongEdgeMm = Math.max(currentWidthMm, currentHeightMm);
   const baseLongEdge = Math.max(baseBounds.width, baseBounds.height);
-  const detectedLongEdge = Math.max(detectedBounds.width, detectedBounds.height);
+  const detectedLongEdge = Math.max(
+    detectedBounds.width,
+    detectedBounds.height,
+  );
 
   if (
     !Number.isFinite(sizeLongEdgeMm) ||
@@ -469,11 +460,14 @@ const normalizeImagePlacementForCompare = (items: any[]) => {
 
 const detectImageWorkingSessionDirty = async (): Promise<boolean> => {
   try {
-    const workingItems = (await cmdSvc.executeCommand("getWorkingImages")) || [];
+    const workingItems =
+      (await cmdSvc.executeCommand("getWorkingImages")) || [];
     const configItems = cfgSvc.get("image.items", []) || [];
     const workingNormalized = normalizeImagePlacementForCompare(workingItems);
     const configNormalized = normalizeImagePlacementForCompare(configItems);
-    return JSON.stringify(workingNormalized) !== JSON.stringify(configNormalized);
+    return (
+      JSON.stringify(workingNormalized) !== JSON.stringify(configNormalized)
+    );
   } catch {
     return false;
   }
@@ -489,11 +483,14 @@ const resolveDetectImageUpdateTarget = async (
 
   if (activeToolId !== IMAGE_TOOL_ID) {
     if (debug) {
-      console.info("[PooderEditor] detectDielineFromFrame image update target", {
-        activeToolId,
-        target: "config",
-        reason: "image-tool-inactive",
-      });
+      console.info(
+        "[PooderEditor] detectDielineFromFrame image update target",
+        {
+          activeToolId,
+          target: "config",
+          reason: "image-tool-inactive",
+        },
+      );
     }
     return "config";
   }
@@ -526,7 +523,8 @@ const syncCommittedImageDataForIds = async (
   const normalizedIds = [...new Set(imageIds)].filter(
     (id): id is string => typeof id === "string" && id.length > 0,
   );
-  if (!normalizedIds.length) return [] as Array<{ id: string; width: number; height: number }>;
+  if (!normalizedIds.length)
+    return [] as Array<{ id: string; width: number; height: number }>;
 
   const exportedById = new Map<
     string,
@@ -546,7 +544,8 @@ const syncCommittedImageDataForIds = async (
     });
   }
 
-  if (!exportedById.size) return [] as Array<{ id: string; width: number; height: number }>;
+  if (!exportedById.size)
+    return [] as Array<{ id: string; width: number; height: number }>;
 
   const items = Array.isArray(cfgSvc.get("image.items", []))
     ? (cfgSvc.get("image.items", []) as any[])
@@ -580,7 +579,9 @@ const syncCommittedImageDataForIds = async (
         height: exported.height,
       };
     })
-    .filter((item): item is { id: string; width: number; height: number } => !!item);
+    .filter(
+      (item): item is { id: string; width: number; height: number } => !!item,
+    );
 
   if (debug) {
     console.info("[PooderEditor] detectDieline committed image sync", {
@@ -919,9 +920,12 @@ const detectDielineFromFrame = async (options?: {
     try {
       layoutBeforeCommit = await cmdSvc.executeCommand("getSceneLayout");
     } catch (error) {
-      console.warn("[PooderEditor] detectDielineFromFrame layout(before) failed", {
-        error,
-      });
+      console.warn(
+        "[PooderEditor] detectDielineFromFrame layout(before) failed",
+        {
+          error,
+        },
+      );
     }
   }
 
@@ -987,8 +991,12 @@ const detectDielineFromFrame = async (options?: {
     applyDetectedDielineConfig(result);
     const mappedSize = applyDetectSizeByLongEdge(result, debug);
     const imageUpdateTarget = await resolveDetectImageUpdateTarget(debug);
-    let committedSync: Array<{ id: string; width: number; height: number }> = [];
-    const targetSnapshots = filterSnapshotsByIds(snapshots, sourceImage.imageIds);
+    let committedSync: Array<{ id: string; width: number; height: number }> =
+      [];
+    const targetSnapshots = filterSnapshotsByIds(
+      snapshots,
+      sourceImage.imageIds,
+    );
     await compensateImagesForDetectedDieline(
       result,
       targetSnapshots,
@@ -1006,13 +1014,17 @@ const detectDielineFromFrame = async (options?: {
     const verifyUrl = verifySource?.url;
     if (verifyUrl) {
       try {
-        const verifyResult = (await cmdSvc.executeCommand("detectEdge", verifyUrl, {
-          expand: options?.detect?.expand ?? 0,
-          smoothing: options?.detect?.smoothing ?? true,
-          simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
-          threshold: options?.detect?.threshold,
-          debug,
-        })) as DetectEdgeResult | null;
+        const verifyResult = (await cmdSvc.executeCommand(
+          "detectEdge",
+          verifyUrl,
+          {
+            expand: options?.detect?.expand ?? 0,
+            smoothing: options?.detect?.smoothing ?? true,
+            simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
+            threshold: options?.detect?.threshold,
+            debug,
+          },
+        )) as DetectEdgeResult | null;
 
         if (verifyResult) {
           const verifyOffset = getDetectCenterOffset(
@@ -1072,9 +1084,12 @@ const detectDielineFromFrame = async (options?: {
       try {
         layoutAfterCommit = await cmdSvc.executeCommand("getSceneLayout");
       } catch (error) {
-        console.warn("[PooderEditor] detectDielineFromFrame layout(after) failed", {
-          error,
-        });
+        console.warn(
+          "[PooderEditor] detectDielineFromFrame layout(after) failed",
+          {
+            error,
+          },
+        );
       }
       console.info("[PooderEditor] detectDielineFromFrame commit result", {
         mappedSize,
