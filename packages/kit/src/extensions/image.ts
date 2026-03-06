@@ -1788,16 +1788,25 @@ export class ImageTool implements Extension {
       });
       const url = exported.url;
 
-      const sourceUrl = item.sourceUrl || item.url;
+      const previousSource = item.sourceUrl || item.url;
       const previousCommitted = item.committedUrl;
       next.push(
         this.normalizeItem({
           ...item,
           url,
-          sourceUrl,
-          committedUrl: url,
+          // Persist cropped output as the actual image source so all
+          // non-image tools operate on the committed crop result.
+          sourceUrl: url,
+          committedUrl: undefined,
+          left: 0.5,
+          top: 0.5,
+          scale: 1,
+          angle: 0,
         }),
       );
+      if (previousSource && previousSource !== url) {
+        this.sourceSizeBySrc.delete(previousSource);
+      }
       if (previousCommitted && previousCommitted !== url) {
         this.sourceSizeBySrc.delete(previousCommitted);
       }
