@@ -306,14 +306,10 @@ export class ImageTracer {
 
     const baseUnpaddedContours = baseContours
       .map((contour) =>
-        this.clampPointsToImageBounds(
-          contour.map((p) => ({
-            x: p.x - padding,
-            y: p.y - padding,
-          })),
-          width,
-          height,
-        ),
+        contour.map((p) => ({
+          x: p.x - padding,
+          y: p.y - padding,
+        })),
       )
       .filter((contour) => contour.length > 2);
 
@@ -946,19 +942,6 @@ export class ImageTracer {
         y: p.y + offsetY,
       })),
     );
-  }
-
-  private static clampPointsToImageBounds(
-    points: Point[],
-    width: number,
-    height: number,
-  ): Point[] {
-    const maxX = Math.max(0, width);
-    const maxY = Math.max(0, height);
-    return points.map((p) => ({
-      x: Math.max(0, Math.min(maxX, p.x)),
-      y: Math.max(0, Math.min(maxY, p.y)),
-    }));
   }
 
   private static pointsToSVG(points: Point[]): string {
