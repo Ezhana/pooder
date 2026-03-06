@@ -418,6 +418,49 @@ export class ImageTracer {
       );
     }
 
+    if (expand > 0) {
+      const expectedExpandedBounds = {
+        x: baseBounds.x - expand,
+        y: baseBounds.y - expand,
+        width: baseBounds.width + expand * 2,
+        height: baseBounds.height + expand * 2,
+      };
+      if (
+        expectedExpandedBounds.width > 0 &&
+        expectedExpandedBounds.height > 0 &&
+        globalBounds.width > 0 &&
+        globalBounds.height > 0
+      ) {
+        const shouldNormalizeExpandBounds =
+          Math.abs(globalBounds.x - expectedExpandedBounds.x) > 1 ||
+          Math.abs(globalBounds.y - expectedExpandedBounds.y) > 1 ||
+          Math.abs(globalBounds.width - expectedExpandedBounds.width) > 1 ||
+          Math.abs(globalBounds.height - expectedExpandedBounds.height) > 1;
+        if (shouldNormalizeExpandBounds) {
+          const beforeNormalize = globalBounds;
+          finalContours = this.translateContours(
+            this.scaleContours(
+              finalContours,
+              expectedExpandedBounds.width,
+              expectedExpandedBounds.height,
+              globalBounds,
+            ),
+            expectedExpandedBounds.x,
+            expectedExpandedBounds.y,
+          );
+          globalBounds = this.boundsFromPoints(
+            this.flattenContours(finalContours),
+          );
+          debugLog("traceWithBounds:expand-normalized", {
+            expand,
+            expectedExpandedBounds,
+            beforeNormalize,
+            afterNormalize: globalBounds,
+          });
+        }
+      }
+    }
+
     // Simplify and Generate SVG
     debugLog("traceWithBounds:contours", {
       baseContourCount: baseContoursRaw.length,
@@ -889,6 +932,19 @@ export class ImageTracer {
   ): Point[][] {
     return contours.map((points) =>
       this.scalePoints(points, targetWidth, targetHeight, bounds),
+    );
+  }
+
+  private static translateContours(
+    contours: Point[][],
+    offsetX: number,
+    offsetY: number,
+  ): Point[][] {
+    return contours.map((points) =>
+      points.map((p) => ({
+        x: p.x + offsetX,
+        y: p.y + offsetY,
+      })),
     );
   }
 
