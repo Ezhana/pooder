@@ -181,30 +181,6 @@ interface ExportUserCroppedImageResult {
   format: "png" | "jpeg";
   imageIds: string[];
 }
-
-type DetectSizeAdjustBoundsSource =
-  | "auto"
-  | "raw"
-  | "base"
-  | "expected-expand";
-
-type DetectSizeAdjustStrategy = "long-edge";
-
-interface DetectSizeAdjustOptions {
-  enabled?: boolean;
-  boundsSource?: DetectSizeAdjustBoundsSource;
-  strategy?: DetectSizeAdjustStrategy;
-}
-
-interface DetectSizeAdjustResult {
-  widthMm: number;
-  heightMm: number;
-  aspectRatio: number;
-  longEdgeMm: number;
-  bounds: DetectBounds;
-  boundsSource: DetectSizeAdjustBoundsSource;
-  strategy: DetectSizeAdjustStrategy;
-}
 const applyDetectedDielineConfig = (
   result: DetectEdgeResult,
   sourceImage?: { width?: number; height?: number },
@@ -363,136 +339,6 @@ const detectPostCommitDiagnostics = async (
   }
 };
 
-const settleDetectImageRender = async (imageIds: string[]) => {
-  if (!imageIds.length) return;
-  const settled = await exportUserCroppedImage({
-    multiplier: 1,
-    format: "png",
-    imageIds,
-  });
-  if (settled?.url) {
-    URL.revokeObjectURL(settled.url);
-  }
-};
-
-const normalizeDetectSizeAdjustOptions = (
-  options?: DetectSizeAdjustOptions,
-): Required<DetectSizeAdjustOptions> => {
-  return {
-    enabled: options?.enabled !== false,
-    boundsSource: options?.boundsSource ?? "expected-expand",
-    strategy: options?.strategy ?? "long-edge",
-  };
-};
-
-const buildExpectedExpandedBounds = (
-  baseBounds?: DetectBounds,
-  expectedExpand = 0,
-): DetectBounds | null => {
-  if (!isValidBounds(baseBounds)) return null;
-  const expand = Math.max(0, expectedExpand);
-  return {
-    x: baseBounds.x - expand,
-    y: baseBounds.y - expand,
-    width: baseBounds.width + expand * 2,
-    height: baseBounds.height + expand * 2,
-  };
-};
-
-const resolveCompensationBounds = (
-  result: DetectEdgeResult,
-  boundsSource: DetectSizeAdjustBoundsSource,
-  expectedExpand = 0,
-): DetectBounds | null => {
-  const expectedExpanded = buildExpectedExpandedBounds(
-    result.baseBounds,
-    expectedExpand,
-  );
-  if (boundsSource === "expected-expand") {
-    return expectedExpanded || result.rawBounds || result.baseBounds || null;
-  }
-  if (boundsSource === "raw") return result.rawBounds || null;
-  if (boundsSource === "base") return result.baseBounds || null;
-  return expectedExpanded || result.rawBounds || result.baseBounds || null;
-};
-
-const applyDetectSizeAdjust = (
-  result: DetectEdgeResult,
-  options?: DetectSizeAdjustOptions,
-  debug = false,
-  expectedExpand = 0,
-): DetectSizeAdjustResult | null => {
-  const normalized = normalizeDetectSizeAdjustOptions(options);
-  if (!normalized.enabled) return null;
-
-  const bounds = resolveCompensationBounds(
-    result,
-    normalized.boundsSource,
-    expectedExpand,
-  );
-  if (!isValidBounds(bounds)) return null;
-
-  const currentWidthMm = Number(cfgSvc.get("size.actualWidthMm", 0));
-  const currentHeightMm = Number(cfgSvc.get("size.actualHeightMm", 0));
-  const longEdgeMm = Math.max(currentWidthMm, currentHeightMm);
-  const boundsLongEdge = Math.max(bounds.width, bounds.height);
-
-  if (
-    !Number.isFinite(longEdgeMm) ||
-    !Number.isFinite(boundsLongEdge) ||
-    longEdgeMm <= 0 ||
-    boundsLongEdge <= 0
-  ) {
-    return null;
-  }
-
-  const scale = longEdgeMm / boundsLongEdge;
-  const widthMm = bounds.width * scale;
-  const heightMm = bounds.height * scale;
-  const aspectRatio = widthMm / Math.max(0.001, heightMm);
-
-  if (
-    !Number.isFinite(widthMm) ||
-    !Number.isFinite(heightMm) ||
-    !Number.isFinite(aspectRatio) ||
-    widthMm <= 0 ||
-    heightMm <= 0 ||
-    aspectRatio <= 0
-  ) {
-    return null;
-  }
-
-  cfgSvc.update("size.actualWidthMm", widthMm);
-  cfgSvc.update("size.actualHeightMm", heightMm);
-  cfgSvc.update("size.aspectRatio", aspectRatio);
-
-  const adjusted = {
-    widthMm,
-    heightMm,
-    aspectRatio,
-    longEdgeMm,
-    bounds,
-    boundsSource: normalized.boundsSource,
-    strategy: normalized.strategy,
-  };
-
-  if (debug) {
-    console.info("[PooderEditor] detectDieline size adjust(raw)", {
-      rawBounds: result.rawBounds ?? null,
-      baseBounds: result.baseBounds ?? null,
-      expectedExpandedBounds: buildExpectedExpandedBounds(
-        result.baseBounds,
-        expectedExpand,
-      ),
-      expectedExpand,
-      options: normalized,
-      adjusted,
-    });
-  }
-
-  return adjusted;
-};
-
 const detectDieline = async (url: string) => {
   const result = (await cmdSvc.executeCommand("detectEdge", url, {
     expand: 10, // 安全距离（像素）
@@ -513,7 +359,6 @@ const detectDielineFromFrame = async (options?: {
     simplifyTolerance?: number;
     threshold?: number;
     debug?: boolean;
-    sizeAdjust?: DetectSizeAdjustOptions;
   };
   export?: {
     multiplier?: number;
@@ -567,15 +412,6 @@ const detectDielineFromFrame = async (options?: {
     }
 
     applyDetectedDielineConfig(result, sourceImage);
-    const sizeAdjusted = applyDetectSizeAdjust(
-      result,
-      options?.detect?.sizeAdjust,
-      debug,
-      expectedExpand,
-    );
-    if (sizeAdjusted) {
-      await settleDetectImageRender(sourceImage.imageIds);
-    }
 
     const diagnosticsOptions = {
       multiplier: options?.export?.multiplier ?? 2,
