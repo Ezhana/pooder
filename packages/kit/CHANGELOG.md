@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 5.3.1
+
+### Patch Changes
+
+- fix edge detection and expand
+
 ## 5.3.0
 
 ### Minor Changes
