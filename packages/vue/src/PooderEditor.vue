@@ -160,16 +160,6 @@ interface DetectFrameDiagnostics {
   coverageY: number;
 }
 
-interface DetectSizeByLongEdge {
-  widthMm: number;
-  heightMm: number;
-  scale: number;
-  sizeLongEdgeMm: number;
-  baseLongEdge: number;
-  appliedBounds: DetectBounds;
-  baseBounds: DetectBounds;
-}
-
 interface ExportUserCroppedImageResult {
   url: string;
   width: number;
@@ -195,11 +185,9 @@ interface FrameRect {
   height: number;
 }
 
-type ImageUpdateTarget = "auto" | "config" | "working";
+type ImageUpdateTarget = "auto" | "config";
 
 const IMAGE_OBJECT_LAYER_ID = "image.user";
-const IMAGE_TOOL_ID = "pooder.kit.image";
-
 const clampNormalized = (value: number): number => {
   return Math.max(-1, Math.min(2, value));
 };
@@ -281,7 +269,6 @@ const filterSnapshotsByIds = (
 const applyDetectedDielineConfig = (result: DetectEdgeResult) => {
   cfgSvc.update("dieline.shape", "custom");
   cfgSvc.update("dieline.pathData", result.pathData);
-  cfgSvc.update("dieline.features", []);
   cfgSvc.update("size.cutMode", "trim");
   cfgSvc.update("size.cutMarginMm", 0);
 };
@@ -298,83 +285,6 @@ const isValidBounds = (
     bounds.width > 0 &&
     bounds.height > 0
   );
-};
-
-const computeDetectSizeByLongEdge = (
-  result: DetectEdgeResult,
-): DetectSizeByLongEdge | null => {
-  const baseBounds = result.baseBounds || result.rawBounds;
-  const detectedBounds = result.rawBounds || result.baseBounds;
-  if (!isValidBounds(baseBounds) || !isValidBounds(detectedBounds)) return null;
-
-  const currentWidthMm = Number(cfgSvc.get("size.actualWidthMm", 0));
-  const currentHeightMm = Number(cfgSvc.get("size.actualHeightMm", 0));
-  const sizeLongEdgeMm = Math.max(currentWidthMm, currentHeightMm);
-  const baseLongEdge = Math.max(baseBounds.width, baseBounds.height);
-  const detectedLongEdge = Math.max(
-    detectedBounds.width,
-    detectedBounds.height,
-  );
-
-  if (
-    !Number.isFinite(sizeLongEdgeMm) ||
-    !Number.isFinite(baseLongEdge) ||
-    !Number.isFinite(detectedLongEdge) ||
-    sizeLongEdgeMm <= 0 ||
-    baseLongEdge <= 0 ||
-    detectedLongEdge <= 0
-  ) {
-    return null;
-  }
-
-  // Keep long-edge mapping against the actual applied contour bounds.
-  const scale = sizeLongEdgeMm / detectedLongEdge;
-  const widthMm = detectedBounds.width * scale;
-  const heightMm = detectedBounds.height * scale;
-
-  if (
-    !Number.isFinite(widthMm) ||
-    !Number.isFinite(heightMm) ||
-    widthMm <= 0 ||
-    heightMm <= 0
-  ) {
-    return null;
-  }
-
-  return {
-    widthMm,
-    heightMm,
-    scale,
-    sizeLongEdgeMm,
-    baseLongEdge,
-    appliedBounds: detectedBounds,
-    baseBounds,
-  };
-};
-
-const applyDetectSizeByLongEdge = (
-  result: DetectEdgeResult,
-  debug = false,
-): DetectSizeByLongEdge | null => {
-  const mappedSize = computeDetectSizeByLongEdge(result);
-  if (!mappedSize) return null;
-
-  cfgSvc.update("size.actualWidthMm", mappedSize.widthMm);
-  cfgSvc.update("size.actualHeightMm", mappedSize.heightMm);
-  cfgSvc.update(
-    "size.aspectRatio",
-    mappedSize.widthMm / Math.max(0.001, mappedSize.heightMm),
-  );
-
-  if (debug) {
-    console.info("[PooderEditor] detectDielineFromFrame size mapping", {
-      mappedSize,
-      rawBounds: result.rawBounds,
-      baseBounds: result.baseBounds,
-    });
-  }
-
-  return mappedSize;
 };
 
 const summarizeRectForDebug = (rect: any) => {
@@ -420,96 +330,6 @@ const summarizeSceneLayoutForDebug = (layout: any) => {
     cutRect: summarizeRectForDebug(layout.cutRect),
     bleedRect: summarizeRectForDebug(layout.bleedRect),
   };
-};
-
-const getDetectCenterOffset = (
-  result: DetectEdgeResult,
-  sourceWidth: number,
-  sourceHeight: number,
-) => {
-  const bounds = result.rawBounds || result.baseBounds;
-  if (
-    !isValidBounds(bounds) ||
-    !Number.isFinite(sourceWidth) ||
-    !Number.isFinite(sourceHeight) ||
-    sourceWidth <= 0 ||
-    sourceHeight <= 0
-  ) {
-    return null;
-  }
-  return {
-    bounds,
-    offsetX: bounds.x + bounds.width / 2 - sourceWidth / 2,
-    offsetY: bounds.y + bounds.height / 2 - sourceHeight / 2,
-  };
-};
-
-const normalizeImagePlacementForCompare = (items: any[]) => {
-  return (items || []).map((item: any) => ({
-    id: String(item?.id ?? ""),
-    left: Number(item?.left ?? 0),
-    top: Number(item?.top ?? 0),
-    scale: Number(item?.scale ?? 1),
-    angle: Number(item?.angle ?? 0),
-    url: typeof item?.url === "string" ? item.url : "",
-    sourceUrl: typeof item?.sourceUrl === "string" ? item.sourceUrl : "",
-    committedUrl:
-      typeof item?.committedUrl === "string" ? item.committedUrl : "",
-  }));
-};
-
-const detectImageWorkingSessionDirty = async (): Promise<boolean> => {
-  try {
-    const workingItems =
-      (await cmdSvc.executeCommand("getWorkingImages")) || [];
-    const configItems = cfgSvc.get("image.items", []) || [];
-    const workingNormalized = normalizeImagePlacementForCompare(workingItems);
-    const configNormalized = normalizeImagePlacementForCompare(configItems);
-    return (
-      JSON.stringify(workingNormalized) !== JSON.stringify(configNormalized)
-    );
-  } catch {
-    return false;
-  }
-};
-
-const resolveDetectImageUpdateTarget = async (
-  debug = false,
-): Promise<ImageUpdateTarget> => {
-  const activeToolId =
-    typeof (wbSvc as any)?.activeToolId === "string"
-      ? String((wbSvc as any).activeToolId)
-      : null;
-
-  if (activeToolId !== IMAGE_TOOL_ID) {
-    if (debug) {
-      console.info(
-        "[PooderEditor] detectDielineFromFrame image update target",
-        {
-          activeToolId,
-          target: "config",
-          reason: "image-tool-inactive",
-        },
-      );
-    }
-    return "config";
-  }
-
-  const workingDirty = await detectImageWorkingSessionDirty();
-  const target: ImageUpdateTarget = workingDirty ? "working" : "config";
-
-  if (debug) {
-    console.info("[PooderEditor] detectDielineFromFrame image update target", {
-      activeToolId,
-      workingDirty,
-      target,
-      reason: workingDirty
-        ? "working-session-dirty-follow-working"
-        : "working-session-clean-update-config",
-    });
-  }
-
-  return target;
 };
 
 const syncCommittedImageDataForIds = async (
@@ -783,88 +603,6 @@ const compensateImagesForDetectedDieline = async (
   }
 };
 
-const compensateImagesByDetectionOffset = async (
-  offsetX: number,
-  offsetY: number,
-  sourceWidth: number,
-  sourceHeight: number,
-  snapshots: ImageRenderSnapshot[],
-  debug = false,
-  target: ImageUpdateTarget = "auto",
-  label = "offset",
-) => {
-  if (!snapshots.length) return;
-  if (
-    !Number.isFinite(offsetX) ||
-    !Number.isFinite(offsetY) ||
-    !Number.isFinite(sourceWidth) ||
-    !Number.isFinite(sourceHeight) ||
-    sourceWidth <= 0 ||
-    sourceHeight <= 0
-  ) {
-    return;
-  }
-
-  const layout = await cmdSvc.executeCommand("getSceneLayout");
-  const frame = toFrameRect(layout);
-  if (!frame) return;
-
-  const shiftX = (offsetX * frame.width) / sourceWidth;
-  const shiftY = (offsetY * frame.height) / sourceHeight;
-
-  if (debug) {
-    console.info("[PooderEditor] detectDieline direct compensation", {
-      label,
-      target,
-      sourceWidth,
-      sourceHeight,
-      offsetX,
-      offsetY,
-      frame,
-      shiftX,
-      shiftY,
-      shiftNormalized: {
-        x: frame.width > 0 ? shiftX / frame.width : 0,
-        y: frame.height > 0 ? shiftY / frame.height : 0,
-      },
-      snapshotCount: snapshots.length,
-    });
-  }
-
-  for (const snapshot of snapshots) {
-    const targetCenterX = snapshot.centerX - shiftX;
-    const targetCenterY = snapshot.centerY - shiftY;
-    const left = clampNormalized(
-      (targetCenterX - frame.left) / Math.max(1, frame.width),
-    );
-    const top = clampNormalized(
-      (targetCenterY - frame.top) / Math.max(1, frame.height),
-    );
-
-    if (debug) {
-      console.info("[PooderEditor] detectDieline direct compensation item", {
-        label,
-        id: snapshot.id,
-        centerBefore: { x: snapshot.centerX, y: snapshot.centerY },
-        centerAfter: { x: targetCenterX, y: targetCenterY },
-        normalizedAfter: { left, top },
-      });
-    }
-
-    await cmdSvc.executeCommand(
-      "updateImage",
-      snapshot.id,
-      {
-        left,
-        top,
-      },
-      {
-        target,
-      },
-    );
-  }
-};
-
 const detectDieline = async (url: string) => {
   const canvasService = pooder.getService<CanvasService>("CanvasService");
   const snapshots = snapshotImageRenderStates(canvasService);
@@ -915,6 +653,22 @@ const detectDielineFromFrame = async (options?: {
   const includeDiagnostics = options?.inspect?.includeDiagnostics === true;
   const canvasService = pooder.getService<CanvasService>("CanvasService");
   const snapshots = snapshotImageRenderStates(canvasService);
+  console.info("[PooderEditor] detectDielineFromFrame start", {
+    commit: options?.commit !== false,
+    imageCount: snapshots.length,
+    export: {
+      multiplier: options?.export?.multiplier ?? 2,
+      format: options?.export?.format ?? "png",
+      imageIds: options?.export?.imageIds ?? null,
+    },
+    detect: {
+      expand: options?.detect?.expand ?? 0,
+      smoothing: options?.detect?.smoothing ?? true,
+      simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
+      threshold: options?.detect?.threshold,
+      debug,
+    },
+  });
   let layoutBeforeCommit: any = null;
   if (debug) {
     try {
@@ -935,7 +689,18 @@ const detectDielineFromFrame = async (options?: {
     imageIds: options?.export?.imageIds,
   });
   const sourceUrl = sourceImage?.url;
-  if (!sourceUrl) return null;
+  if (!sourceUrl) {
+    console.warn("[PooderEditor] detectDielineFromFrame no source image");
+    return null;
+  }
+
+  console.info("[PooderEditor] detectDielineFromFrame source exported", {
+    width: sourceImage.width,
+    height: sourceImage.height,
+    multiplier: sourceImage.multiplier,
+    format: sourceImage.format,
+    imageIds: sourceImage.imageIds,
+  });
 
   try {
     if (debug) {
@@ -970,8 +735,20 @@ const detectDielineFromFrame = async (options?: {
       debug,
     })) as DetectEdgeResult | null;
 
-    if (!result) return null;
+    if (!result) {
+      console.warn(
+        "[PooderEditor] detectDielineFromFrame detectEdge returned null",
+      );
+      return null;
+    }
     const diagnostics = buildDetectFrameDiagnostics(result, sourceImage);
+    console.info("[PooderEditor] detectDielineFromFrame detect result", {
+      hasPathData:
+        typeof result.pathData === "string" && result.pathData.length > 0,
+      rawBounds: result.rawBounds ?? null,
+      baseBounds: result.baseBounds ?? null,
+      diagnostics,
+    });
 
     if (debug) {
       console.info(
@@ -981,6 +758,9 @@ const detectDielineFromFrame = async (options?: {
     }
 
     if (options?.commit === false) {
+      console.info("[PooderEditor] detectDielineFromFrame commit skipped", {
+        reason: "commit=false",
+      });
       return {
         ...result,
         ...(includeCroppedImage ? { sourceImage } : {}),
@@ -989,8 +769,11 @@ const detectDielineFromFrame = async (options?: {
     }
 
     applyDetectedDielineConfig(result);
-    const mappedSize = applyDetectSizeByLongEdge(result, debug);
-    const imageUpdateTarget = await resolveDetectImageUpdateTarget(debug);
+    const imageUpdateTarget: ImageUpdateTarget = "config";
+    console.info("[PooderEditor] detectDielineFromFrame commit start", {
+      imageUpdateTarget,
+      correctedImageIds: sourceImage.imageIds,
+    });
     let committedSync: Array<{ id: string; width: number; height: number }> =
       [];
     const targetSnapshots = filterSnapshotsByIds(
@@ -1003,72 +786,13 @@ const detectDielineFromFrame = async (options?: {
       debug,
       imageUpdateTarget,
     );
-
-    // One-pass closed-loop correction: detect again on the updated frame and
-    // directly nudge image left/top by measured center residual.
-    const verifySource = await exportUserCroppedImage({
-      multiplier: options?.export?.multiplier ?? 2,
-      format: options?.export?.format ?? "png",
-      imageIds: sourceImage.imageIds,
+    console.info("[PooderEditor] detectDielineFromFrame compensation done", {
+      correctedImageCount: targetSnapshots.length,
+      imageUpdateTarget,
     });
-    const verifyUrl = verifySource?.url;
-    if (verifyUrl) {
-      try {
-        const verifyResult = (await cmdSvc.executeCommand(
-          "detectEdge",
-          verifyUrl,
-          {
-            expand: options?.detect?.expand ?? 0,
-            smoothing: options?.detect?.smoothing ?? true,
-            simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
-            threshold: options?.detect?.threshold,
-            debug,
-          },
-        )) as DetectEdgeResult | null;
 
-        if (verifyResult) {
-          const verifyOffset = getDetectCenterOffset(
-            verifyResult,
-            verifySource.width,
-            verifySource.height,
-          );
-          if (debug) {
-            console.info("[PooderEditor] detectDieline verify pass", {
-              sourceWidth: verifySource.width,
-              sourceHeight: verifySource.height,
-              offset: verifyOffset,
-              imageIds: sourceImage.imageIds,
-            });
-          }
-          if (
-            verifyOffset &&
-            (Math.abs(verifyOffset.offsetX) > 0.01 ||
-              Math.abs(verifyOffset.offsetY) > 0.01)
-          ) {
-            const latestSnapshots = filterSnapshotsByIds(
-              snapshotImageRenderStates(canvasService),
-              sourceImage.imageIds,
-            );
-            await compensateImagesByDetectionOffset(
-              verifyOffset.offsetX,
-              verifyOffset.offsetY,
-              verifySource.width,
-              verifySource.height,
-              latestSnapshots,
-              debug,
-              imageUpdateTarget,
-              "verify-pass",
-            );
-          }
-        }
-      } finally {
-        URL.revokeObjectURL(verifyUrl);
-      }
-    }
-
-    // Keep non-session rendering aligned with the latest detected dieline by
-    // syncing committed image bitmap data after position compensation.
-    if (imageUpdateTarget === "config" && sourceImage.imageIds.length > 0) {
+    // Keep non-session rendering aligned with latest detected dieline.
+    if (sourceImage.imageIds.length > 0) {
       committedSync = await syncCommittedImageDataForIds(
         sourceImage.imageIds,
         {
@@ -1078,6 +802,12 @@ const detectDielineFromFrame = async (options?: {
         debug,
       );
     }
+    console.info("[PooderEditor] detectDielineFromFrame commit result", {
+      imageUpdateTarget,
+      correctedImageCount: targetSnapshots.length,
+      committedSyncCount: committedSync.length,
+      committedSync,
+    });
 
     if (debug) {
       let layoutAfterCommit: any = null;
@@ -1091,10 +821,8 @@ const detectDielineFromFrame = async (options?: {
           },
         );
       }
-      console.info("[PooderEditor] detectDielineFromFrame commit result", {
-        mappedSize,
+      console.info("[PooderEditor] detectDielineFromFrame commit debug", {
         imageUpdateTarget,
-        committedSync,
         sizeAfter: {
           actualWidthMm: cfgSvc.get("size.actualWidthMm"),
           actualHeightMm: cfgSvc.get("size.actualHeightMm"),
