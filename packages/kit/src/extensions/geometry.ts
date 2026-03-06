@@ -35,6 +35,8 @@ export interface GeometryOptions {
   y: number;
   features: Array<DielineFeature>;
   pathData?: string;
+  customSourceWidthPx?: number;
+  customSourceHeightPx?: number;
   canvasWidth?: number;
   canvasHeight?: number;
 }
@@ -191,7 +193,17 @@ function selectOuterChain(args: {
  * Creates the base dieline shape (Rect/Circle/Ellipse/Custom)
  */
 function createBaseShape(options: GeometryOptions): paper.PathItem {
-  const { shape, width, height, radius, x, y, pathData } = options;
+  const {
+    shape,
+    width,
+    height,
+    radius,
+    x,
+    y,
+    pathData,
+    customSourceWidthPx,
+    customSourceHeightPx,
+  } = options;
   const center = new paper.Point(x, y);
 
   if (shape === "rect") {
@@ -220,16 +232,37 @@ function createBaseShape(options: GeometryOptions): paper.PathItem {
           single.pathData = pathData;
           return single;
         })();
-    // Align center
-    path.position = center;
+    const sourceWidth = Number(customSourceWidthPx ?? 0);
+    const sourceHeight = Number(customSourceHeightPx ?? 0);
+    if (
+      Number.isFinite(sourceWidth) &&
+      Number.isFinite(sourceHeight) &&
+      sourceWidth > 0 &&
+      sourceHeight > 0 &&
+      width > 0 &&
+      height > 0
+    ) {
+      // Preserve original detect-space offset/expand by mapping source image
+      // coordinates directly into the target dieline frame.
+      const targetLeft = x - width / 2;
+      const targetTop = y - height / 2;
+      path.scale(width / sourceWidth, height / sourceHeight, new paper.Point(0, 0));
+      path.translate(new paper.Point(targetLeft, targetTop));
+      return path;
+    }
+
     if (
       width > 0 &&
       height > 0 &&
       path.bounds.width > 0 &&
       path.bounds.height > 0
     ) {
+      // Fallback for malformed custom-path metadata.
+      path.position = center;
       path.scale(width / path.bounds.width, height / path.bounds.height);
+      return path;
     }
+    path.position = center;
     return path;
   } else {
     return new paper.Path.Rectangle({

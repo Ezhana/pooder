@@ -56,6 +56,8 @@ export interface SceneGeometrySnapshot {
   offset: number;
   scale: number;
   pathData?: string;
+  customSourceWidthPx?: number;
+  customSourceHeightPx?: number;
 }
 
 const DEFAULT_SIZE_STATE: SizeState = {
@@ -325,6 +327,10 @@ export function buildSceneGeometry(
     "mm",
   );
   const offset = (layout.cutRect.width - layout.trimRect.width) / 2;
+  const sourceWidth = Number(configService.get("dieline.customSourceWidthPx", 0));
+  const sourceHeight = Number(
+    configService.get("dieline.customSourceHeightPx", 0),
+  );
 
   return {
     shape: configService.get("dieline.shape", "rect"),
@@ -338,5 +344,9 @@ export function buildSceneGeometry(
     offset,
     scale: layout.scale,
     pathData: configService.get("dieline.pathData"),
+    customSourceWidthPx:
+      Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,
+    customSourceHeightPx:
+      Number.isFinite(sourceHeight) && sourceHeight > 0 ? sourceHeight : undefined,
   };
 }

@@ -37,6 +37,8 @@ export interface DielineGeometry {
   scale?: number;
   strokeWidth?: number;
   pathData?: string;
+  customSourceWidthPx?: number;
+  customSourceHeightPx?: number;
 }
 
 export interface LineStyle {
@@ -61,6 +63,8 @@ export interface DielineState {
   showBleedLines: boolean;
   features: DielineFeature[];
   pathData?: string;
+  customSourceWidthPx?: number;
+  customSourceHeightPx?: number;
 }
 
 const IMAGE_OBJECT_LAYER_ID = "image.user";
@@ -193,6 +197,20 @@ export class DielineTool implements Extension {
       );
       s.features = configService.get("dieline.features", s.features);
       s.pathData = configService.get("dieline.pathData", s.pathData);
+      const sourceWidth = Number(
+        configService.get("dieline.customSourceWidthPx", 0),
+      );
+      const sourceHeight = Number(
+        configService.get("dieline.customSourceHeightPx", 0),
+      );
+      s.customSourceWidthPx =
+        Number.isFinite(sourceWidth) && sourceWidth > 0
+          ? sourceWidth
+          : undefined;
+      s.customSourceHeightPx =
+        Number.isFinite(sourceHeight) && sourceHeight > 0
+          ? sourceHeight
+          : undefined;
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
@@ -261,6 +279,18 @@ export class DielineTool implements Extension {
               break;
             case "dieline.pathData":
               s.pathData = e.value;
+              break;
+            case "dieline.customSourceWidthPx":
+              s.customSourceWidthPx =
+                Number.isFinite(Number(e.value)) && Number(e.value) > 0
+                  ? Number(e.value)
+                  : undefined;
+              break;
+            case "dieline.customSourceHeightPx":
+              s.customSourceHeightPx =
+                Number.isFinite(Number(e.value)) && Number(e.value) > 0
+                  ? Number(e.value)
+                  : undefined;
               break;
           }
           this.updateDieline();
@@ -656,6 +686,8 @@ export class DielineTool implements Extension {
       y: cy,
       features: cutFeatures,
       pathData: this.state.pathData,
+      customSourceWidthPx: this.state.customSourceWidthPx,
+      customSourceHeightPx: this.state.customSourceHeightPx,
     });
     const mask = new Path(maskPathData, {
       fill: outsideColor,
@@ -683,6 +715,8 @@ export class DielineTool implements Extension {
         y: cy,
         features: cutFeatures,
         pathData: this.state.pathData,
+        customSourceWidthPx: this.state.customSourceWidthPx,
+        customSourceHeightPx: this.state.customSourceHeightPx,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
       });
@@ -709,6 +743,8 @@ export class DielineTool implements Extension {
           y: cy,
           features: cutFeatures,
           pathData: this.state.pathData,
+          customSourceWidthPx: this.state.customSourceWidthPx,
+          customSourceHeightPx: this.state.customSourceHeightPx,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
         },
@@ -721,6 +757,8 @@ export class DielineTool implements Extension {
           y: cy,
           features: cutFeatures,
           pathData: this.state.pathData,
+          customSourceWidthPx: this.state.customSourceWidthPx,
+          customSourceHeightPx: this.state.customSourceHeightPx,
           canvasWidth: canvasW,
           canvasHeight: canvasH,
         },
@@ -752,6 +790,8 @@ export class DielineTool implements Extension {
         y: cy,
         features: cutFeatures,
         pathData: this.state.pathData,
+        customSourceWidthPx: this.state.customSourceWidthPx,
+        customSourceHeightPx: this.state.customSourceHeightPx,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
       });
@@ -781,6 +821,8 @@ export class DielineTool implements Extension {
       y: cy,
       features: absoluteFeatures,
       pathData: this.state.pathData,
+      customSourceWidthPx: this.state.customSourceWidthPx,
+      customSourceHeightPx: this.state.customSourceHeightPx,
       canvasWidth: canvasW,
       canvasHeight: canvasH,
     });
@@ -838,6 +880,8 @@ export class DielineTool implements Extension {
       ...sceneGeometry,
       strokeWidth: this.state.mainLine.width,
       pathData: this.state.pathData,
+      customSourceWidthPx: this.state.customSourceWidthPx,
+      customSourceHeightPx: this.state.customSourceHeightPx,
     } as DielineGeometry;
   }
 
@@ -904,6 +948,8 @@ export class DielineTool implements Extension {
       y: cy,
       features: cutFeatures,
       pathData,
+      customSourceWidthPx: this.state.customSourceWidthPx,
+      customSourceHeightPx: this.state.customSourceHeightPx,
       canvasWidth: canvasW,
       canvasHeight: canvasH,
     });
