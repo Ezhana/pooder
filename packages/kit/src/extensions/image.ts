@@ -15,6 +15,8 @@ import {
   Point,
 } from "fabric";
 import { CanvasService, RenderObjectSpec } from "../services";
+import { isDielineShape, normalizeShapeStyle } from "./dielineShape";
+import type { DielineShape, DielineShapeStyle } from "./dielineShape";
 import { generateDielinePath } from "./geometry";
 import {
   buildSceneGeometry,
@@ -64,11 +66,11 @@ interface FrameVisualConfig {
   outerBackground: string;
 }
 
-type DielineShape = "rect" | "circle" | "ellipse" | "custom";
 type ShapeOverlayShape = Exclude<DielineShape, "custom">;
 
 interface SceneGeometryLike {
   shape: DielineShape;
+  shapeStyle: DielineShapeStyle;
   radius: number;
   offset: number;
 }
@@ -929,12 +931,7 @@ export class ImageTool implements Extension {
 
   private toSceneGeometryLike(raw: any): SceneGeometryLike | null {
     const shape = raw?.shape;
-    if (
-      shape !== "rect" &&
-      shape !== "circle" &&
-      shape !== "ellipse" &&
-      shape !== "custom"
-    ) {
+    if (!isDielineShape(shape)) {
       return null;
     }
 
@@ -942,6 +939,7 @@ export class ImageTool implements Extension {
     const offset = Number(raw?.offset);
     return {
       shape,
+      shapeStyle: normalizeShapeStyle(raw?.shapeStyle),
       radius: Number.isFinite(radius) ? radius : 0,
       offset: Number.isFinite(offset) ? offset : 0,
     };
@@ -1062,6 +1060,7 @@ export class ImageTool implements Extension {
     }
 
     const shape = sceneGeometry.shape as ShapeOverlayShape;
+    const shapeStyle = sceneGeometry.shapeStyle;
     const inset = 0;
     const shapeWidth = Math.max(1, frame.width);
     const shapeHeight = Math.max(1, frame.height);
@@ -1072,6 +1071,7 @@ export class ImageTool implements Extension {
       frameWidth: frame.width,
       frameHeight: frame.height,
       offset: sceneGeometry.offset,
+      shapeStyle,
       inset,
       shapeWidth,
       shapeHeight,
@@ -1097,6 +1097,7 @@ export class ImageTool implements Extension {
       x: frame.width / 2,
       y: frame.height / 2,
       features: [],
+      shapeStyle,
       canvasWidth: frame.width,
       canvasHeight: frame.height,
     };

@@ -12,6 +12,14 @@ import { ImageTracer } from "./tracer";
 import { Unit } from "../coordinate";
 import { parseLengthToMm } from "../units";
 import {
+  DEFAULT_DIELINE_SHAPE,
+  DEFAULT_DIELINE_SHAPE_STYLE,
+  DIELINE_SHAPES,
+  normalizeShapeStyle,
+  normalizeDielineShape,
+} from "./dielineShape";
+import type { DielineShape, DielineShapeStyle } from "./dielineShape";
+import {
   generateDielinePath,
   generateMaskPath,
   generateBleedZonePath,
@@ -24,7 +32,8 @@ import {
 } from "./sceneLayoutModel";
 
 export interface DielineGeometry {
-  shape: "rect" | "circle" | "ellipse" | "custom";
+  shape: DielineShape;
+  shapeStyle: DielineShapeStyle;
   unit: "mm";
   displayUnit: Unit;
   x: number;
@@ -50,7 +59,8 @@ export interface LineStyle {
 
 export interface DielineState {
   displayUnit: Unit;
-  shape: "rect" | "circle" | "ellipse" | "custom";
+  shape: DielineShape;
+  shapeStyle: DielineShapeStyle;
   width: number;
   height: number;
   radius: number;
@@ -77,7 +87,8 @@ export class DielineTool implements Extension {
 
   private state: DielineState = {
     displayUnit: "mm",
-    shape: "rect",
+    shape: DEFAULT_DIELINE_SHAPE,
+    shapeStyle: { ...DEFAULT_DIELINE_SHAPE_STYLE },
     width: 500,
     height: 500,
     radius: 0,
@@ -118,7 +129,15 @@ export class DielineTool implements Extension {
         Object.assign(this.state.offsetLine, options.offsetLine);
         delete options.offsetLine;
       }
+      if (options.shapeStyle) {
+        this.state.shapeStyle = normalizeShapeStyle(
+          options.shapeStyle,
+          this.state.shapeStyle,
+        );
+        delete options.shapeStyle;
+      }
       Object.assign(this.state, options);
+      this.state.shape = normalizeDielineShape(options.shape, this.state.shape);
     }
   }
 
@@ -138,7 +157,14 @@ export class DielineTool implements Extension {
       const s = this.state;
       const sizeState = readSizeState(configService);
       s.displayUnit = sizeState.unit;
-      s.shape = configService.get("dieline.shape", s.shape);
+      s.shape = normalizeDielineShape(
+        configService.get("dieline.shape", s.shape),
+        s.shape,
+      );
+      s.shapeStyle = normalizeShapeStyle(
+        configService.get("dieline.shapeStyle", s.shapeStyle),
+        s.shapeStyle,
+      );
       s.width = sizeState.actualWidthMm;
       s.height = sizeState.actualHeightMm;
       s.radius = parseLengthToMm(
@@ -233,7 +259,10 @@ export class DielineTool implements Extension {
         if (e.key.startsWith("dieline.")) {
           switch (e.key) {
             case "dieline.shape":
-              s.shape = e.value;
+              s.shape = normalizeDielineShape(e.value, s.shape);
+              break;
+            case "dieline.shapeStyle":
+              s.shapeStyle = normalizeShapeStyle(e.value, s.shapeStyle);
               break;
             case "dieline.radius":
               s.radius = parseLengthToMm(e.value, "mm");
@@ -329,7 +358,7 @@ export class DielineTool implements Extension {
           id: "dieline.shape",
           type: "select",
           label: "Shape",
-          options: ["rect", "circle", "ellipse", "custom"],
+          options: Array.from(DIELINE_SHAPES),
           default: s.shape,
         },
         {
@@ -339,6 +368,12 @@ export class DielineTool implements Extension {
           min: 0,
           max: 500,
           default: s.radius,
+        },
+        {
+          id: "dieline.shapeStyle",
+          type: "json",
+          label: "Shape Style",
+          default: s.shapeStyle,
         },
         {
           id: "dieline.showBleedLines",
@@ -637,6 +672,7 @@ export class DielineTool implements Extension {
 
     const {
       shape,
+      shapeStyle,
       radius,
       mainLine,
       offsetLine,
@@ -685,6 +721,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       features: cutFeatures,
+      shapeStyle,
       pathData: this.state.pathData,
       customSourceWidthPx: this.state.customSourceWidthPx,
       customSourceHeightPx: this.state.customSourceHeightPx,
@@ -714,6 +751,7 @@ export class DielineTool implements Extension {
         x: cx,
         y: cy,
         features: cutFeatures,
+        shapeStyle,
         pathData: this.state.pathData,
         customSourceWidthPx: this.state.customSourceWidthPx,
         customSourceHeightPx: this.state.customSourceHeightPx,
@@ -742,6 +780,7 @@ export class DielineTool implements Extension {
           x: cx,
           y: cy,
           features: cutFeatures,
+          shapeStyle,
           pathData: this.state.pathData,
           customSourceWidthPx: this.state.customSourceWidthPx,
           customSourceHeightPx: this.state.customSourceHeightPx,
@@ -756,6 +795,7 @@ export class DielineTool implements Extension {
           x: cx,
           y: cy,
           features: cutFeatures,
+          shapeStyle,
           pathData: this.state.pathData,
           customSourceWidthPx: this.state.customSourceWidthPx,
           customSourceHeightPx: this.state.customSourceHeightPx,
@@ -789,6 +829,7 @@ export class DielineTool implements Extension {
         x: cx,
         y: cy,
         features: cutFeatures,
+        shapeStyle,
         pathData: this.state.pathData,
         customSourceWidthPx: this.state.customSourceWidthPx,
         customSourceHeightPx: this.state.customSourceHeightPx,
@@ -820,6 +861,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       features: absoluteFeatures,
+      shapeStyle,
       pathData: this.state.pathData,
       customSourceWidthPx: this.state.customSourceWidthPx,
       customSourceHeightPx: this.state.customSourceHeightPx,
@@ -914,7 +956,7 @@ export class DielineTool implements Extension {
       return null;
     }
 
-    const { shape, radius, features, pathData } = this.state;
+    const { shape, shapeStyle, radius, features, pathData } = this.state;
     const canvasW =
       sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
     const canvasH =
@@ -947,6 +989,7 @@ export class DielineTool implements Extension {
       x: cx,
       y: cy,
       features: cutFeatures,
+      shapeStyle,
       pathData,
       customSourceWidthPx: this.state.customSourceWidthPx,
       customSourceHeightPx: this.state.customSourceHeightPx,

@@ -2,6 +2,13 @@ import type { ConfigurationService } from "@pooder/core";
 import type { CanvasService } from "../services";
 import { Coordinate, Unit } from "../coordinate";
 import { parseLengthToMm } from "../units";
+import {
+  DEFAULT_DIELINE_SHAPE,
+  DEFAULT_DIELINE_SHAPE_STYLE,
+  normalizeShapeStyle,
+  normalizeDielineShape,
+} from "./dielineShape";
+import type { DielineShape, DielineShapeStyle } from "./dielineShape";
 
 export type SizeConstraintMode = "free" | "lockAspect" | "equal";
 export type CutMode = "trim" | "outset" | "inset";
@@ -45,7 +52,8 @@ export interface SceneLayoutSnapshot {
 }
 
 export interface SceneGeometrySnapshot {
-  shape: "rect" | "circle" | "ellipse" | "custom";
+  shape: DielineShape;
+  shapeStyle: DielineShapeStyle;
   unit: "mm";
   displayUnit: Unit;
   x: number;
@@ -331,9 +339,15 @@ export function buildSceneGeometry(
   const sourceHeight = Number(
     configService.get("dieline.customSourceHeightPx", 0),
   );
+  const shapeStyle = normalizeShapeStyle(
+    configService.get("dieline.shapeStyle", DEFAULT_DIELINE_SHAPE_STYLE),
+  );
 
   return {
-    shape: configService.get("dieline.shape", "rect"),
+    shape: normalizeDielineShape(
+      configService.get("dieline.shape", DEFAULT_DIELINE_SHAPE),
+    ),
+    shapeStyle,
     unit: "mm",
     displayUnit: normalizeUnit(configService.get("size.unit", "mm")),
     x: layout.trimRect.centerX,

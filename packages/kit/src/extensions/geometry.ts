@@ -1,5 +1,16 @@
 import paper from "paper";
 import { pickExitIndex, scoreOutsideAbove } from "./bridgeSelection";
+import {
+  DEFAULT_DIELINE_SHAPE,
+  getHeartShapeParams,
+  getShapeFitMode,
+} from "./dielineShape";
+import type {
+  BuiltinDielineShape,
+  DielineShape,
+  DielineShapeStyle,
+  ShapeFitMode,
+} from "./dielineShape";
 import { sampleWrappedOffsets, wrappedDistance } from "./wrappedOffsets";
 
 export type FeatureOperation = "add" | "subtract";
@@ -27,7 +38,7 @@ export interface DielineFeature {
 }
 
 export interface GeometryOptions {
-  shape: "rect" | "circle" | "ellipse" | "custom";
+  shape: DielineShape;
   width: number;
   height: number;
   radius: number;
@@ -35,6 +46,7 @@ export interface GeometryOptions {
   y: number;
   features: Array<DielineFeature>;
   pathData?: string;
+  shapeStyle?: DielineShapeStyle;
   customSourceWidthPx?: number;
   customSourceHeightPx?: number;
   canvasWidth?: number;
@@ -190,86 +202,207 @@ function selectOuterChain(args: {
 }
 
 /**
- * Creates the base dieline shape (Rect/Circle/Ellipse/Custom)
+ * Creates the base dieline shape (Rect/Circle/Ellipse/Heart/Custom).
  */
-function createBaseShape(options: GeometryOptions): paper.PathItem {
+type BuiltinShapeBuilder = (options: GeometryOptions) => paper.PathItem;
+
+function fitPathItemToRect(
+  item: paper.PathItem,
+  rect: { left: number; top: number; width: number; height: number },
+  fitMode: ShapeFitMode,
+): paper.PathItem {
+  const { left, top, width, height } = rect;
+  const bounds = item.bounds;
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
+    bounds.width <= 0 ||
+    bounds.height <= 0
+  ) {
+    item.position = new paper.Point(left + width / 2, top + height / 2);
+    return item;
+  }
+
+  item.translate(new paper.Point(-bounds.left, -bounds.top));
+  if (fitMode === "stretch") {
+    item.scale(width / bounds.width, height / bounds.height, new paper.Point(0, 0));
+    item.translate(new paper.Point(left, top));
+    return item;
+  }
+
+  const uniformScale = Math.min(width / bounds.width, height / bounds.height);
+  item.scale(uniformScale, uniformScale, new paper.Point(0, 0));
+  const scaledWidth = bounds.width * uniformScale;
+  const scaledHeight = bounds.height * uniformScale;
+  item.translate(
+    new paper.Point(
+      left + (width - scaledWidth) / 2,
+      top + (height - scaledHeight) / 2,
+    ),
+  );
+  return item;
+}
+
+function createNormalizedHeartPath(params: {
+  lobeSpread: number;
+  notchDepth: number;
+  tipSharpness: number;
+}): paper.Path {
+  const { lobeSpread, notchDepth, tipSharpness } = params;
+
+  const halfSpread = 0.22 + lobeSpread * 0.18;
+  const notchY = 0.06 + notchDepth * 0.2;
+  const shoulderY = 0.24 + notchDepth * 0.2;
+  const topLift = 0.12 + (1 - notchDepth) * 0.06;
+  const topY = notchY - topLift;
+  const sideCtrlY = shoulderY - (0.18 - notchDepth * 0.08);
+  const lowerCtrlY = 0.58 + (1 - tipSharpness) * 0.16;
+  const tipCtrlX = 0.34 - tipSharpness * 0.2;
+  const notchCtrlX = 0.06 + lobeSpread * 0.06;
+  const lobeCtrlX = 0.1 + lobeSpread * 0.08;
+  const notchCtrlY = notchY - topLift * 0.45;
+
+  const xPeakL = 0.5 - halfSpread;
+  const xPeakR = 0.5 + halfSpread;
+
+  const heartPath = new paper.Path({ insert: false });
+  heartPath.moveTo(new paper.Point(0.5, notchY));
+  heartPath.cubicCurveTo(
+    new paper.Point(0.5 - notchCtrlX, notchCtrlY),
+    new paper.Point(xPeakL + lobeCtrlX, topY),
+    new paper.Point(xPeakL, topY),
+  );
+  heartPath.cubicCurveTo(
+    new paper.Point(xPeakL - lobeCtrlX, topY),
+    new paper.Point(0, sideCtrlY),
+    new paper.Point(0, shoulderY),
+  );
+  heartPath.cubicCurveTo(
+    new paper.Point(0, lowerCtrlY),
+    new paper.Point(tipCtrlX, 1),
+    new paper.Point(0.5, 1),
+  );
+  heartPath.cubicCurveTo(
+    new paper.Point(1 - tipCtrlX, 1),
+    new paper.Point(1, lowerCtrlY),
+    new paper.Point(1, shoulderY),
+  );
+  heartPath.cubicCurveTo(
+    new paper.Point(1, sideCtrlY),
+    new paper.Point(xPeakR + lobeCtrlX, topY),
+    new paper.Point(xPeakR, topY),
+  );
+  heartPath.cubicCurveTo(
+    new paper.Point(xPeakR - lobeCtrlX, topY),
+    new paper.Point(0.5 + notchCtrlX, notchCtrlY),
+    new paper.Point(0.5, notchY),
+  );
+  heartPath.closed = true;
+  return heartPath;
+}
+
+function createHeartBaseShape(options: GeometryOptions): paper.PathItem {
+  const { x, y, width, height } = options;
+  const w = Math.max(0, width);
+  const h = Math.max(0, height);
+  const left = x - w / 2;
+  const top = y - h / 2;
+  const fitMode = getShapeFitMode(options.shapeStyle);
+  const heartParams = getHeartShapeParams(options.shapeStyle);
+  const rawHeart = createNormalizedHeartPath(heartParams);
+  return fitPathItemToRect(rawHeart, { left, top, width: w, height: h }, fitMode);
+}
+
+const BUILTIN_SHAPE_BUILDERS: Record<BuiltinDielineShape, BuiltinShapeBuilder> =
+  {
+    rect: (options) => {
+      const { x, y, width, height, radius } = options;
+      return new paper.Path.Rectangle({
+        point: [x - width / 2, y - height / 2],
+        size: [Math.max(0, width), Math.max(0, height)],
+        radius: Math.max(0, radius),
+      });
+    },
+    circle: (options) => {
+      const { x, y, width, height } = options;
+      const r = Math.min(width, height) / 2;
+      return new paper.Path.Circle({
+        center: new paper.Point(x, y),
+        radius: Math.max(0, r),
+      });
+    },
+    ellipse: (options) => {
+      const { x, y, width, height } = options;
+      return new paper.Path.Ellipse({
+        center: new paper.Point(x, y),
+        radius: [Math.max(0, width / 2), Math.max(0, height / 2)],
+      });
+    },
+    heart: createHeartBaseShape,
+  };
+
+function createCustomBaseShape(options: GeometryOptions): paper.PathItem | null {
   const {
-    shape,
-    width,
-    height,
-    radius,
-    x,
-    y,
     pathData,
     customSourceWidthPx,
     customSourceHeightPx,
+    x,
+    y,
+    width,
+    height,
   } = options;
-  const center = new paper.Point(x, y);
-
-  if (shape === "rect") {
-    return new paper.Path.Rectangle({
-      point: [x - width / 2, y - height / 2],
-      size: [Math.max(0, width), Math.max(0, height)],
-      radius: Math.max(0, radius),
-    });
-  } else if (shape === "circle") {
-    const r = Math.min(width, height) / 2;
-    return new paper.Path.Circle({
-      center: center,
-      radius: Math.max(0, r),
-    });
-  } else if (shape === "ellipse") {
-    return new paper.Path.Ellipse({
-      center: center,
-      radius: [Math.max(0, width / 2), Math.max(0, height / 2)],
-    });
-  } else if (shape === "custom" && pathData) {
-    const hasMultipleSubPaths = ((pathData.match(/[Mm]/g) || []).length ?? 0) > 1;
-    const path: paper.PathItem = hasMultipleSubPaths
-      ? new paper.CompoundPath(pathData)
-      : (() => {
-          const single = new paper.Path();
-          single.pathData = pathData;
-          return single;
-        })();
-    const sourceWidth = Number(customSourceWidthPx ?? 0);
-    const sourceHeight = Number(customSourceHeightPx ?? 0);
-    if (
-      Number.isFinite(sourceWidth) &&
-      Number.isFinite(sourceHeight) &&
-      sourceWidth > 0 &&
-      sourceHeight > 0 &&
-      width > 0 &&
-      height > 0
-    ) {
-      // Preserve original detect-space offset/expand by mapping source image
-      // coordinates directly into the target dieline frame.
-      const targetLeft = x - width / 2;
-      const targetTop = y - height / 2;
-      path.scale(width / sourceWidth, height / sourceHeight, new paper.Point(0, 0));
-      path.translate(new paper.Point(targetLeft, targetTop));
-      return path;
-    }
-
-    if (
-      width > 0 &&
-      height > 0 &&
-      path.bounds.width > 0 &&
-      path.bounds.height > 0
-    ) {
-      // Fallback for malformed custom-path metadata.
-      path.position = center;
-      path.scale(width / path.bounds.width, height / path.bounds.height);
-      return path;
-    }
-    path.position = center;
-    return path;
-  } else {
-    return new paper.Path.Rectangle({
-      point: [x - width / 2, y - height / 2],
-      size: [Math.max(0, width), Math.max(0, height)],
-    });
+  if (typeof pathData !== "string" || pathData.trim().length === 0) {
+    return null;
   }
+
+  const center = new paper.Point(x, y);
+  const hasMultipleSubPaths = ((pathData.match(/[Mm]/g) || []).length ?? 0) > 1;
+  const path: paper.PathItem = hasMultipleSubPaths
+    ? new paper.CompoundPath(pathData)
+    : (() => {
+        const single = new paper.Path();
+        single.pathData = pathData;
+        return single;
+      })();
+  const sourceWidth = Number(customSourceWidthPx ?? 0);
+  const sourceHeight = Number(customSourceHeightPx ?? 0);
+  if (
+    Number.isFinite(sourceWidth) &&
+    Number.isFinite(sourceHeight) &&
+    sourceWidth > 0 &&
+    sourceHeight > 0 &&
+    width > 0 &&
+    height > 0
+  ) {
+    // Preserve original detect-space offset/expand by mapping source image
+    // coordinates directly into the target dieline frame.
+    const targetLeft = x - width / 2;
+    const targetTop = y - height / 2;
+    path.scale(width / sourceWidth, height / sourceHeight, new paper.Point(0, 0));
+    path.translate(new paper.Point(targetLeft, targetTop));
+    return path;
+  }
+
+  if (width > 0 && height > 0 && path.bounds.width > 0 && path.bounds.height > 0) {
+    // Fallback for malformed custom-path metadata.
+    path.position = center;
+    path.scale(width / path.bounds.width, height / path.bounds.height);
+    return path;
+  }
+  path.position = center;
+  return path;
+}
+
+function createBaseShape(options: GeometryOptions): paper.PathItem {
+  const { shape } = options;
+  if (shape === "custom") {
+    const customShape = createCustomBaseShape(options);
+    if (customShape) return customShape;
+    return BUILTIN_SHAPE_BUILDERS[DEFAULT_DIELINE_SHAPE](options);
+  }
+  return BUILTIN_SHAPE_BUILDERS[shape](options);
 }
 
 function resolveBridgeBasePath(
