@@ -11,10 +11,40 @@ import { Service, EventBus } from "@pooder/core";
 import { ViewportSystem } from "./ViewportSystem";
 import type { RenderLayerSpec, RenderObjectSpec } from "./renderSpec";
 
+export interface RenderProducerResult {
+  layerSpecs?: Record<string, RenderObjectSpec[]>;
+  rootLayerSpecs?: Record<string, RenderObjectSpec[]>;
+  replaceLayerIds?: string[];
+  replaceRootLayerIds?: string[];
+}
+
+export type RenderProducer = () =>
+  | RenderProducerResult
+  | undefined
+  | Promise<RenderProducerResult | undefined>;
+
+export interface RegisterRenderProducerOptions {
+  priority?: number;
+}
+
+interface RenderProducerEntry {
+  toolId: string;
+  producer: RenderProducer;
+  priority: number;
+  order: number;
+}
+
 export default class CanvasService implements Service {
   public canvas: Canvas;
   public viewport: ViewportSystem;
   private eventBus?: EventBus;
+  private renderProducers: Map<string, RenderProducerEntry> = new Map();
+  private producerOrder = 0;
+  private producerFlushRequested = false;
+  private producerLoopPending = false;
+  private producerLoopPromise: Promise<void> | null = null;
+  private managedProducerLayerIds: Set<string> = new Set();
+  private managedProducerRootLayerIds: Set<string> = new Set();
 
   constructor(el: HTMLCanvasElement | string | Canvas, options?: any) {
     if (el instanceof Canvas) {
@@ -56,7 +86,181 @@ export default class CanvasService implements Service {
   }
 
   dispose() {
+    this.renderProducers.clear();
+    this.managedProducerLayerIds.clear();
+    this.managedProducerRootLayerIds.clear();
+    this.producerFlushRequested = false;
     this.canvas.dispose();
+  }
+
+  registerRenderProducer(
+    toolId: string,
+    producer: RenderProducer,
+    options: RegisterRenderProducerOptions = {},
+  ): { dispose: () => void } {
+    const normalizedToolId = String(toolId || "").trim();
+    if (!normalizedToolId) {
+      throw new Error("[CanvasService] registerRenderProducer requires a toolId.");
+    }
+    if (typeof producer !== "function") {
+      throw new Error(
+        `[CanvasService] registerRenderProducer("${normalizedToolId}") requires a producer function.`,
+      );
+    }
+    const entry: RenderProducerEntry = {
+      toolId: normalizedToolId,
+      producer,
+      priority: Number.isFinite(options.priority)
+        ? Number(options.priority)
+        : 0,
+      order: this.producerOrder++,
+    };
+    this.renderProducers.set(normalizedToolId, entry);
+    this.requestRenderFromProducers();
+    return {
+      dispose: () => {
+        this.unregisterRenderProducer(normalizedToolId);
+      },
+    };
+  }
+
+  unregisterRenderProducer(toolId: string): boolean {
+    const normalizedToolId = String(toolId || "").trim();
+    if (!normalizedToolId) return false;
+    const removed = this.renderProducers.delete(normalizedToolId);
+    if (removed) {
+      this.requestRenderFromProducers();
+    }
+    return removed;
+  }
+
+  requestRenderFromProducers() {
+    this.producerFlushRequested = true;
+    this.scheduleProducerLoop();
+  }
+
+  async flushRenderFromProducers(): Promise<void> {
+    this.requestRenderFromProducers();
+    if (this.producerLoopPromise) {
+      await this.producerLoopPromise;
+    }
+  }
+
+  private scheduleProducerLoop() {
+    if (this.producerLoopPending) return;
+    this.producerLoopPending = true;
+    this.producerLoopPromise = Promise.resolve()
+      .then(() => this.runProducerLoop())
+      .catch((error) => {
+        console.error("[CanvasService] render producer loop failed.", error);
+      })
+      .finally(() => {
+        this.producerLoopPending = false;
+        if (this.producerFlushRequested) {
+          this.scheduleProducerLoop();
+        }
+      });
+  }
+
+  private async runProducerLoop(): Promise<void> {
+    while (this.producerFlushRequested) {
+      this.producerFlushRequested = false;
+      await this.collectAndApplyProducerSpecs();
+    }
+  }
+
+  private sortedRenderProducerEntries(): RenderProducerEntry[] {
+    return Array.from(this.renderProducers.values()).sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority;
+      }
+      if (a.order !== b.order) {
+        return a.order - b.order;
+      }
+      return a.toolId.localeCompare(b.toolId);
+    });
+  }
+
+  private appendLayerSpecMap(
+    map: Map<string, RenderObjectSpec[]>,
+    source?: Record<string, RenderObjectSpec[]>,
+  ) {
+    if (!source) return;
+    Object.entries(source).forEach(([layerId, specs]) => {
+      if (!Array.isArray(specs)) return;
+      const list = map.get(layerId) || [];
+      list.push(...specs);
+      map.set(layerId, list);
+    });
+  }
+
+  private async collectAndApplyProducerSpecs(): Promise<void> {
+    const groupLayerSpecs = new Map<string, RenderObjectSpec[]>();
+    const rootLayerSpecs = new Map<string, RenderObjectSpec[]>();
+    const replaceLayerIds = new Set<string>();
+    const replaceRootLayerIds = new Set<string>();
+    const entries = this.sortedRenderProducerEntries();
+
+    for (const entry of entries) {
+      try {
+        const result = await entry.producer();
+        if (!result) continue;
+        this.appendLayerSpecMap(groupLayerSpecs, result.layerSpecs);
+        this.appendLayerSpecMap(rootLayerSpecs, result.rootLayerSpecs);
+        if (Array.isArray(result.replaceLayerIds)) {
+          result.replaceLayerIds.forEach((layerId) => {
+            if (layerId) replaceLayerIds.add(layerId);
+          });
+        }
+        if (Array.isArray(result.replaceRootLayerIds)) {
+          result.replaceRootLayerIds.forEach((layerId) => {
+            if (layerId) replaceRootLayerIds.add(layerId);
+          });
+        }
+      } catch (error) {
+        console.error(
+          `[CanvasService] render producer "${entry.toolId}" failed.`,
+          error,
+        );
+      }
+    }
+
+    const nextLayerIds = new Set(groupLayerSpecs.keys());
+    const nextRootLayerIds = new Set(rootLayerSpecs.keys());
+
+    for (const [layerId, specs] of groupLayerSpecs.entries()) {
+      if (replaceLayerIds.has(layerId)) {
+        const layer = this.getLayer(layerId);
+        if (layer) {
+          (layer.getObjects() as any[]).forEach((obj) => layer.remove(obj));
+        }
+      }
+      await this.applyObjectSpecsToLayer(layerId, specs, { render: false });
+    }
+
+    for (const layerId of this.managedProducerLayerIds) {
+      if (nextLayerIds.has(layerId)) continue;
+      const layer = this.getLayer(layerId);
+      if (!layer) continue;
+      await this.applyObjectSpecsToContainer(layer, [], { render: false });
+    }
+
+    for (const [layerId, specs] of rootLayerSpecs.entries()) {
+      if (replaceRootLayerIds.has(layerId)) {
+        const existing = this.getRootLayerObjects(layerId) as any[];
+        existing.forEach((obj) => this.canvas.remove(obj));
+      }
+      await this.applyObjectSpecsToRootLayer(layerId, specs, { render: false });
+    }
+
+    for (const layerId of this.managedProducerRootLayerIds) {
+      if (nextRootLayerIds.has(layerId)) continue;
+      await this.applyObjectSpecsToRootLayer(layerId, [], { render: false });
+    }
+
+    this.managedProducerLayerIds = nextLayerIds;
+    this.managedProducerRootLayerIds = nextRootLayerIds;
+    this.requestRenderAll();
   }
 
   /**
@@ -118,9 +322,10 @@ export default class CanvasService implements Service {
   async applyObjectSpecsToLayer(
     layerId: string,
     objects: RenderObjectSpec[],
+    options: { render?: boolean } = {},
   ): Promise<void> {
     const layer = this.createLayer(layerId, {});
-    await this.applyObjectSpecsToContainer(layer, objects);
+    await this.applyObjectSpecsToContainer(layer, objects, options);
   }
 
   getRootLayerObjects(layerId: string): FabricObject[] {
@@ -132,6 +337,7 @@ export default class CanvasService implements Service {
   async applyObjectSpecsToRootLayer(
     layerId: string,
     specs: RenderObjectSpec[],
+    options: { render?: boolean } = {},
   ): Promise<void> {
     const desiredIds = new Set(specs.map((s) => s.id));
     const existing = this.getRootLayerObjects(layerId) as any[];
@@ -175,12 +381,15 @@ export default class CanvasService implements Service {
       this.patchFabricObject(current, spec, { layerId });
     }
 
-    this.requestRenderAll();
+    if (options.render !== false) {
+      this.requestRenderAll();
+    }
   }
 
   private async applyObjectSpecsToContainer(
     container: Group,
     specs: RenderObjectSpec[],
+    options: { render?: boolean } = {},
   ): Promise<void> {
     const desiredIds = new Set(specs.map((s) => s.id));
     const existing = container.getObjects() as any[];
@@ -226,7 +435,9 @@ export default class CanvasService implements Service {
     }
 
     container.dirty = true;
-    this.requestRenderAll();
+    if (options.render !== false) {
+      this.requestRenderAll();
+    }
   }
 
   private patchFabricObject(

@@ -125,6 +125,10 @@ export class WhiteInkTool implements Extension {
   private previewImageVisible = true;
   private renderSeq = 0;
   private dirtyTrackerDisposable?: { dispose(): void };
+  private whiteSpecs: RenderObjectSpec[] = [];
+  private coverSpecs: RenderObjectSpec[] = [];
+  private overlaySpecs: RenderObjectSpec[] = [];
+  private renderProducerDisposable?: { dispose: () => void };
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -133,6 +137,18 @@ export class WhiteInkTool implements Extension {
       console.warn("CanvasService not found for WhiteInkTool");
       return;
     }
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
+      this.id,
+      () => ({
+        rootLayerSpecs: {
+          [WHITE_INK_OBJECT_LAYER_ID]: this.whiteSpecs,
+          [WHITE_INK_COVER_LAYER_ID]: this.coverSpecs,
+          [WHITE_INK_OVERLAY_LAYER_ID]: this.overlaySpecs,
+        },
+      }),
+      { priority: 260 },
+    );
 
     context.eventBus.on("tool:activated", this.onToolActivated);
     context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
@@ -223,6 +239,11 @@ export class WhiteInkTool implements Extension {
     this.dirtyTrackerDisposable = undefined;
     this.clearRenderedWhiteInks();
     this.applyImageVisibilityForWhiteInk(false);
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = undefined;
+    if (this.canvasService) {
+      void this.canvasService.flushRenderFromProducers();
+    }
 
     this.canvasService = undefined;
     this.context = undefined;
@@ -1307,18 +1328,10 @@ export class WhiteInkTool implements Extension {
 
   private clearRenderedWhiteInks() {
     if (!this.canvasService) return;
-    void this.canvasService.applyObjectSpecsToRootLayer(
-      WHITE_INK_OBJECT_LAYER_ID,
-      [],
-    );
-    void this.canvasService.applyObjectSpecsToRootLayer(
-      WHITE_INK_COVER_LAYER_ID,
-      [],
-    );
-    void this.canvasService.applyObjectSpecsToRootLayer(
-      WHITE_INK_OVERLAY_LAYER_ID,
-      [],
-    );
+    this.whiteSpecs = [];
+    this.coverSpecs = [];
+    this.overlaySpecs = [];
+    this.canvasService.requestRenderFromProducers();
   }
 
   private purgeSourceCaches(item?: WhiteInkItem) {
@@ -1397,22 +1410,14 @@ export class WhiteInkTool implements Extension {
       }
     }
 
-    await this.canvasService.applyObjectSpecsToRootLayer(
-      WHITE_INK_OBJECT_LAYER_ID,
-      whiteSpecs,
-    );
+    this.whiteSpecs = whiteSpecs;
     if (seq !== this.renderSeq) return;
 
-    await this.canvasService.applyObjectSpecsToRootLayer(
-      WHITE_INK_COVER_LAYER_ID,
-      coverSpecs,
-    );
+    this.coverSpecs = coverSpecs;
     if (seq !== this.renderSeq) return;
 
-    await this.canvasService.applyObjectSpecsToRootLayer(
-      WHITE_INK_OVERLAY_LAYER_ID,
-      frameSpecs,
-    );
+    this.overlaySpecs = frameSpecs;
+    await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
 
     this.syncZOrder();

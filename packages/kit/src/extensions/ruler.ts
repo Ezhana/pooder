@@ -51,6 +51,8 @@ export class RulerTool implements Extension {
   private fontSize = DEFAULT_FONT_SIZE;
   private renderSeq = 0;
   private readonly numericProps = new Set(["thickness", "gap", "fontSize"]);
+  private specs: RenderObjectSpec[] = [];
+  private renderProducerDisposable?: { dispose: () => void };
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
@@ -80,6 +82,20 @@ export class RulerTool implements Extension {
       console.warn("[RulerTool] CanvasService not found.");
       return;
     }
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
+      this.id,
+      () => ({
+        layerSpecs: {
+          [RULER_LAYER_ID]: this.specs,
+        },
+        rootLayerSpecs: {
+          [RULER_LAYER_ID]: [],
+        },
+        replaceLayerIds: [RULER_LAYER_ID],
+      }),
+      { priority: 400 },
+    );
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -124,9 +140,11 @@ export class RulerTool implements Extension {
 
   deactivate(context: ExtensionContext) {
     context.eventBus.off("canvas:resized", this.onCanvasResized);
+    this.specs = [];
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = undefined;
     if (this.canvasService) {
-      void this.canvasService.applyObjectSpecsToLayer(RULER_LAYER_ID, []);
-      void this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
+      void this.canvasService.flushRenderFromProducers();
     }
     this.destroyLayer();
     this.canvasService = undefined;
@@ -290,8 +308,8 @@ export class RulerTool implements Extension {
     layer.set({ selectable: false, evented: false });
     canvas.bringObjectToFront(layer);
 
-    // Hard reset any legacy root-rendered ruler objects from previous implementations.
-    void this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
+    // Keep legacy root-rendered ruler artifacts cleaned through producer flush.
+    this.canvasService.requestRenderFromProducers();
   }
 
   private destroyLayer() {
@@ -591,8 +609,8 @@ export class RulerTool implements Extension {
     if (!layout || layout.scale <= 0) {
       if (seq !== this.renderSeq) return;
       this.log("render:skip", { seq, reason: "invalid-layout" });
-      await this.canvasService.applyObjectSpecsToLayer(RULER_LAYER_ID, []);
-      await this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
+      this.specs = [];
+      await this.canvasService.flushRenderFromProducers();
       return;
     }
 
@@ -634,17 +652,8 @@ export class RulerTool implements Extension {
 
     if (seq !== this.renderSeq) return;
 
-    // Clean stale root objects from old ruler implementations.
-    await this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
-    if (seq !== this.renderSeq) return;
-
-    // Important: for Group containers, patching existing child left/top can be
-    // interpreted as local coordinates and cause drift. Rebuild ruler objects
-    // each frame to keep coordinates stable.
-    await this.canvasService.applyObjectSpecsToLayer(RULER_LAYER_ID, []);
-    if (seq !== this.renderSeq) return;
-
-    await this.canvasService.applyObjectSpecsToLayer(RULER_LAYER_ID, specs);
+    this.specs = specs;
+    await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
 
     const layer = this.getLayer();

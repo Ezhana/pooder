@@ -136,6 +136,8 @@ export class ImageTool implements Extension {
   private dirtyTrackerDisposable?: { dispose(): void };
   private cropShapeHatchPattern?: Pattern;
   private cropShapeHatchPatternColor?: string;
+  private overlaySpecs: RenderObjectSpec[] = [];
+  private renderProducerDisposable?: { dispose: () => void };
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -144,6 +146,16 @@ export class ImageTool implements Extension {
       console.warn("CanvasService not found for ImageTool");
       return;
     }
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
+      this.id,
+      () => ({
+        rootLayerSpecs: {
+          [IMAGE_OVERLAY_LAYER_ID]: this.overlaySpecs,
+        },
+      }),
+      { priority: 300 },
+    );
 
     context.eventBus.on("tool:activated", this.onToolActivated);
     context.eventBus.on("object:modified", this.onObjectModified);
@@ -204,13 +216,13 @@ export class ImageTool implements Extension {
     this.dirtyTrackerDisposable = undefined;
     this.cropShapeHatchPattern = undefined;
     this.cropShapeHatchPatternColor = undefined;
+    this.overlaySpecs = [];
 
     this.clearRenderedImages();
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = undefined;
     if (this.canvasService) {
-      void this.canvasService.applyObjectSpecsToRootLayer(
-        IMAGE_OVERLAY_LAYER_ID,
-        [],
-      );
+      void this.canvasService.flushRenderFromProducers();
       this.canvasService = undefined;
     }
     this.context = undefined;
@@ -1557,10 +1569,8 @@ export class ImageTool implements Extension {
     if (seq !== this.renderSeq) return;
 
     const overlaySpecs = this.buildOverlaySpecs(frame, sceneGeometry);
-    await this.canvasService.applyObjectSpecsToRootLayer(
-      IMAGE_OVERLAY_LAYER_ID,
-      overlaySpecs,
-    );
+    this.overlaySpecs = overlaySpecs;
+    await this.canvasService.flushRenderFromProducers();
     this.syncImageZOrder(renderItems);
     const overlayCanvasCount = this.getOverlayObjects().length;
 
