@@ -50,10 +50,10 @@ class SceneVisibilityService {
             }
         }
         const rulerLayer = this.canvasService.getLayer("ruler-overlay");
+        const rulerVisible = !HIDDEN_RULER_TOOLS.has(this.activeToolId || "");
         if (rulerLayer) {
-            const visible = !HIDDEN_RULER_TOOLS.has(this.activeToolId || "");
-            if (rulerLayer.visible !== visible) {
-                rulerLayer.set({ visible });
+            if (rulerLayer.visible !== rulerVisible) {
+                rulerLayer.set({ visible: rulerVisible });
             }
         }
         this.canvasService.requestRenderAll();

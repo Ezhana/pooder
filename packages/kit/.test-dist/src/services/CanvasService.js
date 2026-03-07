@@ -243,6 +243,15 @@ class CanvasService {
             image.setCoords();
             return image;
         }
+        if (spec.type === "text") {
+            const content = String(spec.props?.text ?? "");
+            const text = new fabric_1.Text(content, {
+                ...(spec.props || {}),
+                data: { ...(spec.data || {}), id: spec.id },
+            });
+            text.setCoords();
+            return text;
+        }
         return undefined;
     }
 }

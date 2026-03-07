@@ -1522,4 +1522,3 @@ export class WhiteInkTool implements Extension {
     });
   }
 }
-

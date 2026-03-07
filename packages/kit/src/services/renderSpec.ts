@@ -1,4 +1,4 @@
-export type RenderObjectType = "rect" | "image" | "path";
+export type RenderObjectType = "rect" | "image" | "path" | "text";
 
 export type RenderProps = Record<string, any>;
 
@@ -15,4 +15,3 @@ export interface RenderLayerSpec {
   objects: RenderObjectSpec[];
   props?: RenderProps;
 }
-

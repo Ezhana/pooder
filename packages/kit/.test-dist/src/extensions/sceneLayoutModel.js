@@ -12,6 +12,7 @@ exports.computeSceneLayout = computeSceneLayout;
 exports.buildSceneGeometry = buildSceneGeometry;
 const coordinate_1 = require("../coordinate");
 const units_1 = require("../units");
+const dielineShape_1 = require("./dielineShape");
 const DEFAULT_SIZE_STATE = {
     unit: "mm",
     actualWidthMm: 500,
@@ -180,10 +181,13 @@ function computeSceneLayout(canvasService, size) {
 function buildSceneGeometry(configService, layout) {
     const radiusMm = (0, units_1.parseLengthToMm)(configService.get("dieline.radius", 0), "mm");
     const offset = (layout.cutRect.width - layout.trimRect.width) / 2;
+    const sourceWidth = Number(configService.get("dieline.customSourceWidthPx", 0));
+    const sourceHeight = Number(configService.get("dieline.customSourceHeightPx", 0));
+    const shapeStyle = (0, dielineShape_1.normalizeShapeStyle)(configService.get("dieline.shapeStyle", dielineShape_1.DEFAULT_DIELINE_SHAPE_STYLE));
     return {
-        shape: configService.get("dieline.shape", "rect"),
-        unit: "mm",
-        displayUnit: normalizeUnit(configService.get("size.unit", "mm")),
+        shape: (0, dielineShape_1.normalizeDielineShape)(configService.get("dieline.shape", dielineShape_1.DEFAULT_DIELINE_SHAPE)),
+        shapeStyle,
+        unit: "px",
         x: layout.trimRect.centerX,
         y: layout.trimRect.centerY,
         width: layout.trimRect.width,
@@ -192,5 +196,7 @@ function buildSceneGeometry(configService, layout) {
         offset,
         scale: layout.scale,
         pathData: configService.get("dieline.pathData"),
+        customSourceWidthPx: Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,
+        customSourceHeightPx: Number.isFinite(sourceHeight) && sourceHeight > 0 ? sourceHeight : undefined,
     };
 }

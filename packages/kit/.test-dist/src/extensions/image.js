@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ImageTool = void 0;
 const core_1 = require("@pooder/core");
 const fabric_1 = require("fabric");
+const dielineShape_1 = require("./dielineShape");
 const geometry_1 = require("./geometry");
 const sceneLayoutModel_1 = require("./sceneLayoutModel");
 const IMAGE_OBJECT_LAYER_ID = "image.user";
@@ -710,16 +711,14 @@ class ImageTool {
     }
     toSceneGeometryLike(raw) {
         const shape = raw?.shape;
-        if (shape !== "rect" &&
-            shape !== "circle" &&
-            shape !== "ellipse" &&
-            shape !== "custom") {
+        if (!(0, dielineShape_1.isDielineShape)(shape)) {
             return null;
         }
         const radius = Number(raw?.radius);
         const offset = Number(raw?.offset);
         return {
             shape,
+            shapeStyle: (0, dielineShape_1.normalizeShapeStyle)(raw?.shapeStyle),
             radius: Number.isFinite(radius) ? radius : 0,
             offset: Number.isFinite(offset) ? offset : 0,
         };
@@ -818,6 +817,7 @@ class ImageTool {
             return [];
         }
         const shape = sceneGeometry.shape;
+        const shapeStyle = sceneGeometry.shapeStyle;
         const inset = 0;
         const shapeWidth = Math.max(1, frame.width);
         const shapeHeight = Math.max(1, frame.height);
@@ -827,6 +827,7 @@ class ImageTool {
             frameWidth: frame.width,
             frameHeight: frame.height,
             offset: sceneGeometry.offset,
+            shapeStyle,
             inset,
             shapeWidth,
             shapeHeight,
@@ -849,6 +850,7 @@ class ImageTool {
             x: frame.width / 2,
             y: frame.height / 2,
             features: [],
+            shapeStyle,
             canvasWidth: frame.width,
             canvasHeight: frame.height,
         };
@@ -866,6 +868,12 @@ class ImageTool {
             }
             const patternFill = this.getCropShapeHatchPattern();
             const hatchFill = patternFill || "rgba(255, 0, 0, 0.22)";
+            const shapeBounds = (0, geometry_1.getPathBounds)(shapePathData);
+            const hatchBounds = (0, geometry_1.getPathBounds)(hatchPathData);
+            const hatchLeft = frame.left + hatchBounds.x;
+            const hatchTop = frame.top + hatchBounds.y;
+            const shapeLeft = frame.left + shapeBounds.x;
+            const shapeTop = frame.top + shapeBounds.y;
             const hatchPathLength = hatchPathData.length;
             const shapePathLength = shapePathData.length;
             const specs = [
@@ -875,8 +883,8 @@ class ImageTool {
                     data: { id: "image.cropShapeHatch", zIndex: 5 },
                     props: {
                         pathData: hatchPathData,
-                        left: frame.left,
-                        top: frame.top,
+                        left: hatchLeft,
+                        top: hatchTop,
                         originX: "left",
                         originY: "top",
                         fill: hatchFill,
@@ -895,8 +903,8 @@ class ImageTool {
                     data: { id: "image.cropShapePath", zIndex: 6 },
                     props: {
                         pathData: shapePathData,
-                        left: frame.left,
-                        top: frame.top,
+                        left: shapeLeft,
+                        top: shapeTop,
                         originX: "left",
                         originY: "top",
                         fill: "rgba(0,0,0,0)",
@@ -918,6 +926,8 @@ class ImageTool {
                 fillRule: "evenodd",
                 shapePathLength,
                 hatchPathLength,
+                shapeBounds,
+                hatchBounds,
                 hatchFillType: hatchFill && typeof hatchFill === "object" ? "pattern" : "color",
                 ids: specs.map((spec) => spec.id),
             });
@@ -1426,6 +1436,8 @@ class ImageTool {
             next.push(this.normalizeItem({
                 ...item,
                 url,
+                // Keep original source for next image-tool session editing,
+                // and use committedUrl as non-image-tools render source.
                 sourceUrl,
                 committedUrl: url,
             }));

@@ -2,9 +2,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RulerTool = void 0;
 const core_1 = require("@pooder/core");
-const fabric_1 = require("fabric");
-const units_1 = require("../units");
 const sceneLayoutModel_1 = require("./sceneLayoutModel");
+const RULER_LAYER_ID = "ruler-overlay";
+const EXTENSION_LINE_LENGTH = 5;
+const MIN_ARROW_SIZE = 4;
 class RulerTool {
     constructor(options) {
         this.id = "pooder.kit.ruler";
@@ -17,6 +18,8 @@ class RulerTool {
         this.textColor = "#333333";
         this.lineColor = "#999999";
         this.fontSize = 10;
+        this.renderSeq = 0;
+        this.numericProps = new Set(["thickness", "gap", "fontSize"]);
         this.onCanvasResized = () => {
             this.updateRuler();
         };
@@ -28,30 +31,34 @@ class RulerTool {
         this.context = context;
         this.canvasService = context.services.get("CanvasService");
         if (!this.canvasService) {
-            console.warn("CanvasService not found for RulerTool");
+            console.warn("[RulerTool] CanvasService not found.");
             return;
         }
         const configService = context.services.get("ConfigurationService");
         if (configService) {
-            // Load initial config
-            this.thickness = configService.get("ruler.thickness", this.thickness);
-            this.gap = configService.get("ruler.gap", this.gap);
-            this.backgroundColor = configService.get("ruler.backgroundColor", this.backgroundColor);
-            this.textColor = configService.get("ruler.textColor", this.textColor);
-            this.lineColor = configService.get("ruler.lineColor", this.lineColor);
-            this.fontSize = configService.get("ruler.fontSize", this.fontSize);
-            // Listen for changes
+            this.syncConfig(configService);
             configService.onAnyChange((e) => {
                 let shouldUpdate = false;
                 if (e.key.startsWith("ruler.")) {
                     const prop = e.key.split(".")[1];
                     if (prop && prop in this) {
-                        this[prop] = e.value;
+                        if (this.numericProps.has(prop)) {
+                            this[prop] = this.toFiniteNumber(e.value, this[prop]);
+                        }
+                        else {
+                            this[prop] = e.value;
+                        }
                         shouldUpdate = true;
+                        this.log("config:update", {
+                            key: e.key,
+                            raw: e.value,
+                            normalized: this[prop],
+                        });
                     }
                 }
                 else if (e.key.startsWith("size.")) {
                     shouldUpdate = true;
+                    this.log("size:update", { key: e.key, value: e.value });
                 }
                 if (shouldUpdate) {
                     this.updateRuler();
@@ -64,9 +71,14 @@ class RulerTool {
     }
     deactivate(context) {
         context.eventBus.off("canvas:resized", this.onCanvasResized);
+        if (this.canvasService) {
+            void this.canvasService.applyObjectSpecsToLayer(RULER_LAYER_ID, []);
+            void this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
+        }
         this.destroyLayer();
         this.canvasService = undefined;
         this.context = undefined;
+        this.renderSeq = 0;
     }
     contribute() {
         return {
@@ -125,11 +137,16 @@ class RulerTool {
                             lineColor: this.lineColor,
                             fontSize: this.fontSize,
                             thickness: this.thickness,
+                            gap: this.gap,
                         };
                         const newState = { ...oldState, ...theme };
-                        if (JSON.stringify(newState) === JSON.stringify(oldState))
+                        if (JSON.stringify(newState) === JSON.stringify(oldState)) {
                             return true;
+                        }
                         Object.assign(this, newState);
+                        this.thickness = this.toFiniteNumber(this.thickness, 20);
+                        this.gap = this.toFiniteNumber(this.gap, 15);
+                        this.fontSize = this.toFiniteNumber(this.fontSize, 10);
                         this.updateRuler();
                         return true;
                     },
@@ -137,8 +154,31 @@ class RulerTool {
             ],
         };
     }
+    log(step, payload) {
+        if (payload) {
+            console.debug(`[RulerTool] ${step}`, payload);
+            return;
+        }
+        console.debug(`[RulerTool] ${step}`);
+    }
+    syncConfig(configService) {
+        this.thickness = this.toFiniteNumber(configService.get("ruler.thickness", this.thickness), 20);
+        this.gap = Math.max(0, this.toFiniteNumber(configService.get("ruler.gap", this.gap), 15));
+        this.backgroundColor = configService.get("ruler.backgroundColor", this.backgroundColor);
+        this.textColor = configService.get("ruler.textColor", this.textColor);
+        this.lineColor = configService.get("ruler.lineColor", this.lineColor);
+        this.fontSize = this.toFiniteNumber(configService.get("ruler.fontSize", this.fontSize), 10);
+        this.log("config:loaded", {
+            thickness: this.thickness,
+            gap: this.gap,
+            fontSize: this.fontSize,
+            backgroundColor: this.backgroundColor,
+            textColor: this.textColor,
+            lineColor: this.lineColor,
+        });
+    }
     getLayer() {
-        return this.canvasService?.getLayer("ruler-overlay");
+        return this.canvasService?.getLayer(RULER_LAYER_ID);
     }
     createLayer() {
         if (!this.canvasService)
@@ -146,7 +186,7 @@ class RulerTool {
         const canvas = this.canvasService.canvas;
         const width = canvas.width || 800;
         const height = canvas.height || 600;
-        const layer = this.canvasService.createLayer("ruler-overlay", {
+        const layer = this.canvasService.createLayer(RULER_LAYER_ID, {
             width,
             height,
             selectable: false,
@@ -156,7 +196,10 @@ class RulerTool {
             originX: "left",
             originY: "top",
         });
+        layer.set({ selectable: false, evented: false });
         canvas.bringObjectToFront(layer);
+        // Hard reset any legacy root-rendered ruler objects from previous implementations.
+        void this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
     }
     destroyLayer() {
         if (!this.canvasService)
@@ -166,180 +209,216 @@ class RulerTool {
             this.canvasService.canvas.remove(layer);
         }
     }
-    createArrowLine(x1, y1, x2, y2, color) {
-        const line = new fabric_1.Line([x1, y1, x2, y2], {
-            stroke: color,
-            strokeWidth: this.thickness / 20, // Scale stroke width relative to thickness (default 1)
-            selectable: false,
-            evented: false,
-        });
-        // Arrow size proportional to thickness
-        const arrowSize = Math.max(4, this.thickness * 0.3);
-        const angle = Math.atan2(y2 - y1, x2 - x1);
-        // End Arrow (at x2, y2)
-        const endArrow = new fabric_1.Polygon([
-            { x: 0, y: 0 },
-            { x: -arrowSize, y: -arrowSize / 2 },
-            { x: -arrowSize, y: arrowSize / 2 },
-        ], {
-            fill: color,
-            left: x2,
-            top: y2,
-            originX: "right",
-            originY: "center",
-            angle: (angle * 180) / Math.PI,
-            selectable: false,
-            evented: false,
-        });
-        // Start Arrow (at x1, y1)
-        const startArrow = new fabric_1.Polygon([
-            { x: 0, y: 0 },
-            { x: arrowSize, y: -arrowSize / 2 },
-            { x: arrowSize, y: arrowSize / 2 },
-        ], {
-            fill: color,
-            left: x1,
-            top: y1,
+    toFiniteNumber(value, fallback) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric : fallback;
+    }
+    formatLengthMm(valueMm, unit) {
+        const converted = (0, sceneLayoutModel_1.fromMm)(valueMm, unit);
+        const fractionDigits = unit === "in" ? 3 : 2;
+        return Number(converted.toFixed(fractionDigits)).toString();
+    }
+    buildLinePath(start, end) {
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        return `M 0 0 L ${dx} ${dy}`;
+    }
+    buildStartArrowPath(size) {
+        return `M 0 0 L ${size} ${-size / 2} L ${size} ${size / 2} Z`;
+    }
+    buildEndArrowPath(size) {
+        return `M 0 0 L ${-size} ${-size / 2} L ${-size} ${size / 2} Z`;
+    }
+    createPathSpec(id, pathData, position, options) {
+        return {
+            id,
+            type: "path",
+            data: {
+                id,
+                type: "ruler",
+            },
+            props: {
+                pathData,
+                left: position.x,
+                top: position.y,
+                originX: options.originX ?? "left",
+                originY: options.originY ?? "top",
+                angle: options.angle ?? 0,
+                stroke: options.stroke ?? null,
+                fill: options.fill ?? null,
+                strokeWidth: options.strokeWidth ?? 1,
+                strokeLineCap: options.strokeLineCap ?? "butt",
+                selectable: false,
+                evented: false,
+                excludeFromExport: true,
+            },
+        };
+    }
+    createTextSpec(id, text, position, angle = 0) {
+        return {
+            id,
+            type: "text",
+            data: {
+                id,
+                type: "ruler",
+            },
+            props: {
+                text,
+                left: position.x,
+                top: position.y,
+                angle,
+                fontSize: this.fontSize,
+                fill: this.textColor,
+                fontFamily: "Arial",
+                originX: "center",
+                originY: "center",
+                backgroundColor: this.backgroundColor,
+                selectable: false,
+                evented: false,
+                excludeFromExport: true,
+            },
+        };
+    }
+    buildRulerSpecs(input) {
+        const { left, top, right, bottom, widthLabel, heightLabel } = input;
+        const gap = Math.max(0, this.toFiniteNumber(this.gap, 15));
+        const topY = top - gap;
+        const leftX = left - gap;
+        const arrowSize = Math.max(MIN_ARROW_SIZE, this.thickness * 0.3);
+        const strokeWidth = Math.max(1, this.thickness / 20);
+        const topLineAngleDeg = 0;
+        const leftLineAngleDeg = 90;
+        // Keep dimension line inside the arrow heads so it doesn't visually overflow.
+        const topMidX = left + (right - left) / 2;
+        const leftMidY = top + (bottom - top) / 2;
+        const topLineStartX = Math.min(left + arrowSize, topMidX);
+        const topLineEndX = Math.max(right - arrowSize, topMidX);
+        const leftLineStartY = Math.min(top + arrowSize, leftMidY);
+        const leftLineEndY = Math.max(bottom - arrowSize, leftMidY);
+        const specs = [];
+        specs.push(this.createPathSpec("ruler.top.line", this.buildLinePath({ x: topLineStartX, y: topY }, { x: topLineEndX, y: topY }), { x: topLineStartX, y: topY }, {
+            stroke: this.lineColor,
+            strokeWidth,
+            strokeLineCap: "butt",
+        }), this.createPathSpec("ruler.top.arrow.start", this.buildStartArrowPath(arrowSize), { x: left, y: topY }, {
+            fill: this.lineColor,
+            stroke: this.lineColor,
+            strokeWidth: 1,
             originX: "left",
             originY: "center",
-            angle: (angle * 180) / Math.PI,
-            selectable: false,
-            evented: false,
-        });
-        return new fabric_1.Group([line, startArrow, endArrow], {
-            selectable: false,
-            evented: false,
-        });
+            angle: topLineAngleDeg,
+        }), this.createPathSpec("ruler.top.arrow.end", this.buildEndArrowPath(arrowSize), { x: right, y: topY }, {
+            fill: this.lineColor,
+            stroke: this.lineColor,
+            strokeWidth: 1,
+            originX: "right",
+            originY: "center",
+            angle: topLineAngleDeg,
+        }), this.createPathSpec("ruler.top.ext.start", this.buildLinePath({ x: left, y: topY - EXTENSION_LINE_LENGTH }, { x: left, y: topY + EXTENSION_LINE_LENGTH }), { x: left, y: topY - EXTENSION_LINE_LENGTH }, { stroke: this.lineColor, strokeWidth: 1 }), this.createPathSpec("ruler.top.ext.end", this.buildLinePath({ x: right, y: topY - EXTENSION_LINE_LENGTH }, { x: right, y: topY + EXTENSION_LINE_LENGTH }), { x: right, y: topY - EXTENSION_LINE_LENGTH }, { stroke: this.lineColor, strokeWidth: 1 }), this.createTextSpec("ruler.top.label", widthLabel, {
+            x: left + (right - left) / 2,
+            y: topY,
+        }));
+        specs.push(this.createPathSpec("ruler.left.line", this.buildLinePath({ x: leftX, y: leftLineStartY }, { x: leftX, y: leftLineEndY }), { x: leftX, y: leftLineStartY }, {
+            stroke: this.lineColor,
+            strokeWidth,
+            strokeLineCap: "butt",
+        }), this.createPathSpec("ruler.left.arrow.start", this.buildStartArrowPath(arrowSize), { x: leftX, y: top }, {
+            fill: this.lineColor,
+            stroke: this.lineColor,
+            strokeWidth: 1,
+            originX: "left",
+            originY: "center",
+            angle: leftLineAngleDeg,
+        }), this.createPathSpec("ruler.left.arrow.end", this.buildEndArrowPath(arrowSize), { x: leftX, y: bottom }, {
+            fill: this.lineColor,
+            stroke: this.lineColor,
+            strokeWidth: 1,
+            originX: "right",
+            originY: "center",
+            angle: leftLineAngleDeg,
+        }), this.createPathSpec("ruler.left.ext.start", this.buildLinePath({ x: leftX - EXTENSION_LINE_LENGTH, y: top }, { x: leftX + EXTENSION_LINE_LENGTH, y: top }), { x: leftX - EXTENSION_LINE_LENGTH, y: top }, { stroke: this.lineColor, strokeWidth: 1 }), this.createPathSpec("ruler.left.ext.end", this.buildLinePath({ x: leftX - EXTENSION_LINE_LENGTH, y: bottom }, { x: leftX + EXTENSION_LINE_LENGTH, y: bottom }), { x: leftX - EXTENSION_LINE_LENGTH, y: bottom }, { stroke: this.lineColor, strokeWidth: 1 }), this.createTextSpec("ruler.left.label", heightLabel, {
+            x: leftX,
+            y: top + (bottom - top) / 2,
+        }, -90));
+        return specs;
     }
     updateRuler() {
+        void this.updateRulerAsync();
+    }
+    async updateRulerAsync() {
         if (!this.canvasService)
             return;
-        const layer = this.getLayer();
-        if (!layer)
-            return;
-        layer.remove(...layer.getObjects());
-        const { backgroundColor, lineColor, textColor, fontSize } = this;
         const configService = this.context?.services.get("ConfigurationService");
         if (!configService)
             return;
+        const seq = ++this.renderSeq;
         const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
         const layout = (0, sceneLayoutModel_1.computeSceneLayout)(this.canvasService, sizeState);
-        if (!layout)
+        this.log("render:start", {
+            seq,
+            unit: sizeState.unit,
+            gap: this.gap,
+            thickness: this.thickness,
+            fontSize: this.fontSize,
+            hasLayout: !!layout,
+            scale: layout?.scale ?? null,
+        });
+        if (!layout || layout.scale <= 0) {
+            if (seq !== this.renderSeq)
+                return;
+            this.log("render:skip", { seq, reason: "invalid-layout" });
+            await this.canvasService.applyObjectSpecsToLayer(RULER_LAYER_ID, []);
+            await this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
             return;
-        const trimRect = layout.trimRect;
-        const cutRect = layout.cutRect;
-        const useCutAsRuler = layout.cutMode === "outset";
-        const rulerRect = useCutAsRuler ? cutRect : trimRect;
-        // Use gap configuration
-        const gap = this.gap || 15;
-        // New Bounding Box for Ruler
-        const rulerLeft = rulerRect.left;
-        const rulerTop = rulerRect.top;
-        const rulerRight = rulerRect.left + rulerRect.width;
-        const rulerBottom = rulerRect.top + rulerRect.height;
-        // Display Dimensions (Physical)
-        const displayWidthMm = useCutAsRuler
-            ? layout.cutWidthMm
-            : layout.trimWidthMm;
-        const displayHeightMm = useCutAsRuler
-            ? layout.cutHeightMm
-            : layout.trimHeightMm;
-        const displayUnit = sizeState.unit;
-        // Ruler Placement Coordinates
-        // Top Ruler: Above the top boundary
-        const topRulerY = rulerTop - gap;
-        const topRulerXStart = rulerLeft;
-        const topRulerXEnd = rulerRight;
-        // Left Ruler: Left of the left boundary
-        const leftRulerX = rulerLeft - gap;
-        const leftRulerYStart = rulerTop;
-        const leftRulerYEnd = rulerBottom;
-        // 1. Top Dimension Line (X-Axis)
-        const topDimLine = this.createArrowLine(topRulerXStart, topRulerY, topRulerXEnd, topRulerY, lineColor);
-        layer.add(topDimLine);
-        // Top Extension Lines
-        const extLen = 5;
-        layer.add(new fabric_1.Line([
-            topRulerXStart,
-            topRulerY - extLen,
-            topRulerXStart,
-            topRulerY + extLen,
-        ], {
-            stroke: lineColor,
-            strokeWidth: 1,
-            selectable: false,
-            evented: false,
-        }));
-        layer.add(new fabric_1.Line([topRulerXEnd, topRulerY - extLen, topRulerXEnd, topRulerY + extLen], {
-            stroke: lineColor,
-            strokeWidth: 1,
-            selectable: false,
-            evented: false,
-        }));
-        // Top Text (Centered)
-        const widthStr = (0, units_1.formatMm)(displayWidthMm, displayUnit);
-        const topTextContent = `${widthStr} ${displayUnit}`;
-        const topText = new fabric_1.Text(topTextContent, {
-            left: topRulerXStart + (rulerRight - rulerLeft) / 2,
-            top: topRulerY,
-            fontSize: fontSize,
-            fill: textColor,
-            fontFamily: "Arial",
-            originX: "center",
-            originY: "center",
-            backgroundColor: backgroundColor, // Background mask for readability
-            selectable: false,
-            evented: false,
+        }
+        const geometry = (0, sceneLayoutModel_1.buildSceneGeometry)(configService, layout);
+        if (geometry.unit !== "px") {
+            console.warn("[RulerTool] Unexpected geometry unit.", geometry.unit);
+        }
+        const rulerLeft = geometry.x - geometry.width / 2;
+        const rulerTop = geometry.y - geometry.height / 2;
+        const rulerRight = rulerLeft + geometry.width;
+        const rulerBottom = rulerTop + geometry.height;
+        const widthMm = geometry.width / layout.scale;
+        const heightMm = geometry.height / layout.scale;
+        const unit = sizeState.unit;
+        const widthLabel = `${this.formatLengthMm(widthMm, unit)} ${unit}`;
+        const heightLabel = `${this.formatLengthMm(heightMm, unit)} ${unit}`;
+        const specs = this.buildRulerSpecs({
+            left: rulerLeft,
+            top: rulerTop,
+            right: rulerRight,
+            bottom: rulerBottom,
+            widthLabel,
+            heightLabel,
         });
-        // Add small padding to text background if Fabric supports it directly or via separate rect
-        // Fabric Text backgroundColor is tight.
-        layer.add(topText);
-        // 2. Left Dimension Line (Y-Axis)
-        const leftDimLine = this.createArrowLine(leftRulerX, leftRulerYStart, leftRulerX, leftRulerYEnd, lineColor);
-        layer.add(leftDimLine);
-        // Left Extension Lines
-        layer.add(new fabric_1.Line([
-            leftRulerX - extLen,
-            leftRulerYStart,
-            leftRulerX + extLen,
-            leftRulerYStart,
-        ], {
-            stroke: lineColor,
-            strokeWidth: 1,
-            selectable: false,
-            evented: false,
-        }));
-        layer.add(new fabric_1.Line([
-            leftRulerX - extLen,
-            leftRulerYEnd,
-            leftRulerX + extLen,
-            leftRulerYEnd,
-        ], {
-            stroke: lineColor,
-            strokeWidth: 1,
-            selectable: false,
-            evented: false,
-        }));
-        // Left Text (Centered, Rotated)
-        const heightStr = (0, units_1.formatMm)(displayHeightMm, displayUnit);
-        const leftTextContent = `${heightStr} ${displayUnit}`;
-        const leftText = new fabric_1.Text(leftTextContent, {
-            left: leftRulerX,
-            top: leftRulerYStart + (rulerBottom - rulerTop) / 2,
-            angle: -90,
-            fontSize: fontSize,
-            fill: textColor,
-            fontFamily: "Arial",
-            originX: "center",
-            originY: "center",
-            backgroundColor: backgroundColor,
-            selectable: false,
-            evented: false,
+        this.log("render:geometry", {
+            seq,
+            left: rulerLeft,
+            top: rulerTop,
+            right: rulerRight,
+            bottom: rulerBottom,
+            widthPx: geometry.width,
+            heightPx: geometry.height,
+            widthMm,
+            heightMm,
+            specCount: specs.length,
         });
-        layer.add(leftText);
-        // Always bring ruler to front
-        this.canvasService.canvas.bringObjectToFront(layer);
-        this.canvasService.canvas.requestRenderAll();
+        if (seq !== this.renderSeq)
+            return;
+        // Clean stale root objects from old ruler implementations.
+        await this.canvasService.applyObjectSpecsToRootLayer(RULER_LAYER_ID, []);
+        if (seq !== this.renderSeq)
+            return;
+        await this.canvasService.applyObjectSpecsToLayer(RULER_LAYER_ID, specs);
+        if (seq !== this.renderSeq)
+            return;
+        const layer = this.getLayer();
+        if (layer) {
+            this.canvasService.canvas.bringObjectToFront(layer);
+        }
+        this.canvasService.requestRenderAll();
+        this.log("render:done", { seq });
     }
 }
 exports.RulerTool = RulerTool;

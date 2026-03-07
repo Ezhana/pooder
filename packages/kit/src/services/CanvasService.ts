@@ -1,4 +1,12 @@
-import { Canvas, Group, FabricObject, Rect, Path, Image } from "fabric";
+import {
+  Canvas,
+  Group,
+  FabricObject,
+  Rect,
+  Path,
+  Image,
+  Text,
+} from "fabric";
 import { Service, EventBus } from "@pooder/core";
 import { ViewportSystem } from "./ViewportSystem";
 import type { RenderLayerSpec, RenderObjectSpec } from "./renderSpec";
@@ -293,6 +301,16 @@ export default class CanvasService implements Service {
       } as any);
       image.setCoords();
       return image as any;
+    }
+
+    if (spec.type === "text") {
+      const content = String((spec.props as any)?.text ?? "");
+      const text = new Text(content, {
+        ...(spec.props || {}),
+        data: { ...(spec.data || {}), id: spec.id },
+      } as any);
+      text.setCoords();
+      return text as any;
     }
 
     return undefined;

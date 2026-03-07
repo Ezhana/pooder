@@ -9,7 +9,6 @@ import {
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
 import { CanvasService } from "../services";
 import { ImageTracer } from "./tracer";
-import { Unit } from "../coordinate";
 import { parseLengthToMm } from "../units";
 import {
   DEFAULT_DIELINE_SHAPE,
@@ -34,8 +33,7 @@ import {
 export interface DielineGeometry {
   shape: DielineShape;
   shapeStyle: DielineShapeStyle;
-  unit: "mm";
-  displayUnit: Unit;
+  unit: "px";
   x: number;
   y: number;
   width: number;
@@ -58,7 +56,6 @@ export interface LineStyle {
 }
 
 export interface DielineState {
-  displayUnit: Unit;
   shape: DielineShape;
   shapeStyle: DielineShapeStyle;
   width: number;
@@ -86,7 +83,6 @@ export class DielineTool implements Extension {
   };
 
   private state: DielineState = {
-    displayUnit: "mm",
     shape: DEFAULT_DIELINE_SHAPE,
     shapeStyle: { ...DEFAULT_DIELINE_SHAPE_STYLE },
     width: 500,
@@ -156,7 +152,6 @@ export class DielineTool implements Extension {
       // Load initial config
       const s = this.state;
       const sizeState = readSizeState(configService);
-      s.displayUnit = sizeState.unit;
       s.shape = normalizeDielineShape(
         configService.get("dieline.shape", s.shape),
         s.shape,
@@ -242,7 +237,6 @@ export class DielineTool implements Extension {
       configService.onAnyChange((e: { key: string; value: any }) => {
         if (e.key.startsWith("size.")) {
           const nextSize = readSizeState(configService);
-          s.displayUnit = nextSize.unit;
           s.width = nextSize.actualWidthMm;
           s.height = nextSize.actualHeightMm;
           s.padding = nextSize.viewPadding;
@@ -635,7 +629,6 @@ export class DielineTool implements Extension {
 
   private syncSizeState(configService: ConfigurationService) {
     const sizeState = readSizeState(configService);
-    this.state.displayUnit = sizeState.unit;
     this.state.width = sizeState.actualWidthMm;
     this.state.height = sizeState.actualHeightMm;
     this.state.padding = sizeState.viewPadding;

@@ -24,6 +24,15 @@ class ImageTracer {
         const img = await this.loadImage(imageUrl);
         const width = img.width;
         const height = img.height;
+        if (width <= 0 || height <= 0) {
+            const w = options.scaleToWidth ?? 0;
+            const h = options.scaleToHeight ?? 0;
+            return {
+                pathData: `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`,
+                baseBounds: { x: 0, y: 0, width: w, height: h },
+                bounds: { x: 0, y: 0, width: w, height: h },
+            };
+        }
         const debug = options.debug === true;
         const debugLog = (message, payload) => {
             if (!debug)
@@ -34,7 +43,7 @@ class ImageTracer {
             }
             console.info(`[ImageTracer] ${message}`);
         };
-        // 1. Draw to canvas and get pixel data
+        // Draw to canvas and get pixel data
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = height;
@@ -43,64 +52,122 @@ class ImageTracer {
             throw new Error("Could not get 2D context");
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, width, height);
-        // 2. Morphology processing
+        // Strategy: fixed internal morphology + single-component target.
         const threshold = options.threshold ?? 10;
-        const componentMode = options.componentMode ?? "largest";
-        const minComponentArea = Math.max(0, options.minComponentArea ?? 0);
-        // Adaptive radius: 3% of the image's largest dimension, at least 6px
-        const adaptiveRadius = Math.max(6, Math.floor(Math.max(width, height) * 0.03));
-        const radius = options.morphologyRadius ?? adaptiveRadius;
-        const expand = options.expand ?? 0;
-        const noChannels = options.noChannels !== false;
-        const alphaOpaqueCutoff = options.alphaOpaqueCutoff ?? 250;
-        const resolvedMaskMode = (options.maskMode ?? "auto") === "auto"
-            ? (0, maskOps_1.inferMaskMode)(imageData, alphaOpaqueCutoff)
-            : options.maskMode;
-        const alphaAnalysis = (0, maskOps_1.analyzeAlpha)(imageData, alphaOpaqueCutoff);
+        const expand = Math.max(0, Math.floor(options.expand ?? 0));
+        const simplifyTolerance = options.simplifyTolerance ?? 2.5;
+        const useSmoothing = options.smoothing !== false;
+        const componentMode = "all";
+        const minComponentArea = 0;
+        const maxDim = Math.max(width, height);
+        const maskMode = "auto";
+        const whiteThreshold = 240;
+        const alphaOpaqueCutoff = 250;
+        const preprocessDilateRadius = Math.max(2, Math.floor(Math.max(maxDim * 0.012, expand * 0.35)));
+        const preprocessErodeRadius = Math.max(1, Math.floor(preprocessDilateRadius * 0.65));
+        const smoothDilateRadius = Math.max(1, Math.floor(preprocessDilateRadius * 0.25));
+        const smoothErodeRadius = Math.max(1, Math.floor(smoothDilateRadius * 0.8));
+        const connectStartDilateRadius = Math.max(1, Math.floor(Math.max(maxDim * 0.006, expand * 0.2)));
+        const connectMaxDilateRadius = Math.max(connectStartDilateRadius, Math.floor(Math.max(maxDim * 0.2, expand * 2.5)));
+        const connectErodeRatio = 0.65;
         debugLog("traceWithBounds:start", {
             width,
             height,
             threshold,
-            radius,
             expand,
-            noChannels,
-            maskMode: options.maskMode ?? "auto",
-            resolvedMaskMode,
-            alphaOpaqueCutoff,
-            alpha: {
-                minAlpha: alphaAnalysis.minAlpha,
-                belowOpaqueRatio: Number(alphaAnalysis.belowOpaqueRatio.toFixed(4)),
-                veryTransparentRatio: Number(alphaAnalysis.veryTransparentRatio.toFixed(4)),
+            simplifyTolerance,
+            smoothing: useSmoothing,
+            strategy: {
+                maskMode,
+                whiteThreshold,
+                alphaOpaqueCutoff,
+                fillHoles: true,
+                preprocessDilateRadius,
+                preprocessErodeRadius,
+                smoothDilateRadius,
+                smoothErodeRadius,
+                connectEnabled: true,
+                connectStartDilateRadius,
+                connectMaxDilateRadius,
+                connectErodeRatio,
             },
-            componentMode,
-            minComponentArea,
-            forceConnected: options.forceConnected === true,
-            simplifyTolerance: options.simplifyTolerance ?? 2.5,
-            smoothing: options.smoothing !== false,
         });
-        // Add padding to the processing canvas to avoid edge clipping during dilation
-        // Padding should be at least the radius + expansion size
-        const padding = radius + expand + 2;
+        // Padding must cover morphology and expansion margins.
+        const padding = Math.max(preprocessDilateRadius, smoothDilateRadius, connectMaxDilateRadius, expand) + 2;
         const paddedWidth = width + padding * 2;
         const paddedHeight = height + padding * 2;
+        const summarizeMaskContours = (m) => {
+            const summary = this.summarizeAllContours(m, paddedWidth, paddedHeight, minComponentArea);
+            return {
+                rawContourCount: summary.rawCount,
+                selectedContourCount: summary.selectedCount,
+            };
+        };
         let mask = (0, maskOps_1.createMask)(imageData, {
             threshold,
             padding,
             paddedWidth,
             paddedHeight,
-            maskMode: options.maskMode,
-            whiteThreshold: options.whiteThreshold,
+            maskMode,
+            whiteThreshold,
             alphaOpaqueCutoff,
         });
-        if (radius > 0) {
-            mask = (0, maskOps_1.circularMorphology)(mask, paddedWidth, paddedHeight, radius, "closing");
+        if (debug) {
+            debugLog("traceWithBounds:mask:after-create", summarizeMaskContours(mask));
         }
-        if (noChannels) {
-            mask = (0, maskOps_1.fillHoles)(mask, paddedWidth, paddedHeight);
+        mask = (0, maskOps_1.circularMorphology)(mask, paddedWidth, paddedHeight, preprocessDilateRadius, "dilate");
+        mask = (0, maskOps_1.fillHoles)(mask, paddedWidth, paddedHeight);
+        mask = (0, maskOps_1.circularMorphology)(mask, paddedWidth, paddedHeight, preprocessErodeRadius, "erode");
+        mask = (0, maskOps_1.fillHoles)(mask, paddedWidth, paddedHeight);
+        if (debug) {
+            debugLog("traceWithBounds:mask:after-preprocess", {
+                dilateRadius: preprocessDilateRadius,
+                erodeRadius: preprocessErodeRadius,
+                ...summarizeMaskContours(mask),
+            });
         }
-        if (radius > 0) {
-            const smoothRadius = Math.max(1, Math.floor(radius * 0.2));
-            mask = (0, maskOps_1.circularMorphology)(mask, paddedWidth, paddedHeight, smoothRadius, "closing");
+        mask = (0, maskOps_1.circularMorphology)(mask, paddedWidth, paddedHeight, smoothDilateRadius, "dilate");
+        mask = (0, maskOps_1.fillHoles)(mask, paddedWidth, paddedHeight);
+        mask = (0, maskOps_1.circularMorphology)(mask, paddedWidth, paddedHeight, smoothErodeRadius, "erode");
+        mask = (0, maskOps_1.fillHoles)(mask, paddedWidth, paddedHeight);
+        if (debug) {
+            debugLog("traceWithBounds:mask:after-smooth", {
+                dilateRadius: smoothDilateRadius,
+                erodeRadius: smoothErodeRadius,
+                ...summarizeMaskContours(mask),
+            });
+        }
+        const beforeConnectSummary = summarizeMaskContours(mask);
+        if (beforeConnectSummary.selectedContourCount <= 1) {
+            debugLog("traceWithBounds:mask:connect-skipped", {
+                reason: "already-single-component",
+                before: beforeConnectSummary,
+            });
+        }
+        else {
+            const connectResult = this.findForceConnectResult(mask, paddedWidth, paddedHeight, minComponentArea, connectStartDilateRadius, connectMaxDilateRadius, connectErodeRatio);
+            if (debug) {
+                debugLog("traceWithBounds:mask:after-connect", {
+                    before: beforeConnectSummary,
+                    appliedDilateRadius: connectResult.appliedDilateRadius,
+                    appliedErodeRadius: connectResult.appliedErodeRadius,
+                    reachedSingleComponent: connectResult.reachedSingleComponent,
+                    after: {
+                        rawContourCount: connectResult.rawContourCount,
+                        selectedContourCount: connectResult.selectedContourCount,
+                    },
+                });
+            }
+            mask = connectResult.mask;
+        }
+        if (debug) {
+            const afterConnectSummary = summarizeMaskContours(mask);
+            if (afterConnectSummary.selectedContourCount > 1) {
+                debugLog("traceWithBounds:mask:connect-warning", {
+                    reason: "still-multi-component-after-connect-search",
+                    summary: afterConnectSummary,
+                });
+            }
         }
         const baseMask = mask;
         const baseContoursRaw = this.traceAllContours(baseMask, paddedWidth, paddedHeight);
@@ -117,10 +184,10 @@ class ImageTracer {
             };
         }
         const baseUnpaddedContours = baseContours
-            .map((contour) => this.clampPointsToImageBounds(contour.map((p) => ({
+            .map((contour) => contour.map((p) => ({
             x: p.x - padding,
             y: p.y - padding,
-        })), width, height))
+        })))
             .filter((contour) => contour.length > 2);
         if (!baseUnpaddedContours.length) {
             const w = options.scaleToWidth ?? width;
@@ -175,7 +242,7 @@ class ImageTracer {
             };
         }
         let globalBounds = this.boundsFromPoints(this.flattenContours(expandedUnpaddedContours));
-        // 9. Post-processing (Scale)
+        // Post-processing (Scale)
         let finalContours = expandedUnpaddedContours;
         if (options.scaleToWidth && options.scaleToHeight) {
             finalContours = this.scaleContours(expandedUnpaddedContours, options.scaleToWidth, options.scaleToHeight, globalBounds);
@@ -183,8 +250,35 @@ class ImageTracer {
             const baseScaledContours = this.scaleContours(baseUnpaddedContours, options.scaleToWidth, options.scaleToHeight, baseBounds);
             baseBounds = this.boundsFromPoints(this.flattenContours(baseScaledContours));
         }
-        // 10. Simplify and Generate SVG
-        const useSmoothing = options.smoothing !== false; // Default true
+        if (expand > 0) {
+            const expectedExpandedBounds = {
+                x: baseBounds.x - expand,
+                y: baseBounds.y - expand,
+                width: baseBounds.width + expand * 2,
+                height: baseBounds.height + expand * 2,
+            };
+            if (expectedExpandedBounds.width > 0 &&
+                expectedExpandedBounds.height > 0 &&
+                globalBounds.width > 0 &&
+                globalBounds.height > 0) {
+                const shouldNormalizeExpandBounds = Math.abs(globalBounds.x - expectedExpandedBounds.x) > 1 ||
+                    Math.abs(globalBounds.y - expectedExpandedBounds.y) > 1 ||
+                    Math.abs(globalBounds.width - expectedExpandedBounds.width) > 1 ||
+                    Math.abs(globalBounds.height - expectedExpandedBounds.height) > 1;
+                if (shouldNormalizeExpandBounds) {
+                    const beforeNormalize = globalBounds;
+                    finalContours = this.translateContours(this.scaleContours(finalContours, expectedExpandedBounds.width, expectedExpandedBounds.height, globalBounds), expectedExpandedBounds.x, expectedExpandedBounds.y);
+                    globalBounds = this.boundsFromPoints(this.flattenContours(finalContours));
+                    debugLog("traceWithBounds:expand-normalized", {
+                        expand,
+                        expectedExpandedBounds,
+                        beforeNormalize,
+                        afterNormalize: globalBounds,
+                    });
+                }
+            }
+        }
+        // Simplify and Generate SVG
         debugLog("traceWithBounds:contours", {
             baseContourCount: baseContoursRaw.length,
             baseSelectedCount: baseContours.length,
@@ -200,16 +294,17 @@ class ImageTracer {
         });
         if (useSmoothing) {
             return {
-                pathData: this.contoursToSVGPaper(finalContours, options.simplifyTolerance ?? 2.5),
+                pathData: this.contoursToSVGPaper(finalContours, simplifyTolerance),
                 baseBounds,
                 bounds: globalBounds,
             };
         }
         else {
             const simplifiedContours = finalContours
-                .map((points) => this.douglasPeucker(points, options.simplifyTolerance ?? 2.0))
+                .map((points) => this.douglasPeucker(points, simplifyTolerance))
                 .filter((points) => points.length > 2);
-            const pathData = this.contoursToSVG(simplifiedContours) || this.contoursToSVG(finalContours);
+            const pathData = this.contoursToSVG(simplifiedContours) ||
+                this.contoursToSVG(finalContours);
             return {
                 pathData,
                 baseBounds,
@@ -251,7 +346,7 @@ class ImageTracer {
             const xj = polygon[j].x;
             const yj = polygon[j].y;
             const intersects = yi > y !== yj > y &&
-                x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi;
+                x < ((xj - xi) * (y - yi)) / (yj - yi || Number.EPSILON) + xi;
             if (intersects)
                 inside = !inside;
         }
@@ -270,6 +365,84 @@ class ImageTracer {
             }
         }
         return selected;
+    }
+    static summarizeAllContours(mask, width, height, minComponentArea) {
+        const raw = this.traceAllContours(mask, width, height);
+        const selected = this.selectContours(raw, "all", minComponentArea);
+        return {
+            rawCount: raw.length,
+            selectedCount: selected.length,
+        };
+    }
+    static findForceConnectResult(sourceMask, width, height, minComponentArea, startDilateRadius, maxDilateRadius, erodeRatio) {
+        const initial = this.summarizeAllContours(sourceMask, width, height, minComponentArea);
+        if (initial.selectedCount <= 1) {
+            return {
+                mask: sourceMask,
+                appliedDilateRadius: 0,
+                appliedErodeRadius: 0,
+                reachedSingleComponent: true,
+                rawContourCount: initial.rawCount,
+                selectedContourCount: initial.selectedCount,
+            };
+        }
+        const normalizedStart = Math.max(1, Math.floor(startDilateRadius));
+        const normalizedMax = Math.max(normalizedStart, Math.floor(maxDilateRadius));
+        const normalizedErodeRatio = Math.max(0, erodeRatio);
+        const evaluate = (dilateRadius) => {
+            const erodeRadius = Math.max(1, Math.floor(dilateRadius * normalizedErodeRatio));
+            let mask = sourceMask;
+            mask = (0, maskOps_1.circularMorphology)(mask, width, height, dilateRadius, "dilate");
+            mask = (0, maskOps_1.fillHoles)(mask, width, height);
+            mask = (0, maskOps_1.circularMorphology)(mask, width, height, erodeRadius, "erode");
+            mask = (0, maskOps_1.fillHoles)(mask, width, height);
+            const summary = this.summarizeAllContours(mask, width, height, minComponentArea);
+            return {
+                dilateRadius,
+                erodeRadius,
+                mask,
+                rawCount: summary.rawCount,
+                selectedCount: summary.selectedCount,
+            };
+        };
+        let low = normalizedStart - 1;
+        let high = normalizedStart;
+        let highResult = evaluate(high);
+        while (high < normalizedMax && highResult.selectedCount > 1) {
+            low = high;
+            high = Math.min(normalizedMax, Math.max(high + 1, Math.floor(high * 1.6)));
+            highResult = evaluate(high);
+        }
+        if (highResult.selectedCount > 1) {
+            return {
+                mask: highResult.mask,
+                appliedDilateRadius: highResult.dilateRadius,
+                appliedErodeRadius: highResult.erodeRadius,
+                reachedSingleComponent: false,
+                rawContourCount: highResult.rawCount,
+                selectedContourCount: highResult.selectedCount,
+            };
+        }
+        let best = highResult;
+        while (low + 1 < high) {
+            const mid = Math.floor((low + high) / 2);
+            const midResult = evaluate(mid);
+            if (midResult.selectedCount <= 1) {
+                best = midResult;
+                high = mid;
+            }
+            else {
+                low = mid;
+            }
+        }
+        return {
+            mask: best.mask,
+            appliedDilateRadius: best.dilateRadius,
+            appliedErodeRadius: best.erodeRadius,
+            reachedSingleComponent: true,
+            rawContourCount: best.rawCount,
+            selectedContourCount: best.selectedCount,
+        };
     }
     static selectContours(contours, mode, minComponentArea) {
         if (!contours.length)
@@ -468,13 +641,11 @@ class ImageTracer {
     static scaleContours(contours, targetWidth, targetHeight, bounds) {
         return contours.map((points) => this.scalePoints(points, targetWidth, targetHeight, bounds));
     }
-    static clampPointsToImageBounds(points, width, height) {
-        const maxX = Math.max(0, width);
-        const maxY = Math.max(0, height);
-        return points.map((p) => ({
-            x: Math.max(0, Math.min(maxX, p.x)),
-            y: Math.max(0, Math.min(maxY, p.y)),
-        }));
+    static translateContours(contours, offsetX, offsetY) {
+        return contours.map((points) => points.map((p) => ({
+            x: p.x + offsetX,
+            y: p.y + offsetY,
+        })));
     }
     static pointsToSVG(points) {
         if (points.length === 0)
@@ -503,8 +674,8 @@ class ImageTracer {
         this.ensurePaper();
         // Create Path
         const path = new paper_1.default.Path({
-            segments: points.map(p => [p.x, p.y]),
-            closed: true
+            segments: points.map((p) => [p.x, p.y]),
+            closed: true,
         });
         // Simplify
         path.simplify(tolerance);

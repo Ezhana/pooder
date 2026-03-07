@@ -54,8 +54,7 @@ export interface SceneLayoutSnapshot {
 export interface SceneGeometrySnapshot {
   shape: DielineShape;
   shapeStyle: DielineShapeStyle;
-  unit: "mm";
-  displayUnit: Unit;
+  unit: "px";
   x: number;
   y: number;
   width: number;
@@ -348,8 +347,7 @@ export function buildSceneGeometry(
       configService.get("dieline.shape", DEFAULT_DIELINE_SHAPE),
     ),
     shapeStyle,
-    unit: "mm",
-    displayUnit: normalizeUnit(configService.get("size.unit", "mm")),
+    unit: "px",
     x: layout.trimRect.centerX,
     y: layout.trimRect.centerY,
     width: layout.trimRect.width,

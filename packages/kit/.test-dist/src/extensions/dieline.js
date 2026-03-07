@@ -5,6 +5,7 @@ const core_1 = require("@pooder/core");
 const fabric_1 = require("fabric");
 const tracer_1 = require("./tracer");
 const units_1 = require("../units");
+const dielineShape_1 = require("./dielineShape");
 const geometry_1 = require("./geometry");
 const sceneLayoutModel_1 = require("./sceneLayoutModel");
 const IMAGE_OBJECT_LAYER_ID = "image.user";
@@ -15,8 +16,8 @@ class DielineTool {
             name: "DielineTool",
         };
         this.state = {
-            displayUnit: "mm",
-            shape: "rect",
+            shape: dielineShape_1.DEFAULT_DIELINE_SHAPE,
+            shapeStyle: { ...dielineShape_1.DEFAULT_DIELINE_SHAPE_STYLE },
             width: 500,
             height: 500,
             radius: 0,
@@ -52,7 +53,12 @@ class DielineTool {
                 Object.assign(this.state.offsetLine, options.offsetLine);
                 delete options.offsetLine;
             }
+            if (options.shapeStyle) {
+                this.state.shapeStyle = (0, dielineShape_1.normalizeShapeStyle)(options.shapeStyle, this.state.shapeStyle);
+                delete options.shapeStyle;
+            }
             Object.assign(this.state, options);
+            this.state.shape = (0, dielineShape_1.normalizeDielineShape)(options.shape, this.state.shape);
         }
     }
     activate(context) {
@@ -67,8 +73,8 @@ class DielineTool {
             // Load initial config
             const s = this.state;
             const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
-            s.displayUnit = sizeState.unit;
-            s.shape = configService.get("dieline.shape", s.shape);
+            s.shape = (0, dielineShape_1.normalizeDielineShape)(configService.get("dieline.shape", s.shape), s.shape);
+            s.shapeStyle = (0, dielineShape_1.normalizeShapeStyle)(configService.get("dieline.shapeStyle", s.shapeStyle), s.shapeStyle);
             s.width = sizeState.actualWidthMm;
             s.height = sizeState.actualHeightMm;
             s.radius = (0, units_1.parseLengthToMm)(configService.get("dieline.radius", s.radius), "mm");
@@ -94,11 +100,20 @@ class DielineTool {
             s.showBleedLines = configService.get("dieline.showBleedLines", s.showBleedLines);
             s.features = configService.get("dieline.features", s.features);
             s.pathData = configService.get("dieline.pathData", s.pathData);
+            const sourceWidth = Number(configService.get("dieline.customSourceWidthPx", 0));
+            const sourceHeight = Number(configService.get("dieline.customSourceHeightPx", 0));
+            s.customSourceWidthPx =
+                Number.isFinite(sourceWidth) && sourceWidth > 0
+                    ? sourceWidth
+                    : undefined;
+            s.customSourceHeightPx =
+                Number.isFinite(sourceHeight) && sourceHeight > 0
+                    ? sourceHeight
+                    : undefined;
             // Listen for changes
             configService.onAnyChange((e) => {
                 if (e.key.startsWith("size.")) {
                     const nextSize = (0, sceneLayoutModel_1.readSizeState)(configService);
-                    s.displayUnit = nextSize.unit;
                     s.width = nextSize.actualWidthMm;
                     s.height = nextSize.actualHeightMm;
                     s.padding = nextSize.viewPadding;
@@ -114,7 +129,10 @@ class DielineTool {
                 if (e.key.startsWith("dieline.")) {
                     switch (e.key) {
                         case "dieline.shape":
-                            s.shape = e.value;
+                            s.shape = (0, dielineShape_1.normalizeDielineShape)(e.value, s.shape);
+                            break;
+                        case "dieline.shapeStyle":
+                            s.shapeStyle = (0, dielineShape_1.normalizeShapeStyle)(e.value, s.shapeStyle);
                             break;
                         case "dieline.radius":
                             s.radius = (0, units_1.parseLengthToMm)(e.value, "mm");
@@ -158,6 +176,18 @@ class DielineTool {
                         case "dieline.pathData":
                             s.pathData = e.value;
                             break;
+                        case "dieline.customSourceWidthPx":
+                            s.customSourceWidthPx =
+                                Number.isFinite(Number(e.value)) && Number(e.value) > 0
+                                    ? Number(e.value)
+                                    : undefined;
+                            break;
+                        case "dieline.customSourceHeightPx":
+                            s.customSourceHeightPx =
+                                Number.isFinite(Number(e.value)) && Number(e.value) > 0
+                                    ? Number(e.value)
+                                    : undefined;
+                            break;
                     }
                     this.updateDieline();
                 }
@@ -192,7 +222,7 @@ class DielineTool {
                     id: "dieline.shape",
                     type: "select",
                     label: "Shape",
-                    options: ["rect", "circle", "ellipse", "custom"],
+                    options: Array.from(dielineShape_1.DIELINE_SHAPES),
                     default: s.shape,
                 },
                 {
@@ -202,6 +232,12 @@ class DielineTool {
                     min: 0,
                     max: 500,
                     default: s.radius,
+                },
+                {
+                    id: "dieline.shapeStyle",
+                    type: "json",
+                    label: "Shape Style",
+                    default: s.shapeStyle,
                 },
                 {
                     id: "dieline.showBleedLines",
@@ -326,6 +362,13 @@ class DielineTool {
                         try {
                             const detectOptions = options || {};
                             const debug = detectOptions.debug === true;
+                            const tracerOptions = {
+                                expand: detectOptions.expand ?? 0,
+                                smoothing: detectOptions.smoothing ?? true,
+                                simplifyTolerance: detectOptions.simplifyTolerance ?? 2,
+                                threshold: detectOptions.threshold,
+                                debug,
+                            };
                             // Helper to get image dimensions
                             const loadImage = (url) => {
                                 return new Promise((resolve, reject) => {
@@ -338,7 +381,7 @@ class DielineTool {
                             };
                             const [img, traced] = await Promise.all([
                                 loadImage(imageUrl),
-                                tracer_1.ImageTracer.traceWithBounds(imageUrl, detectOptions),
+                                tracer_1.ImageTracer.traceWithBounds(imageUrl, tracerOptions),
                             ]);
                             const { pathData, baseBounds, bounds } = traced;
                             if (debug) {
@@ -349,21 +392,8 @@ class DielineTool {
                                     expandedBounds: bounds,
                                     currentDielineWidth: s.width,
                                     currentDielineHeight: s.height,
-                                    options: {
-                                        expand: detectOptions.expand ?? 0,
-                                        morphologyRadius: detectOptions.morphologyRadius,
-                                        connectRadiusMax: detectOptions.connectRadiusMax,
-                                        smoothing: detectOptions.smoothing,
-                                        simplifyTolerance: detectOptions.simplifyTolerance,
-                                        threshold: detectOptions.threshold,
-                                        maskMode: detectOptions.maskMode,
-                                        whiteThreshold: detectOptions.whiteThreshold,
-                                        alphaOpaqueCutoff: detectOptions.alphaOpaqueCutoff,
-                                        noChannels: detectOptions.noChannels,
-                                        componentMode: detectOptions.componentMode,
-                                        minComponentArea: detectOptions.minComponentArea,
-                                        forceConnected: detectOptions.forceConnected,
-                                    },
+                                    options: tracerOptions,
+                                    strategy: "single-connected-silhouette",
                                 });
                             }
                             return {
@@ -443,7 +473,6 @@ class DielineTool {
     }
     syncSizeState(configService) {
         const sizeState = (0, sceneLayoutModel_1.readSizeState)(configService);
-        this.state.displayUnit = sizeState.unit;
         this.state.width = sizeState.actualWidthMm;
         this.state.height = sizeState.actualHeightMm;
         this.state.padding = sizeState.viewPadding;
@@ -476,7 +505,7 @@ class DielineTool {
         const sceneLayout = (0, sceneLayoutModel_1.computeSceneLayout)(this.canvasService, (0, sceneLayoutModel_1.readSizeState)(configService));
         if (!sceneLayout)
             return;
-        const { shape, radius, mainLine, offsetLine, insideColor, outsideColor, showBleedLines, features, } = this.state;
+        const { shape, shapeStyle, radius, mainLine, offsetLine, insideColor, outsideColor, showBleedLines, features, } = this.state;
         const canvasW = sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
         const canvasH = sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
         const scale = sceneLayout.scale;
@@ -509,7 +538,10 @@ class DielineTool {
             x: cx,
             y: cy,
             features: cutFeatures,
+            shapeStyle,
             pathData: this.state.pathData,
+            customSourceWidthPx: this.state.customSourceWidthPx,
+            customSourceHeightPx: this.state.customSourceHeightPx,
         });
         const mask = new fabric_1.Path(maskPathData, {
             fill: outsideColor,
@@ -533,7 +565,10 @@ class DielineTool {
                 x: cx,
                 y: cy,
                 features: cutFeatures,
+                shapeStyle,
                 pathData: this.state.pathData,
+                customSourceWidthPx: this.state.customSourceWidthPx,
+                customSourceHeightPx: this.state.customSourceHeightPx,
                 canvasWidth: canvasW,
                 canvasHeight: canvasH,
             });
@@ -556,7 +591,10 @@ class DielineTool {
                 x: cx,
                 y: cy,
                 features: cutFeatures,
+                shapeStyle,
                 pathData: this.state.pathData,
+                customSourceWidthPx: this.state.customSourceWidthPx,
+                customSourceHeightPx: this.state.customSourceHeightPx,
                 canvasWidth: canvasW,
                 canvasHeight: canvasH,
             }, {
@@ -567,7 +605,10 @@ class DielineTool {
                 x: cx,
                 y: cy,
                 features: cutFeatures,
+                shapeStyle,
                 pathData: this.state.pathData,
+                customSourceWidthPx: this.state.customSourceWidthPx,
+                customSourceHeightPx: this.state.customSourceHeightPx,
                 canvasWidth: canvasW,
                 canvasHeight: canvasH,
             }, visualOffset);
@@ -594,7 +635,10 @@ class DielineTool {
                 x: cx,
                 y: cy,
                 features: cutFeatures,
+                shapeStyle,
                 pathData: this.state.pathData,
+                customSourceWidthPx: this.state.customSourceWidthPx,
+                customSourceHeightPx: this.state.customSourceHeightPx,
                 canvasWidth: canvasW,
                 canvasHeight: canvasH,
             });
@@ -620,7 +664,10 @@ class DielineTool {
             x: cx,
             y: cy,
             features: absoluteFeatures,
+            shapeStyle,
             pathData: this.state.pathData,
+            customSourceWidthPx: this.state.customSourceWidthPx,
+            customSourceHeightPx: this.state.customSourceHeightPx,
             canvasWidth: canvasW,
             canvasHeight: canvasH,
         });
@@ -673,6 +720,8 @@ class DielineTool {
             ...sceneGeometry,
             strokeWidth: this.state.mainLine.width,
             pathData: this.state.pathData,
+            customSourceWidthPx: this.state.customSourceWidthPx,
+            customSourceHeightPx: this.state.customSourceHeightPx,
         };
     }
     async exportCutImage(options) {
@@ -692,7 +741,7 @@ class DielineTool {
             console.warn("[DielineTool] exportCutImage returned null: scene-layout-null");
             return null;
         }
-        const { shape, radius, features, pathData } = this.state;
+        const { shape, shapeStyle, radius, features, pathData } = this.state;
         const canvasW = sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
         const canvasH = sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
         const scale = sceneLayout.scale;
@@ -720,7 +769,10 @@ class DielineTool {
             x: cx,
             y: cy,
             features: cutFeatures,
+            shapeStyle,
             pathData,
+            customSourceWidthPx: this.state.customSourceWidthPx,
+            customSourceHeightPx: this.state.customSourceHeightPx,
             canvasWidth: canvasW,
             canvasHeight: canvasH,
         });
