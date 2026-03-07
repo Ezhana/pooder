@@ -4,9 +4,21 @@ import {
   ContributionPointIds,
   CommandContribution,
   ConfigurationContribution,
+  ConfigurationService,
 } from "@pooder/core";
-import { Rect, FabricImage as Image } from "fabric";
-import { CanvasService } from "../services";
+import { FabricImage } from "fabric";
+import { CanvasService, RenderObjectSpec } from "../services";
+
+interface SourceSize {
+  width: number;
+  height: number;
+}
+
+const BACKGROUND_LAYER_ID = "background";
+const BACKGROUND_RECT_ID = "background-color-rect";
+const BACKGROUND_IMAGE_ID = "background-image";
+const DEFAULT_WIDTH = 800;
+const DEFAULT_HEIGHT = 600;
 
 export class BackgroundTool implements Extension {
   id = "pooder.kit.background";
@@ -18,6 +30,15 @@ export class BackgroundTool implements Extension {
   private url: string = "";
 
   private canvasService?: CanvasService;
+  private specs: RenderObjectSpec[] = [];
+  private renderProducerDisposable?: { dispose: () => void };
+  private renderSeq = 0;
+  private renderImageUrl = "";
+  private sourceSizeBySrc: Map<string, SourceSize> = new Map();
+  private pendingSizeBySrc: Map<string, Promise<SourceSize | null>> = new Map();
+  private onCanvasResized = () => {
+    this.updateBackground();
+  };
 
   constructor(
     options?: Partial<{
@@ -37,7 +58,20 @@ export class BackgroundTool implements Extension {
       return;
     }
 
-    const configService = context.services.get<any>("ConfigurationService");
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
+      this.id,
+      () => ({
+        layerSpecs: {
+          [BACKGROUND_LAYER_ID]: this.specs,
+        },
+      }),
+      { priority: 0 },
+    );
+
+    const configService = context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
     if (configService) {
       // Load initial config
       this.color = configService.get("background.color", this.color);
@@ -65,18 +99,25 @@ export class BackgroundTool implements Extension {
       });
     }
 
-    this.initLayer();
+    context.eventBus.on("canvas:resized", this.onCanvasResized);
     this.updateBackground();
   }
 
   deactivate(context: ExtensionContext) {
-    if (this.canvasService) {
-      const layer = this.canvasService.getLayer("background");
-      if (layer) {
-        this.canvasService.canvas.remove(layer);
-      }
-      this.canvasService = undefined;
+    context.eventBus.off("canvas:resized", this.onCanvasResized);
+    this.renderSeq += 1;
+    this.specs = [];
+    this.renderImageUrl = "";
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = undefined;
+    if (!this.canvasService) return;
+    const layer = this.canvasService.getLayer(BACKGROUND_LAYER_ID);
+    if (layer) {
+      this.canvasService.canvas.remove(layer);
     }
+    void this.canvasService.flushRenderFromProducers();
+    this.canvasService.requestRenderAll();
+    this.canvasService = undefined;
   }
 
   contribute() {
@@ -138,93 +179,145 @@ export class BackgroundTool implements Extension {
     };
   }
 
-  private initLayer() {
-    if (!this.canvasService) return;
-    let backgroundLayer = this.canvasService.getLayer("background");
-    if (!backgroundLayer) {
-      backgroundLayer = this.canvasService.createLayer("background", {
-        width: this.canvasService.canvas.width,
-        height: this.canvasService.canvas.height,
+  private getViewportSize(): { width: number; height: number } {
+    const width = Number(this.canvasService?.canvas.width || 0);
+    const height = Number(this.canvasService?.canvas.height || 0);
+    return {
+      width: width > 0 ? width : DEFAULT_WIDTH,
+      height: height > 0 ? height : DEFAULT_HEIGHT,
+    };
+  }
+
+  private buildBackgroundSpecs(
+    color: string,
+    imageUrl: string,
+  ): RenderObjectSpec[] {
+    const { width, height } = this.getViewportSize();
+    const specs: RenderObjectSpec[] = [
+      {
+        id: BACKGROUND_RECT_ID,
+        type: "rect",
+        space: "screen",
+        data: {
+          id: BACKGROUND_RECT_ID,
+          layerId: BACKGROUND_LAYER_ID,
+          type: "background-color",
+        },
+        props: {
+          left: 0,
+          top: 0,
+          width,
+          height,
+          originX: "left",
+          originY: "top",
+          fill: color,
+          selectable: false,
+          evented: false,
+          excludeFromExport: true,
+        },
+      },
+    ];
+
+    if (!imageUrl) {
+      return specs;
+    }
+
+    const sourceSize = this.sourceSizeBySrc.get(imageUrl);
+    const sourceWidth = Math.max(1, Number(sourceSize?.width || width));
+    const sourceHeight = Math.max(1, Number(sourceSize?.height || height));
+    const coverScale = Math.max(width / sourceWidth, height / sourceHeight);
+    specs.push({
+      id: BACKGROUND_IMAGE_ID,
+      type: "image",
+      src: imageUrl,
+      space: "screen",
+      data: {
+        id: BACKGROUND_IMAGE_ID,
+        layerId: BACKGROUND_LAYER_ID,
+        type: "background-image",
+      },
+      props: {
+        left: 0,
+        top: 0,
+        originX: "left",
+        originY: "top",
+        scaleX: coverScale,
+        scaleY: coverScale,
         selectable: false,
         evented: false,
-      });
-      this.canvasService.canvas.sendObjectToBack(backgroundLayer);
+        excludeFromExport: true,
+      },
+    });
+
+    return specs;
+  }
+
+  private async ensureImageSize(src: string): Promise<SourceSize | null> {
+    if (!src) return null;
+    const cached = this.sourceSizeBySrc.get(src);
+    if (cached) return cached;
+
+    const pending = this.pendingSizeBySrc.get(src);
+    if (pending) {
+      return pending;
+    }
+
+    const task = this.loadImageSize(src);
+    this.pendingSizeBySrc.set(src, task);
+    try {
+      return await task;
+    } finally {
+      if (this.pendingSizeBySrc.get(src) === task) {
+        this.pendingSizeBySrc.delete(src);
+      }
     }
   }
 
-  private async updateBackground() {
-    if (!this.canvasService) return;
-    const layer = this.canvasService.getLayer("background");
-    if (!layer) {
-      console.warn("[BackgroundTool] Background layer not found");
-      return;
-    }
-
-    const { color, url } = this;
-
-    const width = this.canvasService.canvas.width || 800;
-    const height = this.canvasService.canvas.height || 600;
-
-    let rect = this.canvasService.getObject(
-      "background-color-rect",
-      "background",
-    ) as Rect;
-    if (rect) {
-      rect.set({
-        fill: color,
-      });
-    } else {
-      rect = new Rect({
-        width,
-        height,
-        fill: color,
-        selectable: false,
-        evented: false,
-        data: {
-          id: "background-color-rect",
-        },
-      });
-      layer.add(rect);
-      layer.sendObjectToBack(rect);
-    }
-
-    let img = this.canvasService.getObject(
-      "background-image",
-      "background",
-    ) as Image;
+  private async loadImageSize(src: string): Promise<SourceSize | null> {
     try {
-      if (img) {
-        if (img.getSrc() !== url) {
-          if (url) {
-            await img.setSrc(url);
-          } else {
-            layer.remove(img);
-          }
-        }
-      } else {
-        if (url) {
-          img = await Image.fromURL(url, { crossOrigin: "anonymous" });
-          img.set({
-            originX: "left",
-            originY: "top",
-            left: 0,
-            top: 0,
-            selectable: false,
-            evented: false,
-            data: {
-              id: "background-image",
-            },
-          });
-          img.scaleToWidth(width);
-          if (img.getScaledHeight() < height) img.scaleToHeight(height);
-          layer.add(img);
-        }
+      const image = await FabricImage.fromURL(src, {
+        crossOrigin: "anonymous",
+      });
+      const width = Number(image?.width || 0);
+      const height = Number(image?.height || 0);
+      if (width > 0 && height > 0) {
+        const size = { width, height };
+        this.sourceSizeBySrc.set(src, size);
+        return size;
       }
-      this.canvasService.requestRenderAll();
-    } catch (e) {
-      console.error("[BackgroundTool] Failed to load image", e);
+    } catch (error) {
+      console.error("[BackgroundTool] Failed to load image", src, error);
     }
-    layer.dirty = true;
+    return null;
+  }
+
+  private updateBackground() {
+    void this.updateBackgroundAsync();
+  }
+
+  private async updateBackgroundAsync() {
+    if (!this.canvasService) return;
+    const seq = ++this.renderSeq;
+    const color = this.color;
+    const nextUrl = String(this.url || "").trim();
+
+    if (!nextUrl) {
+      this.renderImageUrl = "";
+    } else if (nextUrl !== this.renderImageUrl) {
+      const loaded = await this.ensureImageSize(nextUrl);
+      if (seq !== this.renderSeq) return;
+      if (loaded) {
+        this.renderImageUrl = nextUrl;
+      }
+    }
+
+    this.specs = this.buildBackgroundSpecs(color, this.renderImageUrl);
+    await this.canvasService.flushRenderFromProducers();
+    if (seq !== this.renderSeq) return;
+    const layer = this.canvasService.getLayer(BACKGROUND_LAYER_ID);
+    if (layer) {
+      this.canvasService.canvas.sendObjectToBack(layer);
+    }
     this.canvasService.requestRenderAll();
   }
 }

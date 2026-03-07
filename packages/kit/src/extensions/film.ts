@@ -4,9 +4,20 @@ import {
   ContributionPointIds,
   CommandContribution,
   ConfigurationContribution,
+  ConfigurationService,
 } from "@pooder/core";
-import { FabricImage as Image } from "fabric";
-import { CanvasService } from "../services";
+import { FabricImage } from "fabric";
+import { CanvasService, RenderObjectSpec } from "../services";
+
+interface SourceSize {
+  width: number;
+  height: number;
+}
+
+const FILM_LAYER_ID = "overlay";
+const FILM_IMAGE_ID = "film-image";
+const DEFAULT_WIDTH = 800;
+const DEFAULT_HEIGHT = 600;
 
 export class FilmTool implements Extension {
   id = "pooder.kit.film";
@@ -19,6 +30,15 @@ export class FilmTool implements Extension {
   private opacity: number = 0.5;
 
   private canvasService?: CanvasService;
+  private specs: RenderObjectSpec[] = [];
+  private renderProducerDisposable?: { dispose: () => void };
+  private renderSeq = 0;
+  private renderImageUrl = "";
+  private sourceSizeBySrc: Map<string, SourceSize> = new Map();
+  private pendingSizeBySrc: Map<string, Promise<SourceSize | null>> = new Map();
+  private onCanvasResized = () => {
+    this.updateFilm();
+  };
 
   constructor(
     options?: Partial<{
@@ -38,7 +58,20 @@ export class FilmTool implements Extension {
       return;
     }
 
-    const configService = context.services.get<any>("ConfigurationService");
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
+      this.id,
+      () => ({
+        layerSpecs: {
+          [FILM_LAYER_ID]: this.specs,
+        },
+      }),
+      { priority: 500 },
+    );
+
+    const configService = context.services.get<ConfigurationService>(
+      "ConfigurationService",
+    );
     if (configService) {
       // Load initial config
       this.url = configService.get("film.url", this.url);
@@ -59,22 +92,21 @@ export class FilmTool implements Extension {
       });
     }
 
-    this.initLayer();
+    context.eventBus.on("canvas:resized", this.onCanvasResized);
     this.updateFilm();
   }
 
   deactivate(context: ExtensionContext) {
-    if (this.canvasService) {
-      const layer = this.canvasService.getLayer("overlay");
-      if (layer) {
-        const img = this.canvasService.getObject("film-image", "overlay");
-        if (img) {
-          layer.remove(img);
-          this.canvasService.requestRenderAll();
-        }
-      }
-      this.canvasService = undefined;
-    }
+    context.eventBus.off("canvas:resized", this.onCanvasResized);
+    this.renderSeq += 1;
+    this.specs = [];
+    this.renderImageUrl = "";
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = undefined;
+    if (!this.canvasService) return;
+    void this.canvasService.flushRenderFromProducers();
+    this.canvasService.requestRenderAll();
+    this.canvasService = undefined;
   }
 
   contribute() {
@@ -115,80 +147,120 @@ export class FilmTool implements Extension {
     };
   }
 
-  private initLayer() {
-    if (!this.canvasService) return;
-    let overlayLayer = this.canvasService.getLayer("overlay");
-    if (!overlayLayer) {
-      const width = this.canvasService.canvas.width || 800;
-      const height = this.canvasService.canvas.height || 600;
+  private getViewportSize(): { width: number; height: number } {
+    const width = Number(this.canvasService?.canvas.width || 0);
+    const height = Number(this.canvasService?.canvas.height || 0);
+    return {
+      width: width > 0 ? width : DEFAULT_WIDTH,
+      height: height > 0 ? height : DEFAULT_HEIGHT,
+    };
+  }
 
-      const layer = this.canvasService.createLayer("overlay", {
-        width,
-        height,
-        left: 0,
-        top: 0,
-        originX: "left",
-        originY: "top",
-        selectable: false,
-        evented: false,
-        subTargetCheck: false,
-        interactive: false,
-      });
+  private clampOpacity(value: number): number {
+    return Math.max(0, Math.min(1, Number(value)));
+  }
 
-      this.canvasService.canvas.bringObjectToFront(layer);
+  private buildFilmSpecs(
+    imageUrl: string,
+    opacity: number,
+  ): RenderObjectSpec[] {
+    if (!imageUrl) {
+      return [];
+    }
+    const { width, height } = this.getViewportSize();
+    const sourceSize = this.sourceSizeBySrc.get(imageUrl);
+    const sourceWidth = Math.max(1, Number(sourceSize?.width || width));
+    const sourceHeight = Math.max(1, Number(sourceSize?.height || height));
+    const coverScale = Math.max(width / sourceWidth, height / sourceHeight);
+    return [
+      {
+        id: FILM_IMAGE_ID,
+        type: "image",
+        src: imageUrl,
+        space: "screen",
+        data: {
+          id: FILM_IMAGE_ID,
+          layerId: FILM_LAYER_ID,
+          type: "film-image",
+        },
+        props: {
+          left: 0,
+          top: 0,
+          originX: "left",
+          originY: "top",
+          opacity: this.clampOpacity(opacity),
+          scaleX: coverScale,
+          scaleY: coverScale,
+          selectable: false,
+          evented: false,
+          excludeFromExport: true,
+        },
+      },
+    ];
+  }
+
+  private async ensureImageSize(src: string): Promise<SourceSize | null> {
+    if (!src) return null;
+    const cached = this.sourceSizeBySrc.get(src);
+    if (cached) return cached;
+
+    const pending = this.pendingSizeBySrc.get(src);
+    if (pending) {
+      return pending;
+    }
+
+    const task = this.loadImageSize(src);
+    this.pendingSizeBySrc.set(src, task);
+    try {
+      return await task;
+    } finally {
+      if (this.pendingSizeBySrc.get(src) === task) {
+        this.pendingSizeBySrc.delete(src);
+      }
     }
   }
 
-  private async updateFilm() {
-    if (!this.canvasService) return;
-    const layer = this.canvasService.getLayer("overlay");
-    if (!layer) {
-      console.warn("[FilmTool] Overlay layer not found");
-      return;
-    }
-
-    const { url, opacity } = this;
-
-    if (!url) {
-      const img = this.canvasService.getObject("film-image", "overlay");
-      if (img) {
-        layer.remove(img);
-        this.canvasService.requestRenderAll();
-      }
-      return;
-    }
-
-    const width = this.canvasService.canvas.width || 800;
-    const height = this.canvasService.canvas.height || 600;
-
-    let img = this.canvasService.getObject("film-image", "overlay") as Image;
+  private async loadImageSize(src: string): Promise<SourceSize | null> {
     try {
-      if (img) {
-        if (img.getSrc() !== url) {
-          await img.setSrc(url);
-        }
-        img.set({ opacity });
-      } else {
-        img = await Image.fromURL(url, { crossOrigin: "anonymous" });
-        img.scaleToWidth(width);
-        if (img.getScaledHeight() < height) img.scaleToHeight(height);
-        img.set({
-          originX: "left",
-          originY: "top",
-          left: 0,
-          top: 0,
-          opacity,
-          selectable: false,
-          evented: false,
-          data: { id: "film-image" },
-        });
-        layer.add(img);
+      const image = await FabricImage.fromURL(src, {
+        crossOrigin: "anonymous",
+      });
+      const width = Number(image?.width || 0);
+      const height = Number(image?.height || 0);
+      if (width > 0 && height > 0) {
+        const size = { width, height };
+        this.sourceSizeBySrc.set(src, size);
+        return size;
       }
-      this.canvasService.requestRenderAll();
     } catch (error) {
-      console.error("[FilmTool] Failed to load film image", url, error);
+      console.error("[FilmTool] Failed to load film image", src, error);
     }
-    layer.dirty = true;
+    return null;
+  }
+
+  private updateFilm() {
+    void this.updateFilmAsync();
+  }
+
+  private async updateFilmAsync() {
+    if (!this.canvasService) return;
+    const seq = ++this.renderSeq;
+    const nextUrl = String(this.url || "").trim();
+
+    if (!nextUrl) {
+      this.renderImageUrl = "";
+    } else if (nextUrl !== this.renderImageUrl) {
+      const loaded = await this.ensureImageSize(nextUrl);
+      if (seq !== this.renderSeq) return;
+      if (loaded) {
+        this.renderImageUrl = nextUrl;
+      }
+    }
+
+    this.specs = this.buildFilmSpecs(this.renderImageUrl, this.opacity);
+    await this.canvasService.flushRenderFromProducers();
+    if (seq !== this.renderSeq) return;
+    this.canvasService.bringLayerToFront(FILM_LAYER_ID);
     this.canvasService.requestRenderAll();
   }
 }
