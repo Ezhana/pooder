@@ -14,7 +14,7 @@ import {
   Pattern,
   Point,
 } from "fabric";
-import { CanvasService, RenderObjectSpec } from "../services";
+import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../services";
 import { isDielineShape, normalizeShapeStyle } from "./dielineShape";
 import type { DielineShape, DielineShapeStyle } from "./dielineShape";
 import { generateDielinePath, getPathBounds } from "./geometry";
@@ -797,6 +797,16 @@ export class ImageTool implements Extension {
     return this.canvasService.toScreenRect(frame || this.getFrameRect());
   }
 
+  private toLayoutSceneRect(rect: FrameRect): RenderLayoutRect {
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      space: "scene",
+    };
+  }
+
   private async resolveDefaultFitArea(): Promise<DielineFitArea | null> {
     if (!this.canvasService) return null;
     const frame = this.getFrameRect();
@@ -1140,10 +1150,7 @@ export class ImageTool implements Extension {
       const hatchFill = patternFill || "rgba(255, 0, 0, 0.22)";
       const shapeBounds = getPathBounds(shapePathData);
       const hatchBounds = getPathBounds(hatchPathData);
-      const hatchLeft = frame.left + hatchBounds.x;
-      const hatchTop = frame.top + hatchBounds.y;
-      const shapeLeft = frame.left + shapeBounds.x;
-      const shapeTop = frame.top + shapeBounds.y;
+      const frameRect = this.toLayoutSceneRect(frame);
       const hatchPathLength = hatchPathData.length;
       const shapePathLength = shapePathData.length;
       const specs: RenderObjectSpec[] = [
@@ -1151,10 +1158,16 @@ export class ImageTool implements Extension {
           id: "image.cropShapeHatch",
           type: "path",
           data: { id: "image.cropShapeHatch", zIndex: 5 },
+          layout: {
+            reference: "custom",
+            referenceRect: frameRect,
+            alignX: "start",
+            alignY: "start",
+            offsetX: hatchBounds.x,
+            offsetY: hatchBounds.y,
+          },
           props: {
             pathData: hatchPathData,
-            left: hatchLeft,
-            top: hatchTop,
             originX: "left",
             originY: "top",
             fill: hatchFill,
@@ -1171,10 +1184,16 @@ export class ImageTool implements Extension {
           id: "image.cropShapePath",
           type: "path",
           data: { id: "image.cropShapePath", zIndex: 6 },
+          layout: {
+            reference: "custom",
+            referenceRect: frameRect,
+            alignX: "start",
+            alignY: "start",
+            offsetX: shapeBounds.x,
+            offsetY: shapeBounds.y,
+          },
           props: {
             pathData: shapePathData,
-            left: shapeLeft,
-            top: shapeTop,
             originX: "left",
             originY: "top",
             fill: "rgba(0,0,0,0)",
@@ -1445,7 +1464,9 @@ export class ImageTool implements Extension {
     const canvasLeft = viewport.left || 0;
     const canvasTop = viewport.top || 0;
     const visual = this.getFrameVisualConfig();
-    const strokeWidthScene = this.canvasService.toSceneLength(visual.strokeWidth);
+    const strokeWidthScene = this.canvasService.toSceneLength(
+      visual.strokeWidth,
+    );
     const dashLengthScene = this.canvasService.toSceneLength(visual.dashLength);
 
     const frameLeft = Math.max(
@@ -1470,6 +1491,19 @@ export class ImageTool implements Extension {
     const bottomH = Math.max(0, canvasTop + canvasH - frameBottom);
     const leftW = Math.max(0, frameLeft - canvasLeft);
     const rightW = Math.max(0, canvasLeft + canvasW - frameRight);
+    const viewportRect = this.toLayoutSceneRect({
+      left: canvasLeft,
+      top: canvasTop,
+      width: canvasW,
+      height: canvasH,
+    });
+    const visibleFrameBandRect = this.toLayoutSceneRect({
+      left: canvasLeft,
+      top: frameTop,
+      width: canvasW,
+      height: visibleFrameH,
+    });
+    const frameRect = this.toLayoutSceneRect(frame);
     const shapeOverlay = this.buildCropShapeOverlaySpecs(frame, sceneGeometry);
 
     const mask: RenderObjectSpec[] = [
@@ -1477,13 +1511,17 @@ export class ImageTool implements Extension {
         id: "image.cropMask.top",
         type: "rect",
         data: { id: "image.cropMask.top", zIndex: 1 },
-        props: {
-          left: canvasLeft + canvasW / 2,
-          top: canvasTop + topH / 2,
-          width: canvasW,
+        layout: {
+          reference: "custom",
+          referenceRect: viewportRect,
+          alignX: "start",
+          alignY: "start",
+          width: "100%",
           height: topH,
-          originX: "center",
-          originY: "center",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: visual.outerBackground,
           selectable: false,
           evented: false,
@@ -1493,13 +1531,17 @@ export class ImageTool implements Extension {
         id: "image.cropMask.bottom",
         type: "rect",
         data: { id: "image.cropMask.bottom", zIndex: 2 },
-        props: {
-          left: canvasLeft + canvasW / 2,
-          top: frameBottom + bottomH / 2,
-          width: canvasW,
+        layout: {
+          reference: "custom",
+          referenceRect: viewportRect,
+          alignX: "start",
+          alignY: "end",
+          width: "100%",
           height: bottomH,
-          originX: "center",
-          originY: "center",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: visual.outerBackground,
           selectable: false,
           evented: false,
@@ -1509,13 +1551,17 @@ export class ImageTool implements Extension {
         id: "image.cropMask.left",
         type: "rect",
         data: { id: "image.cropMask.left", zIndex: 3 },
-        props: {
-          left: canvasLeft + leftW / 2,
-          top: frameTop + visibleFrameH / 2,
+        layout: {
+          reference: "custom",
+          referenceRect: visibleFrameBandRect,
+          alignX: "start",
+          alignY: "start",
           width: leftW,
-          height: visibleFrameH,
-          originX: "center",
-          originY: "center",
+          height: "100%",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: visual.outerBackground,
           selectable: false,
           evented: false,
@@ -1525,13 +1571,17 @@ export class ImageTool implements Extension {
         id: "image.cropMask.right",
         type: "rect",
         data: { id: "image.cropMask.right", zIndex: 4 },
-        props: {
-          left: frameRight + rightW / 2,
-          top: frameTop + visibleFrameH / 2,
+        layout: {
+          reference: "custom",
+          referenceRect: visibleFrameBandRect,
+          alignX: "end",
+          alignY: "start",
           width: rightW,
-          height: visibleFrameH,
-          originX: "center",
-          originY: "center",
+          height: "100%",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: visual.outerBackground,
           selectable: false,
           evented: false,
@@ -1543,13 +1593,17 @@ export class ImageTool implements Extension {
       id: "image.cropFrame",
       type: "rect",
       data: { id: "image.cropFrame", zIndex: 7 },
+      layout: {
+        reference: "custom",
+        referenceRect: frameRect,
+        alignX: "start",
+        alignY: "start",
+        width: "100%",
+        height: "100%",
+      },
       props: {
-        left: frame.left + frame.width / 2,
-        top: frame.top + frame.height / 2,
-        width: frame.width,
-        height: frame.height,
-        originX: "center",
-        originY: "center",
+        originX: "left",
+        originY: "top",
         fill: visual.innerBackground,
         stroke:
           visual.strokeStyle === "hidden"
@@ -1819,7 +1873,9 @@ export class ImageTool implements Extension {
         ? viewport.left + areaLeftInput * canvasW
         : areaLeftInput;
     const areaTopPx =
-      areaTopInput <= 1.5 ? viewport.top + areaTopInput * canvasH : areaTopInput;
+      areaTopInput <= 1.5
+        ? viewport.top + areaTopInput * canvasH
+        : areaTopInput;
 
     const updates: Partial<ImageItem> = {
       scale: Math.max(0.05, desiredScale / baseCover),

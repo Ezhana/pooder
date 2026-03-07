@@ -1,17 +1,12 @@
-import {
-  Canvas,
-  Group,
-  FabricObject,
-  Rect,
-  Path,
-  Image,
-  Text,
-} from "fabric";
+import { Canvas, Group, FabricObject, Rect, Path, Image, Text } from "fabric";
 import { Service, EventBus } from "@pooder/core";
 import { ViewportSystem } from "./ViewportSystem";
 import type {
   RenderCoordinateSpace,
   RenderLayerSpec,
+  RenderLayoutInsets,
+  RenderLayoutLength,
+  RenderObjectLayoutSpec,
   RenderObjectSpec,
 } from "./renderSpec";
 
@@ -36,6 +31,13 @@ interface RenderProducerEntry {
   producer: RenderProducer;
   priority: number;
   order: number;
+}
+
+interface RectLike {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
 export default class CanvasService implements Service {
@@ -64,7 +66,7 @@ export default class CanvasService implements Service {
     if (this.canvas.width !== undefined && this.canvas.height !== undefined) {
       this.viewport.updateContainer(this.canvas.width, this.canvas.height);
     }
-    
+
     if (options?.eventBus) {
       this.setEventBus(options.eventBus);
     }
@@ -104,7 +106,9 @@ export default class CanvasService implements Service {
   ): { dispose: () => void } {
     const normalizedToolId = String(toolId || "").trim();
     if (!normalizedToolId) {
-      throw new Error("[CanvasService] registerRenderProducer requires a toolId.");
+      throw new Error(
+        "[CanvasService] registerRenderProducer requires a toolId.",
+      );
     }
     if (typeof producer !== "function") {
       throw new Error(
@@ -400,6 +404,165 @@ export default class CanvasService implements Service {
     return this.toSceneRect({ left: 0, top: 0, width, height });
   }
 
+  getScreenViewportRect(): RectLike {
+    return {
+      left: 0,
+      top: 0,
+      width: Number(this.canvas.width || 0),
+      height: Number(this.canvas.height || 0),
+    };
+  }
+
+  private toSpaceRect(
+    rect: RectLike,
+    from: RenderCoordinateSpace,
+    to: RenderCoordinateSpace,
+  ): RectLike {
+    if (from === to) return { ...rect };
+    if (from === "scene") {
+      return this.toScreenRect(rect);
+    }
+    return this.toSceneRect(rect);
+  }
+
+  private resolveLayoutLength(
+    value: RenderLayoutLength | undefined,
+    base: number,
+  ): number | undefined {
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : undefined;
+    }
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const raw = value.trim();
+    if (!raw) return undefined;
+    if (raw.endsWith("%")) {
+      const percent = parseFloat(raw.slice(0, -1));
+      if (!Number.isFinite(percent)) return undefined;
+      return (base * percent) / 100;
+    }
+    const parsed = parseFloat(raw);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private resolveLayoutInsets(
+    inset: RenderLayoutLength | RenderLayoutInsets | undefined,
+    reference: RectLike,
+  ): { top: number; right: number; bottom: number; left: number } {
+    if (typeof inset === "number" || typeof inset === "string") {
+      const all =
+        this.resolveLayoutLength(
+          inset,
+          Math.min(reference.width, reference.height),
+        ) ?? 0;
+      return { top: all, right: all, bottom: all, left: all };
+    }
+
+    const source = inset || {};
+    const top = this.resolveLayoutLength(source.top, reference.height) ?? 0;
+    const right = this.resolveLayoutLength(source.right, reference.width) ?? 0;
+    const bottom =
+      this.resolveLayoutLength(source.bottom, reference.height) ?? 0;
+    const left = this.resolveLayoutLength(source.left, reference.width) ?? 0;
+    return { top, right, bottom, left };
+  }
+
+  private resolveLayoutReferenceRect(
+    layout: RenderObjectLayoutSpec,
+    space: RenderCoordinateSpace,
+  ): RectLike {
+    if (layout.referenceRect) {
+      const sourceSpace: RenderCoordinateSpace =
+        layout.referenceRect.space || space;
+      return this.toSpaceRect(layout.referenceRect, sourceSpace, space);
+    }
+
+    const reference = layout.reference || "sceneViewport";
+    if (reference === "screenViewport") {
+      const screenRect = this.getScreenViewportRect();
+      return space === "screen" ? screenRect : this.toSceneRect(screenRect);
+    }
+
+    const sceneRect = this.getSceneViewportRect();
+    return space === "scene" ? sceneRect : this.toScreenRect(sceneRect);
+  }
+
+  private alignFactor(value: unknown): number {
+    if (value === "end") return 1;
+    if (value === "center") return 0.5;
+    return 0;
+  }
+
+  private normalizeOriginX(value: unknown): "left" | "center" | "right" {
+    if (value === "center") return "center";
+    if (value === "right") return "right";
+    return "left";
+  }
+
+  private normalizeOriginY(value: unknown): "top" | "center" | "bottom" {
+    if (value === "center") return "center";
+    if (value === "bottom") return "bottom";
+    return "top";
+  }
+
+  private originFactor(
+    value: "left" | "center" | "right" | "top" | "bottom",
+  ): number {
+    if (value === "center") return 0.5;
+    if (value === "right" || value === "bottom") return 1;
+    return 0;
+  }
+
+  private resolveLayoutProps(
+    spec: RenderObjectSpec,
+    props: Record<string, any>,
+  ): Record<string, any> {
+    const layout = spec.layout;
+    if (!layout) {
+      return { ...props };
+    }
+
+    const space: RenderCoordinateSpace = spec.space || "scene";
+    const reference = this.resolveLayoutReferenceRect(layout, space);
+    const inset = this.resolveLayoutInsets(layout.inset, reference);
+    const area: RectLike = {
+      left: reference.left + inset.left,
+      top: reference.top + inset.top,
+      width: Math.max(0, reference.width - inset.left - inset.right),
+      height: Math.max(0, reference.height - inset.top - inset.bottom),
+    };
+
+    const next = { ...props };
+    const width =
+      this.resolveLayoutLength(layout.width, area.width) ??
+      (Number.isFinite(next.width) ? Number(next.width) : undefined);
+    const height =
+      this.resolveLayoutLength(layout.height, area.height) ??
+      (Number.isFinite(next.height) ? Number(next.height) : undefined);
+
+    if (width !== undefined) next.width = width;
+    if (height !== undefined) next.height = height;
+
+    const alignX = this.alignFactor(layout.alignX);
+    const alignY = this.alignFactor(layout.alignY);
+    const offsetX = this.resolveLayoutLength(layout.offsetX, area.width) ?? 0;
+    const offsetY = this.resolveLayoutLength(layout.offsetY, area.height) ?? 0;
+    const objectWidth = Number.isFinite(next.width) ? Number(next.width) : 0;
+    const objectHeight = Number.isFinite(next.height) ? Number(next.height) : 0;
+
+    const objectLeft =
+      area.left + (area.width - objectWidth) * alignX + offsetX;
+    const objectTop =
+      area.top + (area.height - objectHeight) * alignY + offsetY;
+
+    const originX = this.normalizeOriginX(next.originX);
+    const originY = this.normalizeOriginY(next.originY);
+    next.left = objectLeft + objectWidth * this.originFactor(originX);
+    next.top = objectTop + objectHeight * this.originFactor(originY);
+    return next;
+  }
+
   setLayerVisibility(layerId: string, visible: boolean) {
     const layer = this.getLayer(layerId);
     if (layer) {
@@ -568,10 +731,10 @@ export default class CanvasService implements Service {
     props: Record<string, any>,
   ): Record<string, any> {
     const space: RenderCoordinateSpace = spec.space || "scene";
+    const next = this.resolveLayoutProps(spec, props);
     if (space === "screen") {
-      return props;
+      return next;
     }
-    const next = { ...props };
     const hasLeft = Number.isFinite(next.left);
     const hasTop = Number.isFinite(next.top);
     if (hasLeft || hasTop) {
@@ -629,7 +792,8 @@ export default class CanvasService implements Service {
     }
 
     if (spec.type === "path") {
-      const pathData = (spec.props as any)?.path || (spec.props as any)?.pathData;
+      const pathData =
+        (spec.props as any)?.path || (spec.props as any)?.pathData;
       if (!pathData) return undefined;
       const props = this.resolveFabricProps(spec, spec.props || {});
       const path = new Path(pathData, {

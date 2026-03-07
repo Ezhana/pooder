@@ -8,7 +8,7 @@ import {
   ToolSessionService,
   WorkbenchService,
 } from "@pooder/core";
-import { CanvasService, RenderObjectSpec } from "../services";
+import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../services";
 import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
 
 export interface WhiteInkItem {
@@ -776,6 +776,16 @@ export class WhiteInkTool implements Extension {
     });
   }
 
+  private toLayoutSceneRect(rect: FrameRect): RenderLayoutRect {
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      space: "scene",
+    };
+  }
+
   private getImageObjects(): any[] {
     if (!this.canvasService) return [];
     return this.canvasService.canvas.getObjects().filter((obj: any) => {
@@ -893,7 +903,9 @@ export class WhiteInkTool implements Extension {
     return Math.max(frameW / sourceW, frameH / sourceH);
   }
 
-  private async ensureSourceSize(sourceUrl: string): Promise<SourceSize | null> {
+  private async ensureSourceSize(
+    sourceUrl: string,
+  ): Promise<SourceSize | null> {
     if (!sourceUrl) return null;
     const cached = this.getSourceSize(sourceUrl);
     if (cached) return cached;
@@ -1105,6 +1117,19 @@ export class WhiteInkTool implements Extension {
     const bottomH = Math.max(0, canvasTop + canvasH - frameBottom);
     const leftW = Math.max(0, frameLeft - canvasLeft);
     const rightW = Math.max(0, canvasLeft + canvasW - frameRight);
+    const viewportRect = this.toLayoutSceneRect({
+      left: canvasLeft,
+      top: canvasTop,
+      width: canvasW,
+      height: canvasH,
+    });
+    const visibleFrameBandRect = this.toLayoutSceneRect({
+      left: canvasLeft,
+      top: frameTop,
+      width: canvasW,
+      height: visibleFrameH,
+    });
+    const frameRect = this.toLayoutSceneRect(frame);
 
     const maskSpecs: RenderObjectSpec[] = [
       {
@@ -1115,13 +1140,17 @@ export class WhiteInkTool implements Extension {
           layerId: WHITE_INK_OVERLAY_LAYER_ID,
           type: "white-ink-mask",
         },
-        props: {
-          left: canvasLeft + canvasW / 2,
-          top: canvasTop + topH / 2,
-          width: canvasW,
+        layout: {
+          reference: "custom",
+          referenceRect: viewportRect,
+          alignX: "start",
+          alignY: "start",
+          width: "100%",
           height: topH,
-          originX: "center",
-          originY: "center",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: outerBackground,
           selectable: false,
           evented: false,
@@ -1136,13 +1165,17 @@ export class WhiteInkTool implements Extension {
           layerId: WHITE_INK_OVERLAY_LAYER_ID,
           type: "white-ink-mask",
         },
-        props: {
-          left: canvasLeft + canvasW / 2,
-          top: frameBottom + bottomH / 2,
-          width: canvasW,
+        layout: {
+          reference: "custom",
+          referenceRect: viewportRect,
+          alignX: "start",
+          alignY: "end",
+          width: "100%",
           height: bottomH,
-          originX: "center",
-          originY: "center",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: outerBackground,
           selectable: false,
           evented: false,
@@ -1157,13 +1190,17 @@ export class WhiteInkTool implements Extension {
           layerId: WHITE_INK_OVERLAY_LAYER_ID,
           type: "white-ink-mask",
         },
-        props: {
-          left: canvasLeft + leftW / 2,
-          top: frameTop + visibleFrameH / 2,
+        layout: {
+          reference: "custom",
+          referenceRect: visibleFrameBandRect,
+          alignX: "start",
+          alignY: "start",
           width: leftW,
-          height: visibleFrameH,
-          originX: "center",
-          originY: "center",
+          height: "100%",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: outerBackground,
           selectable: false,
           evented: false,
@@ -1178,13 +1215,17 @@ export class WhiteInkTool implements Extension {
           layerId: WHITE_INK_OVERLAY_LAYER_ID,
           type: "white-ink-mask",
         },
-        props: {
-          left: frameRight + rightW / 2,
-          top: frameTop + visibleFrameH / 2,
+        layout: {
+          reference: "custom",
+          referenceRect: visibleFrameBandRect,
+          alignX: "end",
+          alignY: "start",
           width: rightW,
-          height: visibleFrameH,
-          originX: "center",
-          originY: "center",
+          height: "100%",
+        },
+        props: {
+          originX: "left",
+          originY: "top",
           fill: outerBackground,
           selectable: false,
           evented: false,
@@ -1203,13 +1244,17 @@ export class WhiteInkTool implements Extension {
           layerId: WHITE_INK_OVERLAY_LAYER_ID,
           type: "white-ink-frame",
         },
+        layout: {
+          reference: "custom",
+          referenceRect: frameRect,
+          alignX: "start",
+          alignY: "start",
+          width: "100%",
+          height: "100%",
+        },
         props: {
-          left: frame.left + frame.width / 2,
-          top: frame.top + frame.height / 2,
-          width: frame.width,
-          height: frame.height,
-          originX: "center",
-          originY: "center",
+          originX: "left",
+          originY: "top",
           fill: innerBackground,
           stroke: strokeColor,
           strokeWidth: strokeWidthScene,
