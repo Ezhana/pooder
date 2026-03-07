@@ -17,7 +17,7 @@ import {
 import { CanvasService, RenderObjectSpec } from "../services";
 import { isDielineShape, normalizeShapeStyle } from "./dielineShape";
 import type { DielineShape, DielineShapeStyle } from "./dielineShape";
-import { generateDielinePath } from "./geometry";
+import { generateDielinePath, getPathBounds } from "./geometry";
 import {
   buildSceneGeometry,
   computeSceneLayout,
@@ -1117,6 +1117,12 @@ export class ImageTool implements Extension {
 
       const patternFill = this.getCropShapeHatchPattern();
       const hatchFill = patternFill || "rgba(255, 0, 0, 0.22)";
+      const shapeBounds = getPathBounds(shapePathData);
+      const hatchBounds = getPathBounds(hatchPathData);
+      const hatchLeft = frame.left + hatchBounds.x;
+      const hatchTop = frame.top + hatchBounds.y;
+      const shapeLeft = frame.left + shapeBounds.x;
+      const shapeTop = frame.top + shapeBounds.y;
       const hatchPathLength = hatchPathData.length;
       const shapePathLength = shapePathData.length;
       const specs: RenderObjectSpec[] = [
@@ -1126,8 +1132,8 @@ export class ImageTool implements Extension {
           data: { id: "image.cropShapeHatch", zIndex: 5 },
           props: {
             pathData: hatchPathData,
-            left: frame.left,
-            top: frame.top,
+            left: hatchLeft,
+            top: hatchTop,
             originX: "left",
             originY: "top",
             fill: hatchFill,
@@ -1146,8 +1152,8 @@ export class ImageTool implements Extension {
           data: { id: "image.cropShapePath", zIndex: 6 },
           props: {
             pathData: shapePathData,
-            left: frame.left,
-            top: frame.top,
+            left: shapeLeft,
+            top: shapeTop,
             originX: "left",
             originY: "top",
             fill: "rgba(0,0,0,0)",
@@ -1169,6 +1175,8 @@ export class ImageTool implements Extension {
         fillRule: "evenodd",
         shapePathLength,
         hatchPathLength,
+        shapeBounds,
+        hatchBounds,
         hatchFillType:
           hatchFill && typeof hatchFill === "object" ? "pattern" : "color",
         ids: specs.map((spec) => spec.id),
