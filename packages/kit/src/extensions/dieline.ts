@@ -7,7 +7,7 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
-import { CanvasService } from "../services";
+import { CanvasService, RenderObjectSpec } from "../services";
 import { ImageTracer } from "./tracer";
 import { parseLengthToMm } from "../units";
 import {
@@ -75,6 +75,7 @@ export interface DielineState {
 }
 
 const IMAGE_OBJECT_LAYER_ID = "image.user";
+const DIELINE_LAYER_ID = "dieline-overlay";
 
 export class DielineTool implements Extension {
   id = "pooder.kit.dieline";
@@ -110,6 +111,9 @@ export class DielineTool implements Extension {
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
+  private specs: RenderObjectSpec[] = [];
+  private renderSeq = 0;
+  private renderProducerDisposable?: { dispose: () => void };
   private onCanvasResized = () => {
     this.updateDieline();
   };
@@ -144,6 +148,17 @@ export class DielineTool implements Extension {
       console.warn("CanvasService not found for DielineTool");
       return;
     }
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
+      this.id,
+      () => ({
+        layerSpecs: {
+          [DIELINE_LAYER_ID]: this.specs,
+        },
+        replaceLayerIds: [DIELINE_LAYER_ID],
+      }),
+      { priority: 250 },
+    );
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -322,13 +337,18 @@ export class DielineTool implements Extension {
     }
 
     context.eventBus.on("canvas:resized", this.onCanvasResized);
-    this.createLayer();
     this.updateDieline();
   }
 
   deactivate(context: ExtensionContext) {
     context.eventBus.off("canvas:resized", this.onCanvasResized);
-    this.destroyLayer();
+    this.renderSeq += 1;
+    this.specs = [];
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = undefined;
+    if (this.canvasService) {
+      void this.canvasService.flushRenderFromProducers();
+    }
     this.canvasService = undefined;
     this.context = undefined;
   }
@@ -560,42 +580,6 @@ export class DielineTool implements Extension {
     };
   }
 
-  private getLayer() {
-    return this.canvasService?.getLayer("dieline-overlay");
-  }
-
-  private createLayer() {
-    if (!this.canvasService) return;
-    const width = this.canvasService.canvas.width || 800;
-    const height = this.canvasService.canvas.height || 600;
-
-    const layer = this.canvasService.createLayer("dieline-overlay", {
-      width,
-      height,
-      selectable: false,
-      evented: false,
-    });
-
-    this.canvasService.canvas.bringObjectToFront(layer);
-
-    // Ensure above user layer
-    const userLayer = this.canvasService.getLayer("user");
-    if (userLayer) {
-      const userIndex = this.canvasService.canvas
-        .getObjects()
-        .indexOf(userLayer);
-      this.canvasService.canvas.moveObjectTo(layer, userIndex + 1);
-    }
-  }
-
-  private destroyLayer() {
-    if (!this.canvasService) return;
-    const layer = this.getLayer();
-    if (layer) {
-      this.canvasService.canvas.remove(layer);
-    }
-  }
-
   private createHatchPattern(color: string = "rgba(0, 0, 0, 0.3)") {
     if (typeof document === "undefined") {
       return undefined;
@@ -649,20 +633,27 @@ export class DielineTool implements Extension {
       .forEach((obj: any) => canvas.bringObjectToFront(obj));
   }
 
-  public updateDieline(_emitEvent: boolean = true) {
+  private ensureLayerStacking() {
     if (!this.canvasService) return;
-    const layer = this.getLayer();
+    const layer = this.canvasService.getLayer(DIELINE_LAYER_ID);
     if (!layer) return;
-    const configService = this.getConfigService();
-    if (!configService) return;
+    const userLayer = this.canvasService.getLayer("user");
+    if (userLayer) {
+      const layerIndex = this.canvasService.canvas.getObjects().indexOf(layer);
+      const userIndex = this.canvasService.canvas
+        .getObjects()
+        .indexOf(userLayer);
+      if (layerIndex < userIndex) {
+        this.canvasService.canvas.moveObjectTo(layer, userIndex + 1);
+      }
+      return;
+    }
+    this.canvasService.canvas.bringObjectToFront(layer);
+  }
 
-    this.syncSizeState(configService);
-    const sceneLayout = computeSceneLayout(
-      this.canvasService,
-      readSizeState(configService),
-    );
-    if (!sceneLayout) return;
-
+  private buildDielineSpecs(
+    sceneLayout: NonNullable<ReturnType<typeof computeSceneLayout>>,
+  ): RenderObjectSpec[] {
     const {
       shape,
       shapeStyle,
@@ -676,9 +667,9 @@ export class DielineTool implements Extension {
     } = this.state;
 
     const canvasW =
-      sceneLayout.canvasWidth || this.canvasService.canvas.width || 800;
+      sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800;
     const canvasH =
-      sceneLayout.canvasHeight || this.canvasService.canvas.height || 600;
+      sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600;
     const scale = sceneLayout.scale;
     const cx = sceneLayout.trimRect.centerX;
     const cy = sceneLayout.trimRect.centerY;
@@ -691,8 +682,6 @@ export class DielineTool implements Extension {
     const visualOffset = (cutW - visualWidth) / 2;
     const cutR =
       visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
-
-    layer.remove(...layer.getObjects());
 
     const absoluteFeatures = (features || []).map((f) => ({
       ...f,
@@ -719,17 +708,26 @@ export class DielineTool implements Extension {
       customSourceWidthPx: this.state.customSourceWidthPx,
       customSourceHeightPx: this.state.customSourceHeightPx,
     });
-    const mask = new Path(maskPathData, {
-      fill: outsideColor,
-      stroke: null,
-      selectable: false,
-      evented: false,
-      originX: "left" as const,
-      originY: "top" as const,
-      left: 0,
-      top: 0,
-    });
-    layer.add(mask);
+
+    const specs: RenderObjectSpec[] = [
+      {
+        id: "dieline.mask",
+        type: "path",
+        space: "screen",
+        data: { id: "dieline.mask", type: "dieline" },
+        props: {
+          pathData: maskPathData,
+          fill: outsideColor,
+          stroke: null,
+          selectable: false,
+          evented: false,
+          originX: "left",
+          originY: "top",
+          left: 0,
+          top: 0,
+        },
+      },
+    ];
 
     if (
       insideColor &&
@@ -752,15 +750,21 @@ export class DielineTool implements Extension {
         canvasHeight: canvasH,
       });
 
-      const insideObj = new Path(productPathData, {
-        fill: insideColor,
-        stroke: null,
-        selectable: false,
-        evented: false,
-        originX: "left",
-        originY: "top",
+      specs.push({
+        id: "dieline.inside",
+        type: "path",
+        space: "screen",
+        data: { id: "dieline.inside", type: "dieline" },
+        props: {
+          pathData: productPathData,
+          fill: insideColor,
+          stroke: null,
+          selectable: false,
+          evented: false,
+          originX: "left",
+          originY: "top",
+        },
       });
-      layer.add(insideObj);
     }
 
     if (Math.abs(visualOffset) > 0.0001) {
@@ -801,16 +805,22 @@ export class DielineTool implements Extension {
       if (showBleedLines !== false) {
         const pattern = this.createHatchPattern(mainLine.color);
         if (pattern) {
-          const bleedObj = new Path(bleedPathData, {
-            fill: pattern,
-            stroke: null,
-            selectable: false,
-            evented: false,
-            objectCaching: false,
-            originX: "left",
-            originY: "top",
+          specs.push({
+            id: "dieline.bleed-zone",
+            type: "path",
+            space: "screen",
+            data: { id: "dieline.bleed-zone", type: "dieline" },
+            props: {
+              pathData: bleedPathData,
+              fill: pattern,
+              stroke: null,
+              selectable: false,
+              evented: false,
+              objectCaching: false,
+              originX: "left",
+              originY: "top",
+            },
           });
-          layer.add(bleedObj);
         }
       }
 
@@ -830,20 +840,26 @@ export class DielineTool implements Extension {
         canvasHeight: canvasH,
       });
 
-      const offsetBorderObj = new Path(offsetPathData, {
-        fill: null,
-        stroke: offsetLine.style === "hidden" ? null : offsetLine.color,
-        strokeWidth: offsetLine.width,
-        strokeDashArray:
-          offsetLine.style === "dashed"
-            ? [offsetLine.dashLength, offsetLine.dashLength]
-            : undefined,
-        selectable: false,
-        evented: false,
-        originX: "left",
-        originY: "top",
+      specs.push({
+        id: "dieline.offset-border",
+        type: "path",
+        space: "screen",
+        data: { id: "dieline.offset-border", type: "dieline" },
+        props: {
+          pathData: offsetPathData,
+          fill: null,
+          stroke: offsetLine.style === "hidden" ? null : offsetLine.color,
+          strokeWidth: offsetLine.width,
+          strokeDashArray:
+            offsetLine.style === "dashed"
+              ? [offsetLine.dashLength, offsetLine.dashLength]
+              : undefined,
+          selectable: false,
+          evented: false,
+          originX: "left",
+          originY: "top",
+        },
       });
-      layer.add(offsetBorderObj);
     }
 
     const borderPathData = generateDielinePath({
@@ -861,40 +877,64 @@ export class DielineTool implements Extension {
       canvasWidth: canvasW,
       canvasHeight: canvasH,
     });
-    const borderObj = new Path(borderPathData, {
-      fill: "transparent",
-      stroke: mainLine.style === "hidden" ? null : mainLine.color,
-      strokeWidth: mainLine.width,
-      strokeDashArray:
-        mainLine.style === "dashed"
-          ? [mainLine.dashLength, mainLine.dashLength]
-          : undefined,
-      selectable: false,
-      evented: false,
-      originX: "left",
-      originY: "top",
-    });
-    layer.add(borderObj);
 
-    const userLayer = this.canvasService.getLayer("user");
-    if (layer && userLayer) {
-      const layerIndex = this.canvasService.canvas.getObjects().indexOf(layer);
-      const userIndex = this.canvasService.canvas
-        .getObjects()
-        .indexOf(userLayer);
-      if (layerIndex < userIndex) {
-        this.canvasService.canvas.moveObjectTo(layer, userIndex + 1);
-      }
-    } else {
-      this.canvasService.canvas.bringObjectToFront(layer);
+    specs.push({
+      id: "dieline.border",
+      type: "path",
+      space: "screen",
+      data: { id: "dieline.border", type: "dieline" },
+      props: {
+        pathData: borderPathData,
+        fill: "transparent",
+        stroke: mainLine.style === "hidden" ? null : mainLine.color,
+        strokeWidth: mainLine.width,
+        strokeDashArray:
+          mainLine.style === "dashed"
+            ? [mainLine.dashLength, mainLine.dashLength]
+            : undefined,
+        selectable: false,
+        evented: false,
+        originX: "left",
+        originY: "top",
+      },
+    });
+
+    return specs;
+  }
+
+  public updateDieline(_emitEvent: boolean = true) {
+    void this.updateDielineAsync();
+  }
+
+  private async updateDielineAsync() {
+    if (!this.canvasService) return;
+    const configService = this.getConfigService();
+    if (!configService) return;
+    const seq = ++this.renderSeq;
+
+    this.syncSizeState(configService);
+    const sceneLayout = computeSceneLayout(
+      this.canvasService,
+      readSizeState(configService),
+    );
+    if (!sceneLayout) {
+      if (seq !== this.renderSeq) return;
+      this.specs = [];
+      await this.canvasService.flushRenderFromProducers();
+      return;
     }
+
+    const nextSpecs = this.buildDielineSpecs(sceneLayout);
+    if (seq !== this.renderSeq) return;
+    this.specs = nextSpecs;
+    await this.canvasService.flushRenderFromProducers();
+    if (seq !== this.renderSeq) return;
+
+    this.ensureLayerStacking();
 
     // Feature tool markers can extend outside trim. Keep them above dieline mask.
     this.bringFeatureMarkersToFront();
-
     this.canvasService.bringLayerToFront("ruler-overlay");
-
-    layer.dirty = true;
     this.canvasService.requestRenderAll();
   }
 
