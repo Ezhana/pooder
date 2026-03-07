@@ -64,6 +64,7 @@ __snapshots__
 *.bak
 *.tmp
 *.temp
+.test-dist
 
 # --- 某些框架特定 ---
 .svelte-kit
