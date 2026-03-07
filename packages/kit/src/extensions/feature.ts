@@ -6,19 +6,49 @@ import {
   ConfigurationService,
   ToolSessionService,
 } from "@pooder/core";
-import { Circle, Group, Point, Rect } from "fabric";
-import { CanvasService } from "../services";
-import {
-  getNearestPointOnDieline,
-  DielineFeature,
-  resolveFeaturePosition,
-} from "./geometry";
+import { CanvasService, RenderObjectSpec } from "../services";
+import { resolveFeaturePosition } from "./geometry";
 import { ConstraintRegistry, ConstraintFeature } from "./constraints";
 import { completeFeaturesStrict } from "./featureComplete";
 import {
   readSizeState,
   type SceneGeometrySnapshot as DielineGeometry,
 } from "./sceneLayoutModel";
+
+const FEATURE_OVERLAY_LAYER_ID = "feature-overlay";
+const FEATURE_STROKE_WIDTH = 2;
+const DEFAULT_RECT_SIZE = 10;
+const DEFAULT_CIRCLE_RADIUS = 5;
+
+type MarkerPoint = { x: number; y: number };
+
+interface GroupMemberOffset {
+  index: number;
+  dx: number;
+  dy: number;
+}
+
+interface MarkerRenderState {
+  feature: ConstraintFeature;
+  index: number;
+  position: MarkerPoint;
+  geometry: DielineGeometry;
+  scale: number;
+}
+
+interface MarkerData {
+  type: "feature-marker";
+  index: number;
+  featureId: string;
+  groupId?: string;
+  markerRole: "handle" | "member" | "indicator";
+  markerOffsetX: number;
+  markerOffsetY: number;
+  isGroup: boolean;
+  indices?: number[];
+  anchorIndex?: number;
+  memberOffsets?: GroupMemberOffset[];
+}
 
 export class FeatureTool implements Extension {
   id = "pooder.kit.feature";
@@ -36,6 +66,9 @@ export class FeatureTool implements Extension {
   private sessionOriginalFeatures: ConstraintFeature[] | null = null;
   private hasWorkingChanges = false;
   private dirtyTrackerDisposable?: { dispose(): void };
+  private renderProducerDisposable?: { dispose: () => void };
+  private specs: RenderObjectSpec[] = [];
+  private renderSeq = 0;
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
@@ -63,6 +96,17 @@ export class FeatureTool implements Extension {
       console.warn("CanvasService not found for FeatureTool");
       return;
     }
+
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
+      this.id,
+      () => ({
+        rootLayerSpecs: {
+          [FEATURE_OVERLAY_LAYER_ID]: this.specs,
+        },
+      }),
+      { priority: 350 },
+    );
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -94,7 +138,6 @@ export class FeatureTool implements Extension {
       () => this.hasWorkingChanges,
     );
 
-    // Listen to tool activation
     context.eventBus.on("tool:activated", this.onToolActivated);
 
     this.setup();
@@ -119,23 +162,7 @@ export class FeatureTool implements Extension {
   };
 
   private updateVisibility() {
-    if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
-    const markers = canvas
-      .getObjects()
-      .filter((obj: any) => obj.data?.type === "feature-marker");
-
-    markers.forEach((marker: any) => {
-      // If tool active, allow selection. If not, disable selection.
-      // Also might want to hide them entirely or just disable interaction.
-      // Assuming we only want to see/edit holes when tool is active.
-      marker.set({
-        visible: this.isToolActive, // Or just selectable: false if we want them visible but locked
-        selectable: this.isToolActive,
-        evented: this.isToolActive,
-      });
-    });
-    canvas.requestRenderAll();
+    this.redraw();
   }
 
   contribute() {
@@ -384,8 +411,7 @@ export class FeatureTool implements Extension {
 
     this.setWorkingFeatures(next);
     this.hasWorkingChanges = true;
-    this.redraw();
-    this.enforceConstraints();
+    this.redraw({ enforceConstraints: true });
     this.emitWorkingChange();
 
     return { ok: true };
@@ -420,7 +446,7 @@ export class FeatureTool implements Extension {
       { dielineWidth, dielineHeight },
       (next) => {
         this.updateCommittedFeatures(next as ConstraintFeature[]);
-        this.workingFeatures = this.cloneFeatures(next as any);
+        this.workingFeatures = this.cloneFeatures(next as ConstraintFeature[]);
         this.emitWorkingChange();
       },
     );
@@ -434,7 +460,6 @@ export class FeatureTool implements Extension {
 
     this.hasWorkingChanges = false;
     this.clearFeatureSessionState();
-    // Keep feature markers above dieline overlay after config-driven redraw.
     this.redraw();
     return { ok: true };
   }
@@ -442,18 +467,16 @@ export class FeatureTool implements Extension {
   private addFeature(type: "add" | "subtract") {
     if (!this.canvasService) return false;
 
-    // Default to top edge center
     const newFeature: ConstraintFeature = {
       id: Date.now().toString(),
       operation: type,
       shape: "rect",
       x: 0.5,
-      y: 0, // Top edge
+      y: 0,
       width: 10,
       height: 10,
       rotation: 0,
       renderBehavior: "edge",
-      // Default constraint: path (snap to edge)
       constraints: [{ type: "path" }],
     };
 
@@ -470,7 +493,6 @@ export class FeatureTool implements Extension {
     const groupId = Date.now().toString();
     const timestamp = Date.now();
 
-    // 1. Lug (Outer) - Add
     const lug: ConstraintFeature = {
       id: `${timestamp}-lug`,
       groupId,
@@ -484,7 +506,6 @@ export class FeatureTool implements Extension {
       constraints: [{ type: "path" }],
     };
 
-    // 2. Hole (Inner) - Subtract
     const hole: ConstraintFeature = {
       id: `${timestamp}-hole`,
       groupId,
@@ -507,10 +528,8 @@ export class FeatureTool implements Extension {
 
   private getGeometryForFeature(
     geometry: DielineGeometry,
-    feature?: ConstraintFeature,
+    _feature?: ConstraintFeature,
   ): DielineGeometry {
-    // Legacy support or specialized scaling can go here if needed
-    // Currently all features operate on the base geometry (or scaled version of it)
     return geometry;
   }
 
@@ -518,12 +537,10 @@ export class FeatureTool implements Extension {
     if (!this.canvasService || !this.context) return;
     const canvas = this.canvasService.canvas;
 
-    // 1. Listen for Scene Geometry Changes
     if (!this.handleSceneGeometryChange) {
       this.handleSceneGeometryChange = (geometry: DielineGeometry) => {
         this.currentGeometry = geometry;
-        this.redraw();
-        this.enforceConstraints();
+        this.redraw({ enforceConstraints: true });
       };
       this.context.eventBus.on(
         "scene:geometry:change",
@@ -531,7 +548,6 @@ export class FeatureTool implements Extension {
       );
     }
 
-    // 2. Initial Fetch of Geometry
     const commandService = this.context.services.get<any>("CommandService");
     if (commandService) {
       try {
@@ -546,119 +562,41 @@ export class FeatureTool implements Extension {
       } catch (e) {}
     }
 
-    // 3. Setup Canvas Interaction
     if (!this.handleMoving) {
       this.handleMoving = (e: any) => {
-        const target = e.target;
-        if (!target || target.data?.type !== "feature-marker") return;
-        if (!this.currentGeometry) return;
+        const target = this.getDraggableMarkerTarget(e?.target);
+        if (!target || !this.currentGeometry) return;
 
-        // Determine feature to use for snapping context
-        let feature: ConstraintFeature | undefined;
-        if (target.data?.isGroup) {
-          const indices = target.data?.indices as number[];
-          if (indices && indices.length > 0) {
-            feature = this.workingFeatures[indices[0]];
-          }
-        } else {
-          const index = target.data?.index;
-          if (index !== undefined) {
-            feature = this.workingFeatures[index];
-          }
-        }
-
-        const geometry = this.getGeometryForFeature(
-          this.currentGeometry,
+        const feature = this.getFeatureForMarker(target);
+        const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+        const snapped = this.constrainPosition(
+          {
+            x: Number(target.left || 0),
+            y: Number(target.top || 0),
+          },
+          geometry,
           feature,
         );
-
-        // Snap to edge during move
-        // For Group, target.left/top is group center (or top-left depending on origin)
-        // We snap the target position itself.
-        const p = new Point(target.left, target.top);
-
-        // Calculate limit based on target size (min dimension / 2 ensures overlap)
-        // Also subtract stroke width to ensure visual overlap (not just tangent)
-        // target.strokeWidth for group is usually 0, need a safe default (e.g. 2 for markers)
-        const markerStrokeWidth =
-          (target.strokeWidth || 2) * (target.scaleX || 1);
-        const minDim = Math.min(
-          target.getScaledWidth(),
-          target.getScaledHeight(),
-        );
-        const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
-
-        const snapped = this.constrainPosition(p, geometry, limit, feature);
 
         target.set({
           left: snapped.x,
           top: snapped.y,
         });
+        target.setCoords();
+
+        this.syncMarkerVisualsByTarget(target, snapped);
       };
       canvas.on("object:moving", this.handleMoving);
     }
 
     if (!this.handleModified) {
       this.handleModified = (e: any) => {
-        const target = e.target;
-        if (!target || target.data?.type !== "feature-marker") return;
+        const target = this.getDraggableMarkerTarget(e?.target);
+        if (!target) return;
 
         if (target.data?.isGroup) {
-          // It's a Group object
-          const groupObj = target as Group;
-          // @ts-ignore
-          const indices = groupObj.data?.indices as number[];
-          if (!indices) return;
-
-          // We need to update all features in the group based on their new absolute positions.
-          // Fabric Group children positions are relative to group center.
-          // We need to calculate absolute position for each child.
-          // Note: groupObj has already been moved to new position (target.left, target.top)
-
-          const groupCenter = new Point(groupObj.left, groupObj.top);
-          // Get group matrix to transform children
-          // Simplified: just add relative coordinates if no rotation/scaling on group
-          // We locked rotation/scaling, so it's safe.
-
-          const newFeatures = [...this.workingFeatures];
-          const { x, y } = this.currentGeometry!; // Center is same
-
-          // Fabric Group objects have .getObjects() which returns children
-          // But children inside group have coordinates relative to group center.
-          // center is (0,0) inside the group local coordinate system.
-
-          groupObj.getObjects().forEach((child, i) => {
-            const originalIndex = indices[i];
-            const feature = this.workingFeatures[originalIndex];
-            const geometry = this.getGeometryForFeature(
-              this.currentGeometry!,
-              feature,
-            );
-            const { width, height } = geometry;
-            const layoutLeft = x - width / 2;
-            const layoutTop = y - height / 2;
-
-            // Calculate absolute position
-            // child.left/top are relative to group center
-            const absX = groupCenter.x + (child.left || 0);
-            const absY = groupCenter.y + (child.top || 0);
-
-            // Normalize
-            const normalizedX = width > 0 ? (absX - layoutLeft) / width : 0.5;
-            const normalizedY = height > 0 ? (absY - layoutTop) / height : 0.5;
-
-            newFeatures[originalIndex] = {
-              ...newFeatures[originalIndex],
-              x: normalizedX,
-              y: normalizedY,
-            };
-          });
-
-          this.setWorkingFeatures(newFeatures);
-          this.hasWorkingChanges = true;
-          this.emitWorkingChange();
+          this.syncGroupFromCanvas(target);
         } else {
-          // Single object
           this.syncFeatureFromCanvas(target);
         }
       };
@@ -686,20 +624,33 @@ export class FeatureTool implements Extension {
       this.handleSceneGeometryChange = null;
     }
 
-    const objects = canvas
-      .getObjects()
-      .filter((obj: any) => obj.data?.type === "feature-marker");
-    objects.forEach((obj) => canvas.remove(obj));
+    this.renderSeq += 1;
+    this.specs = [];
+    this.renderProducerDisposable?.dispose();
+    this.renderProducerDisposable = undefined;
+    void this.canvasService.flushRenderFromProducers();
+  }
 
-    this.canvasService.requestRenderAll();
+  private getDraggableMarkerTarget(target: any): any | null {
+    if (!target || target.data?.type !== "feature-marker") return null;
+    if (target.data?.markerRole !== "handle") return null;
+    return target;
+  }
+
+  private getFeatureForMarker(target: any): ConstraintFeature | undefined {
+    const data = target?.data || {};
+    const index = data.isGroup
+      ? this.toFeatureIndex(data.anchorIndex)
+      : this.toFeatureIndex(data.index);
+    if (index === null) return undefined;
+    return this.workingFeatures[index];
   }
 
   private constrainPosition(
-    p: Point,
+    p: MarkerPoint,
     geometry: DielineGeometry,
-    limit: number,
     feature?: ConstraintFeature,
-  ): { x: number; y: number } {
+  ): MarkerPoint {
     if (!feature) {
       return { x: p.x, y: p.y };
     }
@@ -707,7 +658,6 @@ export class FeatureTool implements Extension {
     const minX = geometry.x - geometry.width / 2;
     const minY = geometry.y - geometry.height / 2;
 
-    // Normalize
     const nx = geometry.width > 0 ? (p.x - minX) / geometry.width : 0.5;
     const ny = geometry.height > 0 ? (p.y - minY) / geometry.height : 0.5;
 
@@ -715,7 +665,6 @@ export class FeatureTool implements Extension {
     const dielineWidth = geometry.width / scale;
     const dielineHeight = geometry.height / scale;
 
-    // Filter constraints: only apply those that are NOT validateOnly
     const activeConstraints = feature.constraints?.filter(
       (c) => !c.validateOnly,
     );
@@ -732,290 +681,457 @@ export class FeatureTool implements Extension {
       activeConstraints,
     );
 
-    // Denormalize
     return {
       x: minX + constrained.x * geometry.width,
       y: minY + constrained.y * geometry.height,
     };
   }
 
-  private syncFeatureFromCanvas(target: any) {
-    if (!this.currentGeometry || !this.context) return;
+  private toNormalizedPoint(
+    point: MarkerPoint,
+    geometry: DielineGeometry,
+  ): MarkerPoint {
+    const left = geometry.x - geometry.width / 2;
+    const top = geometry.y - geometry.height / 2;
+    return {
+      x: geometry.width > 0 ? (point.x - left) / geometry.width : 0.5,
+      y: geometry.height > 0 ? (point.y - top) / geometry.height : 0.5,
+    };
+  }
 
-    const index = target.data?.index;
-    if (
-      index === undefined ||
-      index < 0 ||
-      index >= this.workingFeatures.length
-    )
-      return;
+  private syncFeatureFromCanvas(target: any) {
+    if (!this.currentGeometry) return;
+
+    const index = this.toFeatureIndex(target.data?.index);
+    if (index === null || index >= this.workingFeatures.length) return;
 
     const feature = this.workingFeatures[index];
     const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
-    const { width, height, x, y } = geometry;
+    const normalized = this.toNormalizedPoint(
+      {
+        x: Number(target.left || 0),
+        y: Number(target.top || 0),
+      },
+      geometry,
+    );
 
-    // Calculate Normalized Position
-    // The geometry x/y is the CENTER.
-    const left = x - width / 2;
-    const top = y - height / 2;
-
-    const normalizedX = width > 0 ? (target.left - left) / width : 0.5;
-    const normalizedY = height > 0 ? (target.top - top) / height : 0.5;
-
-    // Update feature
     const updatedFeature = {
       ...feature,
-      x: normalizedX,
-      y: normalizedY,
-      // Could also update rotation if we allowed rotating markers
+      x: normalized.x,
+      y: normalized.y,
     };
 
-    const newFeatures = [...this.workingFeatures];
-    newFeatures[index] = updatedFeature;
-    this.setWorkingFeatures(newFeatures);
+    const next = [...this.workingFeatures];
+    next[index] = updatedFeature;
+    this.setWorkingFeatures(next);
     this.hasWorkingChanges = true;
     this.emitWorkingChange();
   }
 
-  private redraw() {
-    if (!this.canvasService || !this.currentGeometry) return;
-    const canvas = this.canvasService.canvas;
-    const geometry = this.currentGeometry;
+  private syncGroupFromCanvas(target: any) {
+    if (!this.currentGeometry) return;
 
-    // Remove existing markers
-    const existing = canvas
-      .getObjects()
-      .filter((obj: any) => obj.data?.type === "feature-marker");
-    existing.forEach((obj) => canvas.remove(obj));
+    const indices = this.readGroupIndices(target.data?.indices);
+    if (indices.length === 0) return;
+    const offsets = this.readGroupMemberOffsets(target.data?.memberOffsets, indices);
 
-    if (!this.workingFeatures || this.workingFeatures.length === 0) {
-      this.canvasService.requestRenderAll();
-      return;
-    }
+    const anchorCenter = {
+      x: Number(target.left || 0),
+      y: Number(target.top || 0),
+    };
 
-    const scale = geometry.scale || 1;
-    const finalScale = scale;
+    const next = [...this.workingFeatures];
+    let changed = false;
+    offsets.forEach((entry) => {
+      const index = entry.index;
+      if (index < 0 || index >= next.length) return;
+      const feature = next[index];
+      const geometry = this.getGeometryForFeature(this.currentGeometry!, feature);
+      const normalized = this.toNormalizedPoint(
+        {
+          x: anchorCenter.x + entry.dx,
+          y: anchorCenter.y + entry.dy,
+        },
+        geometry,
+      );
 
-    // Group features by groupId
-    const groups: {
-      [key: string]: { feature: ConstraintFeature; index: number }[];
-    } = {};
-    const singles: { feature: ConstraintFeature; index: number }[] = [];
-
-    this.workingFeatures.forEach((f: ConstraintFeature, i: number) => {
-      if (f.groupId) {
-        if (!groups[f.groupId]) groups[f.groupId] = [];
-        groups[f.groupId].push({ feature: f, index: i });
-      } else {
-        singles.push({ feature: f, index: i });
+      if (feature.x !== normalized.x || feature.y !== normalized.y) {
+        next[index] = {
+          ...feature,
+          x: normalized.x,
+          y: normalized.y,
+        };
+        changed = true;
       }
     });
 
-    // Helper to create marker shape
-    const createMarkerShape = (
-      feature: ConstraintFeature,
-      pos: { x: number; y: number },
-    ) => {
-      const featureScale = scale;
+    if (!changed) return;
+    this.setWorkingFeatures(next);
+    this.hasWorkingChanges = true;
+    this.emitWorkingChange();
+  }
 
-      const visualWidth = (feature.width || 10) * featureScale;
-      const visualHeight = (feature.height || 10) * featureScale;
-      const visualRadius = (feature.radius || 0) * featureScale;
-      const color =
-        feature.color || (feature.operation === "add" ? "#00FF00" : "#FF0000");
-      const strokeDash =
-        feature.strokeDash ||
-        (feature.operation === "subtract" ? [4, 4] : undefined);
+  private redraw(options: { enforceConstraints?: boolean } = {}) {
+    void this.redrawAsync(options);
+  }
 
-      let shape: any;
-      if (feature.shape === "rect") {
-        shape = new Rect({
+  private async redrawAsync(options: { enforceConstraints?: boolean } = {}) {
+    if (!this.canvasService) return;
+
+    const seq = ++this.renderSeq;
+    this.specs = this.buildFeatureSpecs();
+    if (seq !== this.renderSeq) return;
+
+    await this.canvasService.flushRenderFromProducers();
+    if (seq !== this.renderSeq) return;
+
+    this.syncOverlayOrder();
+    if (options.enforceConstraints) {
+      this.enforceConstraints();
+    }
+  }
+
+  private syncOverlayOrder() {
+    if (!this.canvasService) return;
+    this.canvasService.bringLayerToFront(FEATURE_OVERLAY_LAYER_ID);
+    this.canvasService.bringLayerToFront("ruler-overlay");
+  }
+
+  private buildFeatureSpecs(): RenderObjectSpec[] {
+    if (!this.currentGeometry || this.workingFeatures.length === 0) {
+      return [];
+    }
+
+    const groups = new Map<string, MarkerRenderState[]>();
+    const singles: MarkerRenderState[] = [];
+
+    this.workingFeatures.forEach((feature, index) => {
+      const geometry = this.getGeometryForFeature(this.currentGeometry!, feature);
+      const position = resolveFeaturePosition(feature, geometry);
+      const scale = geometry.scale || 1;
+      const marker: MarkerRenderState = {
+        feature,
+        index,
+        position,
+        geometry,
+        scale,
+      };
+
+      if (feature.groupId) {
+        const list = groups.get(feature.groupId) || [];
+        list.push(marker);
+        groups.set(feature.groupId, list);
+        return;
+      }
+      singles.push(marker);
+    });
+
+    const specs: RenderObjectSpec[] = [];
+
+    singles.forEach((marker) => {
+      this.appendMarkerSpecs(specs, marker, {
+        markerRole: "handle",
+        isGroup: false,
+      });
+    });
+
+    groups.forEach((members, groupId) => {
+      if (!members.length) return;
+      const anchor = members[0];
+      const memberOffsets: GroupMemberOffset[] = members.map((member) => ({
+        index: member.index,
+        dx: member.position.x - anchor.position.x,
+        dy: member.position.y - anchor.position.y,
+      }));
+      const indices = members.map((member) => member.index);
+
+      members
+        .filter((member) => member.index !== anchor.index)
+        .forEach((member) => {
+          this.appendMarkerSpecs(specs, member, {
+            markerRole: "member",
+            isGroup: false,
+            groupId,
+          });
+        });
+
+      this.appendMarkerSpecs(specs, anchor, {
+        markerRole: "handle",
+        isGroup: true,
+        groupId,
+        indices,
+        anchorIndex: anchor.index,
+        memberOffsets,
+      });
+    });
+
+    return specs;
+  }
+
+  private appendMarkerSpecs(
+    specs: RenderObjectSpec[],
+    marker: MarkerRenderState,
+    options: {
+      markerRole: "handle" | "member";
+      isGroup: boolean;
+      groupId?: string;
+      indices?: number[];
+      anchorIndex?: number;
+      memberOffsets?: GroupMemberOffset[];
+    },
+  ) {
+    const { feature, index, position, scale, geometry } = marker;
+    const baseRadius =
+      feature.shape === "circle"
+        ? (feature.radius ?? DEFAULT_CIRCLE_RADIUS)
+        : (feature.radius ?? 0);
+    const baseWidth =
+      feature.shape === "circle"
+        ? baseRadius * 2
+        : (feature.width ?? DEFAULT_RECT_SIZE);
+    const baseHeight =
+      feature.shape === "circle"
+        ? baseRadius * 2
+        : (feature.height ?? DEFAULT_RECT_SIZE);
+    const visualWidth = baseWidth * scale;
+    const visualHeight = baseHeight * scale;
+    const visualRadius = baseRadius * scale;
+    const color =
+      feature.color || (feature.operation === "add" ? "#00FF00" : "#FF0000");
+    const strokeDash =
+      feature.strokeDash ||
+      (feature.operation === "subtract" ? [4, 4] : undefined);
+
+    const interactive = options.markerRole === "handle";
+    const baseData = this.buildMarkerData(marker, options);
+    const commonProps = {
+      visible: this.isToolActive,
+      selectable: interactive && this.isToolActive,
+      evented: interactive && this.isToolActive,
+      hasControls: false,
+      hasBorders: false,
+      hoverCursor: interactive ? "move" : "default",
+      lockRotation: true,
+      lockScalingX: true,
+      lockScalingY: true,
+      fill: "transparent",
+      stroke: color,
+      strokeWidth: FEATURE_STROKE_WIDTH,
+      strokeDashArray: strokeDash,
+      originX: "center" as const,
+      originY: "center" as const,
+      left: position.x,
+      top: position.y,
+      angle: feature.rotation || 0,
+    };
+
+    const markerId = this.markerId(index);
+    if (feature.shape === "rect") {
+      specs.push({
+        id: markerId,
+        type: "rect",
+        space: "screen",
+        data: baseData,
+        props: {
+          ...commonProps,
           width: visualWidth,
           height: visualHeight,
           rx: visualRadius,
           ry: visualRadius,
-          fill: "transparent",
-          stroke: color,
-          strokeWidth: 2,
-          strokeDashArray: strokeDash,
-          originX: "center",
-          originY: "center",
-          left: pos.x,
-          top: pos.y,
-        });
-      } else {
-        shape = new Circle({
-          radius: visualRadius || 5 * finalScale,
-          fill: "transparent",
-          stroke: color,
-          strokeWidth: 2,
-          strokeDashArray: strokeDash,
-          originX: "center",
-          originY: "center",
-          left: pos.x,
-          top: pos.y,
-        });
-      }
-      if (feature.rotation) {
-        shape.rotate(feature.rotation);
-      }
-
-      // Handle Indicator for Bridge
-      if (feature.bridge && feature.bridge.type === "vertical") {
-        // Create a visual indicator for the bridge
-        // A dashed rectangle extending upwards
-        const bridgeIndicator = new Rect({
+        },
+      });
+    } else {
+      specs.push({
+        id: markerId,
+        type: "rect",
+        space: "screen",
+        data: baseData,
+        props: {
+          ...commonProps,
           width: visualWidth,
-          height: 100 * featureScale, // Arbitrary long length to show direction
+          height: visualHeight,
+          rx: visualRadius,
+          ry: visualRadius,
+        },
+      });
+    }
+
+    if (feature.bridge?.type === "vertical") {
+      const featureTopY = position.y - visualHeight / 2;
+      const dielineTopY = geometry.y - geometry.height / 2;
+      const bridgeHeight = Math.max(0, featureTopY - dielineTopY);
+      if (bridgeHeight <= 0.001) {
+        return;
+      }
+      specs.push({
+        id: this.bridgeIndicatorId(index),
+        type: "rect",
+        space: "screen",
+        data: {
+          ...baseData,
+          markerRole: "indicator",
+          markerOffsetX: 0,
+          markerOffsetY: -visualHeight / 2,
+        } as MarkerData,
+        props: {
+          visible: this.isToolActive,
+          selectable: false,
+          evented: false,
+          width: visualWidth,
+          height: bridgeHeight,
           fill: "transparent",
           stroke: "#888",
           strokeWidth: 1,
           strokeDashArray: [2, 2],
-          originX: "center",
-          originY: "bottom", // Anchor at bottom so it extends up
-          left: pos.x,
-          top: pos.y - visualHeight / 2, // Start from top of feature
           opacity: 0.5,
-          selectable: false,
-          evented: false,
-        });
-
-        // We need to return a group containing both shape and indicator
-        // But createMarkerShape is expected to return one object.
-        // If we return a Group, Fabric handles it.
-        // But the caller might wrap this in another Group if it's part of a feature group.
-        // Fabric supports nested groups.
-
-        const group = new Group([bridgeIndicator, shape], {
           originX: "center",
-          originY: "center",
-          left: pos.x,
-          top: pos.y,
-        });
-        return group;
-      }
-
-      return shape;
-    };
-
-    // Render Singles
-    singles.forEach(({ feature, index }) => {
-      const geometry = this.getGeometryForFeature(
-        this.currentGeometry!,
-        feature,
-      );
-      const pos = resolveFeaturePosition(feature, geometry);
-      const marker = createMarkerShape(feature, pos);
-
-      marker.set({
-        visible: this.isToolActive,
-        selectable: this.isToolActive,
-        evented: this.isToolActive,
-        hasControls: false,
-        hasBorders: false,
-        hoverCursor: "move",
-        lockRotation: true,
-        lockScalingX: true,
-        lockScalingY: true,
-        data: { type: "feature-marker", index, isGroup: false },
-      });
-
-      canvas.add(marker);
-      canvas.bringObjectToFront(marker);
-    });
-
-    // Render Groups
-    Object.keys(groups).forEach((groupId) => {
-      const members = groups[groupId];
-      if (members.length === 0) return;
-
-      // Calculate group center (average position) to position the group correctly
-      // But Fabric Group uses relative coordinates.
-      // Easiest way: Create shapes at absolute positions, then Group them.
-      // Fabric will auto-calculate group center and adjust children.
-
-      const shapes = members.map(({ feature }) => {
-        const geometry = this.getGeometryForFeature(
-          this.currentGeometry!,
-          feature,
-        );
-        const pos = resolveFeaturePosition(feature, geometry);
-        return createMarkerShape(feature, pos);
-      });
-
-      const groupObj = new Group(shapes, {
-        visible: this.isToolActive,
-        selectable: this.isToolActive,
-        evented: this.isToolActive,
-        hasControls: false,
-        hasBorders: false,
-        hoverCursor: "move",
-        lockRotation: true,
-        lockScalingX: true,
-        lockScalingY: true,
-        subTargetCheck: true, // Allow events to pass through if needed, but we treat as one
-        interactive: false, // Children not interactive
-        // @ts-ignore
-        data: {
-          type: "feature-marker",
-          isGroup: true,
-          groupId,
-          indices: members.map((m) => m.index),
+          originY: "bottom",
+          left: position.x,
+          top: position.y - visualHeight / 2,
         },
       });
+    }
+  }
 
-      canvas.add(groupObj);
-      canvas.bringObjectToFront(groupObj);
+  private buildMarkerData(
+    marker: MarkerRenderState,
+    options: {
+      markerRole: "handle" | "member";
+      isGroup: boolean;
+      groupId?: string;
+      indices?: number[];
+      anchorIndex?: number;
+      memberOffsets?: GroupMemberOffset[];
+    },
+  ): MarkerData {
+    const data: MarkerData = {
+      type: "feature-marker",
+      index: marker.index,
+      featureId: marker.feature.id,
+      markerRole: options.markerRole,
+      markerOffsetX: 0,
+      markerOffsetY: 0,
+      isGroup: options.isGroup,
+    };
+    if (options.groupId) data.groupId = options.groupId;
+    if (options.indices) data.indices = options.indices;
+    if (options.anchorIndex !== undefined) data.anchorIndex = options.anchorIndex;
+    if (options.memberOffsets) data.memberOffsets = options.memberOffsets;
+    return data;
+  }
+
+  private markerId(index: number): string {
+    return `feature.marker.${index}`;
+  }
+
+  private bridgeIndicatorId(index: number): string {
+    return `feature.marker.${index}.bridge`;
+  }
+
+  private toFeatureIndex(value: unknown): number | null {
+    const numeric = Number(value);
+    if (!Number.isInteger(numeric) || numeric < 0) return null;
+    return numeric;
+  }
+
+  private readGroupIndices(raw: unknown): number[] {
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((value) => this.toFeatureIndex(value))
+      .filter((value): value is number => value !== null);
+  }
+
+  private readGroupMemberOffsets(
+    raw: unknown,
+    fallbackIndices: number[] = [],
+  ): GroupMemberOffset[] {
+    if (Array.isArray(raw)) {
+      const parsed = raw
+        .map((entry) => {
+          const index = this.toFeatureIndex((entry as any)?.index);
+          const dx = Number((entry as any)?.dx);
+          const dy = Number((entry as any)?.dy);
+          if (index === null || !Number.isFinite(dx) || !Number.isFinite(dy)) {
+            return null;
+          }
+          return { index, dx, dy };
+        })
+        .filter((value): value is GroupMemberOffset => !!value);
+      if (parsed.length > 0) return parsed;
+    }
+
+    return fallbackIndices.map((index) => ({ index, dx: 0, dy: 0 }));
+  }
+
+  private syncMarkerVisualsByTarget(target: any, center: MarkerPoint) {
+    if (target.data?.isGroup) {
+      const indices = this.readGroupIndices(target.data?.indices);
+      const offsets = this.readGroupMemberOffsets(target.data?.memberOffsets, indices);
+      offsets.forEach((entry) => {
+        this.syncMarkerVisualObjectsToCenter(entry.index, {
+          x: center.x + entry.dx,
+          y: center.y + entry.dy,
+        });
+      });
+      this.canvasService?.requestRenderAll();
+      return;
+    }
+
+    const index = this.toFeatureIndex(target.data?.index);
+    if (index === null) return;
+    this.syncMarkerVisualObjectsToCenter(index, center);
+    this.canvasService?.requestRenderAll();
+  }
+
+  private syncMarkerVisualObjectsToCenter(index: number, center: MarkerPoint) {
+    if (!this.canvasService) return;
+    const markers = this.canvasService.canvas
+      .getObjects()
+      .filter(
+        (obj: any) =>
+          obj?.data?.type === "feature-marker" &&
+          this.toFeatureIndex(obj?.data?.index) === index,
+      );
+
+    markers.forEach((marker: any) => {
+      const offsetX = Number(marker?.data?.markerOffsetX || 0);
+      const offsetY = Number(marker?.data?.markerOffsetY || 0);
+      marker.set({
+        left: center.x + offsetX,
+        top: center.y + offsetY,
+      });
+      marker.setCoords();
     });
-
-    this.canvasService.requestRenderAll();
   }
 
   private enforceConstraints() {
     if (!this.canvasService || !this.currentGeometry) return;
-    // Iterate markers and snap them if geometry changed
-    const canvas = this.canvasService.canvas;
-    const markers = canvas
+
+    const handles = this.canvasService.canvas
       .getObjects()
-      .filter((obj: any) => obj.data?.type === "feature-marker");
-
-    markers.forEach((marker: any) => {
-      // Find associated feature
-      let feature: ConstraintFeature | undefined;
-      if (marker.data?.isGroup) {
-        const indices = marker.data?.indices as number[];
-        if (indices && indices.length > 0) {
-          feature = this.workingFeatures[indices[0]];
-        }
-      } else {
-        const index = marker.data?.index;
-        if (index !== undefined) {
-          feature = this.workingFeatures[index];
-        }
-      }
-
-      const geometry = this.getGeometryForFeature(
-        this.currentGeometry!,
-        feature,
+      .filter(
+        (obj: any) =>
+          obj?.data?.type === "feature-marker" &&
+          obj?.data?.markerRole === "handle",
       );
 
-      const markerStrokeWidth =
-        (marker.strokeWidth || 2) * (marker.scaleX || 1);
-      const minDim = Math.min(
-        marker.getScaledWidth(),
-        marker.getScaledHeight(),
-      );
-      const limit = Math.max(0, minDim / 2 - markerStrokeWidth);
-
+    handles.forEach((marker: any) => {
+      const feature = this.getFeatureForMarker(marker);
+      if (!feature) return;
+      const geometry = this.getGeometryForFeature(this.currentGeometry!, feature);
       const snapped = this.constrainPosition(
-        new Point(marker.left, marker.top),
+        {
+          x: Number(marker.left || 0),
+          y: Number(marker.top || 0),
+        },
         geometry,
-        limit,
         feature,
       );
       marker.set({ left: snapped.x, top: snapped.y });
       marker.setCoords();
+      this.syncMarkerVisualsByTarget(marker, snapped);
     });
-    canvas.requestRenderAll();
+
+    this.canvasService.canvas.requestRenderAll();
   }
 }
