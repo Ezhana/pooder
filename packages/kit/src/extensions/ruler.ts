@@ -86,13 +86,10 @@ export class RulerTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layerSpecs: {
+        rootLayerSpecs: {
           [RULER_LAYER_ID]: this.specs,
         },
-        rootLayerSpecs: {
-          [RULER_LAYER_ID]: [],
-        },
-        replaceLayerIds: [RULER_LAYER_ID],
+        replaceRootLayerIds: [RULER_LAYER_ID],
       }),
       { priority: 400 },
     );
@@ -133,7 +130,6 @@ export class RulerTool implements Extension {
       });
     }
 
-    this.createLayer();
     context.eventBus.on("canvas:resized", this.onCanvasResized);
     this.updateRuler();
   }
@@ -146,7 +142,6 @@ export class RulerTool implements Extension {
     if (this.canvasService) {
       void this.canvasService.flushRenderFromProducers();
     }
-    this.destroyLayer();
     this.canvasService = undefined;
     this.context = undefined;
     this.renderSeq = 0;
@@ -284,45 +279,14 @@ export class RulerTool implements Extension {
     });
   }
 
-  private getLayer() {
-    return this.canvasService?.getLayer(RULER_LAYER_ID);
-  }
-
-  private createLayer() {
-    if (!this.canvasService) return;
-
-    const canvas = this.canvasService.canvas;
-    const width = canvas.width || 800;
-    const height = canvas.height || 600;
-
-    const layer = this.canvasService.createLayer(RULER_LAYER_ID, {
-      width,
-      height,
-      selectable: false,
-      evented: false,
-      left: 0,
-      top: 0,
-      originX: "left",
-      originY: "top",
-    });
-    layer.set({ selectable: false, evented: false });
-    canvas.bringObjectToFront(layer);
-
-    // Keep legacy root-rendered ruler artifacts cleaned through producer flush.
-    this.canvasService.requestRenderFromProducers();
-  }
-
-  private destroyLayer() {
-    if (!this.canvasService) return;
-    const layer = this.getLayer();
-    if (layer) {
-      this.canvasService.canvas.remove(layer);
-    }
-  }
-
   private toFiniteNumber(value: unknown, fallback: number): number {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  private toSceneDisplayLength(value: number): number {
+    if (!this.canvasService) return value;
+    return this.canvasService.toSceneLength(value);
   }
 
   private formatLengthMm(valueMm: number, unit: Unit): string {
@@ -402,7 +366,7 @@ export class RulerTool implements Extension {
         left: position.x,
         top: position.y,
         angle,
-        fontSize: this.fontSize,
+        fontSize: this.toSceneDisplayLength(this.fontSize),
         fill: this.textColor,
         fontFamily: "Arial",
         originX: "center",
@@ -424,14 +388,23 @@ export class RulerTool implements Extension {
     heightLabel: string;
   }): RenderObjectSpec[] {
     const { left, top, right, bottom, widthLabel, heightLabel } = input;
-    const gap = Math.max(0, this.toFiniteNumber(this.gap, DEFAULT_GAP));
+    const gap = Math.max(
+      0,
+      this.toSceneDisplayLength(this.toFiniteNumber(this.gap, DEFAULT_GAP)),
+    );
     const topY = top - gap;
     const leftX = left - gap;
-    const arrowSize = Math.max(MIN_ARROW_SIZE, this.thickness * 0.3);
-    const strokeWidth = Math.max(
-      1,
-      this.thickness / THICKNESS_TO_STROKE_WIDTH_RATIO,
+    const arrowSize = Math.max(
+      this.toSceneDisplayLength(MIN_ARROW_SIZE),
+      this.toSceneDisplayLength(this.thickness * 0.3),
     );
+    const strokeWidth = Math.max(
+      this.toSceneDisplayLength(1),
+      this.toSceneDisplayLength(
+        this.thickness / THICKNESS_TO_STROKE_WIDTH_RATIO,
+      ),
+    );
+    const extensionLength = this.toSceneDisplayLength(EXTENSION_LINE_LENGTH);
     const topLineAngleDeg = 0;
     const leftLineAngleDeg = 90;
 
@@ -466,7 +439,7 @@ export class RulerTool implements Extension {
         {
           fill: this.lineColor,
           stroke: this.lineColor,
-          strokeWidth: 1,
+          strokeWidth: this.toSceneDisplayLength(1),
           originX: "left",
           originY: "center",
           angle: topLineAngleDeg,
@@ -479,7 +452,7 @@ export class RulerTool implements Extension {
         {
           fill: this.lineColor,
           stroke: this.lineColor,
-          strokeWidth: 1,
+          strokeWidth: this.toSceneDisplayLength(1),
           originX: "right",
           originY: "center",
           angle: topLineAngleDeg,
@@ -488,20 +461,26 @@ export class RulerTool implements Extension {
       this.createPathSpec(
         "ruler.top.ext.start",
         this.buildLinePath(
-          { x: left, y: topY - EXTENSION_LINE_LENGTH },
-          { x: left, y: topY + EXTENSION_LINE_LENGTH },
+          { x: left, y: topY - extensionLength },
+          { x: left, y: topY + extensionLength },
         ),
-        { x: left, y: topY - EXTENSION_LINE_LENGTH },
-        { stroke: this.lineColor, strokeWidth: 1 },
+        { x: left, y: topY - extensionLength },
+        {
+          stroke: this.lineColor,
+          strokeWidth: this.toSceneDisplayLength(1),
+        },
       ),
       this.createPathSpec(
         "ruler.top.ext.end",
         this.buildLinePath(
-          { x: right, y: topY - EXTENSION_LINE_LENGTH },
-          { x: right, y: topY + EXTENSION_LINE_LENGTH },
+          { x: right, y: topY - extensionLength },
+          { x: right, y: topY + extensionLength },
         ),
-        { x: right, y: topY - EXTENSION_LINE_LENGTH },
-        { stroke: this.lineColor, strokeWidth: 1 },
+        { x: right, y: topY - extensionLength },
+        {
+          stroke: this.lineColor,
+          strokeWidth: this.toSceneDisplayLength(1),
+        },
       ),
       this.createTextSpec("ruler.top.label", widthLabel, {
         x: left + (right - left) / 2,
@@ -530,7 +509,7 @@ export class RulerTool implements Extension {
         {
           fill: this.lineColor,
           stroke: this.lineColor,
-          strokeWidth: 1,
+          strokeWidth: this.toSceneDisplayLength(1),
           originX: "left",
           originY: "center",
           angle: leftLineAngleDeg,
@@ -543,7 +522,7 @@ export class RulerTool implements Extension {
         {
           fill: this.lineColor,
           stroke: this.lineColor,
-          strokeWidth: 1,
+          strokeWidth: this.toSceneDisplayLength(1),
           originX: "right",
           originY: "center",
           angle: leftLineAngleDeg,
@@ -552,20 +531,26 @@ export class RulerTool implements Extension {
       this.createPathSpec(
         "ruler.left.ext.start",
         this.buildLinePath(
-          { x: leftX - EXTENSION_LINE_LENGTH, y: top },
-          { x: leftX + EXTENSION_LINE_LENGTH, y: top },
+          { x: leftX - extensionLength, y: top },
+          { x: leftX + extensionLength, y: top },
         ),
-        { x: leftX - EXTENSION_LINE_LENGTH, y: top },
-        { stroke: this.lineColor, strokeWidth: 1 },
+        { x: leftX - extensionLength, y: top },
+        {
+          stroke: this.lineColor,
+          strokeWidth: this.toSceneDisplayLength(1),
+        },
       ),
       this.createPathSpec(
         "ruler.left.ext.end",
         this.buildLinePath(
-          { x: leftX - EXTENSION_LINE_LENGTH, y: bottom },
-          { x: leftX + EXTENSION_LINE_LENGTH, y: bottom },
+          { x: leftX - extensionLength, y: bottom },
+          { x: leftX + extensionLength, y: bottom },
         ),
-        { x: leftX - EXTENSION_LINE_LENGTH, y: bottom },
-        { stroke: this.lineColor, strokeWidth: 1 },
+        { x: leftX - extensionLength, y: bottom },
+        {
+          stroke: this.lineColor,
+          strokeWidth: this.toSceneDisplayLength(1),
+        },
       ),
       this.createTextSpec(
         "ruler.left.label",
@@ -618,13 +603,19 @@ export class RulerTool implements Extension {
     if (geometry.unit !== "px") {
       console.warn("[RulerTool] Unexpected geometry unit.", geometry.unit);
     }
-    const rulerLeft = geometry.x - geometry.width / 2;
-    const rulerTop = geometry.y - geometry.height / 2;
-    const rulerRight = rulerLeft + geometry.width;
-    const rulerBottom = rulerTop + geometry.height;
+    const centerScene = this.canvasService.toScenePoint({
+      x: geometry.x,
+      y: geometry.y,
+    });
+    const widthScene = this.canvasService.toSceneLength(geometry.width);
+    const heightScene = this.canvasService.toSceneLength(geometry.height);
+    const rulerLeft = centerScene.x - widthScene / 2;
+    const rulerTop = centerScene.y - heightScene / 2;
+    const rulerRight = rulerLeft + widthScene;
+    const rulerBottom = rulerTop + heightScene;
 
-    const widthMm = geometry.width / layout.scale;
-    const heightMm = geometry.height / layout.scale;
+    const widthMm = widthScene;
+    const heightMm = heightScene;
     const unit = sizeState.unit;
     const widthLabel = `${this.formatLengthMm(widthMm, unit)} ${unit}`;
     const heightLabel = `${this.formatLengthMm(heightMm, unit)} ${unit}`;
@@ -643,8 +634,8 @@ export class RulerTool implements Extension {
       top: rulerTop,
       right: rulerRight,
       bottom: rulerBottom,
-      widthPx: geometry.width,
-      heightPx: geometry.height,
+      widthScene,
+      heightScene,
       widthMm,
       heightMm,
       specCount: specs.length,
@@ -656,10 +647,7 @@ export class RulerTool implements Extension {
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
 
-    const layer = this.getLayer();
-    if (layer) {
-      this.canvasService.canvas.bringObjectToFront(layer);
-    }
+    this.canvasService.bringLayerToFront(RULER_LAYER_ID);
     this.canvasService.requestRenderAll();
     this.log("render:done", { seq });
   }

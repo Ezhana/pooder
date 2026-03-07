@@ -768,12 +768,12 @@ export class WhiteInkTool implements Extension {
       return { left: 0, top: 0, width: 0, height: 0 };
     }
 
-    return {
+    return this.canvasService.toSceneRect({
       left: layout.cutRect.left,
       top: layout.cutRect.top,
       width: layout.cutRect.width,
       height: layout.cutRect.height,
-    };
+    });
   }
 
   private getImageObjects(): any[] {
@@ -807,15 +807,23 @@ export class WhiteInkTool implements Extension {
     const width = Number(obj?.width || 0);
     const height = Number(obj?.height || 0);
     this.rememberSourceSize(src, { width, height });
+    const sceneScale = this.canvasService?.getSceneScale() || 1;
+    const leftScreen = Number.isFinite(obj?.left) ? Number(obj.left) : 0;
+    const topScreen = Number.isFinite(obj?.top) ? Number(obj.top) : 0;
+    const scenePoint = this.canvasService
+      ? this.canvasService.toScenePoint({ x: leftScreen, y: topScreen })
+      : { x: leftScreen, y: topScreen };
 
     return {
       id: String(obj?.data?.id || "image"),
       src,
       element,
-      left: Number.isFinite(obj?.left) ? Number(obj.left) : 0,
-      top: Number.isFinite(obj?.top) ? Number(obj.top) : 0,
-      scaleX: Number.isFinite(obj?.scaleX) ? Number(obj.scaleX) : 1,
-      scaleY: Number.isFinite(obj?.scaleY) ? Number(obj.scaleY) : 1,
+      left: scenePoint.x,
+      top: scenePoint.y,
+      scaleX:
+        (Number.isFinite(obj?.scaleX) ? Number(obj.scaleX) : 1) / sceneScale,
+      scaleY:
+        (Number.isFinite(obj?.scaleY) ? Number(obj.scaleY) : 1) / sceneScale,
       angle: Number.isFinite(obj?.angle) ? Number(obj.angle) : 0,
       originX: typeof obj?.originX === "string" ? obj.originX : "center",
       originY: typeof obj?.originY === "string" ? obj.originY : "center",
@@ -1046,8 +1054,11 @@ export class WhiteInkTool implements Extension {
     if (!this.isToolActive || !this.canvasService) return [];
     if (frame.width <= 0 || frame.height <= 0) return [];
 
-    const canvasW = this.canvasService.canvas.width || 0;
-    const canvasH = this.canvasService.canvas.height || 0;
+    const viewport = this.canvasService.getSceneViewportRect();
+    const canvasW = viewport.width || 0;
+    const canvasH = viewport.height || 0;
+    const canvasLeft = viewport.left || 0;
+    const canvasTop = viewport.top || 0;
     const strokeColor =
       this.getConfig<string>("image.frame.strokeColor", "#808080") || "#808080";
     const strokeWidthRaw = Number(
@@ -1069,23 +1080,31 @@ export class WhiteInkTool implements Extension {
     const dashLength = Number.isFinite(dashLengthRaw)
       ? Math.max(1, dashLengthRaw)
       : 8;
+    const strokeWidthScene = this.canvasService.toSceneLength(strokeWidth);
+    const dashLengthScene = this.canvasService.toSceneLength(dashLength);
 
-    const frameLeft = Math.max(0, Math.min(canvasW, frame.left));
-    const frameTop = Math.max(0, Math.min(canvasH, frame.top));
+    const frameLeft = Math.max(
+      canvasLeft,
+      Math.min(canvasLeft + canvasW, frame.left),
+    );
+    const frameTop = Math.max(
+      canvasTop,
+      Math.min(canvasTop + canvasH, frame.top),
+    );
     const frameRight = Math.max(
       frameLeft,
-      Math.min(canvasW, frame.left + frame.width),
+      Math.min(canvasLeft + canvasW, frame.left + frame.width),
     );
     const frameBottom = Math.max(
       frameTop,
-      Math.min(canvasH, frame.top + frame.height),
+      Math.min(canvasTop + canvasH, frame.top + frame.height),
     );
     const visibleFrameH = Math.max(0, frameBottom - frameTop);
 
-    const topH = frameTop;
-    const bottomH = Math.max(0, canvasH - frameBottom);
-    const leftW = frameLeft;
-    const rightW = Math.max(0, canvasW - frameRight);
+    const topH = Math.max(0, frameTop - canvasTop);
+    const bottomH = Math.max(0, canvasTop + canvasH - frameBottom);
+    const leftW = Math.max(0, frameLeft - canvasLeft);
+    const rightW = Math.max(0, canvasLeft + canvasW - frameRight);
 
     const maskSpecs: RenderObjectSpec[] = [
       {
@@ -1097,8 +1116,8 @@ export class WhiteInkTool implements Extension {
           type: "white-ink-mask",
         },
         props: {
-          left: canvasW / 2,
-          top: topH / 2,
+          left: canvasLeft + canvasW / 2,
+          top: canvasTop + topH / 2,
           width: canvasW,
           height: topH,
           originX: "center",
@@ -1118,7 +1137,7 @@ export class WhiteInkTool implements Extension {
           type: "white-ink-mask",
         },
         props: {
-          left: canvasW / 2,
+          left: canvasLeft + canvasW / 2,
           top: frameBottom + bottomH / 2,
           width: canvasW,
           height: bottomH,
@@ -1139,7 +1158,7 @@ export class WhiteInkTool implements Extension {
           type: "white-ink-mask",
         },
         props: {
-          left: leftW / 2,
+          left: canvasLeft + leftW / 2,
           top: frameTop + visibleFrameH / 2,
           width: leftW,
           height: visibleFrameH,
@@ -1193,8 +1212,8 @@ export class WhiteInkTool implements Extension {
           originY: "center",
           fill: innerBackground,
           stroke: strokeColor,
-          strokeWidth,
-          strokeDashArray: [dashLength, dashLength],
+          strokeWidth: strokeWidthScene,
+          strokeDashArray: [dashLengthScene, dashLengthScene],
           selectable: false,
           evented: false,
           excludeFromExport: true,
@@ -1315,15 +1334,8 @@ export class WhiteInkTool implements Extension {
       .filter((obj: any) => obj?.data?.layerId === IMAGE_OVERLAY_LAYER_ID)
       .forEach((obj: any) => canvas.bringObjectToFront(obj));
 
-    const dielineOverlay = this.canvasService.getLayer("dieline-overlay");
-    if (dielineOverlay) {
-      canvas.bringObjectToFront(dielineOverlay as any);
-    }
-
-    const rulerOverlay = this.canvasService.getLayer("ruler-overlay");
-    if (rulerOverlay) {
-      canvas.bringObjectToFront(rulerOverlay as any);
-    }
+    this.canvasService.bringLayerToFront("dieline-overlay");
+    this.canvasService.bringLayerToFront("ruler-overlay");
   }
 
   private clearRenderedWhiteInks() {

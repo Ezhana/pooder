@@ -9,7 +9,11 @@ import {
 } from "fabric";
 import { Service, EventBus } from "@pooder/core";
 import { ViewportSystem } from "./ViewportSystem";
-import type { RenderLayerSpec, RenderObjectSpec } from "./renderSpec";
+import type {
+  RenderCoordinateSpace,
+  RenderLayerSpec,
+  RenderObjectSpec,
+} from "./renderSpec";
 
 export interface RenderProducerResult {
   layerSpecs?: Record<string, RenderObjectSpec[]>;
@@ -314,6 +318,109 @@ export default class CanvasService implements Service {
     this.requestRenderAll();
   }
 
+  getSceneScale(): number {
+    const scale = Number(this.viewport.scale);
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  }
+
+  getSceneOffset(): { x: number; y: number } {
+    const offset = this.viewport.offset;
+    const x = Number(offset.x);
+    const y = Number(offset.y);
+    return {
+      x: Number.isFinite(x) ? x : 0,
+      y: Number.isFinite(y) ? y : 0,
+    };
+  }
+
+  toScreenPoint(point: { x: number; y: number }): { x: number; y: number } {
+    const scale = this.getSceneScale();
+    const offset = this.getSceneOffset();
+    return {
+      x: point.x * scale + offset.x,
+      y: point.y * scale + offset.y,
+    };
+  }
+
+  toScenePoint(point: { x: number; y: number }): { x: number; y: number } {
+    const scale = this.getSceneScale();
+    const offset = this.getSceneOffset();
+    return {
+      x: (point.x - offset.x) / scale,
+      y: (point.y - offset.y) / scale,
+    };
+  }
+
+  toScreenLength(value: number): number {
+    return value * this.getSceneScale();
+  }
+
+  toSceneLength(value: number): number {
+    return value / this.getSceneScale();
+  }
+
+  toScreenRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }): { left: number; top: number; width: number; height: number } {
+    const start = this.toScreenPoint({ x: rect.left, y: rect.top });
+    return {
+      left: start.x,
+      top: start.y,
+      width: this.toScreenLength(rect.width),
+      height: this.toScreenLength(rect.height),
+    };
+  }
+
+  toSceneRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }): { left: number; top: number; width: number; height: number } {
+    const start = this.toScenePoint({ x: rect.left, y: rect.top });
+    return {
+      left: start.x,
+      top: start.y,
+      width: this.toSceneLength(rect.width),
+      height: this.toSceneLength(rect.height),
+    };
+  }
+
+  getSceneViewportRect(): {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } {
+    const width = Number(this.canvas.width || 0);
+    const height = Number(this.canvas.height || 0);
+    return this.toSceneRect({ left: 0, top: 0, width, height });
+  }
+
+  setLayerVisibility(layerId: string, visible: boolean) {
+    const layer = this.getLayer(layerId);
+    if (layer) {
+      layer.set({ visible });
+    }
+    const objects = this.getRootLayerObjects(layerId) as any[];
+    objects.forEach((obj) => {
+      obj.set?.({ visible });
+      obj.setCoords?.();
+    });
+  }
+
+  bringLayerToFront(layerId: string) {
+    const layer = this.getLayer(layerId);
+    if (layer) {
+      this.canvas.bringObjectToFront(layer);
+    }
+    const objects = this.getRootLayerObjects(layerId) as any[];
+    objects.forEach((obj) => this.canvas.bringObjectToFront(obj as any));
+  }
+
   async applyLayerSpec(spec: RenderLayerSpec): Promise<void> {
     const layer = this.createLayer(spec.id, spec.props || {});
     await this.applyObjectSpecsToContainer(layer, spec.objects);
@@ -451,8 +558,36 @@ export default class CanvasService implements Service {
       ...(extraData || {}),
       id: spec.id,
     };
-    obj.set({ ...(spec.props || {}), data: nextData });
+    const props = this.resolveFabricProps(spec, spec.props || {});
+    obj.set({ ...props, data: nextData });
     obj.setCoords();
+  }
+
+  private resolveFabricProps(
+    spec: RenderObjectSpec,
+    props: Record<string, any>,
+  ): Record<string, any> {
+    const space: RenderCoordinateSpace = spec.space || "scene";
+    if (space === "screen") {
+      return props;
+    }
+    const next = { ...props };
+    const hasLeft = Number.isFinite(next.left);
+    const hasTop = Number.isFinite(next.top);
+    if (hasLeft || hasTop) {
+      const mapped = this.toScreenPoint({
+        x: hasLeft ? Number(next.left) : 0,
+        y: hasTop ? Number(next.top) : 0,
+      });
+      if (hasLeft) next.left = mapped.x;
+      if (hasTop) next.top = mapped.y;
+    }
+    const rawScaleX = Number.isFinite(next.scaleX) ? Number(next.scaleX) : 1;
+    const rawScaleY = Number.isFinite(next.scaleY) ? Number(next.scaleY) : 1;
+    const sceneScale = this.getSceneScale();
+    next.scaleX = rawScaleX * sceneScale;
+    next.scaleY = rawScaleY * sceneScale;
+    return next;
   }
 
   private moveObjectInContainer(
@@ -484,8 +619,9 @@ export default class CanvasService implements Service {
     spec: RenderObjectSpec,
   ): Promise<FabricObject | undefined> {
     if (spec.type === "rect") {
+      const props = this.resolveFabricProps(spec, spec.props || {});
       const rect = new Rect({
-        ...(spec.props || {}),
+        ...props,
         data: { ...(spec.data || {}), id: spec.id },
       } as any);
       rect.setCoords();
@@ -495,8 +631,9 @@ export default class CanvasService implements Service {
     if (spec.type === "path") {
       const pathData = (spec.props as any)?.path || (spec.props as any)?.pathData;
       if (!pathData) return undefined;
+      const props = this.resolveFabricProps(spec, spec.props || {});
       const path = new Path(pathData, {
-        ...(spec.props || {}),
+        ...props,
         data: { ...(spec.data || {}), id: spec.id },
       } as any);
       path.setCoords();
@@ -506,8 +643,9 @@ export default class CanvasService implements Service {
     if (spec.type === "image") {
       if (!spec.src) return undefined;
       const image = await Image.fromURL(spec.src, { crossOrigin: "anonymous" });
+      const props = this.resolveFabricProps(spec, spec.props || {});
       image.set({
-        ...(spec.props || {}),
+        ...props,
         data: { ...(spec.data || {}), id: spec.id },
       } as any);
       image.setCoords();
@@ -516,8 +654,9 @@ export default class CanvasService implements Service {
 
     if (spec.type === "text") {
       const content = String((spec.props as any)?.text ?? "");
+      const props = this.resolveFabricProps(spec, spec.props || {});
       const text = new Text(content, {
-        ...(spec.props || {}),
+        ...props,
         data: { ...(spec.data || {}), id: spec.id },
       } as any);
       text.setCoords();

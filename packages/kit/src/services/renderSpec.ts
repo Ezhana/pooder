@@ -1,6 +1,7 @@
 export type RenderObjectType = "rect" | "image" | "path" | "text";
 
 export type RenderProps = Record<string, any>;
+export type RenderCoordinateSpace = "scene" | "screen";
 
 export interface RenderObjectSpec {
   id: string;
@@ -8,6 +9,7 @@ export interface RenderObjectSpec {
   props: RenderProps;
   data?: Record<string, any>;
   src?: string;
+  space?: RenderCoordinateSpace;
 }
 
 export interface RenderLayerSpec {

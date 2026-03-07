@@ -892,10 +892,7 @@ export class DielineTool implements Extension {
     // Feature tool markers can extend outside trim. Keep them above dieline mask.
     this.bringFeatureMarkersToFront();
 
-    const rulerLayer = this.canvasService.getLayer("ruler-overlay");
-    if (rulerLayer) {
-      this.canvasService.canvas.bringObjectToFront(rulerLayer);
-    }
+    this.canvasService.bringLayerToFront("ruler-overlay");
 
     layer.dirty = true;
     this.canvasService.requestRenderAll();

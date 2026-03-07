@@ -53,18 +53,11 @@ export class SceneVisibilityService implements Service {
     const dielineLayer = this.canvasService.getLayer("dieline-overlay");
     if (dielineLayer) {
       const visible = !HIDDEN_DIELINE_TOOLS.has(this.activeToolId || "");
-      if (dielineLayer.visible !== visible) {
-        dielineLayer.set({ visible });
-      }
+      this.canvasService.setLayerVisibility("dieline-overlay", visible);
     }
 
-    const rulerLayer = this.canvasService.getLayer("ruler-overlay");
     const rulerVisible = !HIDDEN_RULER_TOOLS.has(this.activeToolId || "");
-    if (rulerLayer) {
-      if (rulerLayer.visible !== rulerVisible) {
-        rulerLayer.set({ visible: rulerVisible });
-      }
-    }
+    this.canvasService.setLayerVisibility("ruler-overlay", rulerVisible);
 
     this.canvasService.requestRenderAll();
   }

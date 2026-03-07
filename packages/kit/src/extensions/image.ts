@@ -136,6 +136,7 @@ export class ImageTool implements Extension {
   private dirtyTrackerDisposable?: { dispose(): void };
   private cropShapeHatchPattern?: Pattern;
   private cropShapeHatchPatternColor?: string;
+  private cropShapeHatchPatternKey?: string;
   private overlaySpecs: RenderObjectSpec[] = [];
   private renderProducerDisposable?: { dispose: () => void };
 
@@ -216,6 +217,7 @@ export class ImageTool implements Extension {
     this.dirtyTrackerDisposable = undefined;
     this.cropShapeHatchPattern = undefined;
     this.cropShapeHatchPatternColor = undefined;
+    this.cropShapeHatchPatternKey = undefined;
     this.overlaySpecs = [];
 
     this.clearRenderedImages();
@@ -780,47 +782,31 @@ export class ImageTool implements Extension {
       return { left: 0, top: 0, width: 0, height: 0 };
     }
 
-    return {
+    return this.canvasService.toSceneRect({
       left: layout.cutRect.left,
       top: layout.cutRect.top,
       width: layout.cutRect.width,
       height: layout.cutRect.height,
-    };
+    });
+  }
+
+  private getFrameRectScreen(frame?: FrameRect): FrameRect {
+    if (!this.canvasService) {
+      return { left: 0, top: 0, width: 0, height: 0 };
+    }
+    return this.canvasService.toScreenRect(frame || this.getFrameRect());
   }
 
   private async resolveDefaultFitArea(): Promise<DielineFitArea | null> {
-    if (!this.context || !this.canvasService) return null;
-    const commandService = this.context.services.get<any>("CommandService");
-    if (!commandService) return null;
-
-    try {
-      const layout = await Promise.resolve(
-        commandService.executeCommand("getSceneLayout"),
-      );
-      const cutRect = layout?.cutRect;
-      const width = Number(cutRect?.width);
-      const height = Number(cutRect?.height);
-      const left = Number(cutRect?.left);
-      const top = Number(cutRect?.top);
-
-      if (
-        !Number.isFinite(width) ||
-        !Number.isFinite(height) ||
-        !Number.isFinite(left) ||
-        !Number.isFinite(top)
-      ) {
-        return null;
-      }
-
-      return {
-        width: Math.max(1, width),
-        height: Math.max(1, height),
-        left: left + width / 2,
-        top: top + height / 2,
-      };
-    } catch {
-      return null;
-    }
+    if (!this.canvasService) return null;
+    const frame = this.getFrameRect();
+    if (frame.width <= 0 || frame.height <= 0) return null;
+    return {
+      width: Math.max(1, frame.width),
+      height: Math.max(1, frame.height),
+      left: frame.left + frame.width / 2,
+      top: frame.top + frame.height / 2,
+    };
   }
 
   private async fitImageToDefaultArea(id: string) {
@@ -832,13 +818,14 @@ export class ImageTool implements Extension {
       return;
     }
 
-    const canvasW = Math.max(1, this.canvasService.canvas.width || 0);
-    const canvasH = Math.max(1, this.canvasService.canvas.height || 0);
+    const viewport = this.canvasService.getSceneViewportRect();
+    const canvasW = Math.max(1, viewport.width || 0);
+    const canvasH = Math.max(1, viewport.height || 0);
     await this.fitImageToArea(id, {
       width: canvasW,
       height: canvasH,
-      left: canvasW / 2,
-      top: canvasH / 2,
+      left: viewport.left + canvasW / 2,
+      top: viewport.top + canvasH / 2,
     });
   }
 
@@ -947,8 +934,17 @@ export class ImageTool implements Extension {
       return null;
     }
 
-    const radius = Number(raw?.radius);
-    const offset = Number(raw?.offset);
+    const radiusRaw = Number(raw?.radius);
+    const offsetRaw = Number(raw?.offset);
+    const unit = typeof raw?.unit === "string" ? raw.unit : "px";
+    const radius =
+      unit === "scene" || !this.canvasService
+        ? radiusRaw
+        : this.canvasService.toSceneLength(radiusRaw);
+    const offset =
+      unit === "scene" || !this.canvasService
+        ? offsetRaw
+        : this.canvasService.toSceneLength(offsetRaw);
     return {
       shape,
       shapeStyle: normalizeShapeStyle(raw?.shapeStyle),
@@ -1018,9 +1014,12 @@ export class ImageTool implements Extension {
     color = "rgba(255, 0, 0, 0.6)",
   ): Pattern | undefined {
     if (typeof document === "undefined") return undefined;
+    const sceneScale = this.canvasService?.getSceneScale() || 1;
+    const cacheKey = `${color}::${sceneScale.toFixed(6)}`;
     if (
       this.cropShapeHatchPattern &&
-      this.cropShapeHatchPatternColor === color
+      this.cropShapeHatchPatternColor === color &&
+      this.cropShapeHatchPatternKey === cacheKey
     ) {
       return this.cropShapeHatchPattern;
     }
@@ -1053,8 +1052,18 @@ export class ImageTool implements Extension {
       // @ts-ignore: Fabric Pattern accepts canvas source here.
       repetition: "repeat",
     });
+    // Scene specs are scaled to screen by CanvasService; keep hatch density in screen pixels.
+    (pattern as any).patternTransform = [
+      1 / sceneScale,
+      0,
+      0,
+      1 / sceneScale,
+      0,
+      0,
+    ];
     this.cropShapeHatchPattern = pattern;
     this.cropShapeHatchPatternColor = color;
+    this.cropShapeHatchPatternKey = cacheKey;
     return pattern;
   }
 
@@ -1170,7 +1179,7 @@ export class ImageTool implements Extension {
             originY: "top",
             fill: "rgba(0,0,0,0)",
             stroke: "rgba(255, 0, 0, 0.9)",
-            strokeWidth: 1,
+            strokeWidth: this.canvasService?.toSceneLength(1) ?? 1,
             selectable: false,
             evented: false,
             excludeFromExport: true,
@@ -1262,6 +1271,30 @@ export class ImageTool implements Extension {
     };
   }
 
+  private toScreenObjectProps(props: Record<string, any>): Record<string, any> {
+    if (!this.canvasService) return props;
+    const next = { ...props };
+    if (Number.isFinite(next.left) || Number.isFinite(next.top)) {
+      const mapped = this.canvasService.toScreenPoint({
+        x: Number.isFinite(next.left) ? Number(next.left) : 0,
+        y: Number.isFinite(next.top) ? Number(next.top) : 0,
+      });
+      if (Number.isFinite(next.left)) next.left = mapped.x;
+      if (Number.isFinite(next.top)) next.top = mapped.y;
+    }
+    const sceneScale = this.canvasService.getSceneScale();
+    const sx = Number.isFinite(next.scaleX) ? Number(next.scaleX) : 1;
+    const sy = Number.isFinite(next.scaleY) ? Number(next.scaleY) : 1;
+    next.scaleX = sx * sceneScale;
+    next.scaleY = sy * sceneScale;
+    return next;
+  }
+
+  private toSceneObjectScale(value: number): number {
+    if (!this.canvasService) return value;
+    return value / this.canvasService.getSceneScale();
+  }
+
   private getCurrentSrc(obj: any): string | undefined {
     if (!obj) return undefined;
     if (typeof obj.getSrc === "function") return obj.getSrc();
@@ -1321,9 +1354,10 @@ export class ImageTool implements Extension {
     this.rememberSourceSize(render.src, obj);
     const sourceSize = this.getSourceSize(render.src, obj);
     const props = this.computeCanvasProps(render, sourceSize, frame);
+    const screenProps = this.toScreenObjectProps(props);
 
     obj.set({
-      ...props,
+      ...screenProps,
       data: {
         ...(obj.data || {}),
         id: item.id,
@@ -1405,26 +1439,37 @@ export class ImageTool implements Extension {
       return [];
     }
 
-    const canvasW = this.canvasService.canvas.width || 0;
-    const canvasH = this.canvasService.canvas.height || 0;
+    const viewport = this.canvasService.getSceneViewportRect();
+    const canvasW = viewport.width || 0;
+    const canvasH = viewport.height || 0;
+    const canvasLeft = viewport.left || 0;
+    const canvasTop = viewport.top || 0;
     const visual = this.getFrameVisualConfig();
+    const strokeWidthScene = this.canvasService.toSceneLength(visual.strokeWidth);
+    const dashLengthScene = this.canvasService.toSceneLength(visual.dashLength);
 
-    const frameLeft = Math.max(0, Math.min(canvasW, frame.left));
-    const frameTop = Math.max(0, Math.min(canvasH, frame.top));
+    const frameLeft = Math.max(
+      canvasLeft,
+      Math.min(canvasLeft + canvasW, frame.left),
+    );
+    const frameTop = Math.max(
+      canvasTop,
+      Math.min(canvasTop + canvasH, frame.top),
+    );
     const frameRight = Math.max(
       frameLeft,
-      Math.min(canvasW, frame.left + frame.width),
+      Math.min(canvasLeft + canvasW, frame.left + frame.width),
     );
     const frameBottom = Math.max(
       frameTop,
-      Math.min(canvasH, frame.top + frame.height),
+      Math.min(canvasTop + canvasH, frame.top + frame.height),
     );
     const visibleFrameH = Math.max(0, frameBottom - frameTop);
 
-    const topH = frameTop;
-    const bottomH = Math.max(0, canvasH - frameBottom);
-    const leftW = frameLeft;
-    const rightW = Math.max(0, canvasW - frameRight);
+    const topH = Math.max(0, frameTop - canvasTop);
+    const bottomH = Math.max(0, canvasTop + canvasH - frameBottom);
+    const leftW = Math.max(0, frameLeft - canvasLeft);
+    const rightW = Math.max(0, canvasLeft + canvasW - frameRight);
     const shapeOverlay = this.buildCropShapeOverlaySpecs(frame, sceneGeometry);
 
     const mask: RenderObjectSpec[] = [
@@ -1433,8 +1478,8 @@ export class ImageTool implements Extension {
         type: "rect",
         data: { id: "image.cropMask.top", zIndex: 1 },
         props: {
-          left: canvasW / 2,
-          top: topH / 2,
+          left: canvasLeft + canvasW / 2,
+          top: canvasTop + topH / 2,
           width: canvasW,
           height: topH,
           originX: "center",
@@ -1449,7 +1494,7 @@ export class ImageTool implements Extension {
         type: "rect",
         data: { id: "image.cropMask.bottom", zIndex: 2 },
         props: {
-          left: canvasW / 2,
+          left: canvasLeft + canvasW / 2,
           top: frameBottom + bottomH / 2,
           width: canvasW,
           height: bottomH,
@@ -1465,7 +1510,7 @@ export class ImageTool implements Extension {
         type: "rect",
         data: { id: "image.cropMask.left", zIndex: 3 },
         props: {
-          left: leftW / 2,
+          left: canvasLeft + leftW / 2,
           top: frameTop + visibleFrameH / 2,
           width: leftW,
           height: visibleFrameH,
@@ -1510,10 +1555,10 @@ export class ImageTool implements Extension {
           visual.strokeStyle === "hidden"
             ? "rgba(0,0,0,0)"
             : visual.strokeColor,
-        strokeWidth: visual.strokeStyle === "hidden" ? 0 : visual.strokeWidth,
+        strokeWidth: visual.strokeStyle === "hidden" ? 0 : strokeWidthScene,
         strokeDashArray:
           visual.strokeStyle === "dashed"
-            ? [visual.dashLength, visual.dashLength]
+            ? [dashLengthScene, dashLengthScene]
             : undefined,
         selectable: false,
         evented: false,
@@ -1603,8 +1648,12 @@ export class ImageTool implements Extension {
     const center = target.getCenterPoint
       ? target.getCenterPoint()
       : new Point(target.left ?? 0, target.top ?? 0);
+    const centerScene = this.canvasService
+      ? this.canvasService.toScenePoint({ x: center.x, y: center.y })
+      : { x: center.x, y: center.y };
 
     const objectScale = Number.isFinite(target?.scaleX) ? target.scaleX : 1;
+    const objectScaleScene = this.toSceneObjectScale(objectScale || 1);
 
     const workingItem = this.workingItems.find((item) => item.id === id);
     const sourceKey = workingItem?.sourceUrl || workingItem?.url || "";
@@ -1612,10 +1661,10 @@ export class ImageTool implements Extension {
     const coverScale = this.getCoverScale(frame, sourceSize);
 
     const updates: Partial<ImageItem> = {
-      left: this.clampNormalized((center.x - frame.left) / frame.width),
-      top: this.clampNormalized((center.y - frame.top) / frame.height),
+      left: this.clampNormalized((centerScene.x - frame.left) / frame.width),
+      top: this.clampNormalized((centerScene.y - frame.top) / frame.height),
       angle: Number.isFinite(target.angle) ? target.angle : 0,
-      scale: Math.max(0.05, (objectScale || 1) / coverScale),
+      scale: Math.max(0.05, objectScaleScene / coverScale),
     };
 
     this.focusedImageId = id;
@@ -1710,7 +1759,7 @@ export class ImageTool implements Extension {
     const frame = this.getFrameRect();
     const coverScale = this.getCoverScale(frame, source);
 
-    const currentScale = obj.scaleX || 1;
+    const currentScale = this.toSceneObjectScale(obj.scaleX || 1);
     const zoom = Math.max(0.05, currentScale / coverScale);
 
     const updated: Partial<ImageItem> = {
@@ -1758,16 +1807,19 @@ export class ImageTool implements Extension {
       Math.max(1, area.height) / Math.max(1, source.height),
     );
 
-    const canvasW = this.canvasService.canvas.width || 1;
-    const canvasH = this.canvasService.canvas.height || 1;
+    const viewport = this.canvasService.getSceneViewportRect();
+    const canvasW = viewport.width || 1;
+    const canvasH = viewport.height || 1;
 
     const areaLeftInput = area.left ?? 0.5;
     const areaTopInput = area.top ?? 0.5;
 
     const areaLeftPx =
-      areaLeftInput <= 1.5 ? areaLeftInput * canvasW : areaLeftInput;
+      areaLeftInput <= 1.5
+        ? viewport.left + areaLeftInput * canvasW
+        : areaLeftInput;
     const areaTopPx =
-      areaTopInput <= 1.5 ? areaTopInput * canvasH : areaTopInput;
+      areaTopInput <= 1.5 ? viewport.top + areaTopInput * canvasH : areaTopInput;
 
     const updates: Partial<ImageItem> = {
       scale: Math.max(0.05, desiredScale / baseCover),
@@ -1846,7 +1898,8 @@ export class ImageTool implements Extension {
       throw new Error("image-ids-required");
     }
 
-    const frame = this.getFrameRect();
+    const frameScene = this.getFrameRect();
+    const frame = this.getFrameRectScreen(frameScene);
     const multiplier = Math.max(1, options.multiplier ?? 2);
     const format: "png" | "jpeg" = options.format === "jpeg" ? "jpeg" : "png";
 
