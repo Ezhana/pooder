@@ -1351,25 +1351,17 @@ export class WhiteInkTool implements Extension {
       ? Math.min(...imageIndexes)
       : this.resolveDefaultInsertIndex(currentObjects);
 
-    whiteObjects.forEach((obj) => {
-      canvas.moveObjectTo(obj, whiteInsertIndex);
-      whiteInsertIndex += 1;
-    });
-
-    const afterWhiteObjects = canvas.getObjects();
-    const afterImageIndexes = afterWhiteObjects
-      .map((obj: any, index: number) =>
-        obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID ? index : -1,
-      )
-      .filter((index: number) => index >= 0);
-
-    let coverInsertIndex = afterImageIndexes.length
-      ? Math.max(...afterImageIndexes) + 1
-      : whiteInsertIndex;
+    let coverInsertIndex = whiteInsertIndex;
 
     coverObjects.forEach((obj) => {
       canvas.moveObjectTo(obj, coverInsertIndex);
       coverInsertIndex += 1;
+    });
+
+    whiteInsertIndex = coverInsertIndex;
+    whiteObjects.forEach((obj) => {
+      canvas.moveObjectTo(obj, whiteInsertIndex);
+      whiteInsertIndex += 1;
     });
 
     frameObjects.forEach((obj) => canvas.bringObjectToFront(obj));
