@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 5.4.0
+
+### Minor Changes
+
+- spec framework
+
 ## 5.3.1
 
 ### Patch Changes
