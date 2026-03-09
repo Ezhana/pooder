@@ -62,9 +62,15 @@ export class BackgroundTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layerSpecs: {
-          [BACKGROUND_LAYER_ID]: this.specs,
-        },
+        layers: [
+          {
+            id: BACKGROUND_LAYER_ID,
+            mount: "group",
+            stack: 0,
+            order: 0,
+            objects: this.specs,
+          },
+        ],
       }),
       { priority: 0 },
     );

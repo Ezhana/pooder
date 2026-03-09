@@ -1,20 +1,27 @@
 import { Canvas, Group, FabricObject, Rect, Path, Image, Text } from "fabric";
-import { Service, EventBus } from "@pooder/core";
+import {
+  Service,
+  EventBus,
+  ServiceContext,
+  TOOL_SESSION_SERVICE,
+  ToolSessionService,
+  WORKBENCH_SERVICE,
+  WorkbenchService,
+} from "@pooder/core";
 import { ViewportSystem } from "./ViewportSystem";
 import type {
   RenderCoordinateSpace,
+  RenderLayerMount,
   RenderLayerSpec,
   RenderLayoutInsets,
   RenderLayoutLength,
   RenderObjectLayoutSpec,
   RenderObjectSpec,
 } from "./renderSpec";
+import { evaluateVisibilityExpr, type VisibilityLayerState } from "./visibility";
 
 export interface RenderProducerResult {
-  layerSpecs?: Record<string, RenderObjectSpec[]>;
-  rootLayerSpecs?: Record<string, RenderObjectSpec[]>;
-  replaceLayerIds?: string[];
-  replaceRootLayerIds?: string[];
+  layers?: RenderLayerSpec[];
 }
 
 export type RenderProducer = () =>
@@ -40,17 +47,73 @@ interface RectLike {
   height: number;
 }
 
+interface ResolvedRenderLayerSpec {
+  id: string;
+  mount: RenderLayerMount;
+  stack: number;
+  order: number;
+  replace: boolean;
+  visibility?: RenderLayerSpec["visibility"];
+  props?: Record<string, any>;
+  objects: RenderObjectSpec[];
+}
+
+interface ManagedLayerMeta {
+  id: string;
+  mount: RenderLayerMount;
+  stack: number;
+  order: number;
+  visibility?: RenderLayerSpec["visibility"];
+}
+
 export default class CanvasService implements Service {
   public canvas: Canvas;
   public viewport: ViewportSystem;
+  private context?: ServiceContext;
   private eventBus?: EventBus;
+  private workbenchService?: WorkbenchService;
+  private toolSessionService?: ToolSessionService;
   private renderProducers: Map<string, RenderProducerEntry> = new Map();
   private producerOrder = 0;
   private producerFlushRequested = false;
   private producerLoopPending = false;
   private producerLoopPromise: Promise<void> | null = null;
+  private producerApplyInProgress = false;
+  private visibilityRefreshScheduled = false;
   private managedProducerLayerIds: Set<string> = new Set();
   private managedProducerRootLayerIds: Set<string> = new Set();
+  private managedLayerMetas: Map<string, ManagedLayerMeta> = new Map();
+
+  private canvasForwardersBound = false;
+  private readonly forwardSelectionCreated = (e: any) => {
+    this.eventBus?.emit("selection:created", e);
+  };
+  private readonly forwardSelectionUpdated = (e: any) => {
+    this.eventBus?.emit("selection:updated", e);
+  };
+  private readonly forwardSelectionCleared = (e: any) => {
+    this.eventBus?.emit("selection:cleared", e);
+  };
+  private readonly forwardObjectModified = (e: any) => {
+    this.eventBus?.emit("object:modified", e);
+  };
+  private readonly forwardObjectAdded = (e: any) => {
+    this.eventBus?.emit("object:added", e);
+  };
+  private readonly forwardObjectRemoved = (e: any) => {
+    this.eventBus?.emit("object:removed", e);
+  };
+
+  private readonly onToolActivated = () => {
+    this.applyManagedLayerVisibility();
+  };
+  private readonly onToolSessionChanged = () => {
+    this.applyManagedLayerVisibility();
+  };
+  private readonly onCanvasObjectChanged = () => {
+    if (this.producerApplyInProgress) return;
+    this.scheduleManagedLayerVisibilityRefresh();
+  };
 
   constructor(el: HTMLCanvasElement | string | Canvas, options?: any) {
     if (el instanceof Canvas) {
@@ -72,29 +135,59 @@ export default class CanvasService implements Service {
     }
   }
 
+  init(context: ServiceContext) {
+    if (this.context) {
+      this.detachContextEvents(this.context.eventBus);
+    }
+
+    this.context = context;
+    this.workbenchService = context.get(WORKBENCH_SERVICE);
+    this.toolSessionService = context.get(TOOL_SESSION_SERVICE);
+    this.setEventBus(context.eventBus);
+    this.attachContextEvents(context.eventBus);
+  }
+
+  private attachContextEvents(eventBus: EventBus) {
+    eventBus.on("tool:activated", this.onToolActivated);
+    eventBus.on("tool:session:change", this.onToolSessionChanged);
+    eventBus.on("object:added", this.onCanvasObjectChanged);
+    eventBus.on("object:removed", this.onCanvasObjectChanged);
+  }
+
+  private detachContextEvents(eventBus: EventBus) {
+    eventBus.off("tool:activated", this.onToolActivated);
+    eventBus.off("tool:session:change", this.onToolSessionChanged);
+    eventBus.off("object:added", this.onCanvasObjectChanged);
+    eventBus.off("object:removed", this.onCanvasObjectChanged);
+  }
+
   setEventBus(eventBus: EventBus) {
     this.eventBus = eventBus;
     this.setupEvents();
   }
 
   private setupEvents() {
-    if (!this.eventBus) return;
-    const bus = this.eventBus;
-
-    const forward = (name: string) => (e: any) => bus.emit(name, e);
-
-    this.canvas.on("selection:created", forward("selection:created"));
-    this.canvas.on("selection:updated", forward("selection:updated"));
-    this.canvas.on("selection:cleared", forward("selection:cleared"));
-    this.canvas.on("object:modified", forward("object:modified"));
-    this.canvas.on("object:added", forward("object:added"));
-    this.canvas.on("object:removed", forward("object:removed"));
+    if (this.canvasForwardersBound) return;
+    this.canvas.on("selection:created", this.forwardSelectionCreated);
+    this.canvas.on("selection:updated", this.forwardSelectionUpdated);
+    this.canvas.on("selection:cleared", this.forwardSelectionCleared);
+    this.canvas.on("object:modified", this.forwardObjectModified);
+    this.canvas.on("object:added", this.forwardObjectAdded);
+    this.canvas.on("object:removed", this.forwardObjectRemoved);
+    this.canvasForwardersBound = true;
   }
 
   dispose() {
+    if (this.context) {
+      this.detachContextEvents(this.context.eventBus);
+    }
     this.renderProducers.clear();
     this.managedProducerLayerIds.clear();
     this.managedProducerRootLayerIds.clear();
+    this.managedLayerMetas.clear();
+    this.context = undefined;
+    this.workbenchService = undefined;
+    this.toolSessionService = undefined;
     this.producerFlushRequested = false;
     this.canvas.dispose();
   }
@@ -189,85 +282,280 @@ export default class CanvasService implements Service {
     });
   }
 
-  private appendLayerSpecMap(
-    map: Map<string, RenderObjectSpec[]>,
-    source?: Record<string, RenderObjectSpec[]>,
+  private normalizeLayerSpecValue(spec: RenderLayerSpec): ResolvedRenderLayerSpec | null {
+    const id = String(spec.id || "").trim();
+    if (!id) return null;
+
+    return {
+      id,
+      mount: spec.mount === "root" ? "root" : "group",
+      stack: Number.isFinite(spec.stack) ? Number(spec.stack) : 0,
+      order: Number.isFinite(spec.order) ? Number(spec.order) : 0,
+      replace: spec.replace === true,
+      visibility: spec.visibility,
+      props:
+        spec.props && typeof spec.props === "object"
+          ? { ...(spec.props as Record<string, any>) }
+          : undefined,
+      objects: Array.isArray(spec.objects) ? [...spec.objects] : [],
+    };
+  }
+
+  private mergeLayerSpec(
+    map: Map<string, ResolvedRenderLayerSpec>,
+    rawSpec: RenderLayerSpec,
+    producerId: string,
   ) {
-    if (!source) return;
-    Object.entries(source).forEach(([layerId, specs]) => {
-      if (!Array.isArray(specs)) return;
-      const list = map.get(layerId) || [];
-      list.push(...specs);
-      map.set(layerId, list);
+    const normalized = this.normalizeLayerSpecValue(rawSpec);
+    if (!normalized) return;
+
+    const existing = map.get(normalized.id);
+    if (!existing) {
+      map.set(normalized.id, normalized);
+      return;
+    }
+
+    if (existing.mount !== normalized.mount) {
+      console.warn(
+        `[CanvasService] layer "${normalized.id}" from producer "${producerId}" has mount "${normalized.mount}" but an existing mount "${existing.mount}" is already registered in this flush.`,
+      );
+      return;
+    }
+
+    existing.objects.push(...normalized.objects);
+    existing.replace = existing.replace || normalized.replace;
+    existing.stack = normalized.stack;
+    existing.order = normalized.order;
+    if (normalized.visibility !== undefined) {
+      existing.visibility = normalized.visibility;
+    }
+    if (normalized.props && normalized.mount === "group") {
+      existing.props = { ...(existing.props || {}), ...normalized.props };
+    }
+  }
+
+  private removeGroupLayer(layerId: string) {
+    const layer = this.getLayer(layerId);
+    if (!layer) return;
+    this.canvas.remove(layer);
+  }
+
+  private compareLayerMeta(a: ManagedLayerMeta, b: ManagedLayerMeta): number {
+    if (a.stack !== b.stack) return a.stack - b.stack;
+    if (a.order !== b.order) return a.order - b.order;
+    return a.id.localeCompare(b.id);
+  }
+
+  private getLayerCanvasObjects(
+    layerId: string,
+    mount: RenderLayerMount,
+  ): FabricObject[] {
+    if (mount === "group") {
+      const layer = this.getLayer(layerId);
+      return layer ? [layer as any] : [];
+    }
+    const rootObjects = this.getRootLayerObjects(layerId);
+    const all = this.canvas.getObjects();
+    return [...rootObjects].sort((a, b) => all.indexOf(a) - all.indexOf(b));
+  }
+
+  private syncManagedLayerStacking(layers: ManagedLayerMeta[]) {
+    const ordered = [...layers]
+      .sort((a, b) => this.compareLayerMeta(a, b))
+      .map((meta) => ({
+        meta,
+        objects: this.getLayerCanvasObjects(meta.id, meta.mount),
+      }))
+      .filter((entry) => entry.objects.length > 0);
+
+    let previousMaxIndex = -1;
+    ordered.forEach((entry) => {
+      const canvasObjects = this.canvas.getObjects();
+      const indexes = entry.objects
+        .map((obj) => canvasObjects.indexOf(obj))
+        .filter((index) => index >= 0);
+      if (!indexes.length) return;
+
+      const currentMin = Math.min(...indexes);
+      if (previousMaxIndex >= 0 && currentMin <= previousMaxIndex) {
+        let targetIndex = previousMaxIndex + 1;
+        entry.objects.forEach((obj) => {
+          this.moveObjectInContainer(this.canvas, obj as any, targetIndex);
+          targetIndex += 1;
+        });
+        previousMaxIndex = targetIndex - 1;
+        return;
+      }
+
+      previousMaxIndex = Math.max(...indexes);
+    });
+  }
+
+  private getLayerRuntimeState(): Map<string, VisibilityLayerState> {
+    const state = new Map<string, VisibilityLayerState>();
+
+    const ensure = (layerId: string): VisibilityLayerState => {
+      const id = String(layerId || "").trim();
+      if (!id) return { exists: false, objectCount: 0 };
+      let item = state.get(id);
+      if (!item) {
+        item = { exists: false, objectCount: 0 };
+        state.set(id, item);
+      }
+      return item;
+    };
+
+    this.canvas.getObjects().forEach((obj: any) => {
+      const layerId = obj?.data?.id;
+      if (obj instanceof Group && typeof layerId === "string") {
+        const item = ensure(layerId);
+        item.exists = true;
+        item.objectCount = Math.max(
+          item.objectCount,
+          (obj.getObjects() as any[]).length,
+        );
+      }
+
+      const rootLayerId = obj?.data?.layerId;
+      if (typeof rootLayerId === "string") {
+        const item = ensure(rootLayerId);
+        item.exists = true;
+        item.objectCount += 1;
+      }
+    });
+
+    this.managedLayerMetas.forEach((meta) => {
+      const item = ensure(meta.id);
+      item.exists = true;
+    });
+
+    return state;
+  }
+
+  private applyManagedLayerVisibility(options: { render?: boolean } = {}): boolean {
+    if (!this.managedLayerMetas.size) return false;
+    const layers = this.getLayerRuntimeState();
+    const activeToolId = this.workbenchService?.activeToolId ?? null;
+    const isSessionActive = (toolId: string) => {
+      if (!this.toolSessionService) return false;
+      return this.toolSessionService.getState(toolId).status === "active";
+    };
+
+    let changed = false;
+
+    this.managedLayerMetas.forEach((meta) => {
+      const visible = evaluateVisibilityExpr(meta.visibility, {
+        activeToolId,
+        isSessionActive,
+        layers,
+      });
+      changed = this.setLayerVisibility(meta.id, visible, meta.mount) || changed;
+    });
+
+    if (changed && options.render !== false) {
+      this.requestRenderAll();
+    }
+    return changed;
+  }
+
+  private scheduleManagedLayerVisibilityRefresh() {
+    if (this.visibilityRefreshScheduled) return;
+    this.visibilityRefreshScheduled = true;
+    void Promise.resolve().then(() => {
+      this.visibilityRefreshScheduled = false;
+      this.applyManagedLayerVisibility();
     });
   }
 
   private async collectAndApplyProducerSpecs(): Promise<void> {
-    const groupLayerSpecs = new Map<string, RenderObjectSpec[]>();
-    const rootLayerSpecs = new Map<string, RenderObjectSpec[]>();
-    const replaceLayerIds = new Set<string>();
-    const replaceRootLayerIds = new Set<string>();
+    const layers = new Map<string, ResolvedRenderLayerSpec>();
     const entries = this.sortedRenderProducerEntries();
 
-    for (const entry of entries) {
-      try {
-        const result = await entry.producer();
-        if (!result) continue;
-        this.appendLayerSpecMap(groupLayerSpecs, result.layerSpecs);
-        this.appendLayerSpecMap(rootLayerSpecs, result.rootLayerSpecs);
-        if (Array.isArray(result.replaceLayerIds)) {
-          result.replaceLayerIds.forEach((layerId) => {
-            if (layerId) replaceLayerIds.add(layerId);
-          });
-        }
-        if (Array.isArray(result.replaceRootLayerIds)) {
-          result.replaceRootLayerIds.forEach((layerId) => {
-            if (layerId) replaceRootLayerIds.add(layerId);
-          });
-        }
-      } catch (error) {
-        console.error(
-          `[CanvasService] render producer "${entry.toolId}" failed.`,
-          error,
-        );
-      }
-    }
-
-    const nextLayerIds = new Set(groupLayerSpecs.keys());
-    const nextRootLayerIds = new Set(rootLayerSpecs.keys());
-
-    for (const [layerId, specs] of groupLayerSpecs.entries()) {
-      if (replaceLayerIds.has(layerId)) {
-        const layer = this.getLayer(layerId);
-        if (layer) {
-          (layer.getObjects() as any[]).forEach((obj) => layer.remove(obj));
+    this.producerApplyInProgress = true;
+    try {
+      for (const entry of entries) {
+        try {
+          const result = await entry.producer();
+          if (!result) continue;
+          const specs = Array.isArray(result.layers) ? result.layers : [];
+          specs.forEach((spec) => this.mergeLayerSpec(layers, spec, entry.toolId));
+        } catch (error) {
+          console.error(
+            `[CanvasService] render producer "${entry.toolId}" failed.`,
+            error,
+          );
         }
       }
-      await this.applyObjectSpecsToLayer(layerId, specs, { render: false });
-    }
 
-    for (const layerId of this.managedProducerLayerIds) {
-      if (nextLayerIds.has(layerId)) continue;
-      const layer = this.getLayer(layerId);
-      if (!layer) continue;
-      await this.applyObjectSpecsToContainer(layer, [], { render: false });
-    }
+      const nextLayerIds = new Set<string>();
+      const nextRootLayerIds = new Set<string>();
+      const nextManagedLayerMetas = new Map<string, ManagedLayerMeta>();
 
-    for (const [layerId, specs] of rootLayerSpecs.entries()) {
-      if (replaceRootLayerIds.has(layerId)) {
-        const existing = this.getRootLayerObjects(layerId) as any[];
-        existing.forEach((obj) => this.canvas.remove(obj));
+      for (const layer of layers.values()) {
+        nextManagedLayerMetas.set(layer.id, {
+          id: layer.id,
+          mount: layer.mount,
+          stack: layer.stack,
+          order: layer.order,
+          visibility: layer.visibility,
+        });
+
+        if (layer.mount === "group") {
+          nextLayerIds.add(layer.id);
+          if (layer.replace) {
+            const existingLayer = this.getLayer(layer.id);
+            if (existingLayer) {
+              (existingLayer.getObjects() as any[]).forEach((obj) =>
+                existingLayer.remove(obj),
+              );
+            }
+          }
+          await this.applyLayerSpec(
+            {
+              id: layer.id,
+              mount: "group",
+              stack: layer.stack,
+              order: layer.order,
+              replace: layer.replace,
+              visibility: layer.visibility,
+              objects: layer.objects,
+              props: layer.props,
+            },
+            { render: false },
+          );
+          continue;
+        }
+
+        nextRootLayerIds.add(layer.id);
+        if (layer.replace) {
+          const existing = this.getRootLayerObjects(layer.id) as any[];
+          existing.forEach((obj) => this.canvas.remove(obj));
+        }
+        await this.applyObjectSpecsToRootLayer(layer.id, layer.objects, {
+          render: false,
+        });
       }
-      await this.applyObjectSpecsToRootLayer(layerId, specs, { render: false });
+
+      for (const layerId of this.managedProducerLayerIds) {
+        if (nextLayerIds.has(layerId)) continue;
+        this.removeGroupLayer(layerId);
+      }
+
+      for (const layerId of this.managedProducerRootLayerIds) {
+        if (nextRootLayerIds.has(layerId)) continue;
+        await this.applyObjectSpecsToRootLayer(layerId, [], { render: false });
+      }
+
+      this.managedProducerLayerIds = nextLayerIds;
+      this.managedProducerRootLayerIds = nextRootLayerIds;
+      this.managedLayerMetas = nextManagedLayerMetas;
+
+      this.syncManagedLayerStacking(Array.from(nextManagedLayerMetas.values()));
+      this.applyManagedLayerVisibility({ render: false });
+    } finally {
+      this.producerApplyInProgress = false;
     }
 
-    for (const layerId of this.managedProducerRootLayerIds) {
-      if (nextRootLayerIds.has(layerId)) continue;
-      await this.applyObjectSpecsToRootLayer(layerId, [], { render: false });
-    }
-
-    this.managedProducerLayerIds = nextLayerIds;
-    this.managedProducerRootLayerIds = nextRootLayerIds;
     this.requestRenderAll();
   }
 
@@ -276,7 +564,10 @@ export default class CanvasService implements Service {
    * We assume layers are Groups directly on the canvas with a data.id property.
    */
   getLayer(id: string): Group | undefined {
-    return this.canvas.getObjects().find((obj: any) => obj.data?.id === id) as
+    return this.canvas.getObjects().find((obj: any) => {
+      if (!(obj instanceof Group)) return false;
+      return (obj as any).data?.id === id;
+    }) as
       | Group
       | undefined;
   }
@@ -295,7 +586,16 @@ export default class CanvasService implements Service {
       };
       layer = new Group([], defaultOptions);
       this.canvas.add(layer);
+      return layer;
     }
+
+    const nextData = {
+      ...((layer as any).data || {}),
+      ...(options.data || {}),
+      id,
+    };
+    layer.set({ ...options, data: nextData });
+    layer.setCoords();
     return layer;
   }
 
@@ -563,16 +863,33 @@ export default class CanvasService implements Service {
     return next;
   }
 
-  setLayerVisibility(layerId: string, visible: boolean) {
-    const layer = this.getLayer(layerId);
-    if (layer) {
-      layer.set({ visible });
+  setLayerVisibility(
+    layerId: string,
+    visible: boolean,
+    mount?: RenderLayerMount,
+  ): boolean {
+    let changed = false;
+
+    if (mount !== "root") {
+      const layer = this.getLayer(layerId);
+      if (layer && layer.visible !== visible) {
+        layer.set({ visible });
+        layer.setCoords();
+        changed = true;
+      }
     }
-    const objects = this.getRootLayerObjects(layerId) as any[];
-    objects.forEach((obj) => {
-      obj.set?.({ visible });
-      obj.setCoords?.();
-    });
+
+    if (mount !== "group") {
+      const objects = this.getRootLayerObjects(layerId) as any[];
+      objects.forEach((obj) => {
+        if (obj.visible === visible) return;
+        obj.set?.({ visible });
+        obj.setCoords?.();
+        changed = true;
+      });
+    }
+
+    return changed;
   }
 
   bringLayerToFront(layerId: string) {
@@ -584,9 +901,16 @@ export default class CanvasService implements Service {
     objects.forEach((obj) => this.canvas.bringObjectToFront(obj as any));
   }
 
-  async applyLayerSpec(spec: RenderLayerSpec): Promise<void> {
+  async applyLayerSpec(
+    spec: RenderLayerSpec,
+    options: { render?: boolean } = {},
+  ): Promise<void> {
+    if (spec.mount === "root") {
+      await this.applyObjectSpecsToRootLayer(spec.id, spec.objects, options);
+      return;
+    }
     const layer = this.createLayer(spec.id, spec.props || {});
-    await this.applyObjectSpecsToContainer(layer, spec.objects);
+    await this.applyObjectSpecsToContainer(layer, spec.objects, options);
   }
 
   async applyObjectSpecsToLayer(

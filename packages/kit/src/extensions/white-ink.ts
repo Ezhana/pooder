@@ -88,7 +88,6 @@ const WHITE_INK_OBJECT_LAYER_ID = "white-ink.user";
 const WHITE_INK_COVER_LAYER_ID = "white-ink.cover";
 const WHITE_INK_OVERLAY_LAYER_ID = "white-ink.overlay";
 const IMAGE_OBJECT_LAYER_ID = "image.user";
-const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
 
 const WHITE_INK_DEBUG_KEY = "whiteInk.debug";
 const WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY = "whiteInk.previewImageVisible";
@@ -141,11 +140,29 @@ export class WhiteInkTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        rootLayerSpecs: {
-          [WHITE_INK_OBJECT_LAYER_ID]: this.whiteSpecs,
-          [WHITE_INK_COVER_LAYER_ID]: this.coverSpecs,
-          [WHITE_INK_OVERLAY_LAYER_ID]: this.overlaySpecs,
-        },
+        layers: [
+          {
+            id: WHITE_INK_COVER_LAYER_ID,
+            mount: "root",
+            stack: 220,
+            order: 0,
+            objects: this.coverSpecs,
+          },
+          {
+            id: WHITE_INK_OBJECT_LAYER_ID,
+            mount: "root",
+            stack: 221,
+            order: 0,
+            objects: this.whiteSpecs,
+          },
+          {
+            id: WHITE_INK_OVERLAY_LAYER_ID,
+            mount: "root",
+            stack: 790,
+            order: 0,
+            objects: this.overlaySpecs,
+          },
+        ],
       }),
       { priority: 260 },
     );
@@ -1336,10 +1353,6 @@ export class WhiteInkTool implements Extension {
     const coverObjects = this.canvasService.getRootLayerObjects(
       WHITE_INK_COVER_LAYER_ID,
     ) as any[];
-    const frameObjects = this.canvasService.getRootLayerObjects(
-      WHITE_INK_OVERLAY_LAYER_ID,
-    ) as any[];
-
     const currentObjects = canvas.getObjects();
     const imageIndexes = currentObjects
       .map((obj: any, index: number) =>
@@ -1363,16 +1376,6 @@ export class WhiteInkTool implements Extension {
       canvas.moveObjectTo(obj, whiteInsertIndex);
       whiteInsertIndex += 1;
     });
-
-    frameObjects.forEach((obj) => canvas.bringObjectToFront(obj));
-
-    canvas
-      .getObjects()
-      .filter((obj: any) => obj?.data?.layerId === IMAGE_OVERLAY_LAYER_ID)
-      .forEach((obj: any) => canvas.bringObjectToFront(obj));
-
-    this.canvasService.bringLayerToFront("dieline-overlay");
-    this.canvasService.bringLayerToFront("ruler-overlay");
   }
 
   private clearRenderedWhiteInks() {

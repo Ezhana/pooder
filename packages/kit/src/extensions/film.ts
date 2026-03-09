@@ -62,9 +62,15 @@ export class FilmTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layerSpecs: {
-          [FILM_LAYER_ID]: this.specs,
-        },
+        layers: [
+          {
+            id: FILM_LAYER_ID,
+            mount: "group",
+            stack: 1000,
+            order: 0,
+            objects: this.specs,
+          },
+        ],
       }),
       { priority: 500 },
     );
@@ -260,7 +266,6 @@ export class FilmTool implements Extension {
     this.specs = this.buildFilmSpecs(this.renderImageUrl, this.opacity);
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
-    this.canvasService.bringLayerToFront(FILM_LAYER_ID);
     this.canvasService.requestRenderAll();
   }
 }

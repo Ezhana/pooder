@@ -46,8 +46,32 @@ export interface RenderObjectSpec {
   layout?: RenderObjectLayoutSpec;
 }
 
+export type LayerObjectCountComparator = ">" | ">=" | "==" | "<" | "<=";
+
+export type VisibilityExpr =
+  | { op: "const"; value: boolean }
+  | { op: "activeToolIn"; ids: string[] }
+  | { op: "sessionActive"; toolId: string }
+  | { op: "layerExists"; layerId: string }
+  | {
+      op: "layerObjectCount";
+      layerId: string;
+      cmp: LayerObjectCountComparator;
+      value: number;
+    }
+  | { op: "not"; expr: VisibilityExpr }
+  | { op: "all"; exprs: VisibilityExpr[] }
+  | { op: "any"; exprs: VisibilityExpr[] };
+
+export type RenderLayerMount = "group" | "root";
+
 export interface RenderLayerSpec {
   id: string;
+  mount: RenderLayerMount;
+  stack?: number;
+  order?: number;
+  replace?: boolean;
+  visibility?: VisibilityExpr;
   objects: RenderObjectSpec[];
   props?: RenderProps;
 }

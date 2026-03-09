@@ -21,14 +21,12 @@ import {
   ImageTool,
   WhiteInkTool,
   MirrorTool,
-  SceneVisibilityService,
   SizeTool,
   SceneLayoutService,
 } from "@pooder/kit";
 import CanvasArea from "./components/CanvasArea.vue";
 
 const SCENE_LAYOUT_SERVICE_ID = "SceneLayoutService";
-const SCENE_VISIBILITY_SERVICE_ID = "SceneVisibilityService";
 
 const pooder = new Pooder();
 provide("pooder", pooder);
@@ -513,10 +511,6 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
 
   pooder.registerService(canvasService, "CanvasService");
   pooder.registerService(new SceneLayoutService(), SCENE_LAYOUT_SERVICE_ID);
-  pooder.registerService(
-    new SceneVisibilityService(),
-    SCENE_VISIBILITY_SERVICE_ID,
-  );
 
   const tools = [
     new BackgroundTool(),
@@ -545,7 +539,6 @@ const onResize = (width: number, height: number) => {
 onUnmounted(() => {
   configDisposable.dispose();
   pooder.extensionManager.destroy();
-  pooder.unregisterService(SCENE_VISIBILITY_SERVICE_ID);
   pooder.unregisterService(SCENE_LAYOUT_SERVICE_ID);
   pooder.unregisterService("CanvasService");
 });

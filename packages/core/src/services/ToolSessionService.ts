@@ -1,6 +1,7 @@
 import { ToolContribution } from "../contribution";
 import Disposable from "../disposable";
 import { Service, ServiceContext } from "../service";
+import EventBus from "../event";
 import CommandService from "./CommandService";
 import ToolRegistryService from "./ToolRegistryService";
 import { COMMAND_SERVICE, TOOL_REGISTRY_SERVICE } from "./tokens";
@@ -31,6 +32,7 @@ export default class ToolSessionService implements Service {
   private readonly sessions = new Map<string, ToolSessionState>();
   private commandService?: CommandService;
   private toolRegistry?: ToolRegistryService;
+  private eventBus?: EventBus;
 
   constructor(dependencies: ToolSessionServiceDependencies = {}) {
     this.commandService = dependencies.commandService;
@@ -40,6 +42,7 @@ export default class ToolSessionService implements Service {
   init(context: ServiceContext) {
     this.commandService ??= context.get(COMMAND_SERVICE);
     this.toolRegistry ??= context.get(TOOL_REGISTRY_SERVICE);
+    this.eventBus ??= context.eventBus;
 
     if (!this.commandService) {
       throw new Error("ToolSessionService requires CommandService.");
@@ -94,6 +97,15 @@ export default class ToolSessionService implements Service {
     return { ...this.ensureSession(toolId) };
   }
 
+  private emitSessionChange(toolId: string, reason: string) {
+    if (!this.eventBus) return;
+    this.eventBus.emit("tool:session:change", {
+      toolId,
+      reason,
+      state: this.getState(toolId),
+    });
+  }
+
   isDirty(toolId: string): boolean {
     const tracker = this.dirtyTrackers.get(toolId);
     if (tracker) return tracker();
@@ -104,6 +116,7 @@ export default class ToolSessionService implements Service {
     const session = this.ensureSession(toolId);
     session.dirty = dirty;
     session.lastUpdatedAt = Date.now();
+    this.emitSessionChange(toolId, "dirty");
   }
 
   private resolveTool(toolId: string): ToolContribution | undefined {
@@ -138,6 +151,7 @@ export default class ToolSessionService implements Service {
     session.status = "active";
     session.startedAt = Date.now();
     session.lastUpdatedAt = session.startedAt;
+    this.emitSessionChange(toolId, "begin");
   }
 
   async validate(toolId: string): Promise<{ ok: boolean; result?: any }> {
@@ -163,6 +177,7 @@ export default class ToolSessionService implements Service {
     session.dirty = false;
     session.status = "idle";
     session.lastUpdatedAt = Date.now();
+    this.emitSessionChange(toolId, "commit");
     return { ok: true, result };
   }
 
@@ -173,12 +188,14 @@ export default class ToolSessionService implements Service {
     session.dirty = false;
     session.status = "idle";
     session.lastUpdatedAt = Date.now();
+    this.emitSessionChange(toolId, "rollback");
   }
 
   deactivateSession(toolId: string) {
     const session = this.ensureSession(toolId);
     session.status = "idle";
     session.lastUpdatedAt = Date.now();
+    this.emitSessionChange(toolId, "deactivate");
   }
 
   async handleBeforeLeave(toolId: string): Promise<LeaveResult> {
@@ -209,5 +226,6 @@ export default class ToolSessionService implements Service {
   dispose() {
     this.sessions.clear();
     this.dirtyTrackers.clear();
+    this.eventBus = undefined;
   }
 }

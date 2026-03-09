@@ -86,10 +86,23 @@ export class RulerTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        rootLayerSpecs: {
-          [RULER_LAYER_ID]: this.specs,
-        },
-        replaceRootLayerIds: [RULER_LAYER_ID],
+        layers: [
+          {
+            id: RULER_LAYER_ID,
+            mount: "root",
+            stack: 950,
+            order: 0,
+            replace: true,
+            visibility: {
+              op: "not",
+              expr: {
+                op: "activeToolIn",
+                ids: ["pooder.kit.white-ink"],
+              },
+            },
+            objects: this.specs,
+          },
+        ],
       }),
       { priority: 400 },
     );
@@ -646,8 +659,6 @@ export class RulerTool implements Extension {
     this.specs = specs;
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
-
-    this.canvasService.bringLayerToFront(RULER_LAYER_ID);
     this.canvasService.requestRenderAll();
     this.log("render:done", { seq });
   }

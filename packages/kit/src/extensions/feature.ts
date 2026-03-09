@@ -101,9 +101,15 @@ export class FeatureTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        rootLayerSpecs: {
-          [FEATURE_OVERLAY_LAYER_ID]: this.specs,
-        },
+        layers: [
+          {
+            id: FEATURE_OVERLAY_LAYER_ID,
+            mount: "root",
+            stack: 880,
+            order: 0,
+            objects: this.specs,
+          },
+        ],
       }),
       { priority: 350 },
     );
@@ -264,10 +270,10 @@ export class FeatureTool implements Extension {
             await this.refreshGeometry();
             this.setWorkingFeatures(original);
             this.hasWorkingChanges = false;
+            this.clearFeatureSessionState();
             this.redraw();
             this.emitWorkingChange();
             this.updateCommittedFeatures(original);
-            this.clearFeatureSessionState();
             return { ok: true };
           },
         },
@@ -632,6 +638,7 @@ export class FeatureTool implements Extension {
   }
 
   private getDraggableMarkerTarget(target: any): any | null {
+    if (!this.isFeatureSessionActive || !this.isToolActive) return null;
     if (!target || target.data?.type !== "feature-marker") return null;
     if (target.data?.markerRole !== "handle") return null;
     return target;
@@ -784,21 +791,17 @@ export class FeatureTool implements Extension {
 
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
-
-    this.syncOverlayOrder();
     if (options.enforceConstraints) {
       this.enforceConstraints();
     }
   }
 
-  private syncOverlayOrder() {
-    if (!this.canvasService) return;
-    this.canvasService.bringLayerToFront(FEATURE_OVERLAY_LAYER_ID);
-    this.canvasService.bringLayerToFront("ruler-overlay");
-  }
-
   private buildFeatureSpecs(): RenderObjectSpec[] {
-    if (!this.currentGeometry || this.workingFeatures.length === 0) {
+    if (
+      !this.isFeatureSessionActive ||
+      !this.currentGeometry ||
+      this.workingFeatures.length === 0
+    ) {
       return [];
     }
 
@@ -903,11 +906,12 @@ export class FeatureTool implements Extension {
       (feature.operation === "subtract" ? [4, 4] : undefined);
 
     const interactive = options.markerRole === "handle";
+    const sessionVisible = this.isToolActive && this.isFeatureSessionActive;
     const baseData = this.buildMarkerData(marker, options);
     const commonProps = {
-      visible: this.isToolActive,
-      selectable: interactive && this.isToolActive,
-      evented: interactive && this.isToolActive,
+      visible: sessionVisible,
+      selectable: interactive && sessionVisible,
+      evented: interactive && sessionVisible,
       hasControls: false,
       hasBorders: false,
       hoverCursor: interactive ? "move" : "default",
@@ -974,7 +978,7 @@ export class FeatureTool implements Extension {
           markerOffsetY: -visualHeight / 2,
         } as MarkerData,
         props: {
-          visible: this.isToolActive,
+          visible: sessionVisible,
           selectable: false,
           evented: false,
           width: visualWidth,

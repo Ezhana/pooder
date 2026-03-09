@@ -152,10 +152,23 @@ export class DielineTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layerSpecs: {
-          [DIELINE_LAYER_ID]: this.specs,
-        },
-        replaceLayerIds: [DIELINE_LAYER_ID],
+        layers: [
+          {
+            id: DIELINE_LAYER_ID,
+            mount: "group",
+            stack: 700,
+            order: 0,
+            replace: true,
+            visibility: {
+              op: "not",
+              expr: {
+                op: "activeToolIn",
+                ids: ["pooder.kit.image", "pooder.kit.white-ink"],
+              },
+            },
+            objects: this.specs,
+          },
+        ],
       }),
       { priority: 250 },
     );
@@ -934,7 +947,6 @@ export class DielineTool implements Extension {
 
     // Feature tool markers can extend outside trim. Keep them above dieline mask.
     this.bringFeatureMarkersToFront();
-    this.canvasService.bringLayerToFront("ruler-overlay");
     this.canvasService.requestRenderAll();
   }
 

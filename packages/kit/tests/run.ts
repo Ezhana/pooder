@@ -1,13 +1,20 @@
-import { pickExitIndex, scoreOutsideAbove } from "../src/bridgeSelection";
-import { sampleWrappedOffsets, wrappedDistance } from "../src/wrappedOffsets";
+import {
+  pickExitIndex,
+  scoreOutsideAbove,
+} from "../src/extensions/bridgeSelection";
+import {
+  sampleWrappedOffsets,
+  wrappedDistance,
+} from "../src/extensions/wrappedOffsets";
 import {
   circularMorphology,
   createMask,
   fillHoles,
   findMinimalConnectRadius,
   isMaskConnected8,
-} from "../src/maskOps";
-import { computeDetectEdgeSize } from "../src/edgeScale";
+} from "../src/extensions/maskOps";
+import { computeDetectEdgeSize } from "../src/extensions/edgeScale";
+import { evaluateVisibilityExpr } from "../src/services/visibility";
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -107,11 +114,139 @@ function testEdgeScale() {
   assert(height === 80, `expected height 80, got ${height}`);
 }
 
+function testVisibilityDsl() {
+  const layers = new Map([
+    ["ruler-overlay", { exists: true, objectCount: 2 }],
+    ["feature-overlay", { exists: true, objectCount: 0 }],
+  ]);
+
+  const context = {
+    activeToolId: "pooder.kit.image",
+    isSessionActive: (toolId: string) => toolId === "pooder.kit.feature",
+    layers,
+  };
+
+  assert(
+    evaluateVisibilityExpr({ op: "const", value: true }, context) === true,
+    "const true failed",
+  );
+  assert(
+    evaluateVisibilityExpr({ op: "const", value: false }, context) === false,
+    "const false failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "activeToolIn", ids: ["pooder.kit.image"] },
+      context,
+    ) === true,
+    "activeToolIn true failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "activeToolIn", ids: ["pooder.kit.white-ink"] },
+      context,
+    ) === false,
+    "activeToolIn false failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "sessionActive", toolId: "pooder.kit.feature" },
+      context,
+    ) === true,
+    "sessionActive true failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "sessionActive", toolId: "pooder.kit.ruler" },
+      context,
+    ) === false,
+    "sessionActive false failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "layerExists", layerId: "ruler-overlay" },
+      context,
+    ) === true,
+    "layerExists true failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "layerExists", layerId: "missing-layer" },
+      context,
+    ) === false,
+    "layerExists false failed",
+  );
+
+  const comparisons: Array<{
+    cmp: ">" | ">=" | "==" | "<" | "<=";
+    value: number;
+    expected: boolean;
+  }> = [
+    { cmp: ">", value: 1, expected: true },
+    { cmp: ">=", value: 2, expected: true },
+    { cmp: "==", value: 2, expected: true },
+    { cmp: "<", value: 2, expected: false },
+    { cmp: "<=", value: 1, expected: false },
+  ];
+  comparisons.forEach((entry) => {
+    assert(
+      evaluateVisibilityExpr(
+        {
+          op: "layerObjectCount",
+          layerId: "ruler-overlay",
+          cmp: entry.cmp,
+          value: entry.value,
+        },
+        context,
+      ) === entry.expected,
+      `layerObjectCount ${entry.cmp} failed`,
+    );
+  });
+
+  assert(
+    evaluateVisibilityExpr(
+      {
+        op: "not",
+        expr: { op: "activeToolIn", ids: ["pooder.kit.white-ink"] },
+      },
+      context,
+    ) === true,
+    "not failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      {
+        op: "all",
+        exprs: [
+          { op: "layerExists", layerId: "ruler-overlay" },
+          { op: "sessionActive", toolId: "pooder.kit.feature" },
+        ],
+      },
+      context,
+    ) === true,
+    "all failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      {
+        op: "any",
+        exprs: [
+          { op: "layerExists", layerId: "missing-layer" },
+          { op: "activeToolIn", ids: ["pooder.kit.image"] },
+        ],
+      },
+      context,
+    ) === true,
+    "any failed",
+  );
+}
+
 function main() {
   testWrappedOffsets();
   testBridgeSelection();
   testMaskOps();
   testEdgeScale();
+  testVisibilityDsl();
   console.log("ok");
 }
 

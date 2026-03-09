@@ -151,9 +151,15 @@ export class ImageTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        rootLayerSpecs: {
-          [IMAGE_OVERLAY_LAYER_ID]: this.overlaySpecs,
-        },
+        layers: [
+          {
+            id: IMAGE_OVERLAY_LAYER_ID,
+            mount: "root",
+            stack: 800,
+            order: 0,
+            objects: this.overlaySpecs,
+          },
+        ],
       }),
       { priority: 300 },
     );
@@ -1412,15 +1418,6 @@ export class ImageTool implements Extension {
       if (!obj) return;
       canvas.moveObjectTo(obj, insertIndex);
       insertIndex += 1;
-    });
-
-    const overlayObjects = this.getOverlayObjects().sort((a: any, b: any) => {
-      const az = Number(a?.data?.zIndex ?? 0);
-      const bz = Number(b?.data?.zIndex ?? 0);
-      return az - bz;
-    });
-    overlayObjects.forEach((obj) => {
-      canvas.bringObjectToFront(obj);
     });
 
     if (this.isDebugEnabled()) {
