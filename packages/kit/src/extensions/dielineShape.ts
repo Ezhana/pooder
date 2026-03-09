@@ -33,7 +33,7 @@ const DEFAULT_HEART_SHAPE_PARAMS: HeartShapeParams = {
 };
 
 export const DEFAULT_DIELINE_SHAPE_STYLE: DielineShapeStyle = {
-  fitMode: "contain",
+  fitMode: "stretch",
   ...DEFAULT_HEART_SHAPE_PARAMS,
 };
 
