@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 6.0.0
+
+### Major Changes
+
+- pass compositor
+
 ## 5.4.0
 
 ### Minor Changes
