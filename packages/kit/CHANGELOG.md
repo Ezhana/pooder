@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 6.0.1
+
+### Patch Changes
+
+- image control
+
 ## 6.0.0
 
 ### Major Changes
