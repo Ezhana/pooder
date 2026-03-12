@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 6.1.0
+
+### Minor Changes
+
+- project structure
+
 ## 6.0.1
 
 ### Patch Changes
