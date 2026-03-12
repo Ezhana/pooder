@@ -1,5 +1,13 @@
 # @pooder/kit
 
+## 6.1.1
+
+### Patch Changes
+
+- bugfix
+- Updated dependencies
+  - @pooder/core@2.2.1
+
 ## 6.1.0
 
 ### Minor Changes
