@@ -97,6 +97,17 @@ export default class ToolSessionService implements Service {
     return { ...this.ensureSession(toolId) };
   }
 
+  hasActiveSession(toolId: string): boolean {
+    return this.ensureSession(toolId).status === "active";
+  }
+
+  hasAnyActiveSession(): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.status === "active") return true;
+    }
+    return false;
+  }
+
   private emitSessionChange(toolId: string, reason: string) {
     if (!this.eventBus) return;
     this.eventBus.emit("tool:session:change", {

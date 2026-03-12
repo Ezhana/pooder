@@ -52,6 +52,7 @@ export type VisibilityExpr =
   | { op: "const"; value: boolean }
   | { op: "activeToolIn"; ids: string[] }
   | { op: "sessionActive"; toolId: string }
+  | { op: "anySessionActive" }
   | { op: "layerExists"; layerId: string }
   | {
       op: "layerObjectCount";
@@ -66,6 +67,7 @@ export type VisibilityExpr =
 export interface RenderClipPathEffectSpec {
   type: "clipPath";
   id?: string;
+  visibility?: VisibilityExpr;
   source: RenderObjectSpec;
   targetPassIds: string[];
 }

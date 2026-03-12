@@ -123,6 +123,7 @@ function testVisibilityDsl() {
   const context = {
     activeToolId: "pooder.kit.image",
     isSessionActive: (toolId: string) => toolId === "pooder.kit.feature",
+    hasAnyActiveSession: () => true,
     layers,
   };
 
@@ -161,6 +162,10 @@ function testVisibilityDsl() {
       context,
     ) === false,
     "sessionActive false failed",
+  );
+  assert(
+    evaluateVisibilityExpr({ op: "anySessionActive" }, context) === true,
+    "anySessionActive true failed",
   );
   assert(
     evaluateVisibilityExpr(

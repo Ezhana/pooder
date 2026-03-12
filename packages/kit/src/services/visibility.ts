@@ -8,6 +8,7 @@ export interface VisibilityLayerState {
 export interface VisibilityEvalContext {
   activeToolId?: string | null;
   isSessionActive?: (toolId: string) => boolean;
+  hasAnyActiveSession?: () => boolean;
   layers: Map<string, VisibilityLayerState>;
 }
 
@@ -49,6 +50,10 @@ export function evaluateVisibilityExpr(
     const toolId = String(expr.toolId || "").trim();
     if (!toolId) return false;
     return context.isSessionActive ? context.isSessionActive(toolId) : false;
+  }
+
+  if (expr.op === "anySessionActive") {
+    return context.hasAnyActiveSession ? context.hasAnyActiveSession() : false;
   }
 
   if (expr.op === "layerExists") {

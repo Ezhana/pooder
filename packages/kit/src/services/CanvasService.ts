@@ -60,6 +60,7 @@ interface ResolvedRenderPassSpec {
 interface ResolvedClipPathEffectSpec {
   type: "clipPath";
   key: string;
+  visibility?: RenderPassSpec["visibility"];
   source: RenderObjectSpec;
   targetPassIds: string[];
 }
@@ -89,6 +90,7 @@ export default class CanvasService implements Service {
 
   private managedProducerPassIds: Set<string> = new Set();
   private managedPassMetas: Map<string, ManagedPassMeta> = new Map();
+  private managedPassEffects: ResolvedClipPathEffectSpec[] = [];
 
   private canvasForwardersBound = false;
   private readonly forwardSelectionCreated = (e: any) => {
@@ -112,9 +114,11 @@ export default class CanvasService implements Service {
 
   private readonly onToolActivated = () => {
     this.applyManagedPassVisibility();
+    void this.applyManagedPassEffects(undefined, { render: true });
   };
   private readonly onToolSessionChanged = () => {
     this.applyManagedPassVisibility();
+    void this.applyManagedPassEffects(undefined, { render: true });
   };
   private readonly onCanvasObjectChanged = () => {
     if (this.producerApplyInProgress) return;
@@ -190,6 +194,7 @@ export default class CanvasService implements Service {
     this.renderProducers.clear();
     this.managedProducerPassIds.clear();
     this.managedPassMetas.clear();
+    this.managedPassEffects = [];
     this.context = undefined;
     this.workbenchService = undefined;
     this.toolSessionService = undefined;
@@ -332,6 +337,7 @@ export default class CanvasService implements Service {
     return {
       type: "clipPath",
       key,
+      visibility: effect.visibility,
       source: {
         ...source,
         id: sourceId,
@@ -466,23 +472,35 @@ export default class CanvasService implements Service {
     return state;
   }
 
+  private isSessionActive(toolId: string): boolean {
+    if (!this.toolSessionService) return false;
+    return this.toolSessionService.getState(toolId).status === "active";
+  }
+
+  private hasAnyActiveSession(): boolean {
+    return this.toolSessionService?.hasAnyActiveSession() ?? false;
+  }
+
+  private buildVisibilityEvalContext(
+    layers: Map<string, VisibilityLayerState>,
+  ) {
+    return {
+      activeToolId: this.workbenchService?.activeToolId ?? null,
+      isSessionActive: (toolId: string) => this.isSessionActive(toolId),
+      hasAnyActiveSession: () => this.hasAnyActiveSession(),
+      layers,
+    };
+  }
+
   private applyManagedPassVisibility(options: { render?: boolean } = {}): boolean {
     if (!this.managedPassMetas.size) return false;
     const layers = this.getPassRuntimeState();
-    const activeToolId = this.workbenchService?.activeToolId ?? null;
-    const isSessionActive = (toolId: string) => {
-      if (!this.toolSessionService) return false;
-      return this.toolSessionService.getState(toolId).status === "active";
-    };
+    const context = this.buildVisibilityEvalContext(layers);
 
     let changed = false;
 
     this.managedPassMetas.forEach((meta) => {
-      const visible = evaluateVisibilityExpr(meta.visibility, {
-        activeToolId,
-        isSessionActive,
-        layers,
-      });
+      const visible = evaluateVisibilityExpr(meta.visibility, context);
       changed = this.setPassVisibility(meta.id, visible) || changed;
     });
 
@@ -560,9 +578,10 @@ export default class CanvasService implements Service {
 
       this.managedProducerPassIds = nextPassIds;
       this.managedPassMetas = nextManagedPassMetas;
+      this.managedPassEffects = nextEffects;
 
       this.syncManagedPassStacking(Array.from(nextManagedPassMetas.values()));
-      await this.applyManagedPassEffects(nextEffects);
+      await this.applyManagedPassEffects(nextEffects, { render: false });
       this.applyManagedPassVisibility({ render: false });
     } finally {
       this.producerApplyInProgress = false;
@@ -571,11 +590,19 @@ export default class CanvasService implements Service {
     this.requestRenderAll();
   }
 
-  private async applyManagedPassEffects(effects: ResolvedClipPathEffectSpec[]) {
+  private async applyManagedPassEffects(
+    effects: ResolvedClipPathEffectSpec[] = this.managedPassEffects,
+    options: { render?: boolean } = {},
+  ) {
     const effectTargetMap = new Map<FabricObject, ResolvedClipPathEffectSpec>();
+    const layers = this.getPassRuntimeState();
+    const visibilityContext = this.buildVisibilityEvalContext(layers);
 
     for (const effect of effects) {
       if (effect.type !== "clipPath") continue;
+      if (!evaluateVisibilityExpr(effect.visibility, visibilityContext)) {
+        continue;
+      }
       effect.targetPassIds.forEach((targetPassId) => {
         this.getPassCanvasObjects(targetPassId).forEach((obj) => {
           effectTargetMap.set(obj, effect);
@@ -612,6 +639,10 @@ export default class CanvasService implements Service {
         template,
         targetEffect.key,
       );
+    }
+
+    if (options.render !== false) {
+      this.requestRenderAll();
     }
   }
 

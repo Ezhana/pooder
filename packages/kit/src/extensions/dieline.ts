@@ -900,6 +900,10 @@ export class DielineTool implements Extension {
       {
         type: "clipPath",
         id: "dieline.clip.image",
+        visibility: {
+          op: "not",
+          expr: { op: "anySessionActive" },
+        },
         targetPassIds: [IMAGE_OBJECT_LAYER_ID],
         source: {
           id: "dieline.effect.clip-path",
