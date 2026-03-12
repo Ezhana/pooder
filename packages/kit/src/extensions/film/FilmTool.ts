@@ -7,14 +7,15 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { FabricImage } from "fabric";
-import { CanvasService, RenderObjectSpec } from "../services";
+import { CanvasService, RenderObjectSpec } from "../../services";
+import { FILM_LAYER_ID } from "../../shared/constants/layers";
+import {
+  createSourceSizeCache,
+  getCoverScale,
+  type SourceSize,
+} from "../../shared/imaging/sourceSizeCache";
+import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 
-interface SourceSize {
-  width: number;
-  height: number;
-}
-
-const FILM_LAYER_ID = "overlay";
 const FILM_IMAGE_ID = "film-image";
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
@@ -34,8 +35,10 @@ export class FilmTool implements Extension {
   private renderProducerDisposable?: { dispose: () => void };
   private renderSeq = 0;
   private renderImageUrl = "";
-  private sourceSizeBySrc: Map<string, SourceSize> = new Map();
-  private pendingSizeBySrc: Map<string, Promise<SourceSize | null>> = new Map();
+  private sourceSizeCache = createSourceSizeCache((src) =>
+    this.loadImageSize(src),
+  );
+  private readonly subscriptions = new SubscriptionBag();
   private onCanvasResized = () => {
     this.updateFilm();
   };
@@ -52,6 +55,7 @@ export class FilmTool implements Extension {
   }
 
   activate(context: ExtensionContext) {
+    this.subscriptions.disposeAll();
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
       console.warn("CanvasService not found for FilmTool");
@@ -83,29 +87,33 @@ export class FilmTool implements Extension {
       this.opacity = configService.get("film.opacity", this.opacity);
 
       // Listen for changes
-      configService.onAnyChange((e: { key: string; value: any }) => {
-        if (e.key.startsWith("film.")) {
-          const prop = e.key.split(".")[1];
-          console.log(
-            `[FilmTool] Config change detected: ${e.key} -> ${e.value}`,
-          );
-          if (prop && prop in this) {
-            (this as any)[prop] = e.value;
-            this.updateFilm();
+      this.subscriptions.onConfigChange(
+        configService,
+        (e: { key: string; value: any }) => {
+          if (e.key.startsWith("film.")) {
+            const prop = e.key.split(".")[1];
+            console.log(
+              `[FilmTool] Config change detected: ${e.key} -> ${e.value}`,
+            );
+            if (prop && prop in this) {
+              (this as any)[prop] = e.value;
+              this.updateFilm();
+            }
           }
         }
-      });
+      );
     }
 
-    context.eventBus.on("canvas:resized", this.onCanvasResized);
+    this.subscriptions.on(context.eventBus, "canvas:resized", this.onCanvasResized);
     this.updateFilm();
   }
 
   deactivate(context: ExtensionContext) {
-    context.eventBus.off("canvas:resized", this.onCanvasResized);
+    this.subscriptions.disposeAll();
     this.renderSeq += 1;
     this.specs = [];
     this.renderImageUrl = "";
+    this.sourceSizeCache.clear();
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
     if (!this.canvasService) return;
@@ -173,10 +181,13 @@ export class FilmTool implements Extension {
       return [];
     }
     const { width, height } = this.getViewportSize();
-    const sourceSize = this.sourceSizeBySrc.get(imageUrl);
+    const sourceSize = this.sourceSizeCache.getSourceSize(imageUrl);
     const sourceWidth = Math.max(1, Number(sourceSize?.width || width));
     const sourceHeight = Math.max(1, Number(sourceSize?.height || height));
-    const coverScale = Math.max(width / sourceWidth, height / sourceHeight);
+    const coverScale = getCoverScale(
+      { width, height },
+      { width: sourceWidth, height: sourceHeight },
+    );
     return [
       {
         id: FILM_IMAGE_ID,
@@ -204,27 +215,6 @@ export class FilmTool implements Extension {
     ];
   }
 
-  private async ensureImageSize(src: string): Promise<SourceSize | null> {
-    if (!src) return null;
-    const cached = this.sourceSizeBySrc.get(src);
-    if (cached) return cached;
-
-    const pending = this.pendingSizeBySrc.get(src);
-    if (pending) {
-      return pending;
-    }
-
-    const task = this.loadImageSize(src);
-    this.pendingSizeBySrc.set(src, task);
-    try {
-      return await task;
-    } finally {
-      if (this.pendingSizeBySrc.get(src) === task) {
-        this.pendingSizeBySrc.delete(src);
-      }
-    }
-  }
-
   private async loadImageSize(src: string): Promise<SourceSize | null> {
     try {
       const image = await FabricImage.fromURL(src, {
@@ -233,9 +223,7 @@ export class FilmTool implements Extension {
       const width = Number(image?.width || 0);
       const height = Number(image?.height || 0);
       if (width > 0 && height > 0) {
-        const size = { width, height };
-        this.sourceSizeBySrc.set(src, size);
-        return size;
+        return { width, height };
       }
     } catch (error) {
       console.error("[FilmTool] Failed to load film image", src, error);
@@ -255,7 +243,7 @@ export class FilmTool implements Extension {
     if (!nextUrl) {
       this.renderImageUrl = "";
     } else if (nextUrl !== this.renderImageUrl) {
-      const loaded = await this.ensureImageSize(nextUrl);
+      const loaded = await this.sourceSizeCache.ensureImageSize(nextUrl);
       if (seq !== this.renderSeq) return;
       if (loaded) {
         this.renderImageUrl = nextUrl;

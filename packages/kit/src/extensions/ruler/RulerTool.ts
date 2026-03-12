@@ -6,16 +6,15 @@ import {
   ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
-import { CanvasService, RenderObjectSpec } from "../services";
+import { CanvasService, RenderObjectSpec } from "../../services";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   fromMm,
   readSizeState,
-} from "./sceneLayoutModel";
-import type { Unit } from "../coordinate";
-
-const RULER_LAYER_ID = "ruler-overlay";
+} from "../../shared/scene/sceneLayoutModel";
+import type { Unit } from "../../coordinate";
+import { RULER_LAYER_ID } from "../../shared/constants/layers";
 const EXTENSION_LINE_LENGTH = 5;
 const MIN_ARROW_SIZE = 4;
 const THICKNESS_TO_STROKE_WIDTH_RATIO = 20;

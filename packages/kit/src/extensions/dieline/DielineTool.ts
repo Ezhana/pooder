@@ -2,32 +2,34 @@ import {
   Extension,
   ExtensionContext,
   ContributionPointIds,
-  CommandContribution,
-  ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
-import { CanvasService, RenderEffectSpec, RenderObjectSpec } from "../services";
-import { ImageTracer } from "./tracer";
-import { parseLengthToMm } from "../units";
+import { CanvasService, RenderEffectSpec, RenderObjectSpec } from "../../services";
+import { parseLengthToMm } from "../../units";
 import {
   DEFAULT_DIELINE_SHAPE,
   DEFAULT_DIELINE_SHAPE_STYLE,
-  DIELINE_SHAPES,
   normalizeShapeStyle,
   normalizeDielineShape,
-} from "./dielineShape";
-import type { DielineShape, DielineShapeStyle } from "./dielineShape";
+} from "../dielineShape";
+import type { DielineShape, DielineShapeStyle } from "../dielineShape";
 import {
   generateDielinePath,
   generateBleedZonePath,
   DielineFeature,
-} from "./geometry";
+} from "../geometry";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   readSizeState,
-} from "./sceneLayoutModel";
+} from "../../shared/scene/sceneLayoutModel";
+import {
+  DIELINE_LAYER_ID,
+  IMAGE_OBJECT_LAYER_ID,
+} from "../../shared/constants/layers";
+import { createDielineCommands } from "./commands";
+import { createDielineConfigurations } from "./config";
 
 export interface DielineGeometry {
   shape: DielineShape;
@@ -71,9 +73,6 @@ export interface DielineState {
   customSourceWidthPx?: number;
   customSourceHeightPx?: number;
 }
-
-const IMAGE_OBJECT_LAYER_ID = "image.user";
-const DIELINE_LAYER_ID = "dieline-overlay";
 
 export class DielineTool implements Extension {
   id = "pooder.kit.dieline";
@@ -359,7 +358,6 @@ export class DielineTool implements Extension {
   }
 
   contribute() {
-    const s = this.state;
     return {
       [ContributionPointIds.TOOLS]: [
         {
@@ -372,210 +370,8 @@ export class DielineTool implements Extension {
           },
         },
       ],
-      [ContributionPointIds.CONFIGURATIONS]: [
-        {
-          id: "dieline.shape",
-          type: "select",
-          label: "Shape",
-          options: Array.from(DIELINE_SHAPES),
-          default: s.shape,
-        },
-        {
-          id: "dieline.radius",
-          type: "number",
-          label: "Corner Radius (mm)",
-          min: 0,
-          max: 500,
-          default: s.radius,
-        },
-        {
-          id: "dieline.shapeStyle",
-          type: "json",
-          label: "Shape Style",
-          default: s.shapeStyle,
-        },
-        {
-          id: "dieline.showBleedLines",
-          type: "boolean",
-          label: "Show Bleed Lines",
-          default: s.showBleedLines,
-        },
-        {
-          id: "dieline.strokeWidth",
-          type: "number",
-          label: "Line Width",
-          min: 0.1,
-          max: 10,
-          step: 0.1,
-          default: s.mainLine.width,
-        },
-        {
-          id: "dieline.strokeColor",
-          type: "color",
-          label: "Line Color",
-          default: s.mainLine.color,
-        },
-        {
-          id: "dieline.dashLength",
-          type: "number",
-          label: "Dash Length",
-          min: 1,
-          max: 50,
-          default: s.mainLine.dashLength,
-        },
-        {
-          id: "dieline.style",
-          type: "select",
-          label: "Line Style",
-          options: ["solid", "dashed", "hidden"],
-          default: s.mainLine.style,
-        },
-        {
-          id: "dieline.offsetStrokeWidth",
-          type: "number",
-          label: "Offset Line Width",
-          min: 0.1,
-          max: 10,
-          step: 0.1,
-          default: s.offsetLine.width,
-        },
-        {
-          id: "dieline.offsetStrokeColor",
-          type: "color",
-          label: "Offset Line Color",
-          default: s.offsetLine.color,
-        },
-        {
-          id: "dieline.offsetDashLength",
-          type: "number",
-          label: "Offset Dash Length",
-          min: 1,
-          max: 50,
-          default: s.offsetLine.dashLength,
-        },
-        {
-          id: "dieline.offsetStyle",
-          type: "select",
-          label: "Offset Line Style",
-          options: ["solid", "dashed", "hidden"],
-          default: s.offsetLine.style,
-        },
-        {
-          id: "dieline.insideColor",
-          type: "color",
-          label: "Inside Color",
-          default: s.insideColor,
-        },
-        {
-          id: "dieline.features",
-          type: "json",
-          label: "Edge Features",
-          default: s.features,
-        },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
-        {
-          command: "updateFeaturePosition",
-          title: "Update Feature Position",
-          handler: (groupId: string, x: number, y: number) => {
-            const configService = this.context?.services.get<any>(
-              "ConfigurationService",
-            );
-            if (!configService) return;
-
-            const features = configService.get("dieline.features") || [];
-
-            let changed = false;
-            const newFeatures = features.map((f: any) => {
-              if (f.groupId === groupId) {
-                if (f.x !== x || f.y !== y) {
-                  changed = true;
-                  return { ...f, x, y };
-                }
-              }
-              return f;
-            });
-
-            if (changed) {
-              configService.update("dieline.features", newFeatures);
-            }
-          },
-        },
-        {
-          command: "exportCutImage",
-          title: "Export Cut Image",
-          handler: (options?: { debug?: boolean }) => {
-            return this.exportCutImage(options);
-          },
-        },
-        {
-          command: "detectEdge",
-          title: "Detect Edge from Image",
-          handler: async (
-            imageUrl: string,
-            options?: {
-              expand?: number;
-              smoothing?: boolean;
-              simplifyTolerance?: number;
-              threshold?: number;
-              debug?: boolean;
-            },
-          ) => {
-            try {
-              const detectOptions = options || {};
-              const debug = detectOptions.debug === true;
-              const tracerOptions = {
-                expand: detectOptions.expand ?? 0,
-                smoothing: detectOptions.smoothing ?? true,
-                simplifyTolerance: detectOptions.simplifyTolerance ?? 2,
-                threshold: detectOptions.threshold,
-                debug,
-              };
-
-              // Helper to get image dimensions
-              const loadImage = (url: string): Promise<HTMLImageElement> => {
-                return new Promise((resolve, reject) => {
-                  const img = new Image();
-                  img.crossOrigin = "Anonymous";
-                  img.onload = () => resolve(img);
-                  img.onerror = (e) => reject(e);
-                  img.src = url;
-                });
-              };
-
-              const [img, traced] = await Promise.all([
-                loadImage(imageUrl),
-                ImageTracer.traceWithBounds(imageUrl, tracerOptions),
-              ]);
-              const { pathData, baseBounds, bounds } = traced;
-
-              if (debug) {
-                console.info("[DielineTool] detectEdge", {
-                  imageWidth: img.width,
-                  imageHeight: img.height,
-                  baseBounds,
-                  expandedBounds: bounds,
-                  currentDielineWidth: s.width,
-                  currentDielineHeight: s.height,
-                  options: tracerOptions,
-                  strategy: "single-connected-silhouette",
-                });
-              }
-
-              return {
-                pathData,
-                rawBounds: bounds,
-                baseBounds,
-                imageWidth: img.width,
-                imageHeight: img.height,
-              };
-            } catch (e) {
-              console.error("Edge detection failed", e);
-              throw e;
-            }
-          },
-        },
-      ] as CommandContribution[],
+      [ContributionPointIds.CONFIGURATIONS]: createDielineConfigurations(this.state),
+      [ContributionPointIds.COMMANDS]: createDielineCommands(this, this.state),
     };
   }
 

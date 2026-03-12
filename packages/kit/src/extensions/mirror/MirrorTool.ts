@@ -5,7 +5,7 @@ import {
   CommandContribution,
   ConfigurationContribution,
 } from "@pooder/core";
-import { CanvasService } from "../services";
+import { CanvasService } from "../../services";
 
 export class MirrorTool implements Extension {
   id = "pooder.kit.mirror";

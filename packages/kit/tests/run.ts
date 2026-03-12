@@ -15,6 +15,12 @@ import {
 } from "../src/extensions/maskOps";
 import { computeDetectEdgeSize } from "../src/extensions/edgeScale";
 import { evaluateVisibilityExpr } from "../src/services/visibility";
+import { createImageCommands } from "../src/extensions/image/commands";
+import { createImageConfigurations } from "../src/extensions/image/config";
+import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
+import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config";
+import { createDielineCommands } from "../src/extensions/dieline/commands";
+import { createDielineConfigurations } from "../src/extensions/dieline/config";
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -246,12 +252,152 @@ function testVisibilityDsl() {
   );
 }
 
+function testContributionCompatibility() {
+  const imageCommandNames = createImageCommands({} as any).map(
+    (entry) => entry.command,
+  );
+  const whiteInkCommandNames = createWhiteInkCommands({} as any).map(
+    (entry) => entry.command,
+  );
+  const dielineCommandNames = createDielineCommands({} as any, {
+    width: 0,
+    height: 0,
+  }).map((entry) => entry.command);
+
+  const expectedImageCommands = [
+    "addImage",
+    "upsertImage",
+    "getWorkingImages",
+    "setWorkingImage",
+    "resetWorkingImages",
+    "completeImages",
+    "exportUserCroppedImage",
+    "fitImageToArea",
+    "fitImageToDefaultArea",
+    "focusImage",
+    "removeImage",
+    "updateImage",
+    "clearImages",
+    "bringToFront",
+    "sendToBack",
+  ];
+  const expectedWhiteInkCommands = [
+    "addWhiteInk",
+    "upsertWhiteInk",
+    "getWhiteInks",
+    "getWhiteInkSettings",
+    "setWhiteInkPrintEnabled",
+    "setWhiteInkPreviewImageVisible",
+    "getWorkingWhiteInks",
+    "setWorkingWhiteInk",
+    "updateWhiteInk",
+    "removeWhiteInk",
+    "clearWhiteInks",
+    "resetWorkingWhiteInks",
+    "completeWhiteInks",
+    "setWhiteInkImage",
+  ];
+  const expectedDielineCommands = [
+    "updateFeaturePosition",
+    "exportCutImage",
+    "detectEdge",
+  ];
+
+  assert(
+    JSON.stringify(imageCommandNames) === JSON.stringify(expectedImageCommands),
+    `image command set changed: ${JSON.stringify(imageCommandNames)}`,
+  );
+  assert(
+    JSON.stringify(whiteInkCommandNames) ===
+      JSON.stringify(expectedWhiteInkCommands),
+    `white-ink command set changed: ${JSON.stringify(whiteInkCommandNames)}`,
+  );
+  assert(
+    JSON.stringify(dielineCommandNames) ===
+      JSON.stringify(expectedDielineCommands),
+    `dieline command set changed: ${JSON.stringify(dielineCommandNames)}`,
+  );
+
+  const imageConfigKeys = createImageConfigurations().map((entry) => entry.id);
+  const whiteInkConfigKeys = createWhiteInkConfigurations().map(
+    (entry) => entry.id,
+  );
+  const dielineConfigKeys = createDielineConfigurations({
+    shape: "rect",
+    radius: 0,
+    shapeStyle: {},
+    showBleedLines: true,
+    mainLine: { width: 1, color: "#000", dashLength: 1, style: "solid" },
+    offsetLine: { width: 1, color: "#000", dashLength: 1, style: "solid" },
+    insideColor: "#000",
+    features: [],
+  }).map((entry) => entry.id);
+
+  const expectedImageConfigKeys = [
+    "image.items",
+    "image.debug",
+    "image.control.cornerSize",
+    "image.control.touchCornerSize",
+    "image.control.cornerStyle",
+    "image.control.cornerColor",
+    "image.control.cornerStrokeColor",
+    "image.control.transparentCorners",
+    "image.control.borderColor",
+    "image.control.borderScaleFactor",
+    "image.control.padding",
+    "image.frame.strokeColor",
+    "image.frame.strokeWidth",
+    "image.frame.strokeStyle",
+    "image.frame.dashLength",
+    "image.frame.innerBackground",
+    "image.frame.outerBackground",
+  ];
+  const expectedWhiteInkConfigKeys = [
+    "whiteInk.items",
+    "whiteInk.printWithWhiteInk",
+    "whiteInk.previewImageVisible",
+    "whiteInk.debug",
+  ];
+  const expectedDielineConfigKeys = [
+    "dieline.shape",
+    "dieline.radius",
+    "dieline.shapeStyle",
+    "dieline.showBleedLines",
+    "dieline.strokeWidth",
+    "dieline.strokeColor",
+    "dieline.dashLength",
+    "dieline.style",
+    "dieline.offsetStrokeWidth",
+    "dieline.offsetStrokeColor",
+    "dieline.offsetDashLength",
+    "dieline.offsetStyle",
+    "dieline.insideColor",
+    "dieline.features",
+  ];
+
+  assert(
+    JSON.stringify(imageConfigKeys) === JSON.stringify(expectedImageConfigKeys),
+    `image config keys changed: ${JSON.stringify(imageConfigKeys)}`,
+  );
+  assert(
+    JSON.stringify(whiteInkConfigKeys) ===
+      JSON.stringify(expectedWhiteInkConfigKeys),
+    `white-ink config keys changed: ${JSON.stringify(whiteInkConfigKeys)}`,
+  );
+  assert(
+    JSON.stringify(dielineConfigKeys) ===
+      JSON.stringify(expectedDielineConfigKeys),
+    `dieline config keys changed: ${JSON.stringify(dielineConfigKeys)}`,
+  );
+}
+
 function main() {
   testWrappedOffsets();
   testBridgeSelection();
   testMaskOps();
   testEdgeScale();
   testVisibilityDsl();
+  testContributionCompatibility();
   console.log("ok");
 }
 

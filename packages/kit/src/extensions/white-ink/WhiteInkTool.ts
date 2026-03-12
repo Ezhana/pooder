@@ -2,14 +2,34 @@ import {
   Extension,
   ExtensionContext,
   ContributionPointIds,
-  CommandContribution,
-  ConfigurationContribution,
   ConfigurationService,
   ToolSessionService,
   WorkbenchService,
 } from "@pooder/core";
-import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../services";
-import { computeSceneLayout, readSizeState } from "./sceneLayoutModel";
+import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../../services";
+import {
+  type FrameRect,
+  resolveCutFrameRect,
+  toLayoutSceneRect as toSceneLayoutRect,
+} from "../../shared/scene/frame";
+import {
+  createSourceSizeCache,
+  getCoverScale as getCoverScaleFromRect,
+  type SourceSize,
+} from "../../shared/imaging/sourceSizeCache";
+import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import {
+  applyCommittedSnapshot,
+  runDeferredConfigUpdate,
+} from "../../shared/runtime/sessionState";
+import {
+  IMAGE_OBJECT_LAYER_ID,
+  WHITE_INK_COVER_LAYER_ID,
+  WHITE_INK_OBJECT_LAYER_ID,
+  WHITE_INK_OVERLAY_LAYER_ID,
+} from "../../shared/constants/layers";
+import { createWhiteInkCommands } from "./commands";
+import { createWhiteInkConfigurations } from "./config";
 
 export interface WhiteInkItem {
   id: string;
@@ -18,23 +38,11 @@ export interface WhiteInkItem {
   opacity: number;
 }
 
-interface SourceSize {
-  width: number;
-  height: number;
-}
-
 interface MaskTint {
   r: number;
   g: number;
   b: number;
   key: string;
-}
-
-interface FrameRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
 }
 
 interface ImageSnapshot {
@@ -84,11 +92,6 @@ interface UpdateWhiteInkOptions {
   target?: "auto" | "config" | "working";
 }
 
-const WHITE_INK_OBJECT_LAYER_ID = "white-ink.user";
-const WHITE_INK_COVER_LAYER_ID = "white-ink.cover";
-const WHITE_INK_OVERLAY_LAYER_ID = "white-ink.overlay";
-const IMAGE_OBJECT_LAYER_ID = "image.user";
-
 const WHITE_INK_DEBUG_KEY = "whiteInk.debug";
 const WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY = "whiteInk.previewImageVisible";
 const WHITE_INK_DEFAULT_OPACITY = 0.85;
@@ -111,7 +114,9 @@ export class WhiteInkTool implements Extension {
   private workingItems: WhiteInkItem[] = [];
   private hasWorkingChanges = false;
 
-  private sourceSizeBySrc: Map<string, SourceSize> = new Map();
+  private sourceSizeCache = createSourceSizeCache((src) =>
+    this.loadImageSize(src),
+  );
   private previewMaskBySource: Map<string, string> = new Map();
   private pendingPreviewMaskBySource: Map<string, Promise<string | null>> =
     new Map();
@@ -128,8 +133,10 @@ export class WhiteInkTool implements Extension {
   private coverSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
   private renderProducerDisposable?: { dispose: () => void };
+  private readonly subscriptions = new SubscriptionBag();
 
   activate(context: ExtensionContext) {
+    this.subscriptions.disposeAll();
     this.context = context;
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
@@ -164,22 +171,34 @@ export class WhiteInkTool implements Extension {
       { priority: 260 },
     );
 
-    context.eventBus.on("tool:activated", this.onToolActivated);
-    context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
-    context.eventBus.on("object:added", this.onObjectAdded);
-    context.eventBus.on("object:modified", this.onObjectModified);
-    context.eventBus.on("object:removed", this.onObjectRemoved);
-    context.eventBus.on("image:working:change", this.onImageWorkingChanged);
+    this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
+    this.subscriptions.on(
+      context.eventBus,
+      "scene:layout:change",
+      this.onSceneLayoutChanged,
+    );
+    this.subscriptions.on(context.eventBus, "object:added", this.onObjectAdded);
+    this.subscriptions.on(
+      context.eventBus,
+      "object:modified",
+      this.onObjectModified,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "object:removed",
+      this.onObjectRemoved,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "image:working:change",
+      this.onImageWorkingChanged,
+    );
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
     );
     if (configService) {
-      this.items = this.normalizeItems(
-        configService.get("whiteInk.items", []) || [],
-      );
-      this.workingItems = this.cloneItems(this.items);
-      this.hasWorkingChanges = false;
+      this.applyCommittedItems(configService.get("whiteInk.items", []) || []);
       this.printWithWhiteInk = !!configService.get(
         "whiteInk.printWithWhiteInk",
         true,
@@ -191,44 +210,43 @@ export class WhiteInkTool implements Extension {
 
       this.migrateLegacyConfigIfNeeded(configService);
 
-      configService.onAnyChange((e: { key: string; value: any }) => {
-        if (this.isUpdatingConfig) return;
+      this.subscriptions.onConfigChange(
+        configService,
+        (e: { key: string; value: any }) => {
+          if (this.isUpdatingConfig) return;
 
-        if (e.key === "whiteInk.items") {
-          this.items = this.normalizeItems(e.value || []);
-          if (!this.isToolActive || !this.hasWorkingChanges) {
-            this.workingItems = this.cloneItems(this.items);
-            this.hasWorkingChanges = false;
+          if (e.key === "whiteInk.items") {
+            this.applyCommittedItems(e.value || []);
+            this.updateWhiteInks();
+            return;
           }
-          this.updateWhiteInks();
-          return;
-        }
 
-        if (e.key === "whiteInk.printWithWhiteInk") {
-          this.printWithWhiteInk = !!e.value;
-          this.updateWhiteInks();
-          return;
-        }
+          if (e.key === "whiteInk.printWithWhiteInk") {
+            this.printWithWhiteInk = !!e.value;
+            this.updateWhiteInks();
+            return;
+          }
 
-        if (e.key === WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY) {
-          this.previewImageVisible = !!e.value;
-          this.updateWhiteInks();
-          return;
-        }
+          if (e.key === WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY) {
+            this.previewImageVisible = !!e.value;
+            this.updateWhiteInks();
+            return;
+          }
 
-        if (e.key === "image.items") {
-          this.updateWhiteInks();
-          return;
-        }
+          if (e.key === "image.items") {
+            this.updateWhiteInks();
+            return;
+          }
 
-        if (e.key === WHITE_INK_DEBUG_KEY) {
-          return;
-        }
+          if (e.key === WHITE_INK_DEBUG_KEY) {
+            return;
+          }
 
-        if (e.key.startsWith("size.")) {
-          this.updateWhiteInks();
-        }
-      });
+          if (e.key.startsWith("size.")) {
+            this.updateWhiteInks();
+          }
+        },
+      );
     }
 
     const toolSessionService =
@@ -242,15 +260,11 @@ export class WhiteInkTool implements Extension {
   }
 
   deactivate(context: ExtensionContext) {
-    context.eventBus.off("tool:activated", this.onToolActivated);
-    context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
-    context.eventBus.off("object:added", this.onObjectAdded);
-    context.eventBus.off("object:modified", this.onObjectModified);
-    context.eventBus.off("object:removed", this.onObjectRemoved);
-    context.eventBus.off("image:working:change", this.onImageWorkingChanged);
+    this.subscriptions.disposeAll();
 
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
+    this.sourceSizeCache.clear();
     this.clearRenderedWhiteInks();
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
@@ -280,177 +294,8 @@ export class WhiteInkTool implements Extension {
           },
         },
       ],
-      [ContributionPointIds.CONFIGURATIONS]: [
-        {
-          id: "whiteInk.items",
-          type: "array",
-          label: "White Ink Images",
-          default: [],
-        },
-        {
-          id: "whiteInk.printWithWhiteInk",
-          type: "boolean",
-          label: "Preview White Ink",
-          default: true,
-        },
-        {
-          id: WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
-          type: "boolean",
-          label: "Show Cover During White Ink Preview",
-          default: true,
-        },
-        {
-          id: WHITE_INK_DEBUG_KEY,
-          type: "boolean",
-          label: "White Ink Debug Log",
-          default: false,
-        },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
-        {
-          command: "addWhiteInk",
-          title: "Add White Ink",
-          handler: async (url: string, options?: Partial<WhiteInkItem>) => {
-            return await this.addWhiteInkEntry(url, options);
-          },
-        },
-        {
-          command: "upsertWhiteInk",
-          title: "Upsert White Ink",
-          handler: async (url: string, options: UpsertWhiteInkOptions = {}) => {
-            return await this.upsertWhiteInkEntry(url, options);
-          },
-        },
-        {
-          command: "getWhiteInks",
-          title: "Get White Inks",
-          handler: () => this.cloneItems(this.items),
-        },
-        {
-          command: "getWhiteInkSettings",
-          title: "Get White Ink Settings",
-          handler: () => {
-            const first = this.getEffectiveWhiteInkItem(this.items);
-            const primarySource = this.getPrimaryImageSource();
-            const sourceUrl = this.resolveSourceUrl(first) || primarySource;
-
-            return {
-              id: first?.id || null,
-              url: sourceUrl,
-              sourceUrl,
-              opacity: WHITE_INK_DEFAULT_OPACITY,
-              printWithWhiteInk: this.printWithWhiteInk,
-              previewImageVisible: this.previewImageVisible,
-            };
-          },
-        },
-        {
-          command: "setWhiteInkPrintEnabled",
-          title: "Set White Ink Preview Enabled",
-          handler: (enabled: boolean) => {
-            this.printWithWhiteInk = !!enabled;
-            const configService =
-              this.context?.services.get<ConfigurationService>(
-                "ConfigurationService",
-              );
-            configService?.update(
-              "whiteInk.printWithWhiteInk",
-              this.printWithWhiteInk,
-            );
-            this.updateWhiteInks();
-            return { ok: true };
-          },
-        },
-        {
-          command: "setWhiteInkPreviewImageVisible",
-          title: "Set White Ink Cover Visible",
-          handler: (visible: boolean) => {
-            this.previewImageVisible = !!visible;
-            const configService =
-              this.context?.services.get<ConfigurationService>(
-                "ConfigurationService",
-              );
-            configService?.update(
-              WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
-              this.previewImageVisible,
-            );
-            this.updateWhiteInks();
-            return { ok: true };
-          },
-        },
-        {
-          command: "getWorkingWhiteInks",
-          title: "Get Working White Inks",
-          handler: () => this.cloneItems(this.workingItems),
-        },
-        {
-          command: "setWorkingWhiteInk",
-          title: "Set Working White Ink",
-          handler: (id: string, updates: Partial<WhiteInkItem>) => {
-            this.updateWhiteInkInWorking(id, updates);
-          },
-        },
-        {
-          command: "updateWhiteInk",
-          title: "Update White Ink",
-          handler: async (
-            id: string,
-            updates: Partial<WhiteInkItem>,
-            options: UpdateWhiteInkOptions = {},
-          ) => {
-            await this.updateWhiteInkItem(id, updates, options);
-          },
-        },
-        {
-          command: "removeWhiteInk",
-          title: "Remove White Ink",
-          handler: (id: string) => {
-            this.removeWhiteInk(id);
-          },
-        },
-        {
-          command: "clearWhiteInks",
-          title: "Clear White Inks",
-          handler: () => {
-            this.clearWhiteInks();
-          },
-        },
-        {
-          command: "resetWorkingWhiteInks",
-          title: "Reset Working White Inks",
-          handler: () => {
-            this.workingItems = this.cloneItems(this.items);
-            this.hasWorkingChanges = false;
-            this.updateWhiteInks();
-          },
-        },
-        {
-          command: "completeWhiteInks",
-          title: "Complete White Inks",
-          handler: async () => {
-            return await this.completeWhiteInks();
-          },
-        },
-        {
-          command: "setWhiteInkImage",
-          title: "Set White Ink Image",
-          handler: async (url: string) => {
-            if (!url) {
-              this.clearWhiteInks();
-              return { ok: true };
-            }
-
-            const targetId = this.resolveReplaceTargetId(null);
-            const upsertResult = await this.upsertWhiteInkEntry(url, {
-              id: targetId || undefined,
-              mode: targetId ? "replace" : "add",
-              createIfMissing: true,
-              addOptions: {},
-            });
-            return { ok: true, id: upsertResult.id };
-          },
-        },
-      ] as CommandContribution[],
+      [ContributionPointIds.CONFIGURATIONS]: createWhiteInkConfigurations(),
+      [ContributionPointIds.COMMANDS]: createWhiteInkCommands(this),
     };
   }
 
@@ -506,13 +351,10 @@ export class WhiteInkTool implements Extension {
       opacity: WHITE_INK_DEFAULT_OPACITY,
     });
 
-    this.items = [item];
-    this.workingItems = this.cloneItems(this.items);
-    this.isUpdatingConfig = true;
-    configService.update("whiteInk.items", this.items);
-    setTimeout(() => {
-      this.isUpdatingConfig = false;
-    }, 0);
+    this.applyCommittedItems([item]);
+    runDeferredConfigUpdate(this, () => {
+      configService.update("whiteInk.items", this.items);
+    });
   }
 
   private syncToolActiveFromWorkbench(fallbackId?: string | null) {
@@ -612,28 +454,39 @@ export class WhiteInkTool implements Extension {
     return null;
   }
 
+  private applyCommittedItems(nextItems: WhiteInkItem[]) {
+    const session = {
+      committed: this.items,
+      working: this.workingItems,
+      hasWorkingChanges: this.hasWorkingChanges,
+    };
+    applyCommittedSnapshot(session, this.normalizeItems(nextItems), {
+      clone: (items) => this.cloneItems(items),
+      toolActive: this.isToolActive,
+      preserveDirtyWorking: true,
+    });
+    this.items = session.committed;
+    this.workingItems = session.working;
+    this.hasWorkingChanges = session.hasWorkingChanges;
+  }
+
   private updateConfig(newItems: WhiteInkItem[], skipCanvasUpdate = false) {
     if (!this.context) return;
+    this.applyCommittedItems(newItems);
+    runDeferredConfigUpdate(
+      this,
+      () => {
+        const configService = this.context?.services.get<ConfigurationService>(
+          "ConfigurationService",
+        );
+        configService?.update("whiteInk.items", this.items);
 
-    this.isUpdatingConfig = true;
-    this.items = this.normalizeItems(newItems);
-    if (!this.isToolActive || !this.hasWorkingChanges) {
-      this.workingItems = this.cloneItems(this.items);
-      this.hasWorkingChanges = false;
-    }
-
-    const configService = this.context.services.get<ConfigurationService>(
-      "ConfigurationService",
+        if (!skipCanvasUpdate) {
+          this.updateWhiteInks();
+        }
+      },
+      50,
     );
-    configService?.update("whiteInk.items", this.items);
-
-    if (!skipCanvasUpdate) {
-      this.updateWhiteInks();
-    }
-
-    setTimeout(() => {
-      this.isUpdatingConfig = false;
-    }, 50);
   }
 
   private async addWhiteInkEntry(
@@ -753,7 +606,7 @@ export class WhiteInkTool implements Extension {
   }
 
   private clearWhiteInks() {
-    this.sourceSizeBySrc.clear();
+    this.sourceSizeCache.clear();
     this.previewMaskBySource.clear();
     this.pendingPreviewMaskBySource.clear();
     this.updateConfig([]);
@@ -766,37 +619,14 @@ export class WhiteInkTool implements Extension {
   }
 
   private getFrameRect(): FrameRect {
-    if (!this.canvasService) {
-      return { left: 0, top: 0, width: 0, height: 0 };
-    }
     const configService = this.context?.services.get<ConfigurationService>(
       "ConfigurationService",
     );
-    if (!configService) {
-      return { left: 0, top: 0, width: 0, height: 0 };
-    }
-    const sizeState = readSizeState(configService);
-    const layout = computeSceneLayout(this.canvasService, sizeState);
-    if (!layout) {
-      return { left: 0, top: 0, width: 0, height: 0 };
-    }
-
-    return this.canvasService.toSceneRect({
-      left: layout.cutRect.left,
-      top: layout.cutRect.top,
-      width: layout.cutRect.width,
-      height: layout.cutRect.height,
-    });
+    return resolveCutFrameRect(this.canvasService, configService);
   }
 
   private toLayoutSceneRect(rect: FrameRect): RenderLayoutRect {
-    return {
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
-      space: "scene",
-    };
+    return toSceneLayoutRect(rect);
   }
 
   private getImageObjects(): any[] {
@@ -909,25 +739,20 @@ export class WhiteInkTool implements Extension {
   }
 
   private getCoverScale(frame: FrameRect, source: SourceSize): number {
-    const frameW = Math.max(1, frame.width);
-    const frameH = Math.max(1, frame.height);
-    const sourceW = Math.max(1, source.width);
-    const sourceH = Math.max(1, source.height);
-    return Math.max(frameW / sourceW, frameH / sourceH);
+    return getCoverScaleFromRect(frame, source);
   }
 
   private async ensureSourceSize(
     sourceUrl: string,
   ): Promise<SourceSize | null> {
-    if (!sourceUrl) return null;
-    const cached = this.getSourceSize(sourceUrl);
-    if (cached) return cached;
+    return this.sourceSizeCache.ensureImageSize(sourceUrl);
+  }
 
+  private async loadImageSize(sourceUrl: string): Promise<SourceSize | null> {
     try {
       const image = await this.loadImageElement(sourceUrl);
       const size = this.getElementSize(image);
       if (!size) return null;
-      this.rememberSourceSize(sourceUrl, size);
       return {
         width: size.width,
         height: size.height,
@@ -980,23 +805,11 @@ export class WhiteInkTool implements Extension {
   }
 
   private rememberSourceSize(src: string, size: SourceSize) {
-    if (!src) return;
-    if (!Number.isFinite(size.width) || !Number.isFinite(size.height)) return;
-    if (size.width <= 0 || size.height <= 0) return;
-    this.sourceSizeBySrc.set(src, {
-      width: size.width,
-      height: size.height,
-    });
+    this.sourceSizeCache.rememberSourceSize(src, size);
   }
 
   private getSourceSize(src: string): SourceSize | null {
-    if (!src) return null;
-    const cached = this.sourceSizeBySrc.get(src);
-    if (!cached) return null;
-    return {
-      width: cached.width,
-      height: cached.height,
-    };
+    return this.sourceSizeCache.getSourceSize(src);
   }
 
   private computeWhiteScaleAdjust(
@@ -1322,7 +1135,7 @@ export class WhiteInkTool implements Extension {
   private purgeSourceCaches(item?: WhiteInkItem) {
     const sourceUrl = this.resolveSourceUrl(item);
     if (!sourceUrl) return;
-    this.sourceSizeBySrc.delete(sourceUrl);
+    this.sourceSizeCache.deleteSourceSize(sourceUrl);
     const prefix = `${sourceUrl}::`;
     Array.from(this.previewMaskBySource.keys()).forEach((cacheKey) => {
       if (cacheKey.startsWith(prefix)) {

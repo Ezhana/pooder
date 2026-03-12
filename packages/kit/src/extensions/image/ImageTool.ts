@@ -2,8 +2,6 @@ import {
   Extension,
   ExtensionContext,
   ContributionPointIds,
-  CommandContribution,
-  ConfigurationContribution,
   ConfigurationService,
   ToolSessionService,
   WorkbenchService,
@@ -16,15 +14,36 @@ import {
   Point,
   controlsUtils,
 } from "fabric";
-import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../services";
-import { isDielineShape, normalizeShapeStyle } from "./dielineShape";
-import type { DielineShape, DielineShapeStyle } from "./dielineShape";
-import { generateDielinePath, getPathBounds } from "./geometry";
+import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../../services";
+import { isDielineShape, normalizeShapeStyle } from "../dielineShape";
+import type { DielineShape, DielineShapeStyle } from "../dielineShape";
+import { generateDielinePath, getPathBounds } from "../geometry";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   readSizeState,
-} from "./sceneLayoutModel";
+} from "../../shared/scene/sceneLayoutModel";
+import {
+  type FrameRect,
+  resolveCutFrameRect,
+  toLayoutSceneRect as toSceneLayoutRect,
+} from "../../shared/scene/frame";
+import {
+  createSourceSizeCache,
+  getCoverScale as getCoverScaleFromRect,
+  type SourceSize,
+} from "../../shared/imaging/sourceSizeCache";
+import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import {
+  applyCommittedSnapshot,
+  runDeferredConfigUpdate,
+} from "../../shared/runtime/sessionState";
+import {
+  IMAGE_OBJECT_LAYER_ID,
+  IMAGE_OVERLAY_LAYER_ID,
+} from "../../shared/constants/layers";
+import { createImageCommands } from "./commands";
+import { createImageConfigurations } from "./config";
 
 export interface ImageItem {
   id: string;
@@ -36,18 +55,6 @@ export interface ImageItem {
   top?: number;
   sourceUrl?: string;
   committedUrl?: string;
-}
-
-interface FrameRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-interface SourceSize {
-  width: number;
-  height: number;
 }
 
 interface RenderImageState {
@@ -125,8 +132,6 @@ interface ExportUserCroppedImageResult {
   imageIds: string[];
 }
 
-const IMAGE_OBJECT_LAYER_ID = "image.user";
-const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
 type ImageControlCapability = "rotate" | "scale" | "flipX" | "flipY";
 
 interface ImageControlDescriptor {
@@ -178,7 +183,9 @@ export class ImageTool implements Extension {
   private workingItems: ImageItem[] = [];
   private hasWorkingChanges = false;
   private loadResolvers: Map<string, () => void> = new Map();
-  private sourceSizeBySrc: Map<string, SourceSize> = new Map();
+  private sourceSizeCache = createSourceSizeCache((src) =>
+    this.loadImageSize(src),
+  );
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
@@ -193,10 +200,12 @@ export class ImageTool implements Extension {
   private imageSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
   private renderProducerDisposable?: { dispose: () => void };
+  private readonly subscriptions = new SubscriptionBag();
   private imageControlsByCapabilityKey: Map<string, Record<string, Control>> =
     new Map();
 
   activate(context: ExtensionContext) {
+    this.subscriptions.disposeAll();
     this.context = context;
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
@@ -239,48 +248,63 @@ export class ImageTool implements Extension {
       { priority: 300 },
     );
 
-    context.eventBus.on("tool:activated", this.onToolActivated);
-    context.eventBus.on("object:modified", this.onObjectModified);
-    context.eventBus.on("selection:created", this.onSelectionChanged);
-    context.eventBus.on("selection:updated", this.onSelectionChanged);
-    context.eventBus.on("selection:cleared", this.onSelectionCleared);
-    context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
-    context.eventBus.on("scene:geometry:change", this.onSceneGeometryChanged);
+    this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
+    this.subscriptions.on(context.eventBus, "object:modified", this.onObjectModified);
+    this.subscriptions.on(
+      context.eventBus,
+      "selection:created",
+      this.onSelectionChanged,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "selection:updated",
+      this.onSelectionChanged,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "selection:cleared",
+      this.onSelectionCleared,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "scene:layout:change",
+      this.onSceneLayoutChanged,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "scene:geometry:change",
+      this.onSceneGeometryChanged,
+    );
 
     const configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
     );
     if (configService) {
-      this.items = this.normalizeItems(
-        configService.get("image.items", []) || [],
+      this.applyCommittedItems(configService.get("image.items", []) || []);
+
+      this.subscriptions.onConfigChange(
+        configService,
+        (e: { key: string; value: any }) => {
+          if (this.isUpdatingConfig) return;
+
+          if (e.key === "image.items") {
+            this.applyCommittedItems(e.value || []);
+            this.updateImages();
+            return;
+          }
+
+          if (
+            e.key.startsWith("size.") ||
+            e.key.startsWith("image.frame.") ||
+            e.key.startsWith("image.control.")
+          ) {
+            if (e.key.startsWith("image.control.")) {
+              this.imageControlsByCapabilityKey.clear();
+            }
+            this.updateImages();
+          }
+        },
       );
-      this.workingItems = this.cloneItems(this.items);
-      this.hasWorkingChanges = false;
-
-      configService.onAnyChange((e: { key: string; value: any }) => {
-        if (this.isUpdatingConfig) return;
-
-        if (e.key === "image.items") {
-          this.items = this.normalizeItems(e.value || []);
-          if (!this.isToolActive || !this.hasWorkingChanges) {
-            this.workingItems = this.cloneItems(this.items);
-            this.hasWorkingChanges = false;
-          }
-          this.updateImages();
-          return;
-        }
-
-        if (
-          e.key.startsWith("size.") ||
-          e.key.startsWith("image.frame.") ||
-          e.key.startsWith("image.control.")
-        ) {
-          if (e.key.startsWith("image.control.")) {
-            this.imageControlsByCapabilityKey.clear();
-          }
-          this.updateImages();
-        }
-      });
     }
 
     const toolSessionService =
@@ -294,18 +318,13 @@ export class ImageTool implements Extension {
   }
 
   deactivate(context: ExtensionContext) {
-    context.eventBus.off("tool:activated", this.onToolActivated);
-    context.eventBus.off("object:modified", this.onObjectModified);
-    context.eventBus.off("selection:created", this.onSelectionChanged);
-    context.eventBus.off("selection:updated", this.onSelectionChanged);
-    context.eventBus.off("selection:cleared", this.onSelectionCleared);
-    context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
-    context.eventBus.off("scene:geometry:change", this.onSceneGeometryChanged);
+    this.subscriptions.disposeAll();
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
     this.cropShapeHatchPattern = undefined;
     this.cropShapeHatchPatternColor = undefined;
     this.cropShapeHatchPatternKey = undefined;
+    this.sourceSizeCache.clear();
     this.imageSpecs = [];
     this.overlaySpecs = [];
     this.imageControlsByCapabilityKey.clear();
@@ -547,287 +566,8 @@ export class ImageTool implements Extension {
           },
         },
       ],
-      [ContributionPointIds.CONFIGURATIONS]: [
-        {
-          id: "image.items",
-          type: "array",
-          label: "Images",
-          default: [],
-        },
-        {
-          id: "image.debug",
-          type: "boolean",
-          label: "Image Debug Log",
-          default: false,
-        },
-        {
-          id: "image.control.cornerSize",
-          type: "number",
-          label: "Image Control Corner Size",
-          min: 4,
-          max: 64,
-          step: 1,
-          default: 14,
-        },
-        {
-          id: "image.control.touchCornerSize",
-          type: "number",
-          label: "Image Control Touch Corner Size",
-          min: 8,
-          max: 96,
-          step: 1,
-          default: 24,
-        },
-        {
-          id: "image.control.cornerStyle",
-          type: "select",
-          label: "Image Control Corner Style",
-          options: ["circle", "rect"],
-          default: "circle",
-        },
-        {
-          id: "image.control.cornerColor",
-          type: "color",
-          label: "Image Control Corner Color",
-          default: "#ffffff",
-        },
-        {
-          id: "image.control.cornerStrokeColor",
-          type: "color",
-          label: "Image Control Corner Stroke Color",
-          default: "#1677ff",
-        },
-        {
-          id: "image.control.transparentCorners",
-          type: "boolean",
-          label: "Image Control Transparent Corners",
-          default: false,
-        },
-        {
-          id: "image.control.borderColor",
-          type: "color",
-          label: "Image Control Border Color",
-          default: "#1677ff",
-        },
-        {
-          id: "image.control.borderScaleFactor",
-          type: "number",
-          label: "Image Control Border Width",
-          min: 0.5,
-          max: 8,
-          step: 0.1,
-          default: 1.5,
-        },
-        {
-          id: "image.control.padding",
-          type: "number",
-          label: "Image Control Padding",
-          min: 0,
-          max: 64,
-          step: 1,
-          default: 0,
-        },
-        {
-          id: "image.frame.strokeColor",
-          type: "color",
-          label: "Image Frame Stroke Color",
-          default: "#808080",
-        },
-        {
-          id: "image.frame.strokeWidth",
-          type: "number",
-          label: "Image Frame Stroke Width",
-          min: 0,
-          max: 20,
-          step: 0.5,
-          default: 2,
-        },
-        {
-          id: "image.frame.strokeStyle",
-          type: "select",
-          label: "Image Frame Stroke Style",
-          options: ["solid", "dashed", "hidden"],
-          default: "dashed",
-        },
-        {
-          id: "image.frame.dashLength",
-          type: "number",
-          label: "Image Frame Dash Length",
-          min: 1,
-          max: 40,
-          step: 1,
-          default: 8,
-        },
-        {
-          id: "image.frame.innerBackground",
-          type: "color",
-          label: "Image Frame Inner Background",
-          default: "rgba(0,0,0,0)",
-        },
-        {
-          id: "image.frame.outerBackground",
-          type: "color",
-          label: "Image Frame Outer Background",
-          default: "#f5f5f5",
-        },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
-        {
-          command: "addImage",
-          title: "Add Image",
-          handler: async (url: string, options?: Partial<ImageItem>) => {
-            const result = await this.upsertImageEntry(url, {
-              mode: "add",
-              addOptions: options,
-            });
-            return result.id;
-          },
-        },
-        {
-          command: "upsertImage",
-          title: "Upsert Image",
-          handler: async (url: string, options: UpsertImageOptions = {}) => {
-            return await this.upsertImageEntry(url, options);
-          },
-        },
-        {
-          command: "getWorkingImages",
-          title: "Get Working Images",
-          handler: () => {
-            return this.cloneItems(this.workingItems);
-          },
-        },
-        {
-          command: "setWorkingImage",
-          title: "Set Working Image",
-          handler: (id: string, updates: Partial<ImageItem>) => {
-            this.updateImageInWorking(id, updates);
-          },
-        },
-        {
-          command: "resetWorkingImages",
-          title: "Reset Working Images",
-          handler: () => {
-            this.workingItems = this.cloneItems(this.items);
-            this.hasWorkingChanges = false;
-            this.updateImages();
-            this.emitWorkingChange();
-          },
-        },
-        {
-          command: "completeImages",
-          title: "Complete Images",
-          handler: async () => {
-            return await this.commitWorkingImagesAsCropped();
-          },
-        },
-        {
-          command: "exportUserCroppedImage",
-          title: "Export User Cropped Image",
-          handler: async (options: ExportUserCroppedImageOptions = {}) => {
-            return await this.exportUserCroppedImage(options);
-          },
-        },
-        {
-          command: "fitImageToArea",
-          title: "Fit Image to Area",
-          handler: async (
-            id: string,
-            area: {
-              width: number;
-              height: number;
-              left?: number;
-              top?: number;
-            },
-          ) => {
-            await this.fitImageToArea(id, area);
-          },
-        },
-        {
-          command: "fitImageToDefaultArea",
-          title: "Fit Image to Default Area",
-          handler: async (id: string) => {
-            await this.fitImageToDefaultArea(id);
-          },
-        },
-        {
-          command: "focusImage",
-          title: "Focus Image",
-          handler: (
-            id: string | null,
-            options: { syncCanvasSelection?: boolean } = {},
-          ) => {
-            return this.setImageFocus(id, options);
-          },
-        },
-        {
-          command: "removeImage",
-          title: "Remove Image",
-          handler: (id: string) => {
-            const removed = this.items.find((item) => item.id === id);
-            const next = this.items.filter((item) => item.id !== id);
-            if (next.length !== this.items.length) {
-              this.purgeSourceSizeCacheForItem(removed);
-              if (this.focusedImageId === id) {
-                this.setImageFocus(null, {
-                  syncCanvasSelection: true,
-                  skipRender: true,
-                });
-              }
-              this.updateConfig(next);
-            }
-          },
-        },
-        {
-          command: "updateImage",
-          title: "Update Image",
-          handler: async (
-            id: string,
-            updates: Partial<ImageItem>,
-            options: UpdateImageOptions = {},
-          ) => {
-            await this.updateImage(id, updates, options);
-          },
-        },
-        {
-          command: "clearImages",
-          title: "Clear Images",
-          handler: () => {
-            this.sourceSizeBySrc.clear();
-            this.setImageFocus(null, {
-              syncCanvasSelection: true,
-              skipRender: true,
-            });
-            this.updateConfig([]);
-          },
-        },
-        {
-          command: "bringToFront",
-          title: "Bring Image to Front",
-          handler: (id: string) => {
-            const index = this.items.findIndex((item) => item.id === id);
-            if (index !== -1 && index < this.items.length - 1) {
-              const next = [...this.items];
-              const [item] = next.splice(index, 1);
-              next.push(item);
-              this.updateConfig(next);
-            }
-          },
-        },
-        {
-          command: "sendToBack",
-          title: "Send Image to Back",
-          handler: (id: string) => {
-            const index = this.items.findIndex((item) => item.id === id);
-            if (index > 0) {
-              const next = [...this.items];
-              const [item] = next.splice(index, 1);
-              next.unshift(item);
-              this.updateConfig(next);
-            }
-          },
-        },
-      ] as CommandContribution[],
+      [ContributionPointIds.CONFIGURATIONS]: createImageConfigurations(),
+      [ContributionPointIds.COMMANDS]: createImageCommands(this),
     };
   }
 
@@ -1000,53 +740,46 @@ export class ImageTool implements Extension {
     return (configService.get(key, fallback) as T) ?? fallback;
   }
 
+  private applyCommittedItems(nextItems: ImageItem[]) {
+    const session = {
+      committed: this.items,
+      working: this.workingItems,
+      hasWorkingChanges: this.hasWorkingChanges,
+    };
+    applyCommittedSnapshot(session, this.normalizeItems(nextItems), {
+      clone: (items) => this.cloneItems(items),
+      toolActive: this.isToolActive,
+      preserveDirtyWorking: true,
+    });
+    this.items = session.committed;
+    this.workingItems = session.working;
+    this.hasWorkingChanges = session.hasWorkingChanges;
+  }
+
   private updateConfig(newItems: ImageItem[], skipCanvasUpdate = false) {
     if (!this.context) return;
+    this.applyCommittedItems(newItems);
+    runDeferredConfigUpdate(
+      this,
+      () => {
+        const configService = this.context?.services.get<ConfigurationService>(
+          "ConfigurationService",
+        );
+        configService?.update("image.items", this.items);
 
-    this.isUpdatingConfig = true;
-    this.items = this.normalizeItems(newItems);
-    if (!this.isToolActive || !this.hasWorkingChanges) {
-      this.workingItems = this.cloneItems(this.items);
-      this.hasWorkingChanges = false;
-    }
-
-    const configService = this.context.services.get<ConfigurationService>(
-      "ConfigurationService",
+        if (!skipCanvasUpdate) {
+          this.updateImages();
+        }
+      },
+      50,
     );
-    configService?.update("image.items", this.items);
-
-    if (!skipCanvasUpdate) {
-      this.updateImages();
-    }
-
-    setTimeout(() => {
-      this.isUpdatingConfig = false;
-    }, 50);
   }
 
   private getFrameRect(): FrameRect {
-    if (!this.canvasService) {
-      return { left: 0, top: 0, width: 0, height: 0 };
-    }
     const configService = this.context?.services.get<ConfigurationService>(
       "ConfigurationService",
     );
-    if (!configService) {
-      return { left: 0, top: 0, width: 0, height: 0 };
-    }
-
-    const sizeState = readSizeState(configService);
-    const layout = computeSceneLayout(this.canvasService, sizeState);
-    if (!layout) {
-      return { left: 0, top: 0, width: 0, height: 0 };
-    }
-
-    return this.canvasService.toSceneRect({
-      left: layout.cutRect.left,
-      top: layout.cutRect.top,
-      width: layout.cutRect.width,
-      height: layout.cutRect.height,
-    });
+    return resolveCutFrameRect(this.canvasService, configService);
   }
 
   private getFrameRectScreen(frame?: FrameRect): FrameRect {
@@ -1057,13 +790,7 @@ export class ImageTool implements Extension {
   }
 
   private toLayoutSceneRect(rect: FrameRect): RenderLayoutRect {
-    return {
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
-      space: "scene",
-    };
+    return toSceneLayoutRect(rect);
   }
 
   private async resolveDefaultFitArea(): Promise<DielineFitArea | null> {
@@ -1126,26 +853,26 @@ export class ImageTool implements Extension {
     const sources = [item.url, item.sourceUrl, item.committedUrl].filter(
       (value): value is string => typeof value === "string" && value.length > 0,
     );
-    sources.forEach((src) => this.sourceSizeBySrc.delete(src));
+    sources.forEach((src) => this.sourceSizeCache.deleteSourceSize(src));
   }
 
   private rememberSourceSize(src: string, obj: any) {
     const width = Number(obj?.width || 0);
     const height = Number(obj?.height || 0);
     if (src && width > 0 && height > 0) {
-      this.sourceSizeBySrc.set(src, { width, height });
+      this.sourceSizeCache.rememberSourceSize(src, { width, height });
     }
   }
 
   private getSourceSize(src: string, obj?: any): SourceSize {
-    const cached = src ? this.sourceSizeBySrc.get(src) : undefined;
+    const cached = src ? this.sourceSizeCache.getSourceSize(src) : undefined;
     if (cached) return cached;
 
     const width = Number(obj?.width || 0);
     const height = Number(obj?.height || 0);
     if (src && width > 0 && height > 0) {
       const size = { width, height };
-      this.sourceSizeBySrc.set(src, size);
+      this.sourceSizeCache.rememberSourceSize(src, size);
       return size;
     }
 
@@ -1153,10 +880,10 @@ export class ImageTool implements Extension {
   }
 
   private async ensureSourceSize(src: string): Promise<SourceSize | null> {
-    if (!src) return null;
-    const cached = this.sourceSizeBySrc.get(src);
-    if (cached) return cached;
+    return this.sourceSizeCache.ensureImageSize(src);
+  }
 
+  private async loadImageSize(src: string): Promise<SourceSize | null> {
     try {
       const image = await FabricImage.fromURL(src, {
         crossOrigin: "anonymous",
@@ -1164,9 +891,7 @@ export class ImageTool implements Extension {
       const width = Number(image?.width || 0);
       const height = Number(image?.height || 0);
       if (width > 0 && height > 0) {
-        const size = { width, height };
-        this.sourceSizeBySrc.set(src, size);
-        return size;
+        return { width, height };
       }
     } catch (error) {
       this.debug("image:size:load-failed", {
@@ -1179,11 +904,7 @@ export class ImageTool implements Extension {
   }
 
   private getCoverScale(frame: FrameRect, size: SourceSize): number {
-    const sw = Math.max(1, size.width);
-    const sh = Math.max(1, size.height);
-    const fw = Math.max(1, frame.width);
-    const fh = Math.max(1, frame.height);
-    return Math.max(fw / sw, fh / sh);
+    return getCoverScaleFromRect(frame, size);
   }
 
   private getFrameVisualConfig(): FrameVisualConfig {
@@ -2114,7 +1835,7 @@ export class ImageTool implements Extension {
         }),
       );
       if (previousCommitted && previousCommitted !== url) {
-        this.sourceSizeBySrc.delete(previousCommitted);
+        this.sourceSizeCache.deleteSourceSize(previousCommitted);
       }
     }
 

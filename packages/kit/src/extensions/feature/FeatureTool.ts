@@ -6,16 +6,17 @@ import {
   ConfigurationService,
   ToolSessionService,
 } from "@pooder/core";
-import { CanvasService, RenderObjectSpec } from "../services";
-import { resolveFeaturePosition } from "./geometry";
-import { ConstraintRegistry, ConstraintFeature } from "./constraints";
-import { completeFeaturesStrict } from "./featureComplete";
+import { CanvasService, RenderObjectSpec } from "../../services";
+import { resolveFeaturePosition } from "../geometry";
+import { ConstraintRegistry, ConstraintFeature } from "../constraints";
+import { completeFeaturesStrict } from "../featureComplete";
 import {
   readSizeState,
   type SceneGeometrySnapshot as DielineGeometry,
-} from "./sceneLayoutModel";
-
-const FEATURE_OVERLAY_LAYER_ID = "feature-overlay";
+} from "../../shared/scene/sceneLayoutModel";
+import { FEATURE_OVERLAY_LAYER_ID } from "../../shared/constants/layers";
+import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import { cloneWithJson } from "../../shared/runtime/sessionState";
 const FEATURE_STROKE_WIDTH = 2;
 const DEFAULT_RECT_SIZE = 10;
 const DEFAULT_CIRCLE_RADIUS = 5;
@@ -69,6 +70,7 @@ export class FeatureTool implements Extension {
   private renderProducerDisposable?: { dispose: () => void };
   private specs: RenderObjectSpec[] = [];
   private renderSeq = 0;
+  private readonly subscriptions = new SubscriptionBag();
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
@@ -89,6 +91,7 @@ export class FeatureTool implements Extension {
   }
 
   activate(context: ExtensionContext) {
+    this.subscriptions.disposeAll();
     this.context = context;
     this.canvasService = context.services.get<CanvasService>("CanvasService");
 
@@ -122,18 +125,21 @@ export class FeatureTool implements Extension {
       this.workingFeatures = this.cloneFeatures(features);
       this.hasWorkingChanges = false;
 
-      configService.onAnyChange((e: { key: string; value: any }) => {
-        if (this.isUpdatingConfig) return;
+      this.subscriptions.onConfigChange(
+        configService,
+        (e: { key: string; value: any }) => {
+          if (this.isUpdatingConfig) return;
 
-        if (e.key === "dieline.features") {
-          if (this.isFeatureSessionActive) return;
-          const next = (e.value || []) as ConstraintFeature[];
-          this.workingFeatures = this.cloneFeatures(next);
-          this.hasWorkingChanges = false;
-          this.redraw();
-          this.emitWorkingChange();
-        }
-      });
+          if (e.key === "dieline.features") {
+            if (this.isFeatureSessionActive) return;
+            const next = (e.value || []) as ConstraintFeature[];
+            this.workingFeatures = this.cloneFeatures(next);
+            this.hasWorkingChanges = false;
+            this.redraw();
+            this.emitWorkingChange();
+          }
+        },
+      );
     }
 
     const toolSessionService =
@@ -143,13 +149,13 @@ export class FeatureTool implements Extension {
       () => this.hasWorkingChanges,
     );
 
-    context.eventBus.on("tool:activated", this.onToolActivated);
+    this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
 
     this.setup();
   }
 
   deactivate(context: ExtensionContext) {
-    context.eventBus.off("tool:activated", this.onToolActivated);
+    this.subscriptions.disposeAll();
     this.restoreSessionFeaturesToConfig();
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
@@ -303,7 +309,7 @@ export class FeatureTool implements Extension {
   }
 
   private cloneFeatures(features: ConstraintFeature[]): ConstraintFeature[] {
-    return JSON.parse(JSON.stringify(features || [])) as ConstraintFeature[];
+    return cloneWithJson(features || []) as ConstraintFeature[];
   }
 
   private getConfigService(): ConfigurationService | undefined {

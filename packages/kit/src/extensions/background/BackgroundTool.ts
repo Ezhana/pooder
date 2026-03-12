@@ -7,17 +7,18 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { FabricImage } from "fabric";
-import { CanvasService, RenderObjectSpec } from "../services";
+import { CanvasService, RenderObjectSpec } from "../../services";
 import {
   computeSceneLayout,
   readSizeState,
   type SceneLayoutSnapshot,
-} from "./sceneLayoutModel";
-
-interface SourceSize {
-  width: number;
-  height: number;
-}
+} from "../../shared/scene/sceneLayoutModel";
+import { BACKGROUND_LAYER_ID } from "../../shared/constants/layers";
+import {
+  createSourceSizeCache,
+  type SourceSize,
+} from "../../shared/imaging/sourceSizeCache";
+import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 
 interface Rect {
   left: number;
@@ -47,7 +48,6 @@ export interface BackgroundConfig {
   layers: BackgroundLayer[];
 }
 
-const BACKGROUND_LAYER_ID = "background";
 const BACKGROUND_CONFIG_KEY = "background.config";
 
 const DEFAULT_WIDTH = 800;
@@ -65,7 +65,7 @@ const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
       order: 0,
       enabled: true,
       exportable: false,
-      color: "#fff",
+      color: "#eee",
     },
   ],
 };
@@ -245,13 +245,13 @@ export class BackgroundTool implements Extension {
 
   private specs: RenderObjectSpec[] = [];
   private renderProducerDisposable?: { dispose: () => void };
-  private configChangeDisposable?: { dispose: () => void };
+  private readonly subscriptions = new SubscriptionBag();
 
   private renderSeq = 0;
   private latestSceneLayout: SceneLayoutSnapshot | null = null;
-
-  private sourceSizeBySrc: Map<string, SourceSize> = new Map();
-  private pendingSizeBySrc: Map<string, Promise<SourceSize | null>> = new Map();
+  private sourceSizeCache = createSourceSizeCache((src) =>
+    this.loadImageSize(src),
+  );
 
   private onCanvasResized = () => {
     this.latestSceneLayout = null;
@@ -270,6 +270,7 @@ export class BackgroundTool implements Extension {
   }
 
   activate(context: ExtensionContext) {
+    this.subscriptions.disposeAll();
     this.canvasService = context.services.get<CanvasService>("CanvasService");
     if (!this.canvasService) {
       console.warn("CanvasService not found for BackgroundTool");
@@ -286,8 +287,8 @@ export class BackgroundTool implements Extension {
           DEFAULT_BACKGROUND_CONFIG,
         ),
       );
-      this.configChangeDisposable?.dispose();
-      this.configChangeDisposable = this.configService.onAnyChange(
+      this.subscriptions.onConfigChange(
+        this.configService,
         (e: { key: string; value: any }) => {
           if (e.key === BACKGROUND_CONFIG_KEY) {
             this.config = normalizeConfig(e.value);
@@ -319,21 +320,26 @@ export class BackgroundTool implements Extension {
       { priority: 0 },
     );
 
-    context.eventBus.on("canvas:resized", this.onCanvasResized);
-    context.eventBus.on("scene:layout:change", this.onSceneLayoutChanged);
+    this.subscriptions.on(
+      context.eventBus,
+      "canvas:resized",
+      this.onCanvasResized,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "scene:layout:change",
+      this.onSceneLayoutChanged,
+    );
     this.updateBackground();
   }
 
   deactivate(context: ExtensionContext) {
-    context.eventBus.off("canvas:resized", this.onCanvasResized);
-    context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
+    this.subscriptions.disposeAll();
 
     this.renderSeq += 1;
     this.specs = [];
     this.latestSceneLayout = null;
-
-    this.configChangeDisposable?.dispose();
-    this.configChangeDisposable = undefined;
+    this.sourceSizeCache.clear();
 
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
@@ -576,7 +582,7 @@ export class BackgroundTool implements Extension {
     const src = String(layer.src || "").trim();
     if (!src) return [];
 
-    const sourceSize = this.sourceSizeBySrc.get(src);
+    const sourceSize = this.sourceSizeCache.getSourceSize(src);
     if (!sourceSize) return [];
 
     const rect = this.resolveAnchorRect(layer.anchor);
@@ -648,29 +654,6 @@ export class BackgroundTool implements Extension {
     return Array.from(urls);
   }
 
-  private async ensureImageSize(src: string): Promise<SourceSize | null> {
-    if (!src) return null;
-
-    const cached = this.sourceSizeBySrc.get(src);
-    if (cached) return cached;
-
-    const pending = this.pendingSizeBySrc.get(src);
-    if (pending) {
-      return pending;
-    }
-
-    const task = this.loadImageSize(src);
-    this.pendingSizeBySrc.set(src, task);
-
-    try {
-      return await task;
-    } finally {
-      if (this.pendingSizeBySrc.get(src) === task) {
-        this.pendingSizeBySrc.delete(src);
-      }
-    }
-  }
-
   private async loadImageSize(src: string): Promise<SourceSize | null> {
     try {
       const image = await FabricImage.fromURL(src, {
@@ -679,9 +662,7 @@ export class BackgroundTool implements Extension {
       const width = Number(image?.width || 0);
       const height = Number(image?.height || 0);
       if (width > 0 && height > 0) {
-        const size = { width, height };
-        this.sourceSizeBySrc.set(src, size);
-        return size;
+        return { width, height };
       }
     } catch (error) {
       console.error("[BackgroundTool] Failed to load image", src, error);
@@ -702,7 +683,9 @@ export class BackgroundTool implements Extension {
     const activeUrls = this.collectActiveImageUrls(currentConfig);
 
     if (activeUrls.length > 0) {
-      await Promise.all(activeUrls.map((url) => this.ensureImageSize(url)));
+      await Promise.all(
+        activeUrls.map((url) => this.sourceSizeCache.ensureImageSize(url)),
+      );
       if (seq !== this.renderSeq) return;
     }
 
