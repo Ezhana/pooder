@@ -10,9 +10,11 @@ import {
 } from "@pooder/core";
 import {
   Canvas as FabricCanvas,
+  Control,
   Image as FabricImage,
   Pattern,
   Point,
+  controlsUtils,
 } from "fabric";
 import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../services";
 import { isDielineShape, normalizeShapeStyle } from "./dielineShape";
@@ -66,6 +68,18 @@ interface FrameVisualConfig {
   outerBackground: string;
 }
 
+interface ImageControlVisualConfig {
+  cornerSize: number;
+  touchCornerSize: number;
+  cornerStyle: "rect" | "circle";
+  cornerColor: string;
+  cornerStrokeColor: string;
+  transparentCorners: boolean;
+  borderColor: string;
+  borderScaleFactor: number;
+  padding: number;
+}
+
 type ShapeOverlayShape = Exclude<DielineShape, "custom">;
 
 interface SceneGeometryLike {
@@ -113,6 +127,45 @@ interface ExportUserCroppedImageResult {
 
 const IMAGE_OBJECT_LAYER_ID = "image.user";
 const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
+type ImageControlCapability = "rotate" | "scale" | "flipX" | "flipY";
+
+interface ImageControlDescriptor {
+  key: string;
+  capability: ImageControlCapability;
+  create: () => Control;
+}
+
+const IMAGE_DEFAULT_CONTROL_CAPABILITIES: ImageControlCapability[] = [
+  "rotate",
+  "scale",
+];
+
+const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
+  {
+    key: "tl",
+    capability: "rotate",
+    create: () =>
+      new Control({
+        x: -0.5,
+        y: -0.5,
+        actionName: "rotate",
+        actionHandler: controlsUtils.rotationWithSnapping,
+        cursorStyleHandler: controlsUtils.rotationStyleHandler,
+      }),
+  },
+  {
+    key: "br",
+    capability: "scale",
+    create: () =>
+      new Control({
+        x: 0.5,
+        y: 0.5,
+        actionName: "scale",
+        actionHandler: controlsUtils.scalingEqually,
+        cursorStyleHandler: controlsUtils.scaleCursorStyleHandler,
+      }),
+  },
+];
 
 export class ImageTool implements Extension {
   id = "pooder.kit.image";
@@ -140,6 +193,8 @@ export class ImageTool implements Extension {
   private imageSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
   private renderProducerDisposable?: { dispose: () => void };
+  private imageControlsByCapabilityKey: Map<string, Record<string, Control>> =
+    new Map();
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -215,7 +270,14 @@ export class ImageTool implements Extension {
           return;
         }
 
-        if (e.key.startsWith("size.") || e.key.startsWith("image.frame.")) {
+        if (
+          e.key.startsWith("size.") ||
+          e.key.startsWith("image.frame.") ||
+          e.key.startsWith("image.control.")
+        ) {
+          if (e.key.startsWith("image.control.")) {
+            this.imageControlsByCapabilityKey.clear();
+          }
           this.updateImages();
         }
       });
@@ -246,6 +308,7 @@ export class ImageTool implements Extension {
     this.cropShapeHatchPatternKey = undefined;
     this.imageSpecs = [];
     this.overlaySpecs = [];
+    this.imageControlsByCapabilityKey.clear();
 
     this.clearRenderedImages();
     this.renderProducerDisposable?.dispose();
@@ -346,6 +409,113 @@ export class ImageTool implements Extension {
     );
   }
 
+  private getEnabledImageControlCapabilities(): ImageControlCapability[] {
+    return IMAGE_DEFAULT_CONTROL_CAPABILITIES;
+  }
+
+  private getImageControls(
+    capabilities: ImageControlCapability[],
+  ): Record<string, Control> {
+    const normalized = [...new Set(capabilities)].sort();
+    const cacheKey = normalized.join("|");
+    const cached = this.imageControlsByCapabilityKey.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const enabled = new Set(normalized);
+    const controls: Record<string, Control> = {};
+    IMAGE_CONTROL_DESCRIPTORS.forEach((descriptor) => {
+      if (!enabled.has(descriptor.capability)) return;
+      controls[descriptor.key] = descriptor.create();
+    });
+
+    this.imageControlsByCapabilityKey.set(cacheKey, controls);
+    return controls;
+  }
+
+  private getImageControlVisualConfig(): ImageControlVisualConfig {
+    const cornerSizeRaw = Number(
+      this.getConfig<number>("image.control.cornerSize", 14) ?? 14,
+    );
+    const touchCornerSizeRaw = Number(
+      this.getConfig<number>("image.control.touchCornerSize", 24) ?? 24,
+    );
+    const borderScaleFactorRaw = Number(
+      this.getConfig<number>("image.control.borderScaleFactor", 1.5) ?? 1.5,
+    );
+    const paddingRaw = Number(
+      this.getConfig<number>("image.control.padding", 0) ?? 0,
+    );
+    const cornerStyleRaw = (this.getConfig<string>(
+      "image.control.cornerStyle",
+      "circle",
+    ) || "circle") as string;
+    const cornerStyle: "rect" | "circle" =
+      cornerStyleRaw === "rect" ? "rect" : "circle";
+
+    return {
+      cornerSize: Number.isFinite(cornerSizeRaw)
+        ? Math.max(4, Math.min(64, cornerSizeRaw))
+        : 14,
+      touchCornerSize: Number.isFinite(touchCornerSizeRaw)
+        ? Math.max(8, Math.min(96, touchCornerSizeRaw))
+        : 24,
+      cornerStyle,
+      cornerColor:
+        this.getConfig<string>("image.control.cornerColor", "#ffffff") ||
+        "#ffffff",
+      cornerStrokeColor:
+        this.getConfig<string>("image.control.cornerStrokeColor", "#1677ff") ||
+        "#1677ff",
+      transparentCorners: !!this.getConfig<boolean>(
+        "image.control.transparentCorners",
+        false,
+      ),
+      borderColor:
+        this.getConfig<string>("image.control.borderColor", "#1677ff") ||
+        "#1677ff",
+      borderScaleFactor: Number.isFinite(borderScaleFactorRaw)
+        ? Math.max(0.5, Math.min(8, borderScaleFactorRaw))
+        : 1.5,
+      padding: Number.isFinite(paddingRaw)
+        ? Math.max(0, Math.min(64, paddingRaw))
+        : 0,
+    };
+  }
+
+  private applyImageObjectInteractionState(obj: any) {
+    if (!obj) return;
+    const visible = this.isImageEditingVisible();
+    const visual = this.getImageControlVisualConfig();
+    obj.set({
+      selectable: visible,
+      evented: visible,
+      hasControls: visible,
+      hasBorders: visible,
+      lockScalingFlip: true,
+      cornerSize: visual.cornerSize,
+      touchCornerSize: visual.touchCornerSize,
+      cornerStyle: visual.cornerStyle,
+      cornerColor: visual.cornerColor,
+      cornerStrokeColor: visual.cornerStrokeColor,
+      transparentCorners: visual.transparentCorners,
+      borderColor: visual.borderColor,
+      borderScaleFactor: visual.borderScaleFactor,
+      padding: visual.padding,
+    });
+    obj.controls = this.getImageControls(
+      this.getEnabledImageControlCapabilities(),
+    );
+    obj.setCoords?.();
+  }
+
+  private refreshImageObjectInteractionState() {
+    this.getImageObjects().forEach((obj) =>
+      this.applyImageObjectInteractionState(obj),
+    );
+  }
+
   private isDebugEnabled(): boolean {
     return !!this.getConfig<boolean>("image.debug", false);
   }
@@ -389,6 +559,73 @@ export class ImageTool implements Extension {
           type: "boolean",
           label: "Image Debug Log",
           default: false,
+        },
+        {
+          id: "image.control.cornerSize",
+          type: "number",
+          label: "Image Control Corner Size",
+          min: 4,
+          max: 64,
+          step: 1,
+          default: 14,
+        },
+        {
+          id: "image.control.touchCornerSize",
+          type: "number",
+          label: "Image Control Touch Corner Size",
+          min: 8,
+          max: 96,
+          step: 1,
+          default: 24,
+        },
+        {
+          id: "image.control.cornerStyle",
+          type: "select",
+          label: "Image Control Corner Style",
+          options: ["circle", "rect"],
+          default: "circle",
+        },
+        {
+          id: "image.control.cornerColor",
+          type: "color",
+          label: "Image Control Corner Color",
+          default: "#ffffff",
+        },
+        {
+          id: "image.control.cornerStrokeColor",
+          type: "color",
+          label: "Image Control Corner Stroke Color",
+          default: "#1677ff",
+        },
+        {
+          id: "image.control.transparentCorners",
+          type: "boolean",
+          label: "Image Control Transparent Corners",
+          default: false,
+        },
+        {
+          id: "image.control.borderColor",
+          type: "color",
+          label: "Image Control Border Color",
+          default: "#1677ff",
+        },
+        {
+          id: "image.control.borderScaleFactor",
+          type: "number",
+          label: "Image Control Border Width",
+          min: 0.5,
+          max: 8,
+          step: 0.1,
+          default: 1.5,
+        },
+        {
+          id: "image.control.padding",
+          type: "number",
+          label: "Image Control Padding",
+          min: 0,
+          max: 64,
+          step: 1,
+          default: 0,
         },
         {
           id: "image.frame.strokeColor",
@@ -664,12 +901,7 @@ export class ImageTool implements Extension {
       } else {
         const obj = this.getImageObject(id);
         if (obj) {
-          obj.set({
-            selectable: true,
-            evented: true,
-            hasControls: true,
-            hasBorders: true,
-          });
+          this.applyImageObjectInteractionState(obj);
           canvas.setActiveObject(obj);
         }
       }
@@ -1608,6 +1840,7 @@ export class ImageTool implements Extension {
     this.overlaySpecs = this.buildOverlaySpecs(frame, sceneGeometry);
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
+    this.refreshImageObjectInteractionState();
 
     renderItems.forEach((item) => {
       if (!this.getImageObject(item.id)) return;
