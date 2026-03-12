@@ -193,7 +193,9 @@ const applyDetectedDielineConfig = (
   );
   cfgSvc.update(
     "dieline.customSourceHeightPx",
-    Number.isFinite(sourceHeight) && sourceHeight > 0 ? sourceHeight : undefined,
+    Number.isFinite(sourceHeight) && sourceHeight > 0
+      ? sourceHeight
+      : undefined,
   );
   cfgSvc.update("size.cutMode", "trim");
   cfgSvc.update("size.cutMarginMm", 0);
@@ -518,7 +520,7 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
     new ImageTool(),
     // new FilmTool(),
     new WhiteInkTool(),
-    new MirrorTool(),
+    // new MirrorTool(),
     new DielineTool(),
     new RulerTool(),
     new FeatureTool(),

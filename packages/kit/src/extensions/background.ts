@@ -65,7 +65,7 @@ const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
       order: 0,
       enabled: true,
       exportable: false,
-      color: "#aaa",
+      color: "#fff",
     },
   ],
 };

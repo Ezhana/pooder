@@ -157,12 +157,26 @@ export class ImageTool implements Extension {
             id: IMAGE_OBJECT_LAYER_ID,
             stack: 500,
             order: 0,
+            visibility: {
+              op: "not",
+              expr: {
+                op: "sessionActive",
+                toolId: "pooder.kit.white-ink",
+              },
+            },
             objects: this.imageSpecs,
           },
           {
             id: IMAGE_OVERLAY_LAYER_ID,
             stack: 800,
             order: 0,
+            visibility: {
+              op: "not",
+              expr: {
+                op: "sessionActive",
+                toolId: "pooder.kit.white-ink",
+              },
+            },
             objects: this.overlaySpecs,
           },
         ],

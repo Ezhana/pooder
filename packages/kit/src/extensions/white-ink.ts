@@ -252,7 +252,6 @@ export class WhiteInkTool implements Extension {
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
     this.clearRenderedWhiteInks();
-    this.applyImageVisibilityForWhiteInk(false);
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
     if (this.canvasService) {
@@ -1280,25 +1279,6 @@ export class WhiteInkTool implements Extension {
       },
     ];
   }
-
-  private applyImageVisibilityForWhiteInk(previewActive: boolean) {
-    if (!this.canvasService) return;
-    const visible = !previewActive;
-    let changed = false;
-
-    this.canvasService.canvas.getObjects().forEach((obj: any) => {
-      if (obj?.data?.layerId !== IMAGE_OBJECT_LAYER_ID) return;
-      if (obj.visible === visible) return;
-      obj.set({ visible });
-      obj.setCoords?.();
-      changed = true;
-    });
-
-    if (changed) {
-      this.canvasService.requestRenderAll();
-    }
-  }
-
   private resolveRenderItems(): WhiteInkItem[] {
     if (this.isToolActive) {
       return this.cloneItems(this.workingItems);
@@ -1367,7 +1347,6 @@ export class WhiteInkTool implements Extension {
     const seq = ++this.renderSeq;
 
     const previewActive = this.isPreviewActive();
-    this.applyImageVisibilityForWhiteInk(previewActive);
 
     const frame = this.getFrameRect();
     const frameSpecs = this.buildFrameSpecs(frame);
