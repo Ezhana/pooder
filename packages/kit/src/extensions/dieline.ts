@@ -7,7 +7,7 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
-import { CanvasService, RenderObjectSpec } from "../services";
+import { CanvasService, RenderEffectSpec, RenderObjectSpec } from "../services";
 import { ImageTracer } from "./tracer";
 import { parseLengthToMm } from "../units";
 import {
@@ -20,7 +20,6 @@ import {
 import type { DielineShape, DielineShapeStyle } from "./dielineShape";
 import {
   generateDielinePath,
-  generateMaskPath,
   generateBleedZonePath,
   DielineFeature,
 } from "./geometry";
@@ -66,7 +65,6 @@ export interface DielineState {
   mainLine: LineStyle;
   offsetLine: LineStyle;
   insideColor: string;
-  outsideColor: string;
   showBleedLines: boolean;
   features: DielineFeature[];
   pathData?: string;
@@ -104,7 +102,6 @@ export class DielineTool implements Extension {
       style: "solid",
     },
     insideColor: "rgba(0,0,0,0)",
-    outsideColor: "#ffffff",
     showBleedLines: true,
     features: [],
   };
@@ -112,6 +109,7 @@ export class DielineTool implements Extension {
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private specs: RenderObjectSpec[] = [];
+  private effects: RenderEffectSpec[] = [];
   private renderSeq = 0;
   private renderProducerDisposable?: { dispose: () => void };
   private onCanvasResized = () => {
@@ -152,10 +150,9 @@ export class DielineTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layers: [
+        passes: [
           {
             id: DIELINE_LAYER_ID,
-            mount: "group",
             stack: 700,
             order: 0,
             replace: true,
@@ -166,6 +163,7 @@ export class DielineTool implements Extension {
                 ids: ["pooder.kit.image", "pooder.kit.white-ink"],
               },
             },
+            effects: this.effects,
             objects: this.specs,
           },
         ],
@@ -236,10 +234,6 @@ export class DielineTool implements Extension {
       );
 
       s.insideColor = configService.get("dieline.insideColor", s.insideColor);
-      s.outsideColor = configService.get(
-        "dieline.outsideColor",
-        s.outsideColor,
-      );
       s.showBleedLines = configService.get(
         "dieline.showBleedLines",
         s.showBleedLines,
@@ -319,9 +313,6 @@ export class DielineTool implements Extension {
             case "dieline.insideColor":
               s.insideColor = e.value;
               break;
-            case "dieline.outsideColor":
-              s.outsideColor = e.value;
-              break;
             case "dieline.showBleedLines":
               s.showBleedLines = e.value;
               break;
@@ -357,6 +348,7 @@ export class DielineTool implements Extension {
     context.eventBus.off("canvas:resized", this.onCanvasResized);
     this.renderSeq += 1;
     this.specs = [];
+    this.effects = [];
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
     if (this.canvasService) {
@@ -473,12 +465,6 @@ export class DielineTool implements Extension {
           type: "color",
           label: "Inside Color",
           default: s.insideColor,
-        },
-        {
-          id: "dieline.outsideColor",
-          type: "color",
-          label: "Outside Color",
-          default: s.outsideColor,
         },
         {
           id: "dieline.features",
@@ -624,6 +610,13 @@ export class DielineTool implements Extension {
     );
   }
 
+  private hasImageItems(): boolean {
+    const configService = this.getConfigService();
+    if (!configService) return false;
+    const items = configService.get("image.items", []) as unknown;
+    return Array.isArray(items) && items.length > 0;
+  }
+
   private syncSizeState(configService: ConfigurationService) {
     const sizeState = readSizeState(configService);
     this.state.width = sizeState.actualWidthMm;
@@ -634,34 +627,7 @@ export class DielineTool implements Extension {
         ? sizeState.cutMarginMm
         : sizeState.cutMode === "inset"
           ? -sizeState.cutMarginMm
-          : 0;
-  }
-
-  private bringFeatureMarkersToFront() {
-    if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
-    canvas
-      .getObjects()
-      .filter((obj: any) => obj?.data?.type === "feature-marker")
-      .forEach((obj: any) => canvas.bringObjectToFront(obj));
-  }
-
-  private ensureLayerStacking() {
-    if (!this.canvasService) return;
-    const layer = this.canvasService.getLayer(DIELINE_LAYER_ID);
-    if (!layer) return;
-    const userLayer = this.canvasService.getLayer("user");
-    if (userLayer) {
-      const layerIndex = this.canvasService.canvas.getObjects().indexOf(layer);
-      const userIndex = this.canvasService.canvas
-        .getObjects()
-        .indexOf(userLayer);
-      if (layerIndex < userIndex) {
-        this.canvasService.canvas.moveObjectTo(layer, userIndex + 1);
-      }
-      return;
-    }
-    this.canvasService.canvas.bringObjectToFront(layer);
+      : 0;
   }
 
   private buildDielineSpecs(
@@ -674,10 +640,10 @@ export class DielineTool implements Extension {
       mainLine,
       offsetLine,
       insideColor,
-      outsideColor,
       showBleedLines,
       features,
     } = this.state;
+    const hasImages = this.hasImageItems();
 
     const canvasW =
       sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800;
@@ -706,46 +672,13 @@ export class DielineTool implements Extension {
     }));
     const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
 
-    const maskPathData = generateMaskPath({
-      canvasWidth: canvasW,
-      canvasHeight: canvasH,
-      shape,
-      width: cutW,
-      height: cutH,
-      radius: cutR,
-      x: cx,
-      y: cy,
-      features: cutFeatures,
-      shapeStyle,
-      pathData: this.state.pathData,
-      customSourceWidthPx: this.state.customSourceWidthPx,
-      customSourceHeightPx: this.state.customSourceHeightPx,
-    });
-
-    const specs: RenderObjectSpec[] = [
-      {
-        id: "dieline.mask",
-        type: "path",
-        space: "screen",
-        data: { id: "dieline.mask", type: "dieline" },
-        props: {
-          pathData: maskPathData,
-          fill: outsideColor,
-          stroke: null,
-          selectable: false,
-          evented: false,
-          originX: "left",
-          originY: "top",
-          left: 0,
-          top: 0,
-        },
-      },
-    ];
+    const specs: RenderObjectSpec[] = [];
 
     if (
       insideColor &&
       insideColor !== "transparent" &&
-      insideColor !== "rgba(0,0,0,0)"
+      insideColor !== "rgba(0,0,0,0)" &&
+      !hasImages
     ) {
       const productPathData = generateDielinePath({
         shape,
@@ -915,6 +848,83 @@ export class DielineTool implements Extension {
     return specs;
   }
 
+  private buildImageClipEffects(
+    sceneLayout: NonNullable<ReturnType<typeof computeSceneLayout>>,
+  ): RenderEffectSpec[] {
+    const { shape, shapeStyle, radius, features } = this.state;
+
+    const canvasW =
+      sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800;
+    const canvasH =
+      sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600;
+    const scale = sceneLayout.scale;
+    const cx = sceneLayout.trimRect.centerX;
+    const cy = sceneLayout.trimRect.centerY;
+
+    const visualWidth = sceneLayout.trimRect.width;
+    const visualRadius = radius * scale;
+    const cutW = sceneLayout.cutRect.width;
+    const cutH = sceneLayout.cutRect.height;
+    const visualOffset = (cutW - visualWidth) / 2;
+    const cutR =
+      visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
+
+    const absoluteFeatures = (features || []).map((f) => ({
+      ...f,
+      x: f.x,
+      y: f.y,
+      width: (f.width || 0) * scale,
+      height: (f.height || 0) * scale,
+      radius: (f.radius || 0) * scale,
+    }));
+    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
+
+    const clipPathData = generateDielinePath({
+      shape,
+      width: cutW,
+      height: cutH,
+      radius: cutR,
+      x: cx,
+      y: cy,
+      features: cutFeatures,
+      shapeStyle,
+      pathData: this.state.pathData,
+      customSourceWidthPx: this.state.customSourceWidthPx,
+      customSourceHeightPx: this.state.customSourceHeightPx,
+      canvasWidth: canvasW,
+      canvasHeight: canvasH,
+    });
+    if (!clipPathData) return [];
+
+    return [
+      {
+        type: "clipPath",
+        id: "dieline.clip.image",
+        targetPassIds: [IMAGE_OBJECT_LAYER_ID],
+        source: {
+          id: "dieline.effect.clip-path",
+          type: "path",
+          space: "screen",
+          data: {
+            id: "dieline.effect.clip-path",
+            type: "dieline-effect",
+            effect: "clipPath",
+          },
+          props: {
+            pathData: clipPathData,
+            fill: "#000000",
+            stroke: null,
+            originX: "left",
+            originY: "top",
+            selectable: false,
+            evented: false,
+            excludeFromExport: true,
+          },
+        },
+      },
+    ];
+  }
+
   public updateDieline(_emitEvent: boolean = true) {
     void this.updateDielineAsync();
   }
@@ -933,20 +943,18 @@ export class DielineTool implements Extension {
     if (!sceneLayout) {
       if (seq !== this.renderSeq) return;
       this.specs = [];
+      this.effects = [];
       await this.canvasService.flushRenderFromProducers();
       return;
     }
 
     const nextSpecs = this.buildDielineSpecs(sceneLayout);
+    const nextEffects = this.buildImageClipEffects(sceneLayout);
     if (seq !== this.renderSeq) return;
     this.specs = nextSpecs;
+    this.effects = nextEffects;
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
-
-    this.ensureLayerStacking();
-
-    // Feature tool markers can extend outside trim. Keep them above dieline mask.
-    this.bringFeatureMarkersToFront();
     this.canvasService.requestRenderAll();
   }
 

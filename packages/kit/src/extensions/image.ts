@@ -137,6 +137,7 @@ export class ImageTool implements Extension {
   private cropShapeHatchPattern?: Pattern;
   private cropShapeHatchPatternColor?: string;
   private cropShapeHatchPatternKey?: string;
+  private imageSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
   private renderProducerDisposable?: { dispose: () => void };
 
@@ -151,10 +152,15 @@ export class ImageTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layers: [
+        passes: [
+          {
+            id: IMAGE_OBJECT_LAYER_ID,
+            stack: 500,
+            order: 0,
+            objects: this.imageSpecs,
+          },
           {
             id: IMAGE_OVERLAY_LAYER_ID,
-            mount: "root",
             stack: 800,
             order: 0,
             objects: this.overlaySpecs,
@@ -224,6 +230,7 @@ export class ImageTool implements Extension {
     this.cropShapeHatchPattern = undefined;
     this.cropShapeHatchPatternColor = undefined;
     this.cropShapeHatchPatternKey = undefined;
+    this.imageSpecs = [];
     this.overlaySpecs = [];
 
     this.clearRenderedImages();
@@ -854,9 +861,7 @@ export class ImageTool implements Extension {
 
   private getOverlayObjects(): any[] {
     if (!this.canvasService) return [];
-    return this.canvasService.getRootLayerObjects(
-      IMAGE_OVERLAY_LAYER_ID,
-    ) as any[];
+    return this.canvasService.getPassObjects(IMAGE_OVERLAY_LAYER_ID) as any[];
   }
 
   private getImageObject(id: string): any | undefined {
@@ -865,9 +870,9 @@ export class ImageTool implements Extension {
 
   private clearRenderedImages() {
     if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
-    this.getImageObjects().forEach((obj) => canvas.remove(obj));
-    this.canvasService.requestRenderAll();
+    this.imageSpecs = [];
+    this.overlaySpecs = [];
+    this.canvasService.requestRenderFromProducers();
   }
 
   private purgeSourceSizeCacheForItem(item?: ImageItem) {
@@ -899,6 +904,32 @@ export class ImageTool implements Extension {
     }
 
     return { width: 1, height: 1 };
+  }
+
+  private async ensureSourceSize(src: string): Promise<SourceSize | null> {
+    if (!src) return null;
+    const cached = this.sourceSizeBySrc.get(src);
+    if (cached) return cached;
+
+    try {
+      const image = await FabricImage.fromURL(src, {
+        crossOrigin: "anonymous",
+      });
+      const width = Number(image?.width || 0);
+      const height = Number(image?.height || 0);
+      if (width > 0 && height > 0) {
+        const size = { width, height };
+        this.sourceSizeBySrc.set(src, size);
+        return size;
+      }
+    } catch (error) {
+      this.debug("image:size:load-failed", {
+        src,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return null;
   }
 
   private getCoverScale(frame: FrameRect, size: SourceSize): number {
@@ -1296,25 +1327,6 @@ export class ImageTool implements Extension {
     };
   }
 
-  private toScreenObjectProps(props: Record<string, any>): Record<string, any> {
-    if (!this.canvasService) return props;
-    const next = { ...props };
-    if (Number.isFinite(next.left) || Number.isFinite(next.top)) {
-      const mapped = this.canvasService.toScreenPoint({
-        x: Number.isFinite(next.left) ? Number(next.left) : 0,
-        y: Number.isFinite(next.top) ? Number(next.top) : 0,
-      });
-      if (Number.isFinite(next.left)) next.left = mapped.x;
-      if (Number.isFinite(next.top)) next.top = mapped.y;
-    }
-    const sceneScale = this.canvasService.getSceneScale();
-    const sx = Number.isFinite(next.scaleX) ? Number(next.scaleX) : 1;
-    const sy = Number.isFinite(next.scaleY) ? Number(next.scaleY) : 1;
-    next.scaleX = sx * sceneScale;
-    next.scaleY = sy * sceneScale;
-    return next;
-  }
-
   private toSceneObjectScale(value: number): number {
     if (!this.canvasService) return value;
     return value / this.canvasService.getSceneScale();
@@ -1326,112 +1338,34 @@ export class ImageTool implements Extension {
     return obj?._originalElement?.src;
   }
 
-  private applyImageControlVisibility(obj: any) {
-    if (typeof obj?.setControlsVisibility !== "function") return;
-    obj.setControlsVisibility({
-      mt: false,
-      mb: false,
-      ml: false,
-      mr: false,
-      tl: true,
-      tr: true,
-      bl: true,
-      br: true,
-      mtr: true,
-    });
-  }
-
-  private async upsertImageObject(
-    item: ImageItem,
+  private async buildImageSpecs(
+    items: ImageItem[],
     frame: FrameRect,
-    seq: number,
-  ) {
-    if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
-    const render = this.resolveRenderImageState(item);
-    if (!render.src) return;
+  ): Promise<RenderObjectSpec[]> {
+    const specs: RenderObjectSpec[] = [];
 
-    let obj = this.getImageObject(item.id);
-    const currentSrc = this.getCurrentSrc(obj);
+    for (const item of items) {
+      const render = this.resolveRenderImageState(item);
+      if (!render.src) continue;
 
-    if (obj && currentSrc && currentSrc !== render.src) {
-      canvas.remove(obj);
-      obj = undefined;
-    }
+      const ensured = await this.ensureSourceSize(render.src);
+      const sourceSize = ensured || this.getSourceSize(render.src);
+      const props = this.computeCanvasProps(render, sourceSize, frame);
 
-    if (!obj) {
-      const created = await FabricImage.fromURL(render.src, {
-        crossOrigin: "anonymous",
-      });
-      if (seq !== this.renderSeq) return;
-
-      created.set({
+      specs.push({
+        id: item.id,
+        type: "image",
+        src: render.src,
         data: {
           id: item.id,
           layerId: IMAGE_OBJECT_LAYER_ID,
           type: "image-item",
         },
-      } as any);
-      canvas.add(created as any);
-      obj = created as any;
+        props,
+      });
     }
 
-    this.rememberSourceSize(render.src, obj);
-    const sourceSize = this.getSourceSize(render.src, obj);
-    const props = this.computeCanvasProps(render, sourceSize, frame);
-    const screenProps = this.toScreenObjectProps(props);
-
-    obj.set({
-      ...screenProps,
-      data: {
-        ...(obj.data || {}),
-        id: item.id,
-        layerId: IMAGE_OBJECT_LAYER_ID,
-        type: "image-item",
-      },
-    });
-    this.applyImageControlVisibility(obj);
-    obj.setCoords();
-
-    const resolver = this.loadResolvers.get(item.id);
-    if (resolver) {
-      resolver();
-      this.loadResolvers.delete(item.id);
-    }
-  }
-
-  private syncImageZOrder(items: ImageItem[]) {
-    if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
-
-    const objects = canvas.getObjects();
-    let insertIndex = 0;
-
-    const backgroundLayer = this.canvasService.getLayer("background");
-    if (backgroundLayer) {
-      const bgIndex = objects.indexOf(backgroundLayer as any);
-      if (bgIndex >= 0) insertIndex = bgIndex + 1;
-    }
-
-    items.forEach((item) => {
-      const obj = this.getImageObject(item.id);
-      if (!obj) return;
-      canvas.moveObjectTo(obj, insertIndex);
-      insertIndex += 1;
-    });
-
-    if (this.isDebugEnabled()) {
-      const stack = canvas
-        .getObjects()
-        .map((obj: any, index: number) => ({
-          index,
-          id: obj?.data?.id,
-          layerId: obj?.data?.layerId,
-          zIndex: obj?.data?.zIndex,
-        }))
-        .filter((item) => item.layerId === IMAGE_OVERLAY_LAYER_ID);
-      this.debug("overlay:stack", stack);
-    }
+    return specs;
   }
 
   private buildOverlaySpecs(
@@ -1616,7 +1550,10 @@ export class ImageTool implements Extension {
       },
     };
 
-    const specs = [...mask, ...shapeOverlay, frameSpec];
+    const specs =
+      shapeOverlay.length > 0
+        ? [...mask, ...shapeOverlay]
+        : [...mask, ...shapeOverlay, frameSpec];
     this.debug("overlay:built", {
       frame,
       shape: sceneGeometry?.shape,
@@ -1647,33 +1584,38 @@ export class ImageTool implements Extension {
       });
     }
 
-    this.getImageObjects().forEach((obj: any) => {
-      const id = obj?.data?.id;
-      if (typeof id === "string" && !desiredIds.has(id)) {
-        this.canvasService?.canvas.remove(obj);
-      }
-    });
-
-    for (const item of renderItems) {
-      if (seq !== this.renderSeq) return;
-      await this.upsertImageObject(item, frame, seq);
-    }
+    const imageSpecs = await this.buildImageSpecs(renderItems, frame);
     if (seq !== this.renderSeq) return;
 
-    this.syncImageZOrder(renderItems);
     const sceneGeometry = await this.resolveSceneGeometryForOverlay();
     if (seq !== this.renderSeq) return;
 
-    const overlaySpecs = this.buildOverlaySpecs(frame, sceneGeometry);
-    this.overlaySpecs = overlaySpecs;
+    this.imageSpecs = imageSpecs;
+    this.overlaySpecs = this.buildOverlaySpecs(frame, sceneGeometry);
     await this.canvasService.flushRenderFromProducers();
-    this.syncImageZOrder(renderItems);
+    if (seq !== this.renderSeq) return;
+
+    renderItems.forEach((item) => {
+      if (!this.getImageObject(item.id)) return;
+      const resolver = this.loadResolvers.get(item.id);
+      if (!resolver) return;
+      resolver();
+      this.loadResolvers.delete(item.id);
+    });
+
+    if (this.focusedImageId && this.isToolActive) {
+      this.setImageFocus(this.focusedImageId, {
+        syncCanvasSelection: true,
+        skipRender: true,
+      });
+    }
+
     const overlayCanvasCount = this.getOverlayObjects().length;
 
     this.debug("render:done", {
       seq,
       renderCount: renderItems.length,
-      overlayCount: overlaySpecs.length,
+      overlayCount: this.overlaySpecs.length,
       overlayCanvasCount,
       isToolActive: this.isToolActive,
       isImageSelectionActive: this.isImageSelectionActive,

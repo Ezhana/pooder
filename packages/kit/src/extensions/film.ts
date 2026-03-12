@@ -62,10 +62,9 @@ export class FilmTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layers: [
+        passes: [
           {
             id: FILM_LAYER_ID,
-            mount: "group",
             stack: 1000,
             order: 0,
             objects: this.specs,

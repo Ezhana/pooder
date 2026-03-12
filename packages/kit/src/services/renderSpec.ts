@@ -63,15 +63,21 @@ export type VisibilityExpr =
   | { op: "all"; exprs: VisibilityExpr[] }
   | { op: "any"; exprs: VisibilityExpr[] };
 
-export type RenderLayerMount = "group" | "root";
+export interface RenderClipPathEffectSpec {
+  type: "clipPath";
+  id?: string;
+  source: RenderObjectSpec;
+  targetPassIds: string[];
+}
 
-export interface RenderLayerSpec {
+export type RenderEffectSpec = RenderClipPathEffectSpec;
+
+export interface RenderPassSpec {
   id: string;
-  mount: RenderLayerMount;
   stack?: number;
   order?: number;
   replace?: boolean;
   visibility?: VisibilityExpr;
+  effects?: RenderEffectSpec[];
   objects: RenderObjectSpec[];
-  props?: RenderProps;
 }

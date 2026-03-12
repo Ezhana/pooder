@@ -53,11 +53,6 @@ export interface GeometryOptions {
   canvasHeight?: number;
 }
 
-export interface MaskGeometryOptions extends GeometryOptions {
-  canvasWidth: number;
-  canvasHeight: number;
-}
-
 /**
  * Resolves the absolute position of a feature based on normalized coordinates.
  */
@@ -736,35 +731,6 @@ export function generateDielinePath(options: GeometryOptions): string {
 
   const pathData = finalShape.pathData;
   finalShape.remove();
-
-  return pathData;
-}
-
-/**
- * Generates the path data for the Mask (Background Overlay).
- * Logic: Canvas SUBTRACT ProductShape
- */
-export function generateMaskPath(options: MaskGeometryOptions): string {
-  ensurePaper(options.canvasWidth, options.canvasHeight);
-  paper.project.activeLayer.removeChildren();
-
-  const { canvasWidth, canvasHeight } = options;
-
-  const maskRect = new paper.Path.Rectangle({
-    point: [0, 0],
-    size: [canvasWidth, canvasHeight],
-  });
-
-  const perimeter = getPerimeterShape(options);
-  const mainShape = applySurfaceFeatures(perimeter, options.features, options);
-
-  const finalMask = maskRect.subtract(mainShape);
-
-  maskRect.remove();
-  mainShape.remove();
-
-  const pathData = finalMask.pathData;
-  finalMask.remove();
 
   return pathData;
 }

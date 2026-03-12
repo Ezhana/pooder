@@ -101,10 +101,9 @@ export class FeatureTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layers: [
+        passes: [
           {
             id: FEATURE_OVERLAY_LAYER_ID,
-            mount: "root",
             stack: 880,
             order: 0,
             objects: this.specs,

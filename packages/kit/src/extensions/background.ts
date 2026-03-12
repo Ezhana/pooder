@@ -65,7 +65,7 @@ const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
       order: 0,
       enabled: true,
       exportable: false,
-      color: "#111",
+      color: "#aaa",
     },
   ],
 };
@@ -307,10 +307,9 @@ export class BackgroundTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layers: [
+        passes: [
           {
             id: BACKGROUND_LAYER_ID,
-            mount: "group",
             stack: 0,
             order: 0,
             objects: this.specs,

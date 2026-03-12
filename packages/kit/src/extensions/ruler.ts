@@ -86,10 +86,9 @@ export class RulerTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layers: [
+        passes: [
           {
             id: RULER_LAYER_ID,
-            mount: "root",
             stack: 950,
             order: 0,
             replace: true,

@@ -140,24 +140,21 @@ export class WhiteInkTool implements Extension {
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
       () => ({
-        layers: [
+        passes: [
           {
             id: WHITE_INK_COVER_LAYER_ID,
-            mount: "root",
             stack: 220,
             order: 0,
             objects: this.coverSpecs,
           },
           {
             id: WHITE_INK_OBJECT_LAYER_ID,
-            mount: "root",
             stack: 221,
             order: 0,
             objects: this.whiteSpecs,
           },
           {
             id: WHITE_INK_OVERLAY_LAYER_ID,
-            mount: "root",
             stack: 790,
             order: 0,
             objects: this.overlaySpecs,
@@ -1334,50 +1331,6 @@ export class WhiteInkTool implements Extension {
     };
   }
 
-  private resolveDefaultInsertIndex(objects: any[]): number {
-    if (!this.canvasService) return 0;
-    const backgroundLayer = this.canvasService.getLayer("background");
-    if (!backgroundLayer) return 0;
-    const bgIndex = objects.indexOf(backgroundLayer as any);
-    if (bgIndex < 0) return 0;
-    return bgIndex + 1;
-  }
-
-  private syncZOrder() {
-    if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
-
-    const whiteObjects = this.canvasService.getRootLayerObjects(
-      WHITE_INK_OBJECT_LAYER_ID,
-    ) as any[];
-    const coverObjects = this.canvasService.getRootLayerObjects(
-      WHITE_INK_COVER_LAYER_ID,
-    ) as any[];
-    const currentObjects = canvas.getObjects();
-    const imageIndexes = currentObjects
-      .map((obj: any, index: number) =>
-        obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID ? index : -1,
-      )
-      .filter((index: number) => index >= 0);
-
-    let whiteInsertIndex = imageIndexes.length
-      ? Math.min(...imageIndexes)
-      : this.resolveDefaultInsertIndex(currentObjects);
-
-    let coverInsertIndex = whiteInsertIndex;
-
-    coverObjects.forEach((obj) => {
-      canvas.moveObjectTo(obj, coverInsertIndex);
-      coverInsertIndex += 1;
-    });
-
-    whiteInsertIndex = coverInsertIndex;
-    whiteObjects.forEach((obj) => {
-      canvas.moveObjectTo(obj, whiteInsertIndex);
-      whiteInsertIndex += 1;
-    });
-  }
-
   private clearRenderedWhiteInks() {
     if (!this.canvasService) return;
     this.whiteSpecs = [];
@@ -1471,8 +1424,6 @@ export class WhiteInkTool implements Extension {
     this.overlaySpecs = frameSpecs;
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
-
-    this.syncZOrder();
     this.canvasService.requestRenderAll();
   }
 

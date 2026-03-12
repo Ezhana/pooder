@@ -1,4 +1,4 @@
-import { Canvas, Group, FabricObject, Rect, Path, Image, Text } from "fabric";
+import { Canvas, FabricObject, Rect, Path, Image, Text } from "fabric";
 import {
   Service,
   EventBus,
@@ -11,17 +11,17 @@ import {
 import { ViewportSystem } from "./ViewportSystem";
 import type {
   RenderCoordinateSpace,
-  RenderLayerMount,
-  RenderLayerSpec,
+  RenderEffectSpec,
   RenderLayoutInsets,
   RenderLayoutLength,
   RenderObjectLayoutSpec,
   RenderObjectSpec,
+  RenderPassSpec,
 } from "./renderSpec";
 import { evaluateVisibilityExpr, type VisibilityLayerState } from "./visibility";
 
 export interface RenderProducerResult {
-  layers?: RenderLayerSpec[];
+  passes?: RenderPassSpec[];
 }
 
 export type RenderProducer = () =>
@@ -47,23 +47,28 @@ interface RectLike {
   height: number;
 }
 
-interface ResolvedRenderLayerSpec {
+interface ResolvedRenderPassSpec {
   id: string;
-  mount: RenderLayerMount;
   stack: number;
   order: number;
   replace: boolean;
-  visibility?: RenderLayerSpec["visibility"];
-  props?: Record<string, any>;
+  visibility?: RenderPassSpec["visibility"];
+  effects: RenderEffectSpec[];
   objects: RenderObjectSpec[];
 }
 
-interface ManagedLayerMeta {
+interface ResolvedClipPathEffectSpec {
+  type: "clipPath";
+  key: string;
+  source: RenderObjectSpec;
+  targetPassIds: string[];
+}
+
+interface ManagedPassMeta {
   id: string;
-  mount: RenderLayerMount;
   stack: number;
   order: number;
-  visibility?: RenderLayerSpec["visibility"];
+  visibility?: RenderPassSpec["visibility"];
 }
 
 export default class CanvasService implements Service {
@@ -73,6 +78,7 @@ export default class CanvasService implements Service {
   private eventBus?: EventBus;
   private workbenchService?: WorkbenchService;
   private toolSessionService?: ToolSessionService;
+
   private renderProducers: Map<string, RenderProducerEntry> = new Map();
   private producerOrder = 0;
   private producerFlushRequested = false;
@@ -80,9 +86,9 @@ export default class CanvasService implements Service {
   private producerLoopPromise: Promise<void> | null = null;
   private producerApplyInProgress = false;
   private visibilityRefreshScheduled = false;
-  private managedProducerLayerIds: Set<string> = new Set();
-  private managedProducerRootLayerIds: Set<string> = new Set();
-  private managedLayerMetas: Map<string, ManagedLayerMeta> = new Map();
+
+  private managedProducerPassIds: Set<string> = new Set();
+  private managedPassMetas: Map<string, ManagedPassMeta> = new Map();
 
   private canvasForwardersBound = false;
   private readonly forwardSelectionCreated = (e: any) => {
@@ -105,14 +111,14 @@ export default class CanvasService implements Service {
   };
 
   private readonly onToolActivated = () => {
-    this.applyManagedLayerVisibility();
+    this.applyManagedPassVisibility();
   };
   private readonly onToolSessionChanged = () => {
-    this.applyManagedLayerVisibility();
+    this.applyManagedPassVisibility();
   };
   private readonly onCanvasObjectChanged = () => {
     if (this.producerApplyInProgress) return;
-    this.scheduleManagedLayerVisibilityRefresh();
+    this.scheduleManagedPassVisibilityRefresh();
   };
 
   constructor(el: HTMLCanvasElement | string | Canvas, options?: any) {
@@ -182,9 +188,8 @@ export default class CanvasService implements Service {
       this.detachContextEvents(this.context.eventBus);
     }
     this.renderProducers.clear();
-    this.managedProducerLayerIds.clear();
-    this.managedProducerRootLayerIds.clear();
-    this.managedLayerMetas.clear();
+    this.managedProducerPassIds.clear();
+    this.managedPassMetas.clear();
     this.context = undefined;
     this.workbenchService = undefined;
     this.toolSessionService = undefined;
@@ -282,43 +287,70 @@ export default class CanvasService implements Service {
     });
   }
 
-  private normalizeLayerSpecValue(spec: RenderLayerSpec): ResolvedRenderLayerSpec | null {
+  private normalizePassSpecValue(
+    spec: RenderPassSpec,
+  ): ResolvedRenderPassSpec | null {
     const id = String(spec.id || "").trim();
     if (!id) return null;
 
     return {
       id,
-      mount: spec.mount === "root" ? "root" : "group",
       stack: Number.isFinite(spec.stack) ? Number(spec.stack) : 0,
       order: Number.isFinite(spec.order) ? Number(spec.order) : 0,
-      replace: spec.replace === true,
+      replace: spec.replace !== false,
       visibility: spec.visibility,
-      props:
-        spec.props && typeof spec.props === "object"
-          ? { ...(spec.props as Record<string, any>) }
-          : undefined,
+      effects: Array.isArray(spec.effects)
+        ? [...spec.effects]
+        : [],
       objects: Array.isArray(spec.objects) ? [...spec.objects] : [],
     };
   }
 
-  private mergeLayerSpec(
-    map: Map<string, ResolvedRenderLayerSpec>,
-    rawSpec: RenderLayerSpec,
+  private normalizeClipPathEffectSpec(
+    effect: RenderEffectSpec,
+    passId: string,
+    index: number,
+  ): ResolvedClipPathEffectSpec | null {
+    if (!effect || effect.type !== "clipPath") return null;
+
+    const source = effect.source;
+    if (!source || typeof source !== "object") return null;
+
+    const sourceId = String(source.id || "").trim();
+    if (!sourceId) return null;
+
+    const targetPassIds = Array.isArray(effect.targetPassIds)
+      ? effect.targetPassIds
+          .map((item) => String(item || "").trim())
+          .filter((item) => item.length > 0)
+      : [];
+    if (!targetPassIds.length) return null;
+
+    const customId = String((effect as any).id || "").trim();
+    const key = customId || `${passId}.effect.clipPath.${index}`;
+
+    return {
+      type: "clipPath",
+      key,
+      source: {
+        ...source,
+        id: sourceId,
+      },
+      targetPassIds,
+    };
+  }
+
+  private mergePassSpec(
+    map: Map<string, ResolvedRenderPassSpec>,
+    rawSpec: RenderPassSpec,
     producerId: string,
   ) {
-    const normalized = this.normalizeLayerSpecValue(rawSpec);
+    const normalized = this.normalizePassSpecValue(rawSpec);
     if (!normalized) return;
 
     const existing = map.get(normalized.id);
     if (!existing) {
       map.set(normalized.id, normalized);
-      return;
-    }
-
-    if (existing.mount !== normalized.mount) {
-      console.warn(
-        `[CanvasService] layer "${normalized.id}" from producer "${producerId}" has mount "${normalized.mount}" but an existing mount "${existing.mount}" is already registered in this flush.`,
-      );
       return;
     }
 
@@ -329,73 +361,85 @@ export default class CanvasService implements Service {
     if (normalized.visibility !== undefined) {
       existing.visibility = normalized.visibility;
     }
-    if (normalized.props && normalized.mount === "group") {
-      existing.props = { ...(existing.props || {}), ...normalized.props };
+    existing.effects.push(...normalized.effects);
+
+    if (normalized.objects.length === 0 && normalized.effects.length === 0) {
+      console.debug(
+        `[CanvasService] pass "${normalized.id}" from producer "${producerId}" updated ordering/visibility only.`,
+      );
     }
   }
 
-  private removeGroupLayer(layerId: string) {
-    const layer = this.getLayer(layerId);
-    if (!layer) return;
-    this.canvas.remove(layer);
-  }
-
-  private compareLayerMeta(a: ManagedLayerMeta, b: ManagedLayerMeta): number {
+  private comparePassMeta(a: ManagedPassMeta, b: ManagedPassMeta): number {
     if (a.stack !== b.stack) return a.stack - b.stack;
     if (a.order !== b.order) return a.order - b.order;
     return a.id.localeCompare(b.id);
   }
 
-  private getLayerCanvasObjects(
-    layerId: string,
-    mount: RenderLayerMount,
-  ): FabricObject[] {
-    if (mount === "group") {
-      const layer = this.getLayer(layerId);
-      return layer ? [layer as any] : [];
-    }
-    const rootObjects = this.getRootLayerObjects(layerId);
-    const all = this.canvas.getObjects();
-    return [...rootObjects].sort((a, b) => all.indexOf(a) - all.indexOf(b));
+  private getPassObjectOrder(obj: FabricObject): number {
+    const raw = Number((obj as any)?.data?.passOrder);
+    return Number.isFinite(raw) ? raw : Number.MAX_SAFE_INTEGER;
   }
 
-  private syncManagedLayerStacking(layers: ManagedLayerMeta[]) {
-    const ordered = [...layers]
-      .sort((a, b) => this.compareLayerMeta(a, b))
-      .map((meta) => ({
-        meta,
-        objects: this.getLayerCanvasObjects(meta.id, meta.mount),
-      }))
-      .filter((entry) => entry.objects.length > 0);
+  private getPassCanvasObjects(passId: string): FabricObject[] {
+    const all = this.canvas.getObjects();
+    return all
+      .filter((obj: any) => obj?.data?.passId === passId)
+      .sort((a, b) => {
+        const orderA = this.getPassObjectOrder(a as FabricObject);
+        const orderB = this.getPassObjectOrder(b as FabricObject);
+        if (orderA !== orderB) return orderA - orderB;
+        return all.indexOf(a) - all.indexOf(b);
+      });
+  }
 
-    let previousMaxIndex = -1;
-    ordered.forEach((entry) => {
-      const canvasObjects = this.canvas.getObjects();
-      const indexes = entry.objects
-        .map((obj) => canvasObjects.indexOf(obj))
-        .filter((index) => index >= 0);
-      if (!indexes.length) return;
+  getPassObjects(passId: string): FabricObject[] {
+    return this.getPassCanvasObjects(passId);
+  }
 
-      const currentMin = Math.min(...indexes);
-      if (previousMaxIndex >= 0 && currentMin <= previousMaxIndex) {
-        let targetIndex = previousMaxIndex + 1;
-        entry.objects.forEach((obj) => {
-          this.moveObjectInContainer(this.canvas, obj as any, targetIndex);
-          targetIndex += 1;
-        });
-        previousMaxIndex = targetIndex - 1;
-        return;
-      }
+  getRootLayerObjects(layerId: string): FabricObject[] {
+    return this.getPassCanvasObjects(layerId);
+  }
 
-      previousMaxIndex = Math.max(...indexes);
+  private isManagedPassObject(obj: FabricObject): boolean {
+    const passId = (obj as any)?.data?.passId;
+    return typeof passId === "string" && this.managedPassMetas.has(passId);
+  }
+
+  private syncManagedPassStacking(passes: ManagedPassMeta[]) {
+    const orderedPasses = [...passes].sort((a, b) => this.comparePassMeta(a, b));
+    if (!orderedPasses.length) return;
+
+    const canvasObjects = this.canvas.getObjects();
+    const managedObjects = canvasObjects.filter((obj: any) =>
+      this.isManagedPassObject(obj as FabricObject),
+    );
+
+    if (!managedObjects.length) return;
+
+    const firstManagedIndex = managedObjects
+      .map((obj) => canvasObjects.indexOf(obj as any))
+      .filter((index) => index >= 0)
+      .reduce((min, value) => Math.min(min, value), Number.MAX_SAFE_INTEGER);
+
+    let targetIndex = Number.isFinite(firstManagedIndex)
+      ? firstManagedIndex
+      : 0;
+
+    orderedPasses.forEach((meta) => {
+      const objects = this.getPassCanvasObjects(meta.id);
+      objects.forEach((obj) => {
+        this.moveObjectInCanvas(obj, targetIndex);
+        targetIndex += 1;
+      });
     });
   }
 
-  private getLayerRuntimeState(): Map<string, VisibilityLayerState> {
+  private getPassRuntimeState(): Map<string, VisibilityLayerState> {
     const state = new Map<string, VisibilityLayerState>();
 
-    const ensure = (layerId: string): VisibilityLayerState => {
-      const id = String(layerId || "").trim();
+    const ensure = (passId: string): VisibilityLayerState => {
+      const id = String(passId || "").trim();
       if (!id) return { exists: false, objectCount: 0 };
       let item = state.get(id);
       if (!item) {
@@ -406,25 +450,15 @@ export default class CanvasService implements Service {
     };
 
     this.canvas.getObjects().forEach((obj: any) => {
-      const layerId = obj?.data?.id;
-      if (obj instanceof Group && typeof layerId === "string") {
-        const item = ensure(layerId);
-        item.exists = true;
-        item.objectCount = Math.max(
-          item.objectCount,
-          (obj.getObjects() as any[]).length,
-        );
-      }
-
-      const rootLayerId = obj?.data?.layerId;
-      if (typeof rootLayerId === "string") {
-        const item = ensure(rootLayerId);
+      const passId = obj?.data?.passId;
+      if (typeof passId === "string") {
+        const item = ensure(passId);
         item.exists = true;
         item.objectCount += 1;
       }
     });
 
-    this.managedLayerMetas.forEach((meta) => {
+    this.managedPassMetas.forEach((meta) => {
       const item = ensure(meta.id);
       item.exists = true;
     });
@@ -432,9 +466,9 @@ export default class CanvasService implements Service {
     return state;
   }
 
-  private applyManagedLayerVisibility(options: { render?: boolean } = {}): boolean {
-    if (!this.managedLayerMetas.size) return false;
-    const layers = this.getLayerRuntimeState();
+  private applyManagedPassVisibility(options: { render?: boolean } = {}): boolean {
+    if (!this.managedPassMetas.size) return false;
+    const layers = this.getPassRuntimeState();
     const activeToolId = this.workbenchService?.activeToolId ?? null;
     const isSessionActive = (toolId: string) => {
       if (!this.toolSessionService) return false;
@@ -443,13 +477,13 @@ export default class CanvasService implements Service {
 
     let changed = false;
 
-    this.managedLayerMetas.forEach((meta) => {
+    this.managedPassMetas.forEach((meta) => {
       const visible = evaluateVisibilityExpr(meta.visibility, {
         activeToolId,
         isSessionActive,
         layers,
       });
-      changed = this.setLayerVisibility(meta.id, visible, meta.mount) || changed;
+      changed = this.setPassVisibility(meta.id, visible) || changed;
     });
 
     if (changed && options.render !== false) {
@@ -458,17 +492,17 @@ export default class CanvasService implements Service {
     return changed;
   }
 
-  private scheduleManagedLayerVisibilityRefresh() {
+  private scheduleManagedPassVisibilityRefresh() {
     if (this.visibilityRefreshScheduled) return;
     this.visibilityRefreshScheduled = true;
     void Promise.resolve().then(() => {
       this.visibilityRefreshScheduled = false;
-      this.applyManagedLayerVisibility();
+      this.applyManagedPassVisibility();
     });
   }
 
   private async collectAndApplyProducerSpecs(): Promise<void> {
-    const layers = new Map<string, ResolvedRenderLayerSpec>();
+    const passes = new Map<string, ResolvedRenderPassSpec>();
     const entries = this.sortedRenderProducerEntries();
 
     this.producerApplyInProgress = true;
@@ -477,8 +511,8 @@ export default class CanvasService implements Service {
         try {
           const result = await entry.producer();
           if (!result) continue;
-          const specs = Array.isArray(result.layers) ? result.layers : [];
-          specs.forEach((spec) => this.mergeLayerSpec(layers, spec, entry.toolId));
+          const specs = Array.isArray(result.passes) ? result.passes : [];
+          specs.forEach((spec) => this.mergePassSpec(passes, spec, entry.toolId));
         } catch (error) {
           console.error(
             `[CanvasService] render producer "${entry.toolId}" failed.`,
@@ -487,71 +521,49 @@ export default class CanvasService implements Service {
         }
       }
 
-      const nextLayerIds = new Set<string>();
-      const nextRootLayerIds = new Set<string>();
-      const nextManagedLayerMetas = new Map<string, ManagedLayerMeta>();
+      const nextPassIds = new Set<string>();
+      const nextManagedPassMetas = new Map<string, ManagedPassMeta>();
+      const nextEffects: ResolvedClipPathEffectSpec[] = [];
 
-      for (const layer of layers.values()) {
-        nextManagedLayerMetas.set(layer.id, {
-          id: layer.id,
-          mount: layer.mount,
-          stack: layer.stack,
-          order: layer.order,
-          visibility: layer.visibility,
+      for (const pass of passes.values()) {
+        nextPassIds.add(pass.id);
+        nextManagedPassMetas.set(pass.id, {
+          id: pass.id,
+          stack: pass.stack,
+          order: pass.order,
+          visibility: pass.visibility,
         });
 
-        if (layer.mount === "group") {
-          nextLayerIds.add(layer.id);
-          if (layer.replace) {
-            const existingLayer = this.getLayer(layer.id);
-            if (existingLayer) {
-              (existingLayer.getObjects() as any[]).forEach((obj) =>
-                existingLayer.remove(obj),
-              );
-            }
-          }
-          await this.applyLayerSpec(
-            {
-              id: layer.id,
-              mount: "group",
-              stack: layer.stack,
-              order: layer.order,
-              replace: layer.replace,
-              visibility: layer.visibility,
-              objects: layer.objects,
-              props: layer.props,
-            },
-            { render: false },
-          );
-          continue;
-        }
-
-        nextRootLayerIds.add(layer.id);
-        if (layer.replace) {
-          const existing = this.getRootLayerObjects(layer.id) as any[];
-          existing.forEach((obj) => this.canvas.remove(obj));
-        }
-        await this.applyObjectSpecsToRootLayer(layer.id, layer.objects, {
+        await this.applyObjectSpecsToPass(pass.id, pass.objects, {
           render: false,
+          replace: pass.replace,
+        });
+
+        pass.effects.forEach((effect, index) => {
+          const normalized = this.normalizeClipPathEffectSpec(
+            effect,
+            pass.id,
+            index,
+          );
+          if (!normalized) return;
+          nextEffects.push(normalized);
         });
       }
 
-      for (const layerId of this.managedProducerLayerIds) {
-        if (nextLayerIds.has(layerId)) continue;
-        this.removeGroupLayer(layerId);
+      for (const passId of this.managedProducerPassIds) {
+        if (nextPassIds.has(passId)) continue;
+        await this.applyObjectSpecsToPass(passId, [], {
+          render: false,
+          replace: true,
+        });
       }
 
-      for (const layerId of this.managedProducerRootLayerIds) {
-        if (nextRootLayerIds.has(layerId)) continue;
-        await this.applyObjectSpecsToRootLayer(layerId, [], { render: false });
-      }
+      this.managedProducerPassIds = nextPassIds;
+      this.managedPassMetas = nextManagedPassMetas;
 
-      this.managedProducerLayerIds = nextLayerIds;
-      this.managedProducerRootLayerIds = nextRootLayerIds;
-      this.managedLayerMetas = nextManagedLayerMetas;
-
-      this.syncManagedLayerStacking(Array.from(nextManagedLayerMetas.values()));
-      this.applyManagedLayerVisibility({ render: false });
+      this.syncManagedPassStacking(Array.from(nextManagedPassMetas.values()));
+      await this.applyManagedPassEffects(nextEffects);
+      this.applyManagedPassVisibility({ render: false });
     } finally {
       this.producerApplyInProgress = false;
     }
@@ -559,56 +571,59 @@ export default class CanvasService implements Service {
     this.requestRenderAll();
   }
 
-  /**
-   * Get a layer (Group) by its ID.
-   * We assume layers are Groups directly on the canvas with a data.id property.
-   */
-  getLayer(id: string): Group | undefined {
+  private async applyManagedPassEffects(effects: ResolvedClipPathEffectSpec[]) {
+    const effectTargetMap = new Map<FabricObject, ResolvedClipPathEffectSpec>();
+
+    for (const effect of effects) {
+      if (effect.type !== "clipPath") continue;
+      effect.targetPassIds.forEach((targetPassId) => {
+        this.getPassCanvasObjects(targetPassId).forEach((obj) => {
+          effectTargetMap.set(obj, effect);
+        });
+      });
+    }
+
+    const managedObjects = this.canvas.getObjects().filter((obj: any) =>
+      this.isManagedPassObject(obj as FabricObject),
+    ) as FabricObject[];
+
+    const effectTemplateCache = new Map<string, FabricObject | null>();
+
+    for (const obj of managedObjects) {
+      const targetEffect = effectTargetMap.get(obj);
+      if (!targetEffect) {
+        this.clearClipPathEffectFromObject(obj as any);
+        continue;
+      }
+
+      let template = effectTemplateCache.get(targetEffect.key);
+      if (template === undefined) {
+        template = await this.createClipPathTemplate(targetEffect);
+        effectTemplateCache.set(targetEffect.key, template);
+      }
+
+      if (!template) {
+        this.clearClipPathEffectFromObject(obj as any);
+        continue;
+      }
+
+      await this.applyClipPathEffectToObject(
+        obj as any,
+        template,
+        targetEffect.key,
+      );
+    }
+  }
+
+  getObject(id: string, passId?: string): FabricObject | undefined {
+    const normalizedId = String(id || "").trim();
+    if (!normalizedId) return undefined;
+
     return this.canvas.getObjects().find((obj: any) => {
-      if (!(obj instanceof Group)) return false;
-      return (obj as any).data?.id === id;
-    }) as
-      | Group
-      | undefined;
-  }
-
-  /**
-   * Create a layer (Group) with the given ID if it doesn't exist.
-   */
-  createLayer(id: string, options: any = {}): Group {
-    let layer = this.getLayer(id);
-    if (!layer) {
-      const defaultOptions = {
-        selectable: false,
-        evented: false,
-        ...options,
-        data: { ...options.data, id },
-      };
-      layer = new Group([], defaultOptions);
-      this.canvas.add(layer);
-      return layer;
-    }
-
-    const nextData = {
-      ...((layer as any).data || {}),
-      ...(options.data || {}),
-      id,
-    };
-    layer.set({ ...options, data: nextData });
-    layer.setCoords();
-    return layer;
-  }
-
-  /**
-   * Find an object by ID, optionally within a specific layer.
-   */
-  getObject(id: string, layerId?: string): FabricObject | undefined {
-    if (layerId) {
-      const layer = this.getLayer(layerId);
-      if (!layer) return undefined;
-      return layer.getObjects().find((obj: any) => obj.data?.id === id);
-    }
-    return this.canvas.getObjects().find((obj: any) => obj.data?.id === id);
+      if (obj?.data?.id !== normalizedId) return false;
+      if (!passId) return true;
+      return obj?.data?.passId === passId;
+    }) as FabricObject | undefined;
   }
 
   requestRenderAll() {
@@ -863,101 +878,210 @@ export default class CanvasService implements Service {
     return next;
   }
 
-  setLayerVisibility(
-    layerId: string,
-    visible: boolean,
-    mount?: RenderLayerMount,
-  ): boolean {
+  setPassVisibility(passId: string, visible: boolean): boolean {
+    const objects = this.getPassCanvasObjects(passId) as any[];
     let changed = false;
 
-    if (mount !== "root") {
-      const layer = this.getLayer(layerId);
-      if (layer && layer.visible !== visible) {
-        layer.set({ visible });
-        layer.setCoords();
-        changed = true;
-      }
-    }
-
-    if (mount !== "group") {
-      const objects = this.getRootLayerObjects(layerId) as any[];
-      objects.forEach((obj) => {
-        if (obj.visible === visible) return;
-        obj.set?.({ visible });
-        obj.setCoords?.();
-        changed = true;
-      });
-    }
+    objects.forEach((obj) => {
+      if (obj.visible === visible) return;
+      obj.set?.({ visible });
+      obj.setCoords?.();
+      changed = true;
+    });
 
     return changed;
   }
 
-  bringLayerToFront(layerId: string) {
-    const layer = this.getLayer(layerId);
-    if (layer) {
-      this.canvas.bringObjectToFront(layer);
-    }
-    const objects = this.getRootLayerObjects(layerId) as any[];
+  setLayerVisibility(layerId: string, visible: boolean): boolean {
+    return this.setPassVisibility(layerId, visible);
+  }
+
+  bringPassToFront(passId: string) {
+    const objects = this.getPassCanvasObjects(passId) as any[];
     objects.forEach((obj) => this.canvas.bringObjectToFront(obj as any));
   }
 
-  async applyLayerSpec(
-    spec: RenderLayerSpec,
-    options: { render?: boolean } = {},
-  ): Promise<void> {
-    if (spec.mount === "root") {
-      await this.applyObjectSpecsToRootLayer(spec.id, spec.objects, options);
-      return;
-    }
-    const layer = this.createLayer(spec.id, spec.props || {});
-    await this.applyObjectSpecsToContainer(layer, spec.objects, options);
+  bringLayerToFront(layerId: string) {
+    this.bringPassToFront(layerId);
   }
 
-  async applyObjectSpecsToLayer(
-    layerId: string,
-    objects: RenderObjectSpec[],
+  async applyPassSpec(
+    spec: RenderPassSpec,
     options: { render?: boolean } = {},
   ): Promise<void> {
-    const layer = this.createLayer(layerId, {});
-    await this.applyObjectSpecsToContainer(layer, objects, options);
-  }
-
-  getRootLayerObjects(layerId: string): FabricObject[] {
-    return this.canvas
-      .getObjects()
-      .filter((obj: any) => obj?.data?.layerId === layerId);
+    await this.applyObjectSpecsToPass(spec.id, spec.objects, {
+      render: options.render,
+      replace: spec.replace !== false,
+    });
   }
 
   async applyObjectSpecsToRootLayer(
-    layerId: string,
+    passId: string,
     specs: RenderObjectSpec[],
     options: { render?: boolean } = {},
   ): Promise<void> {
-    const desiredIds = new Set(specs.map((s) => s.id));
-    const existing = this.getRootLayerObjects(layerId) as any[];
-    existing.forEach((obj) => {
-      const id = obj?.data?.id;
-      if (typeof id === "string" && !desiredIds.has(id)) {
-        this.canvas.remove(obj);
-      }
+    await this.applyObjectSpecsToPass(passId, specs, {
+      render: options.render,
+      replace: true,
+    });
+  }
+
+  private normalizeObjectSpecs(specs: RenderObjectSpec[]): RenderObjectSpec[] {
+    const seen = new Set<string>();
+    const normalized: RenderObjectSpec[] = [];
+
+    (specs || []).forEach((spec) => {
+      const id = String(spec?.id || "").trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      normalized.push({
+        ...spec,
+        id,
+      });
     });
 
+    return normalized;
+  }
+
+  private async cloneFabricObject(
+    source: FabricObject,
+  ): Promise<FabricObject | undefined> {
+    const clone = (source as any).clone;
+    if (typeof clone !== "function") return undefined;
+
+    const result = clone.call(source);
+    if (!result || typeof result.then !== "function") {
+      return undefined;
+    }
+
+    try {
+      const copied = (await result) as FabricObject;
+      return copied;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async createClipPathTemplate(
+    effect: ResolvedClipPathEffectSpec,
+  ): Promise<FabricObject | null> {
+    const source = effect.source;
+    const sourceId = String(source.id || "").trim();
+    if (!sourceId) return null;
+
+    const template = await this.createFabricObject({
+      ...source,
+      id: sourceId,
+      data: {
+        ...(source.data || {}),
+        id: sourceId,
+        type: "clip-path-effect-template",
+        effectKey: effect.key,
+      },
+      props: {
+        ...(source.props || {}),
+        selectable: false,
+        evented: false,
+        excludeFromExport: true,
+      },
+    });
+    if (!template) return null;
+
+    (template as any).set?.({
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+      absolutePositioned: true,
+    });
+    (template as any).setCoords?.();
+    return template;
+  }
+
+  private isClipPathEffectManaged(target: any): boolean {
+    return typeof target?.__pooderEffectClipKey === "string";
+  }
+
+  private clearClipPathEffectFromObject(target: any) {
+    if (!target) return;
+    if (!this.isClipPathEffectManaged(target)) return;
+    target.set?.({ clipPath: undefined });
+    target.setCoords?.();
+    delete target.__pooderEffectClipKey;
+  }
+
+  private async applyClipPathEffectToObject(
+    target: any,
+    clipTemplate: FabricObject,
+    effectKey: string,
+  ) {
+    if (!target) return;
+
+    const clipPath = await this.cloneFabricObject(clipTemplate);
+    if (!clipPath) {
+      this.clearClipPathEffectFromObject(target);
+      return;
+    }
+
+    (clipPath as any).set?.({
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+      absolutePositioned: true,
+    });
+    (clipPath as any).setCoords?.();
+
+    target.set?.({ clipPath });
+    target.setCoords?.();
+    target.__pooderEffectClipKey = effectKey;
+  }
+
+  async applyObjectSpecsToPass(
+    passId: string,
+    specs: RenderObjectSpec[],
+    options: {
+      render?: boolean;
+      replace?: boolean;
+    } = {},
+  ): Promise<void> {
+    const normalizedPassId = String(passId || "").trim();
+    if (!normalizedPassId) return;
+
+    const replace = options.replace !== false;
+    const normalizedSpecs = this.normalizeObjectSpecs(specs);
+    const desiredIds = new Set(normalizedSpecs.map((s) => s.id));
+
+    const existing = this.getPassCanvasObjects(normalizedPassId) as any[];
+    if (replace) {
+      existing.forEach((obj) => {
+        const id = obj?.data?.id;
+        if (typeof id === "string" && !desiredIds.has(id)) {
+          this.canvas.remove(obj);
+        }
+      });
+    }
+
     const byId = new Map<string, any>();
-    this.getRootLayerObjects(layerId).forEach((obj: any) => {
+    this.getPassCanvasObjects(normalizedPassId).forEach((obj: any) => {
       const id = obj?.data?.id;
       if (typeof id === "string") byId.set(id, obj);
     });
 
-    for (let index = 0; index < specs.length; index += 1) {
-      const spec = specs[index];
+    for (let index = 0; index < normalizedSpecs.length; index += 1) {
+      const spec = normalizedSpecs[index];
       let current = byId.get(spec.id);
-      if (
-        current &&
-        spec.type === "image" &&
-        spec.src &&
-        current.getSrc &&
-        current.getSrc() !== spec.src
-      ) {
+
+      if (spec.type === "path") {
+        const nextPathData = this.readPathDataFromSpec(spec);
+        if (!nextPathData || !nextPathData.trim()) {
+          if (current) {
+            this.canvas.remove(current);
+            byId.delete(spec.id);
+          }
+          continue;
+        }
+      }
+
+      if (current && this.shouldRecreateObject(current, spec)) {
         this.canvas.remove(current);
         byId.delete(spec.id);
         current = undefined;
@@ -966,69 +1090,23 @@ export default class CanvasService implements Service {
       if (!current) {
         const created = await this.createFabricObject(spec);
         if (!created) continue;
-        this.patchFabricObject(created as any, spec, { layerId });
+        this.patchFabricObject(created as any, spec, {
+          passId: normalizedPassId,
+          layerId: normalizedPassId,
+          passOrder: index,
+        });
         this.canvas.add(created as any);
         byId.set(spec.id, created);
         continue;
       }
 
-      this.patchFabricObject(current, spec, { layerId });
+      this.patchFabricObject(current, spec, {
+        passId: normalizedPassId,
+        layerId: normalizedPassId,
+        passOrder: index,
+      });
     }
 
-    if (options.render !== false) {
-      this.requestRenderAll();
-    }
-  }
-
-  private async applyObjectSpecsToContainer(
-    container: Group,
-    specs: RenderObjectSpec[],
-    options: { render?: boolean } = {},
-  ): Promise<void> {
-    const desiredIds = new Set(specs.map((s) => s.id));
-    const existing = container.getObjects() as any[];
-    existing.forEach((obj) => {
-      const id = obj?.data?.id;
-      if (typeof id === "string" && !desiredIds.has(id)) {
-        container.remove(obj);
-      }
-    });
-
-    const byId = new Map<string, any>();
-    (container.getObjects() as any[]).forEach((obj) => {
-      const id = obj?.data?.id;
-      if (typeof id === "string") byId.set(id, obj);
-    });
-
-    for (let index = 0; index < specs.length; index += 1) {
-      const spec = specs[index];
-      let current = byId.get(spec.id);
-      if (
-        current &&
-        spec.type === "image" &&
-        spec.src &&
-        current.getSrc &&
-        current.getSrc() !== spec.src
-      ) {
-        container.remove(current);
-        byId.delete(spec.id);
-        current = undefined;
-      }
-
-      if (!current) {
-        const created = await this.createFabricObject(spec);
-        if (!created) continue;
-        container.add(created as any);
-        current = created as any;
-        byId.set(spec.id, current);
-      } else {
-        this.patchFabricObject(current, spec);
-      }
-
-      this.moveObjectInContainer(container, current, index);
-    }
-
-    container.dirty = true;
     if (options.render !== false) {
       this.requestRenderAll();
     }
@@ -1045,9 +1123,63 @@ export default class CanvasService implements Service {
       ...(extraData || {}),
       id: spec.id,
     };
+    nextData.__renderSourceKey = this.getSpecRenderSourceKey(spec);
     const props = this.resolveFabricProps(spec, spec.props || {});
     obj.set({ ...props, data: nextData });
     obj.setCoords();
+  }
+
+  private readPathDataFromSpec(spec: RenderObjectSpec): string | undefined {
+    if (spec.type !== "path") return undefined;
+    const raw =
+      (spec.props as any)?.path ||
+      (spec.props as any)?.pathData;
+    if (typeof raw !== "string") return undefined;
+    return raw;
+  }
+
+  private hashText(value: string): string {
+    let hash = 2166136261;
+    for (let i = 0; i < value.length; i += 1) {
+      hash ^= value.charCodeAt(i);
+      hash +=
+        (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    }
+    return (hash >>> 0).toString(16);
+  }
+
+  private getSpecRenderSourceKey(spec: RenderObjectSpec): string {
+    switch (spec.type) {
+      case "path": {
+        const pathData = this.readPathDataFromSpec(spec) || "";
+        return `path:${this.hashText(pathData)}`;
+      }
+      case "image":
+        return `image:${String(spec.src || "")}`;
+      case "text":
+        return `text:${String((spec.props as any)?.text ?? "")}`;
+      case "rect":
+        return "rect";
+      default:
+        return String(spec.type || "");
+    }
+  }
+
+  private shouldRecreateObject(current: any, spec: RenderObjectSpec): boolean {
+    if (!current) return true;
+
+    const currentType = String(current?.type || "").toLowerCase();
+    if (currentType !== spec.type) return true;
+
+    const expectedKey = this.getSpecRenderSourceKey(spec);
+    const currentKey = String(current?.data?.__renderSourceKey || "");
+    if (currentKey && expectedKey && currentKey !== expectedKey) return true;
+
+    if (spec.type === "image" && spec.src && current.getSrc) {
+      return current.getSrc() !== spec.src;
+    }
+
+    return false;
   }
 
   private resolveFabricProps(
@@ -1059,6 +1191,7 @@ export default class CanvasService implements Service {
     if (space === "screen") {
       return next;
     }
+
     const hasLeft = Number.isFinite(next.left);
     const hasTop = Number.isFinite(next.top);
     if (hasLeft || hasTop) {
@@ -1069,6 +1202,7 @@ export default class CanvasService implements Service {
       if (hasLeft) next.left = mapped.x;
       if (hasTop) next.top = mapped.y;
     }
+
     const rawScaleX = Number.isFinite(next.scaleX) ? Number(next.scaleX) : 1;
     const rawScaleY = Number.isFinite(next.scaleY) ? Number(next.scaleY) : 1;
     const sceneScale = this.getSceneScale();
@@ -1077,28 +1211,25 @@ export default class CanvasService implements Service {
     return next;
   }
 
-  private moveObjectInContainer(
-    container: Group | Canvas,
-    obj: any,
-    index: number,
-  ) {
+  private moveObjectInCanvas(obj: any, index: number) {
     if (!obj) return;
 
-    const moveObjectTo = (container as any).moveObjectTo;
+    const moveObjectTo = (this.canvas as any).moveObjectTo;
     if (typeof moveObjectTo === "function") {
-      moveObjectTo.call(container, obj, index);
+      moveObjectTo.call(this.canvas, obj, index);
       return;
     }
 
-    const list = (container as any)._objects as any[] | undefined;
+    const list = (this.canvas as any)._objects as any[] | undefined;
     if (!Array.isArray(list)) return;
     const from = list.indexOf(obj);
     if (from < 0 || from === index) return;
+
     list.splice(from, 1);
     const target = Math.max(0, Math.min(index, list.length));
     list.splice(target, 0, obj);
-    if (typeof (container as any)._onStackOrderChanged === "function") {
-      (container as any)._onStackOrderChanged();
+    if (typeof (this.canvas as any)._onStackOrderChanged === "function") {
+      (this.canvas as any)._onStackOrderChanged();
     }
   }
 
@@ -1116,8 +1247,7 @@ export default class CanvasService implements Service {
     }
 
     if (spec.type === "path") {
-      const pathData =
-        (spec.props as any)?.path || (spec.props as any)?.pathData;
+      const pathData = this.readPathDataFromSpec(spec);
       if (!pathData) return undefined;
       const props = this.resolveFabricProps(spec, spec.props || {});
       const path = new Path(pathData, {
