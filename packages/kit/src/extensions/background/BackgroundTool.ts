@@ -29,6 +29,27 @@ interface Rect {
 
 export type BackgroundLayerKind = "color" | "image";
 export type BackgroundFitMode = "cover" | "contain" | "stretch";
+export type BackgroundRegionUnit = "normalized" | "px";
+export type BackgroundRegistrationFrame =
+  | "trim"
+  | "cut"
+  | "bleed"
+  | "focus"
+  | "viewport";
+
+export interface BackgroundRegistrationRegion {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  unit: BackgroundRegionUnit;
+}
+
+export interface BackgroundRegistration {
+  sourceRegion?: BackgroundRegistrationRegion;
+  targetFrame?: BackgroundRegistrationFrame;
+  fit?: BackgroundFitMode;
+}
 
 export interface BackgroundLayer {
   id: string;
@@ -41,6 +62,7 @@ export interface BackgroundLayer {
   exportable: boolean;
   color?: string;
   src?: string;
+  registration?: BackgroundRegistration;
 }
 
 export interface BackgroundConfig {
@@ -98,6 +120,32 @@ function normalizeFitMode(
   return fallback;
 }
 
+function normalizeRegionUnit(
+  value: unknown,
+  fallback: BackgroundRegionUnit,
+): BackgroundRegionUnit {
+  if (value === "px" || value === "normalized") {
+    return value;
+  }
+  return fallback;
+}
+
+function normalizeRegistrationFrame(
+  value: unknown,
+  fallback: BackgroundRegistrationFrame,
+): BackgroundRegistrationFrame {
+  if (
+    value === "trim" ||
+    value === "cut" ||
+    value === "bleed" ||
+    value === "focus" ||
+    value === "viewport"
+  ) {
+    return value;
+  }
+  return fallback;
+}
+
 function normalizeAnchor(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
@@ -108,6 +156,86 @@ function normalizeOrder(value: unknown, fallback: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return numeric;
+}
+
+function normalizeRegionValue(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeRegistrationRegion(
+  raw: unknown,
+  fallback?: BackgroundRegistrationRegion,
+): BackgroundRegistrationRegion | undefined {
+  if (!raw || typeof raw !== "object") {
+    return fallback ? { ...fallback } : undefined;
+  }
+
+  const input = raw as Partial<BackgroundRegistrationRegion>;
+  const base = fallback || {
+    left: 0,
+    top: 0,
+    width: 1,
+    height: 1,
+    unit: "normalized" as BackgroundRegionUnit,
+  };
+
+  return {
+    left: normalizeRegionValue(input.left, base.left),
+    top: normalizeRegionValue(input.top, base.top),
+    width: normalizeRegionValue(input.width, base.width),
+    height: normalizeRegionValue(input.height, base.height),
+    unit: normalizeRegionUnit(input.unit, base.unit),
+  };
+}
+
+function normalizeRegistration(
+  raw: unknown,
+  fallback?: BackgroundRegistration,
+): BackgroundRegistration | undefined {
+  if (!raw || typeof raw !== "object") {
+    return fallback
+      ? {
+          sourceRegion: fallback.sourceRegion
+            ? { ...fallback.sourceRegion }
+            : undefined,
+          targetFrame: fallback.targetFrame,
+          fit: fallback.fit,
+        }
+      : undefined;
+  }
+
+  const input = raw as Partial<BackgroundRegistration>;
+  const normalized: BackgroundRegistration = {
+    sourceRegion: normalizeRegistrationRegion(
+      input.sourceRegion,
+      fallback?.sourceRegion,
+    ),
+    targetFrame: normalizeRegistrationFrame(
+      input.targetFrame,
+      fallback?.targetFrame || "trim",
+    ),
+    fit: normalizeFitMode(input.fit, fallback?.fit || "stretch"),
+  };
+
+  if (!normalized.sourceRegion) {
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function cloneRegistration(
+  registration?: BackgroundRegistration,
+): BackgroundRegistration | undefined {
+  if (!registration) return undefined;
+  return {
+    sourceRegion: registration.sourceRegion
+      ? { ...registration.sourceRegion }
+      : undefined,
+    targetFrame: registration.targetFrame,
+    fit: registration.fit,
+  };
 }
 
 function normalizeLayer(
@@ -128,7 +256,10 @@ function normalizeLayer(
   };
 
   if (!raw || typeof raw !== "object") {
-    return { ...fallbackLayer };
+    return {
+      ...fallbackLayer,
+      registration: cloneRegistration(fallbackLayer.registration),
+    };
   }
 
   const input = raw as Partial<BackgroundLayer>;
@@ -166,6 +297,10 @@ function normalizeLayer(
           : typeof fallbackLayer.src === "string"
             ? fallbackLayer.src
             : ""
+        : undefined,
+    registration:
+      kind === "image"
+        ? normalizeRegistration(input.registration, fallbackLayer.registration)
         : undefined,
   };
 }
@@ -207,7 +342,10 @@ function normalizeConfig(raw: unknown): BackgroundConfig {
 function cloneConfig(config: BackgroundConfig): BackgroundConfig {
   return {
     version: config.version,
-    layers: (config.layers || []).map((layer) => ({ ...layer })),
+    layers: (config.layers || []).map((layer) => ({
+      ...layer,
+      registration: cloneRegistration(layer.registration),
+    })),
   };
 }
 
@@ -501,6 +639,44 @@ export class BackgroundTool implements Extension {
     };
   }
 
+  private resolveTargetFrameRect(frame: BackgroundRegistrationFrame): Rect | null {
+    if (frame === "viewport") {
+      return this.getViewportRect();
+    }
+
+    const layout = this.resolveSceneLayout();
+    if (!layout) {
+      return frame === "focus" ? this.getViewportRect() : null;
+    }
+
+    switch (frame) {
+      case "trim":
+      case "focus":
+        return {
+          left: layout.trimRect.left,
+          top: layout.trimRect.top,
+          width: layout.trimRect.width,
+          height: layout.trimRect.height,
+        };
+      case "cut":
+        return {
+          left: layout.cutRect.left,
+          top: layout.cutRect.top,
+          width: layout.cutRect.width,
+          height: layout.cutRect.height,
+        };
+      case "bleed":
+        return {
+          left: layout.bleedRect.left,
+          top: layout.bleedRect.top,
+          width: layout.bleedRect.width,
+          height: layout.bleedRect.height,
+        };
+      default:
+        return null;
+    }
+  }
+
   private resolveAnchorRect(anchor: string): Rect {
     if (anchor === "focus") {
       return this.resolveFocusRect() || this.getViewportRect();
@@ -548,6 +724,85 @@ export class BackgroundTool implements Extension {
     };
   }
 
+  private resolveRegistrationRegion(
+    region: BackgroundRegistrationRegion,
+    sourceSize: SourceSize,
+  ): Rect | null {
+    const sourceWidth = Math.max(1, Number(sourceSize.width || 0));
+    const sourceHeight = Math.max(1, Number(sourceSize.height || 0));
+    const width =
+      region.unit === "normalized" ? region.width * sourceWidth : region.width;
+    const height =
+      region.unit === "normalized"
+        ? region.height * sourceHeight
+        : region.height;
+    const left =
+      region.unit === "normalized" ? region.left * sourceWidth : region.left;
+    const top =
+      region.unit === "normalized" ? region.top * sourceHeight : region.top;
+
+    if (
+      !Number.isFinite(left) ||
+      !Number.isFinite(top) ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      return null;
+    }
+
+    return { left, top, width, height };
+  }
+
+  private resolveRegistrationPlacement(
+    layer: BackgroundLayer,
+    sourceSize: SourceSize,
+  ): { left: number; top: number; scaleX: number; scaleY: number } | null {
+    const registration = layer.registration;
+    if (!registration?.sourceRegion) return null;
+
+    const targetRect = this.resolveTargetFrameRect(
+      registration.targetFrame || "trim",
+    );
+    if (!targetRect) return null;
+
+    const sourceRegion = this.resolveRegistrationRegion(
+      registration.sourceRegion,
+      sourceSize,
+    );
+    if (!sourceRegion) return null;
+
+    const fit = registration.fit || "stretch";
+    const baseScaleX = targetRect.width / sourceRegion.width;
+    const baseScaleY = targetRect.height / sourceRegion.height;
+
+    if (fit === "stretch") {
+      return {
+        left: targetRect.left - sourceRegion.left * baseScaleX,
+        top: targetRect.top - sourceRegion.top * baseScaleY,
+        scaleX: baseScaleX,
+        scaleY: baseScaleY,
+      };
+    }
+
+    const uniformScale =
+      fit === "contain"
+        ? Math.min(baseScaleX, baseScaleY)
+        : Math.max(baseScaleX, baseScaleY);
+    const alignedWidth = sourceRegion.width * uniformScale;
+    const alignedHeight = sourceRegion.height * uniformScale;
+    const offsetLeft = targetRect.left + (targetRect.width - alignedWidth) / 2;
+    const offsetTop = targetRect.top + (targetRect.height - alignedHeight) / 2;
+
+    return {
+      left: offsetLeft - sourceRegion.left * uniformScale,
+      top: offsetTop - sourceRegion.top * uniformScale,
+      scaleX: uniformScale,
+      scaleY: uniformScale,
+    };
+  }
+
   private buildColorLayerSpec(layer: BackgroundLayer): RenderObjectSpec {
     const rect = this.resolveAnchorRect(layer.anchor);
 
@@ -585,8 +840,13 @@ export class BackgroundTool implements Extension {
     const sourceSize = this.sourceSizeCache.getSourceSize(src);
     if (!sourceSize) return [];
 
-    const rect = this.resolveAnchorRect(layer.anchor);
-    const placement = this.resolveImagePlacement(rect, sourceSize, layer.fit);
+    const placement =
+      this.resolveRegistrationPlacement(layer, sourceSize) ||
+      this.resolveImagePlacement(
+        this.resolveAnchorRect(layer.anchor),
+        sourceSize,
+        layer.fit,
+      );
 
     return [
       {
