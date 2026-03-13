@@ -1,5 +1,12 @@
 # @pooder/vue
 
+## 4.4.2
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/kit@6.1.2
+
 ## 4.4.1
 
 ### Patch Changes

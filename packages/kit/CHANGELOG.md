@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 6.1.2
+
+### Patch Changes
+
+- snapping
+
 ## 6.1.1
 
 ### Patch Changes
