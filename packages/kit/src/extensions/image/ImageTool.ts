@@ -10,11 +10,16 @@ import {
   Canvas as FabricCanvas,
   Control,
   Image as FabricImage,
+  Path as FabricPath,
   Pattern,
   Point,
   controlsUtils,
 } from "fabric";
-import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../../services";
+import {
+  CanvasService,
+  RenderLayoutRect,
+  RenderObjectSpec,
+} from "../../services";
 import { isDielineShape, normalizeShapeStyle } from "../dielineShape";
 import type { DielineShape, DielineShapeStyle } from "../dielineShape";
 import { generateDielinePath, getPathBounds } from "../geometry";
@@ -140,10 +145,40 @@ interface ImageControlDescriptor {
   create: () => Control;
 }
 
+type SnapAxis = "x" | "y";
+type SnapLineKind = "edge" | "center";
+type SnapLineId =
+  | "frame-left"
+  | "frame-center-x"
+  | "frame-right"
+  | "frame-top"
+  | "frame-center-y"
+  | "frame-bottom";
+
+interface SnapMatch {
+  axis: SnapAxis;
+  lineId: SnapLineId;
+  kind: SnapLineKind;
+  lineScene: number;
+  deltaScene: number;
+}
+
+interface SnapCandidate {
+  axis: SnapAxis;
+  lineId: SnapLineId;
+  kind: SnapLineKind;
+  lineScene: number;
+  deltaScene: number;
+}
+
 const IMAGE_DEFAULT_CONTROL_CAPABILITIES: ImageControlCapability[] = [
   "rotate",
   "scale",
 ];
+
+const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
+const IMAGE_MOVE_SNAP_RELEASE_THRESHOLD_PX = 10;
+const IMAGE_SNAP_GUIDE_LAYER_ID = "image.snapGuide";
 
 const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
   {
@@ -199,6 +234,11 @@ export class ImageTool implements Extension {
   private cropShapeHatchPatternKey?: string;
   private imageSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
+  private activeSnapX: SnapMatch | null = null;
+  private activeSnapY: SnapMatch | null = null;
+  private snapGuideXObject?: FabricPath;
+  private snapGuideYObject?: FabricPath;
+  private canvasObjectMovingHandler?: (e: any) => void;
   private renderProducerDisposable?: { dispose: () => void };
   private readonly subscriptions = new SubscriptionBag();
   private imageControlsByCapabilityKey: Map<string, Record<string, Control>> =
@@ -247,9 +287,18 @@ export class ImageTool implements Extension {
       }),
       { priority: 300 },
     );
+    this.bindCanvasInteractionHandlers();
 
-    this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
-    this.subscriptions.on(context.eventBus, "object:modified", this.onObjectModified);
+    this.subscriptions.on(
+      context.eventBus,
+      "tool:activated",
+      this.onToolActivated,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "object:modified",
+      this.onObjectModified,
+    );
     this.subscriptions.on(
       context.eventBus,
       "selection:created",
@@ -328,6 +377,8 @@ export class ImageTool implements Extension {
     this.imageSpecs = [];
     this.overlaySpecs = [];
     this.imageControlsByCapabilityKey.clear();
+    this.clearSnapGuides();
+    this.unbindCanvasInteractionHandlers();
 
     this.clearRenderedImages();
     this.renderProducerDisposable?.dispose();
@@ -347,6 +398,7 @@ export class ImageTool implements Extension {
     const before = this.isToolActive;
     this.syncToolActiveFromWorkbench(event.id);
     if (!this.isToolActive) {
+      this.clearSnapGuides();
       this.setImageFocus(null, {
         syncCanvasSelection: true,
         skipRender: true,
@@ -396,6 +448,7 @@ export class ImageTool implements Extension {
   };
 
   private onSelectionCleared = () => {
+    this.clearSnapGuides();
     this.setImageFocus(null, {
       syncCanvasSelection: false,
       skipRender: true,
@@ -405,12 +458,329 @@ export class ImageTool implements Extension {
   };
 
   private onSceneLayoutChanged = () => {
+    this.updateSnapGuideVisuals();
     this.updateImages();
   };
 
   private onSceneGeometryChanged = () => {
     this.updateImages();
   };
+
+  private bindCanvasInteractionHandlers() {
+    if (!this.canvasService || this.canvasObjectMovingHandler) return;
+    this.canvasObjectMovingHandler = (e: any) => {
+      this.handleCanvasObjectMoving(e);
+    };
+    this.canvasService.canvas.on(
+      "object:moving",
+      this.canvasObjectMovingHandler,
+    );
+  }
+
+  private unbindCanvasInteractionHandlers() {
+    if (!this.canvasService || !this.canvasObjectMovingHandler) return;
+    this.canvasService.canvas.off(
+      "object:moving",
+      this.canvasObjectMovingHandler,
+    );
+    this.canvasObjectMovingHandler = undefined;
+  }
+
+  private getActiveImageTarget(target: any): any | null {
+    if (!this.isToolActive) return null;
+    if (!target) return null;
+    if (target?.data?.layerId !== IMAGE_OBJECT_LAYER_ID) return null;
+    if (typeof target?.data?.id !== "string") return null;
+    return target;
+  }
+
+  private getTargetBoundsScene(target: any): FrameRect | null {
+    if (!this.canvasService || !target) return null;
+    const rawBounds =
+      typeof target.getBoundingRect === "function"
+        ? target.getBoundingRect()
+        : {
+            left: Number(target.left || 0),
+            top: Number(target.top || 0),
+            width: Number(target.width || 0),
+            height: Number(target.height || 0),
+          };
+    return this.canvasService.toSceneRect({
+      left: Number(rawBounds.left || 0),
+      top: Number(rawBounds.top || 0),
+      width: Number(rawBounds.width || 0),
+      height: Number(rawBounds.height || 0),
+    });
+  }
+
+  private getSnapThresholdScene(px: number): number {
+    if (!this.canvasService) return px;
+    return this.canvasService.toSceneLength(px);
+  }
+
+  private pickSnapMatch(
+    candidates: SnapCandidate[],
+    previous: SnapMatch | null,
+  ): SnapMatch | null {
+    if (!candidates.length) return null;
+
+    const snapThreshold = this.getSnapThresholdScene(
+      IMAGE_MOVE_SNAP_THRESHOLD_PX,
+    );
+    const releaseThreshold = this.getSnapThresholdScene(
+      IMAGE_MOVE_SNAP_RELEASE_THRESHOLD_PX,
+    );
+
+    if (previous) {
+      const sticky = candidates.find((candidate) => {
+        return (
+          candidate.lineId === previous.lineId &&
+          Math.abs(candidate.deltaScene) <= releaseThreshold
+        );
+      });
+      if (sticky) return sticky;
+    }
+
+    let best: SnapCandidate | null = null;
+    candidates.forEach((candidate) => {
+      if (Math.abs(candidate.deltaScene) > snapThreshold) return;
+      if (!best || Math.abs(candidate.deltaScene) < Math.abs(best.deltaScene)) {
+        best = candidate;
+      }
+    });
+    return best;
+  }
+
+  private computeMoveSnapMatches(
+    target: any,
+    frame: FrameRect,
+  ): { x: SnapMatch | null; y: SnapMatch | null } {
+    const bounds = this.getTargetBoundsScene(target);
+    if (!bounds || frame.width <= 0 || frame.height <= 0) {
+      return { x: null, y: null };
+    }
+
+    const xCandidates: SnapCandidate[] = [
+      {
+        axis: "x",
+        lineId: "frame-left",
+        kind: "edge",
+        lineScene: frame.left,
+        deltaScene: frame.left - bounds.left,
+      },
+      {
+        axis: "x",
+        lineId: "frame-center-x",
+        kind: "center",
+        lineScene: frame.left + frame.width / 2,
+        deltaScene:
+          frame.left + frame.width / 2 - (bounds.left + bounds.width / 2),
+      },
+      {
+        axis: "x",
+        lineId: "frame-right",
+        kind: "edge",
+        lineScene: frame.left + frame.width,
+        deltaScene: frame.left + frame.width - (bounds.left + bounds.width),
+      },
+    ];
+    const yCandidates: SnapCandidate[] = [
+      {
+        axis: "y",
+        lineId: "frame-top",
+        kind: "edge",
+        lineScene: frame.top,
+        deltaScene: frame.top - bounds.top,
+      },
+      {
+        axis: "y",
+        lineId: "frame-center-y",
+        kind: "center",
+        lineScene: frame.top + frame.height / 2,
+        deltaScene:
+          frame.top + frame.height / 2 - (bounds.top + bounds.height / 2),
+      },
+      {
+        axis: "y",
+        lineId: "frame-bottom",
+        kind: "edge",
+        lineScene: frame.top + frame.height,
+        deltaScene: frame.top + frame.height - (bounds.top + bounds.height),
+      },
+    ];
+
+    return {
+      x: this.pickSnapMatch(xCandidates, this.activeSnapX),
+      y: this.pickSnapMatch(yCandidates, this.activeSnapY),
+    };
+  }
+
+  private areSnapMatchesEqual(
+    a: SnapMatch | null,
+    b: SnapMatch | null,
+  ): boolean {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return a.lineId === b.lineId && a.axis === b.axis && a.kind === b.kind;
+  }
+
+  private updateSnapMatchState(
+    nextX: SnapMatch | null,
+    nextY: SnapMatch | null,
+  ) {
+    const changed =
+      !this.areSnapMatchesEqual(this.activeSnapX, nextX) ||
+      !this.areSnapMatchesEqual(this.activeSnapY, nextY);
+    this.activeSnapX = nextX;
+    this.activeSnapY = nextY;
+    if (changed) {
+      this.updateSnapGuideVisuals();
+    }
+  }
+
+  private clearSnapGuides() {
+    this.activeSnapX = null;
+    this.activeSnapY = null;
+    this.removeSnapGuideObject("x");
+    this.removeSnapGuideObject("y");
+    this.canvasService?.requestRenderAll();
+  }
+
+  private removeSnapGuideObject(axis: SnapAxis) {
+    if (!this.canvasService) return;
+    const canvas = this.canvasService.canvas;
+    const current =
+      axis === "x" ? this.snapGuideXObject : this.snapGuideYObject;
+    if (!current) return;
+    canvas.remove(current);
+    if (axis === "x") {
+      this.snapGuideXObject = undefined;
+      return;
+    }
+    this.snapGuideYObject = undefined;
+  }
+
+  private createOrUpdateSnapGuideObject(axis: SnapAxis, pathData: string) {
+    if (!this.canvasService) return;
+    const canvas = this.canvasService.canvas;
+    const color =
+      this.getConfig<string>("image.control.borderColor", "#1677ff") ||
+      "#1677ff";
+    const strokeWidth = 1;
+    this.removeSnapGuideObject(axis);
+
+    const created = new FabricPath(pathData, {
+      originX: "left",
+      originY: "top",
+      fill: "rgba(0,0,0,0)",
+      stroke: color,
+      strokeWidth,
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+      objectCaching: false,
+      data: {
+        id: `${IMAGE_SNAP_GUIDE_LAYER_ID}.${axis}`,
+        layerId: IMAGE_SNAP_GUIDE_LAYER_ID,
+        type: "image-snap-guide",
+      },
+    } as any);
+    created.setCoords();
+    canvas.add(created);
+    canvas.bringObjectToFront(created);
+    if (axis === "x") {
+      this.snapGuideXObject = created;
+      return;
+    }
+    this.snapGuideYObject = created;
+  }
+
+  private updateSnapGuideVisuals() {
+    if (!this.canvasService || !this.isImageEditingVisible()) {
+      this.removeSnapGuideObject("x");
+      this.removeSnapGuideObject("y");
+      return;
+    }
+
+    const frame = this.getFrameRect();
+    if (frame.width <= 0 || frame.height <= 0) {
+      this.removeSnapGuideObject("x");
+      this.removeSnapGuideObject("y");
+      return;
+    }
+    const frameScreen = this.getFrameRectScreen(frame);
+
+    if (this.activeSnapX) {
+      const x = this.canvasService.toScreenPoint({
+        x: this.activeSnapX.lineScene,
+        y: frame.top,
+      }).x;
+      this.createOrUpdateSnapGuideObject(
+        "x",
+        `M ${x} ${frameScreen.top} L ${x} ${frameScreen.top + frameScreen.height}`,
+      );
+    } else {
+      this.removeSnapGuideObject("x");
+    }
+
+    if (this.activeSnapY) {
+      const y = this.canvasService.toScreenPoint({
+        x: frame.left,
+        y: this.activeSnapY.lineScene,
+      }).y;
+      this.createOrUpdateSnapGuideObject(
+        "y",
+        `M ${frameScreen.left} ${y} L ${frameScreen.left + frameScreen.width} ${y}`,
+      );
+    } else {
+      this.removeSnapGuideObject("y");
+    }
+
+    this.canvasService.requestRenderAll();
+  }
+
+  private handleCanvasObjectMoving(e: any) {
+    const target = this.getActiveImageTarget(e?.target);
+    if (!target || !this.canvasService) return;
+
+    const frame = this.getFrameRect();
+    if (frame.width <= 0 || frame.height <= 0) {
+      this.clearSnapGuides();
+      return;
+    }
+
+    const matches = this.computeMoveSnapMatches(target, frame);
+    const deltaX = matches.x?.deltaScene ?? 0;
+    const deltaY = matches.y?.deltaScene ?? 0;
+
+    if (deltaX || deltaY) {
+      target.set({
+        left:
+          Number(target.left || 0) + this.canvasService.toScreenLength(deltaX),
+        top:
+          Number(target.top || 0) + this.canvasService.toScreenLength(deltaY),
+      });
+      target.setCoords();
+    }
+
+    this.updateSnapMatchState(matches.x, matches.y);
+  }
+
+  private applySnapMatchesToTarget(
+    target: any,
+    matches: { x: SnapMatch | null; y: SnapMatch | null },
+  ) {
+    if (!this.canvasService || !target) return;
+    const deltaX = matches.x?.deltaScene ?? 0;
+    const deltaY = matches.y?.deltaScene ?? 0;
+    if (!deltaX && !deltaY) return;
+
+    target.set({
+      left: Number(target.left || 0) + this.canvasService.toScreenLength(deltaX),
+      top: Number(target.top || 0) + this.canvasService.toScreenLength(deltaY),
+    });
+    target.setCoords();
+  }
 
   private syncToolActiveFromWorkbench(fallbackId?: string | null) {
     const wb = this.context?.services.get<WorkbenchService>("WorkbenchService");
@@ -1589,6 +1959,7 @@ export class ImageTool implements Extension {
       isImageSelectionActive: this.isImageSelectionActive,
       focusedImageId: this.focusedImageId,
     });
+    this.updateSnapGuideVisuals();
     this.canvasService.requestRenderAll();
   }
 
@@ -1605,6 +1976,9 @@ export class ImageTool implements Extension {
 
     const frame = this.getFrameRect();
     if (!frame.width || !frame.height) return;
+    const matches = this.computeMoveSnapMatches(target, frame);
+    this.applySnapMatchesToTarget(target, matches);
+    this.clearSnapGuides();
 
     const center = target.getCenterPoint
       ? target.getCenterPoint()
