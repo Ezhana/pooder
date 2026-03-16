@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 6.2.0
+
+### Minor Changes
+
+- refactor the dieline feature and modify the image snap
+
 ## 6.1.2
 
 ### Patch Changes

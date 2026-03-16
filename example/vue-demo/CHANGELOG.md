@@ -1,5 +1,12 @@
 # vue-demo
 
+## 3.0.15
+
+### Patch Changes
+
+- refactor the dieline feature and modify the image snap
+  - @pooder/vue@4.4.3
+
 ## 3.0.14
 
 ### Patch Changes
