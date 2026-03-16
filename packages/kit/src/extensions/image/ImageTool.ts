@@ -170,20 +170,12 @@ interface SnapCandidate {
   deltaScene: number;
 }
 
-interface ActiveSnapState {
-  match: SnapMatch;
-  entryPointerScene: number;
-  escapeDirection: -1 | 1;
-}
-
 const IMAGE_DEFAULT_CONTROL_CAPABILITIES: ImageControlCapability[] = [
   "rotate",
   "scale",
 ];
 
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
-const IMAGE_MOVE_SNAP_RELEASE_THRESHOLD_PX = 10;
-const IMAGE_MOVE_SNAP_ESCAPE_THRESHOLD_PX = 12;
 const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
   {
     key: "tl",
@@ -238,11 +230,12 @@ export class ImageTool implements Extension {
   private cropShapeHatchPatternKey?: string;
   private imageSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
-  private activeSnapX: ActiveSnapState | null = null;
-  private activeSnapY: ActiveSnapState | null = null;
+  private activeSnapX: SnapMatch | null = null;
+  private activeSnapY: SnapMatch | null = null;
+  private movingImageId: string | null = null;
   private hasRenderedSnapGuides = false;
   private canvasObjectMovingHandler?: (e: any) => void;
-  private canvasMouseUpHandler?: () => void;
+  private canvasMouseUpHandler?: (e: any) => void;
   private canvasBeforeRenderHandler?: () => void;
   private canvasAfterRenderHandler?: () => void;
   private renderProducerDisposable?: { dispose: () => void };
@@ -383,7 +376,7 @@ export class ImageTool implements Extension {
     this.imageSpecs = [];
     this.overlaySpecs = [];
     this.imageControlsByCapabilityKey.clear();
-    this.clearSnapGuides();
+    this.endMoveSnapInteraction();
     this.unbindCanvasInteractionHandlers();
 
     this.clearRenderedImages();
@@ -404,7 +397,7 @@ export class ImageTool implements Extension {
     const before = this.isToolActive;
     this.syncToolActiveFromWorkbench(event.id);
     if (!this.isToolActive) {
-      this.clearSnapGuides();
+      this.endMoveSnapInteraction();
       this.setImageFocus(null, {
         syncCanvasSelection: true,
         skipRender: true,
@@ -454,7 +447,7 @@ export class ImageTool implements Extension {
   };
 
   private onSelectionCleared = () => {
-    this.clearSnapGuides();
+    this.endMoveSnapInteraction();
     this.setImageFocus(null, {
       syncCanvasSelection: false,
       skipRender: true,
@@ -474,8 +467,21 @@ export class ImageTool implements Extension {
 
   private bindCanvasInteractionHandlers() {
     if (!this.canvasService || this.canvasObjectMovingHandler) return;
-    this.canvasMouseUpHandler = () => {
-      this.clearSnapGuides();
+    this.canvasMouseUpHandler = (e: any) => {
+      const target = this.getActiveImageTarget(e?.target);
+      let applied = false;
+      if (
+        target &&
+        typeof target?.data?.id === "string" &&
+        target.data.id === this.movingImageId
+      ) {
+        this.applyMoveSnapToTarget(target);
+        applied = true;
+      }
+      this.clearSnapPreview();
+      if (applied) {
+        this.movingImageId = null;
+      }
     };
     this.canvasObjectMovingHandler = (e: any) => {
       this.handleCanvasObjectMoving(e);
@@ -559,41 +565,12 @@ export class ImageTool implements Extension {
     return this.canvasService.toSceneLength(px);
   }
 
-  private getTransformPointerScene(e: any): { x: number; y: number } | null {
-    if (Number.isFinite(e?.pointer?.x) && Number.isFinite(e?.pointer?.y)) {
-      return {
-        x: Number(e.pointer.x),
-        y: Number(e.pointer.y),
-      };
-    }
-    if (this.canvasService && e?.e) {
-      return this.canvasService.canvas.getScenePoint(e.e);
-    }
-    return null;
-  }
-
-  private pickSnapMatch(
-    candidates: SnapCandidate[],
-    previous: SnapMatch | null,
-  ): SnapMatch | null {
+  private pickSnapMatch(candidates: SnapCandidate[]): SnapMatch | null {
     if (!candidates.length) return null;
 
     const snapThreshold = this.getSnapThresholdScene(
       IMAGE_MOVE_SNAP_THRESHOLD_PX,
     );
-    const releaseThreshold = this.getSnapThresholdScene(
-      IMAGE_MOVE_SNAP_RELEASE_THRESHOLD_PX,
-    );
-
-    if (previous) {
-      const sticky = candidates.find((candidate) => {
-        return (
-          candidate.lineId === previous.lineId &&
-          Math.abs(candidate.deltaScene) <= releaseThreshold
-        );
-      });
-      if (sticky) return sticky;
-    }
 
     let best: SnapCandidate | null = null;
     candidates.forEach((candidate) => {
@@ -663,8 +640,8 @@ export class ImageTool implements Extension {
     ];
 
     return {
-      x: this.pickSnapMatch(xCandidates, this.activeSnapX?.match ?? null),
-      y: this.pickSnapMatch(yCandidates, this.activeSnapY?.match ?? null),
+      x: this.pickSnapMatch(xCandidates),
+      y: this.pickSnapMatch(yCandidates),
     };
   }
 
@@ -678,18 +655,12 @@ export class ImageTool implements Extension {
   }
 
   private updateSnapMatchState(
-    nextX: ActiveSnapState | null,
-    nextY: ActiveSnapState | null,
+    nextX: SnapMatch | null,
+    nextY: SnapMatch | null,
   ) {
     const changed =
-      !this.areSnapMatchesEqual(
-        this.activeSnapX?.match ?? null,
-        nextX?.match ?? null,
-      ) ||
-      !this.areSnapMatchesEqual(
-        this.activeSnapY?.match ?? null,
-        nextY?.match ?? null,
-      );
+      !this.areSnapMatchesEqual(this.activeSnapX, nextX) ||
+      !this.areSnapMatchesEqual(this.activeSnapY, nextY);
     this.activeSnapX = nextX;
     this.activeSnapY = nextY;
     if (changed) {
@@ -697,53 +668,46 @@ export class ImageTool implements Extension {
     }
   }
 
-  private shouldEscapeActiveSnap(
-    state: ActiveSnapState | null,
-    pointerSceneAxis: number | null,
-  ): boolean {
-    if (!state || !Number.isFinite(pointerSceneAxis)) return false;
-    const escapeThreshold = this.getSnapThresholdScene(
-      IMAGE_MOVE_SNAP_ESCAPE_THRESHOLD_PX,
-    );
-    const delta = Number(pointerSceneAxis) - state.entryPointerScene;
-    return delta * state.escapeDirection >= escapeThreshold;
-  }
-
-  private createActiveSnapState(
-    match: SnapMatch,
-    pointerSceneAxis: number | null,
-  ): ActiveSnapState | null {
-    if (!Number.isFinite(pointerSceneAxis)) return null;
-    const escapeDirection = match.deltaScene > 0 ? -1 : 1;
-    return {
-      match,
-      entryPointerScene: Number(pointerSceneAxis),
-      escapeDirection,
-    };
-  }
-
-  private resolveActiveSnapState(
-    candidate: SnapMatch | null,
-    current: ActiveSnapState | null,
-    pointerSceneAxis: number | null,
-  ): ActiveSnapState | null {
-    if (current && this.shouldEscapeActiveSnap(current, pointerSceneAxis)) {
-      return null;
-    }
-    if (!candidate) {
-      return null;
-    }
-    if (current && this.areSnapMatchesEqual(current.match, candidate)) {
-      return current;
-    }
-    return this.createActiveSnapState(candidate, pointerSceneAxis);
-  }
-
-  private clearSnapGuides() {
+  private clearSnapPreview() {
     this.activeSnapX = null;
     this.activeSnapY = null;
     this.hasRenderedSnapGuides = false;
     this.canvasService?.requestRenderAll();
+  }
+
+  private endMoveSnapInteraction() {
+    this.movingImageId = null;
+    this.clearSnapPreview();
+  }
+
+  private applyMoveSnapToTarget(target: any): {
+    x: SnapMatch | null;
+    y: SnapMatch | null;
+  } {
+    if (!this.canvasService) {
+      return { x: null, y: null };
+    }
+    const frame = this.getFrameRect();
+    if (frame.width <= 0 || frame.height <= 0) {
+      return { x: null, y: null };
+    }
+    const bounds = this.getTargetBoundsScene(target);
+    const matches = this.computeMoveSnapMatches(bounds, frame);
+    const deltaScreenX = this.canvasService.toScreenLength(
+      matches.x?.deltaScene ?? 0,
+    );
+    const deltaScreenY = this.canvasService.toScreenLength(
+      matches.y?.deltaScene ?? 0,
+    );
+    if (deltaScreenX || deltaScreenY) {
+      target.set({
+        left: Number(target.left || 0) + deltaScreenX,
+        top: Number(target.top || 0) + deltaScreenY,
+      });
+      target.setCoords();
+      this.canvasService.requestRenderAll();
+    }
+    return matches;
   }
 
   private handleCanvasBeforeRender() {
@@ -791,7 +755,7 @@ export class ImageTool implements Extension {
 
     if (this.activeSnapX) {
       const x = this.canvasService.toScreenPoint({
-        x: this.activeSnapX.match.lineScene,
+        x: this.activeSnapX.lineScene,
         y: frame.top,
       }).x;
       this.drawSnapGuideLine(
@@ -804,7 +768,7 @@ export class ImageTool implements Extension {
     if (this.activeSnapY) {
       const y = this.canvasService.toScreenPoint({
         x: frame.left,
-        y: this.activeSnapY.match.lineScene,
+        y: this.activeSnapY.lineScene,
       }).y;
       this.drawSnapGuideLine(
         { x: frameScreen.left, y },
@@ -818,55 +782,17 @@ export class ImageTool implements Extension {
   private handleCanvasObjectMoving(e: any) {
     const target = this.getActiveImageTarget(e?.target);
     if (!target || !this.canvasService) return;
+    this.movingImageId =
+      typeof target?.data?.id === "string" ? target.data.id : null;
 
     const frame = this.getFrameRect();
     if (frame.width <= 0 || frame.height <= 0) {
-      this.clearSnapGuides();
+      this.endMoveSnapInteraction();
       return;
     }
     const rawBounds = this.getTargetBoundsScene(target);
-    const pointerScene = this.getTransformPointerScene(e);
-    const candidateMatches = this.computeMoveSnapMatches(rawBounds, frame);
-    const nextSnapX = this.resolveActiveSnapState(
-      candidateMatches.x,
-      this.activeSnapX,
-      pointerScene?.x ?? null,
-    );
-    const nextSnapY = this.resolveActiveSnapState(
-      candidateMatches.y,
-      this.activeSnapY,
-      pointerScene?.y ?? null,
-    );
-    const deltaScreenX = this.canvasService.toScreenLength(
-      nextSnapX?.match.deltaScene ?? 0,
-    );
-    const deltaScreenY = this.canvasService.toScreenLength(
-      nextSnapY?.match.deltaScene ?? 0,
-    );
-    if (deltaScreenX || deltaScreenY) {
-      target.set({
-        left: Number(target.left || 0) + deltaScreenX,
-        top: Number(target.top || 0) + deltaScreenY,
-      });
-      target.setCoords();
-      const enteredX =
-        !!nextSnapX &&
-        (!this.activeSnapX ||
-          !this.areSnapMatchesEqual(this.activeSnapX.match, nextSnapX.match));
-      const enteredY =
-        !!nextSnapY &&
-        (!this.activeSnapY ||
-          !this.areSnapMatchesEqual(this.activeSnapY.match, nextSnapY.match));
-      if (e?.transform) {
-        if (enteredX) {
-          e.transform.offsetX = Number(e.transform.offsetX || 0) - deltaScreenX;
-        }
-        if (enteredY) {
-          e.transform.offsetY = Number(e.transform.offsetY || 0) - deltaScreenY;
-        }
-      }
-    }
-    this.updateSnapMatchState(nextSnapX, nextSnapY);
+    const matches = this.computeMoveSnapMatches(rawBounds, frame);
+    this.updateSnapMatchState(matches.x, matches.y);
   }
 
   private syncToolActiveFromWorkbench(fallbackId?: string | null) {
@@ -2035,9 +1961,12 @@ export class ImageTool implements Extension {
     const id = target?.data?.id;
     const layerId = target?.data?.layerId;
     if (typeof id !== "string" || layerId !== IMAGE_OBJECT_LAYER_ID) return;
+    if (this.movingImageId === id) {
+      this.applyMoveSnapToTarget(target);
+    }
     const frame = this.getFrameRect();
+    this.endMoveSnapInteraction();
     if (!frame.width || !frame.height) return;
-    this.clearSnapGuides();
 
     const center = target.getCenterPoint
       ? target.getCenterPoint()
