@@ -5,6 +5,7 @@ export const WHITE_INK_OBJECT_LAYER_ID = "white-ink.user";
 export const WHITE_INK_COVER_LAYER_ID = "white-ink.cover";
 export const WHITE_INK_OVERLAY_LAYER_ID = "white-ink.overlay";
 export const DIELINE_LAYER_ID = "dieline-overlay";
+export const FEATURE_DIELINE_LAYER_ID = "feature-dieline-overlay";
 export const FEATURE_OVERLAY_LAYER_ID = "feature-overlay";
 export const RULER_LAYER_ID = "ruler-overlay";
 export const FILM_LAYER_ID = "overlay";
@@ -17,6 +18,7 @@ export const LAYER_IDS = {
   whiteInkCover: WHITE_INK_COVER_LAYER_ID,
   whiteInkOverlay: WHITE_INK_OVERLAY_LAYER_ID,
   dieline: DIELINE_LAYER_ID,
+  featureDieline: FEATURE_DIELINE_LAYER_ID,
   featureOverlay: FEATURE_OVERLAY_LAYER_ID,
   rulerOverlay: RULER_LAYER_ID,
   filmOverlay: FILM_LAYER_ID,

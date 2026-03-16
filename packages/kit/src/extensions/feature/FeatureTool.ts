@@ -6,17 +6,31 @@ import {
   ConfigurationService,
   ToolSessionService,
 } from "@pooder/core";
-import { CanvasService, RenderObjectSpec } from "../../services";
+import { Pattern } from "fabric";
+import {
+  CanvasService,
+  RenderEffectSpec,
+  RenderObjectSpec,
+  RenderPassSpec,
+} from "../../services";
 import { resolveFeaturePosition } from "../geometry";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
 import {
+  computeSceneLayout,
   readSizeState,
   type SceneGeometrySnapshot as DielineGeometry,
 } from "../../shared/scene/sceneLayoutModel";
-import { FEATURE_OVERLAY_LAYER_ID } from "../../shared/constants/layers";
+import {
+  DIELINE_LAYER_ID,
+  FEATURE_DIELINE_LAYER_ID,
+  FEATURE_OVERLAY_LAYER_ID,
+  IMAGE_OBJECT_LAYER_ID,
+} from "../../shared/constants/layers";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import { cloneWithJson } from "../../shared/runtime/sessionState";
+import { buildDielineRenderBundle } from "../dieline/renderBuilder";
+import { readDielineState } from "../dieline/model";
 const FEATURE_STROKE_WIDTH = 2;
 const DEFAULT_RECT_SIZE = 10;
 const DEFAULT_CIRCLE_RADIUS = 5;
@@ -68,7 +82,9 @@ export class FeatureTool implements Extension {
   private hasWorkingChanges = false;
   private dirtyTrackerDisposable?: { dispose(): void };
   private renderProducerDisposable?: { dispose: () => void };
-  private specs: RenderObjectSpec[] = [];
+  private markerSpecs: RenderObjectSpec[] = [];
+  private sessionDielineSpecs: RenderObjectSpec[] = [];
+  private sessionDielineEffects: RenderEffectSpec[] = [];
   private renderSeq = 0;
   private readonly subscriptions = new SubscriptionBag();
 
@@ -103,16 +119,38 @@ export class FeatureTool implements Extension {
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
-      () => ({
-        passes: [
+      () => {
+        const passes: RenderPassSpec[] = [
           {
             id: FEATURE_OVERLAY_LAYER_ID,
             stack: 880,
             order: 0,
-            objects: this.specs,
+            replace: true,
+            objects: this.markerSpecs,
           },
-        ],
-      }),
+        ];
+        if (this.isSessionVisible()) {
+          passes.push(
+            {
+              id: DIELINE_LAYER_ID,
+              stack: 700,
+              order: 0,
+              replace: false,
+              visibility: { op: "const", value: false },
+              objects: [],
+            },
+            {
+              id: FEATURE_DIELINE_LAYER_ID,
+              stack: 705,
+              order: 0,
+              replace: true,
+              effects: this.sessionDielineEffects,
+              objects: this.sessionDielineSpecs,
+            },
+          );
+        }
+        return { passes };
+      },
       { priority: 350 },
     );
 
@@ -142,6 +180,12 @@ export class FeatureTool implements Extension {
             this.hasWorkingChanges = false;
             this.redraw();
             this.emitWorkingChange();
+            return;
+          }
+
+          if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
+            void this.refreshGeometry();
+            this.redraw({ enforceConstraints: true });
           }
         },
       );
@@ -180,6 +224,10 @@ export class FeatureTool implements Extension {
 
   private updateVisibility() {
     this.redraw();
+  }
+
+  private isSessionVisible(): boolean {
+    return this.isToolActive && this.isFeatureSessionActive;
   }
 
   contribute() {
@@ -631,10 +679,35 @@ export class FeatureTool implements Extension {
     }
 
     this.renderSeq += 1;
-    this.specs = [];
+    this.markerSpecs = [];
+    this.sessionDielineSpecs = [];
+    this.sessionDielineEffects = [];
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
     void this.canvasService.flushRenderFromProducers();
+  }
+
+  private createHatchPattern(color: string = "rgba(0, 0, 0, 0.3)") {
+    if (typeof document === "undefined") {
+      return undefined;
+    }
+    const size = 20;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.clearRect(0, 0, size, size);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, size);
+      ctx.lineTo(size, 0);
+      ctx.stroke();
+    }
+    return new Pattern({
+      source: canvas,
+    } as any);
   }
 
   private getDraggableMarkerTarget(target: any): any | null {
@@ -732,6 +805,7 @@ export class FeatureTool implements Extension {
     next[index] = updatedFeature;
     this.setWorkingFeatures(next);
     this.hasWorkingChanges = true;
+    this.redraw();
     this.emitWorkingChange();
   }
 
@@ -775,6 +849,7 @@ export class FeatureTool implements Extension {
     if (!changed) return;
     this.setWorkingFeatures(next);
     this.hasWorkingChanges = true;
+    this.redraw();
     this.emitWorkingChange();
   }
 
@@ -786,7 +861,10 @@ export class FeatureTool implements Extension {
     if (!this.canvasService) return;
 
     const seq = ++this.renderSeq;
-    this.specs = this.buildFeatureSpecs();
+    this.markerSpecs = this.buildMarkerSpecs();
+    const sessionRender = this.buildSessionDielineRender();
+    this.sessionDielineSpecs = sessionRender.specs;
+    this.sessionDielineEffects = sessionRender.effects;
     if (seq !== this.renderSeq) return;
 
     await this.canvasService.flushRenderFromProducers();
@@ -796,7 +874,57 @@ export class FeatureTool implements Extension {
     }
   }
 
-  private buildFeatureSpecs(): RenderObjectSpec[] {
+  private buildSessionDielineRender(): {
+    specs: RenderObjectSpec[];
+    effects: RenderEffectSpec[];
+  } {
+    if (!this.isSessionVisible() || !this.canvasService) {
+      return { specs: [], effects: [] };
+    }
+    const configService = this.getConfigService();
+    if (!configService) {
+      return { specs: [], effects: [] };
+    }
+    const sceneLayout = computeSceneLayout(
+      this.canvasService,
+      readSizeState(configService),
+    );
+    if (!sceneLayout) {
+      return { specs: [], effects: [] };
+    }
+
+    const state = readDielineState(configService);
+    state.features = this.cloneFeatures(this.workingFeatures);
+
+    return buildDielineRenderBundle({
+      state,
+      sceneLayout,
+      canvasWidth: sceneLayout.canvasWidth || this.canvasService.canvas.width || 800,
+      canvasHeight:
+        sceneLayout.canvasHeight || this.canvasService.canvas.height || 600,
+      hasImages: this.hasImageItems(),
+      createHatchPattern: (color) => this.createHatchPattern(color),
+      clipTargetPassIds: [IMAGE_OBJECT_LAYER_ID],
+      clipVisibility: { op: "const", value: true },
+      ids: {
+        inside: "feature.session.dieline.inside",
+        bleedZone: "feature.session.dieline.bleed-zone",
+        offsetBorder: "feature.session.dieline.offset-border",
+        border: "feature.session.dieline.border",
+        clip: "feature.session.dieline.clip.image",
+        clipSource: "feature.session.dieline.effect.clip-path",
+      },
+    });
+  }
+
+  private hasImageItems(): boolean {
+    const configService = this.getConfigService();
+    if (!configService) return false;
+    const items = configService.get("image.items", []) as unknown;
+    return Array.isArray(items) && items.length > 0;
+  }
+
+  private buildMarkerSpecs(): RenderObjectSpec[] {
     if (
       !this.isFeatureSessionActive ||
       !this.currentGeometry ||

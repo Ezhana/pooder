@@ -6,19 +6,8 @@ import {
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
 import { CanvasService, RenderEffectSpec, RenderObjectSpec } from "../../services";
-import { parseLengthToMm } from "../../units";
-import {
-  DEFAULT_DIELINE_SHAPE,
-  DEFAULT_DIELINE_SHAPE_STYLE,
-  normalizeShapeStyle,
-  normalizeDielineShape,
-} from "../dielineShape";
-import type { DielineShape, DielineShapeStyle } from "../dielineShape";
-import {
-  generateDielinePath,
-  generateBleedZonePath,
-  DielineFeature,
-} from "../geometry";
+import { generateDielinePath } from "../geometry";
+import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
 import {
   buildSceneGeometry,
   computeSceneLayout,
@@ -30,49 +19,13 @@ import {
 } from "../../shared/constants/layers";
 import { createDielineCommands } from "./commands";
 import { createDielineConfigurations } from "./config";
-
-export interface DielineGeometry {
-  shape: DielineShape;
-  shapeStyle: DielineShapeStyle;
-  unit: "px";
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  radius: number;
-  offset: number;
-  borderLength?: number;
-  scale?: number;
-  strokeWidth?: number;
-  pathData?: string;
-  customSourceWidthPx?: number;
-  customSourceHeightPx?: number;
-}
-
-export interface LineStyle {
-  width: number;
-  color: string;
-  dashLength: number;
-  style: "solid" | "dashed" | "hidden";
-}
-
-export interface DielineState {
-  shape: DielineShape;
-  shapeStyle: DielineShapeStyle;
-  width: number;
-  height: number;
-  radius: number;
-  offset: number;
-  padding: number | string;
-  mainLine: LineStyle;
-  offsetLine: LineStyle;
-  insideColor: string;
-  showBleedLines: boolean;
-  features: DielineFeature[];
-  pathData?: string;
-  customSourceWidthPx?: number;
-  customSourceHeightPx?: number;
-}
+import {
+  createDefaultDielineState,
+  DielineGeometry,
+  DielineState,
+  readDielineState,
+} from "./model";
+import { buildDielineRenderBundle } from "./renderBuilder";
 
 export class DielineTool implements Extension {
   id = "pooder.kit.dieline";
@@ -80,30 +33,7 @@ export class DielineTool implements Extension {
     name: "DielineTool",
   };
 
-  private state: DielineState = {
-    shape: DEFAULT_DIELINE_SHAPE,
-    shapeStyle: { ...DEFAULT_DIELINE_SHAPE_STYLE },
-    width: 500,
-    height: 500,
-    radius: 0,
-    offset: 0,
-    padding: 140,
-    mainLine: {
-      width: 2.7,
-      color: "#FF0000",
-      dashLength: 5,
-      style: "solid",
-    },
-    offsetLine: {
-      width: 2.7,
-      color: "#FF0000",
-      dashLength: 5,
-      style: "solid",
-    },
-    insideColor: "rgba(0,0,0,0)",
-    showBleedLines: true,
-    features: [],
-  };
+  private state: DielineState = createDefaultDielineState();
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
@@ -174,166 +104,12 @@ export class DielineTool implements Extension {
       "ConfigurationService",
     );
     if (configService) {
-      // Load initial config
-      const s = this.state;
-      const sizeState = readSizeState(configService);
-      s.shape = normalizeDielineShape(
-        configService.get("dieline.shape", s.shape),
-        s.shape,
-      );
-      s.shapeStyle = normalizeShapeStyle(
-        configService.get("dieline.shapeStyle", s.shapeStyle),
-        s.shapeStyle,
-      );
-      s.width = sizeState.actualWidthMm;
-      s.height = sizeState.actualHeightMm;
-      s.radius = parseLengthToMm(
-        configService.get("dieline.radius", s.radius),
-        "mm",
-      );
-      s.padding = sizeState.viewPadding;
-      s.offset =
-        sizeState.cutMode === "outset"
-          ? sizeState.cutMarginMm
-          : sizeState.cutMode === "inset"
-            ? -sizeState.cutMarginMm
-            : 0;
-
-      // Main Line
-      s.mainLine.width = configService.get(
-        "dieline.strokeWidth",
-        s.mainLine.width,
-      );
-      s.mainLine.color = configService.get(
-        "dieline.strokeColor",
-        s.mainLine.color,
-      );
-      s.mainLine.dashLength = configService.get(
-        "dieline.dashLength",
-        s.mainLine.dashLength,
-      );
-      s.mainLine.style = configService.get("dieline.style", s.mainLine.style);
-
-      // Offset Line
-      s.offsetLine.width = configService.get(
-        "dieline.offsetStrokeWidth",
-        s.offsetLine.width,
-      );
-      s.offsetLine.color = configService.get(
-        "dieline.offsetStrokeColor",
-        s.offsetLine.color,
-      );
-      s.offsetLine.dashLength = configService.get(
-        "dieline.offsetDashLength",
-        s.offsetLine.dashLength,
-      );
-      s.offsetLine.style = configService.get(
-        "dieline.offsetStyle",
-        s.offsetLine.style,
-      );
-
-      s.insideColor = configService.get("dieline.insideColor", s.insideColor);
-      s.showBleedLines = configService.get(
-        "dieline.showBleedLines",
-        s.showBleedLines,
-      );
-      s.features = configService.get("dieline.features", s.features);
-      s.pathData = configService.get("dieline.pathData", s.pathData);
-      const sourceWidth = Number(
-        configService.get("dieline.customSourceWidthPx", 0),
-      );
-      const sourceHeight = Number(
-        configService.get("dieline.customSourceHeightPx", 0),
-      );
-      s.customSourceWidthPx =
-        Number.isFinite(sourceWidth) && sourceWidth > 0
-          ? sourceWidth
-          : undefined;
-      s.customSourceHeightPx =
-        Number.isFinite(sourceHeight) && sourceHeight > 0
-          ? sourceHeight
-          : undefined;
+      Object.assign(this.state, readDielineState(configService, this.state));
 
       // Listen for changes
       configService.onAnyChange((e: { key: string; value: any }) => {
-        if (e.key.startsWith("size.")) {
-          const nextSize = readSizeState(configService);
-          s.width = nextSize.actualWidthMm;
-          s.height = nextSize.actualHeightMm;
-          s.padding = nextSize.viewPadding;
-          s.offset =
-            nextSize.cutMode === "outset"
-              ? nextSize.cutMarginMm
-              : nextSize.cutMode === "inset"
-                ? -nextSize.cutMarginMm
-                : 0;
-          this.updateDieline();
-          return;
-        }
-
-        if (e.key.startsWith("dieline.")) {
-          switch (e.key) {
-            case "dieline.shape":
-              s.shape = normalizeDielineShape(e.value, s.shape);
-              break;
-            case "dieline.shapeStyle":
-              s.shapeStyle = normalizeShapeStyle(e.value, s.shapeStyle);
-              break;
-            case "dieline.radius":
-              s.radius = parseLengthToMm(e.value, "mm");
-              break;
-
-            case "dieline.strokeWidth":
-              s.mainLine.width = e.value;
-              break;
-            case "dieline.strokeColor":
-              s.mainLine.color = e.value;
-              break;
-            case "dieline.dashLength":
-              s.mainLine.dashLength = e.value;
-              break;
-            case "dieline.style":
-              s.mainLine.style = e.value;
-              break;
-
-            case "dieline.offsetStrokeWidth":
-              s.offsetLine.width = e.value;
-              break;
-            case "dieline.offsetStrokeColor":
-              s.offsetLine.color = e.value;
-              break;
-            case "dieline.offsetDashLength":
-              s.offsetLine.dashLength = e.value;
-              break;
-            case "dieline.offsetStyle":
-              s.offsetLine.style = e.value;
-              break;
-
-            case "dieline.insideColor":
-              s.insideColor = e.value;
-              break;
-            case "dieline.showBleedLines":
-              s.showBleedLines = e.value;
-              break;
-            case "dieline.features":
-              s.features = e.value;
-              break;
-            case "dieline.pathData":
-              s.pathData = e.value;
-              break;
-            case "dieline.customSourceWidthPx":
-              s.customSourceWidthPx =
-                Number.isFinite(Number(e.value)) && Number(e.value) > 0
-                  ? Number(e.value)
-                  : undefined;
-              break;
-            case "dieline.customSourceHeightPx":
-              s.customSourceHeightPx =
-                Number.isFinite(Number(e.value)) && Number(e.value) > 0
-                  ? Number(e.value)
-                  : undefined;
-              break;
-          }
+        if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
+          Object.assign(this.state, readDielineState(configService, this.state));
           this.updateDieline();
         }
       });
@@ -413,316 +189,39 @@ export class DielineTool implements Extension {
     return Array.isArray(items) && items.length > 0;
   }
 
-  private syncSizeState(configService: ConfigurationService) {
-    const sizeState = readSizeState(configService);
-    this.state.width = sizeState.actualWidthMm;
-    this.state.height = sizeState.actualHeightMm;
-    this.state.padding = sizeState.viewPadding;
-    this.state.offset =
-      sizeState.cutMode === "outset"
-        ? sizeState.cutMarginMm
-        : sizeState.cutMode === "inset"
-          ? -sizeState.cutMarginMm
-      : 0;
-  }
-
   private buildDielineSpecs(
     sceneLayout: NonNullable<ReturnType<typeof computeSceneLayout>>,
   ): RenderObjectSpec[] {
-    const {
-      shape,
-      shapeStyle,
-      radius,
-      mainLine,
-      offsetLine,
-      insideColor,
-      showBleedLines,
-      features,
-    } = this.state;
     const hasImages = this.hasImageItems();
-
-    const canvasW =
-      sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800;
-    const canvasH =
-      sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600;
-    const scale = sceneLayout.scale;
-    const cx = sceneLayout.trimRect.centerX;
-    const cy = sceneLayout.trimRect.centerY;
-
-    const visualWidth = sceneLayout.trimRect.width;
-    const visualHeight = sceneLayout.trimRect.height;
-    const visualRadius = radius * scale;
-    const cutW = sceneLayout.cutRect.width;
-    const cutH = sceneLayout.cutRect.height;
-    const visualOffset = (cutW - visualWidth) / 2;
-    const cutR =
-      visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
-
-    const absoluteFeatures = (features || []).map((f) => ({
-      ...f,
-      x: f.x,
-      y: f.y,
-      width: (f.width || 0) * scale,
-      height: (f.height || 0) * scale,
-      radius: (f.radius || 0) * scale,
-    }));
-    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
-
-    const specs: RenderObjectSpec[] = [];
-
-    if (
-      insideColor &&
-      insideColor !== "transparent" &&
-      insideColor !== "rgba(0,0,0,0)" &&
-      !hasImages
-    ) {
-      const productPathData = generateDielinePath({
-        shape,
-        width: cutW,
-        height: cutH,
-        radius: cutR,
-        x: cx,
-        y: cy,
-        features: cutFeatures,
-        shapeStyle,
-        pathData: this.state.pathData,
-        customSourceWidthPx: this.state.customSourceWidthPx,
-        customSourceHeightPx: this.state.customSourceHeightPx,
-        canvasWidth: canvasW,
-        canvasHeight: canvasH,
-      });
-
-      specs.push({
-        id: "dieline.inside",
-        type: "path",
-        space: "screen",
-        data: { id: "dieline.inside", type: "dieline" },
-        props: {
-          pathData: productPathData,
-          fill: insideColor,
-          stroke: null,
-          selectable: false,
-          evented: false,
-          originX: "left",
-          originY: "top",
-        },
-      });
-    }
-
-    if (Math.abs(visualOffset) > 0.0001) {
-      const bleedPathData = generateBleedZonePath(
-        {
-          shape,
-          width: visualWidth,
-          height: visualHeight,
-          radius: visualRadius,
-          x: cx,
-          y: cy,
-          features: cutFeatures,
-          shapeStyle,
-          pathData: this.state.pathData,
-          customSourceWidthPx: this.state.customSourceWidthPx,
-          customSourceHeightPx: this.state.customSourceHeightPx,
-          canvasWidth: canvasW,
-          canvasHeight: canvasH,
-        },
-        {
-          shape,
-          width: cutW,
-          height: cutH,
-          radius: cutR,
-          x: cx,
-          y: cy,
-          features: cutFeatures,
-          shapeStyle,
-          pathData: this.state.pathData,
-          customSourceWidthPx: this.state.customSourceWidthPx,
-          customSourceHeightPx: this.state.customSourceHeightPx,
-          canvasWidth: canvasW,
-          canvasHeight: canvasH,
-        },
-        visualOffset,
-      );
-
-      if (showBleedLines !== false) {
-        const pattern = this.createHatchPattern(mainLine.color);
-        if (pattern) {
-          specs.push({
-            id: "dieline.bleed-zone",
-            type: "path",
-            space: "screen",
-            data: { id: "dieline.bleed-zone", type: "dieline" },
-            props: {
-              pathData: bleedPathData,
-              fill: pattern,
-              stroke: null,
-              selectable: false,
-              evented: false,
-              objectCaching: false,
-              originX: "left",
-              originY: "top",
-            },
-          });
-        }
-      }
-
-      const offsetPathData = generateDielinePath({
-        shape,
-        width: cutW,
-        height: cutH,
-        radius: cutR,
-        x: cx,
-        y: cy,
-        features: cutFeatures,
-        shapeStyle,
-        pathData: this.state.pathData,
-        customSourceWidthPx: this.state.customSourceWidthPx,
-        customSourceHeightPx: this.state.customSourceHeightPx,
-        canvasWidth: canvasW,
-        canvasHeight: canvasH,
-      });
-
-      specs.push({
-        id: "dieline.offset-border",
-        type: "path",
-        space: "screen",
-        data: { id: "dieline.offset-border", type: "dieline" },
-        props: {
-          pathData: offsetPathData,
-          fill: null,
-          stroke: offsetLine.style === "hidden" ? null : offsetLine.color,
-          strokeWidth: offsetLine.width,
-          strokeDashArray:
-            offsetLine.style === "dashed"
-              ? [offsetLine.dashLength, offsetLine.dashLength]
-              : undefined,
-          selectable: false,
-          evented: false,
-          originX: "left",
-          originY: "top",
-        },
-      });
-    }
-
-    const borderPathData = generateDielinePath({
-      shape,
-      width: visualWidth,
-      height: visualHeight,
-      radius: visualRadius,
-      x: cx,
-      y: cy,
-      features: absoluteFeatures,
-      shapeStyle,
-      pathData: this.state.pathData,
-      customSourceWidthPx: this.state.customSourceWidthPx,
-      customSourceHeightPx: this.state.customSourceHeightPx,
-      canvasWidth: canvasW,
-      canvasHeight: canvasH,
-    });
-
-    specs.push({
-      id: "dieline.border",
-      type: "path",
-      space: "screen",
-      data: { id: "dieline.border", type: "dieline" },
-      props: {
-        pathData: borderPathData,
-        fill: "transparent",
-        stroke: mainLine.style === "hidden" ? null : mainLine.color,
-        strokeWidth: mainLine.width,
-        strokeDashArray:
-          mainLine.style === "dashed"
-            ? [mainLine.dashLength, mainLine.dashLength]
-            : undefined,
-        selectable: false,
-        evented: false,
-        originX: "left",
-        originY: "top",
-      },
-    });
-
-    return specs;
+    return buildDielineRenderBundle({
+      state: this.state,
+      sceneLayout,
+      canvasWidth: sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
+      canvasHeight:
+        sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600,
+      hasImages,
+      createHatchPattern: (color) => this.createHatchPattern(color),
+      includeImageClipEffect: false,
+    }).specs;
   }
 
   private buildImageClipEffects(
     sceneLayout: NonNullable<ReturnType<typeof computeSceneLayout>>,
   ): RenderEffectSpec[] {
-    const { shape, shapeStyle, radius, features } = this.state;
-
-    const canvasW =
-      sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800;
-    const canvasH =
-      sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600;
-    const scale = sceneLayout.scale;
-    const cx = sceneLayout.trimRect.centerX;
-    const cy = sceneLayout.trimRect.centerY;
-
-    const visualWidth = sceneLayout.trimRect.width;
-    const visualRadius = radius * scale;
-    const cutW = sceneLayout.cutRect.width;
-    const cutH = sceneLayout.cutRect.height;
-    const visualOffset = (cutW - visualWidth) / 2;
-    const cutR =
-      visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
-
-    const absoluteFeatures = (features || []).map((f) => ({
-      ...f,
-      x: f.x,
-      y: f.y,
-      width: (f.width || 0) * scale,
-      height: (f.height || 0) * scale,
-      radius: (f.radius || 0) * scale,
-    }));
-    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
-
-    const clipPathData = generateDielinePath({
-      shape,
-      width: cutW,
-      height: cutH,
-      radius: cutR,
-      x: cx,
-      y: cy,
-      features: cutFeatures,
-      shapeStyle,
-      pathData: this.state.pathData,
-      customSourceWidthPx: this.state.customSourceWidthPx,
-      customSourceHeightPx: this.state.customSourceHeightPx,
-      canvasWidth: canvasW,
-      canvasHeight: canvasH,
-    });
-    if (!clipPathData) return [];
-
-    return [
-      {
-        type: "clipPath",
-        id: "dieline.clip.image",
-        visibility: {
-          op: "not",
-          expr: { op: "anySessionActive" },
-        },
-        targetPassIds: [IMAGE_OBJECT_LAYER_ID],
-        source: {
-          id: "dieline.effect.clip-path",
-          type: "path",
-          space: "screen",
-          data: {
-            id: "dieline.effect.clip-path",
-            type: "dieline-effect",
-            effect: "clipPath",
-          },
-          props: {
-            pathData: clipPathData,
-            fill: "#000000",
-            stroke: null,
-            originX: "left",
-            originY: "top",
-            selectable: false,
-            evented: false,
-            excludeFromExport: true,
-          },
-        },
+    return buildDielineRenderBundle({
+      state: this.state,
+      sceneLayout,
+      canvasWidth: sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
+      canvasHeight:
+        sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600,
+      hasImages: this.hasImageItems(),
+      includeImageClipEffect: true,
+      clipTargetPassIds: [IMAGE_OBJECT_LAYER_ID],
+      clipVisibility: {
+        op: "not",
+        expr: { op: "anySessionActive" },
       },
-    ];
+    }).effects;
   }
 
   public updateDieline(_emitEvent: boolean = true) {
@@ -735,7 +234,7 @@ export class DielineTool implements Extension {
     if (!configService) return;
     const seq = ++this.renderSeq;
 
-    this.syncSizeState(configService);
+    Object.assign(this.state, readDielineState(configService, this.state));
     const sceneLayout = computeSceneLayout(
       this.canvasService,
       readSizeState(configService),
@@ -794,7 +293,7 @@ export class DielineTool implements Extension {
       return null;
     }
 
-    this.syncSizeState(configService);
+    this.state = readDielineState(configService, this.state);
     const sceneLayout = computeSceneLayout(
       this.canvasService,
       readSizeState(configService),
