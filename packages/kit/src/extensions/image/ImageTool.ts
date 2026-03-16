@@ -997,7 +997,7 @@ export class ImageTool implements Extension {
   }
 
   private debug(message: string, payload?: any) {
-    // if (!this.isDebugEnabled()) return;
+    if (!this.isDebugEnabled()) return;
     if (payload === undefined) {
       console.log(`[ImageTool] ${message}`);
       return;
