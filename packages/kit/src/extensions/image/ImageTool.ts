@@ -469,19 +469,14 @@ export class ImageTool implements Extension {
     if (!this.canvasService || this.canvasObjectMovingHandler) return;
     this.canvasMouseUpHandler = (e: any) => {
       const target = this.getActiveImageTarget(e?.target);
-      let applied = false;
       if (
         target &&
         typeof target?.data?.id === "string" &&
         target.data.id === this.movingImageId
       ) {
         this.applyMoveSnapToTarget(target);
-        applied = true;
       }
-      this.clearSnapPreview();
-      if (applied) {
-        this.movingImageId = null;
-      }
+      this.endMoveSnapInteraction();
     };
     this.canvasObjectMovingHandler = (e: any) => {
       this.handleCanvasObjectMoving(e);
@@ -705,7 +700,6 @@ export class ImageTool implements Extension {
         top: Number(target.top || 0) + deltaScreenY,
       });
       target.setCoords();
-      this.canvasService.requestRenderAll();
     }
     return matches;
   }
