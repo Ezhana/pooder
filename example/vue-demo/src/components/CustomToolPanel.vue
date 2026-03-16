@@ -414,6 +414,7 @@ const featureState = reactive({
   radius: 0,
   constraints: null,
 });
+const featureWorkingItems = ref([]);
 
 const completeStatus = reactive({
   message: "",
@@ -608,6 +609,7 @@ const resetPanelState = () => {
   featureState.y = 0;
   featureState.radius = 0;
   featureState.constraints = null;
+  featureWorkingItems.value = [];
   completeStatus.message = "";
   completeStatus.issues = [];
 };
@@ -883,18 +885,39 @@ const updateDielineConfig = () => {
   editor.value.updateConfig("dieline.shape", dielineState.shape);
 };
 
-const syncFeatureStateFromWorking = async (groupId) => {
-  if (!editor.value || !groupId) return;
-  try {
-    const features = await editor.value.executeCommand("getWorkingFeatures");
-    const feature = (features || []).find((f) => f.groupId === groupId);
-    if (feature) {
-      featureState.x = parseFloat((feature.x || 0).toFixed(2));
-      featureState.y = parseFloat((feature.y || 0).toFixed(2));
-      featureState.radius = feature.radius;
-      featureState.constraints = feature.constraints;
-    }
-  } catch (e) {}
+const cloneFeatureItems = (features) =>
+  JSON.parse(JSON.stringify(features || []));
+
+const getCommittedFeatures = () => {
+  if (!editor.value) return [];
+  const features = editor.value.getConfig("dieline.features");
+  return Array.isArray(features) ? cloneFeatureItems(features) : [];
+};
+
+const getFeatureSourceItems = () => {
+  if (featureWorkingItems.value.length > 0) {
+    return featureWorkingItems.value;
+  }
+  return getCommittedFeatures();
+};
+
+const applyFeatureState = (feature) => {
+  if (!feature) return;
+  featureState.x = parseFloat((feature.x || 0).toFixed(2));
+  featureState.y = parseFloat((feature.y || 0).toFixed(2));
+  featureState.radius = feature.radius;
+  featureState.constraints = feature.constraints;
+};
+
+const syncFeatureStateFromSource = (groupId) => {
+  if (!groupId) return;
+  const feature = getFeatureSourceItems().find((item) => item.groupId === groupId);
+  applyFeatureState(feature);
+};
+
+const findFirstFeatureGroupId = (features = getFeatureSourceItems()) => {
+  const firstGroupedFeature = features.find((feature) => feature.groupId);
+  return firstGroupedFeature?.groupId || null;
 };
 
 const loadPreset = async (presetName = selectedPreset.value) => {
@@ -909,12 +932,24 @@ const loadPreset = async (presetName = selectedPreset.value) => {
   const groupId = features[0]?.groupId || null;
   if (!groupId) return;
 
-  await editor.value.executeCommand("setWorkingFeatures", features);
+  const activeToolId = editor.value?.services?.workbench?.activeToolId || null;
+  if (activeToolId === "pooder.kit.feature") {
+    try {
+      await editor.value.executeCommand("rollbackFeatureSession");
+    } catch (e) {}
+  }
 
-  // Select it for editing
+  featureWorkingItems.value = [];
+  editor.value.updateConfig("dieline.features", cloneFeatureItems(features));
+
   featureState.groupId = groupId;
+  syncFeatureStateFromSource(groupId);
 
-  await syncFeatureStateFromWorking(groupId);
+  if (activeToolId === "pooder.kit.feature") {
+    try {
+      await editor.value.executeCommand("beginFeatureSession");
+    } catch (e) {}
+  }
 };
 
 const isXDisabled = computed(() => {
@@ -994,7 +1029,7 @@ const onSelectionCreated = async (e) => {
   if (selection.data && selection.data.groupId) {
     currentMode.value = "Hole";
     featureState.groupId = selection.data.groupId;
-    syncFeatureStateFromWorking(featureState.groupId);
+    syncFeatureStateFromSource(featureState.groupId);
     return;
   }
 
@@ -1087,6 +1122,19 @@ const onToolActivated = ({ id }) => {
       try {
         await editor.value.executeCommand("beginFeatureSession");
       } catch (e) {}
+      const features = getFeatureSourceItems();
+      if (features.length > 0) {
+        const hasCurrentGroup =
+          !!featureState.groupId &&
+          features.some((feature) => feature.groupId === featureState.groupId);
+        if (!hasCurrentGroup) {
+          featureState.groupId = findFirstFeatureGroupId(features);
+        }
+        if (featureState.groupId) {
+          syncFeatureStateFromSource(featureState.groupId);
+        }
+        return;
+      }
       if (!featureState.groupId) {
         if (!selectedPreset.value && availablePresets.value.length > 0) {
           selectedPreset.value = availablePresets.value[0].name;
@@ -1095,7 +1143,7 @@ const onToolActivated = ({ id }) => {
           await loadPreset(selectedPreset.value);
         }
       } else {
-        await syncFeatureStateFromWorking(featureState.groupId);
+        syncFeatureStateFromSource(featureState.groupId);
       }
     })();
   } else {
@@ -1104,16 +1152,11 @@ const onToolActivated = ({ id }) => {
 };
 
 const onWorkingChange = (e) => {
-  if (featureState.groupId && e?.features) {
-    const feature = (e.features || []).find(
-      (f) => f.groupId === featureState.groupId,
-    );
-    if (feature) {
-      featureState.x = parseFloat((feature.x || 0).toFixed(2));
-      featureState.y = parseFloat((feature.y || 0).toFixed(2));
-      featureState.radius = feature.radius;
-      featureState.constraints = feature.constraints;
-    }
+  featureWorkingItems.value = Array.isArray(e?.features)
+    ? cloneFeatureItems(e.features)
+    : [];
+  if (featureState.groupId) {
+    syncFeatureStateFromSource(featureState.groupId);
   }
 };
 

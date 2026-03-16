@@ -131,7 +131,12 @@ export class FeatureTool implements Extension {
           if (this.isUpdatingConfig) return;
 
           if (e.key === "dieline.features") {
-            if (this.isFeatureSessionActive) return;
+            if (this.isFeatureSessionActive && this.hasFeatureSessionDraft()) {
+              return;
+            }
+            if (this.hasFeatureSessionDraft()) {
+              this.clearFeatureSessionState();
+            }
             const next = (e.value || []) as ConstraintFeature[];
             this.workingFeatures = this.cloneFeatures(next);
             this.hasWorkingChanges = false;
@@ -156,7 +161,8 @@ export class FeatureTool implements Extension {
 
   deactivate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
-    this.restoreSessionFeaturesToConfig();
+    this.restoreCommittedFeaturesToConfig();
+    this.clearFeatureSessionState();
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
     this.teardown();
@@ -167,7 +173,7 @@ export class FeatureTool implements Extension {
   private onToolActivated = (event: { id: string | null }) => {
     this.isToolActive = event.id === this.id;
     if (!this.isToolActive) {
-      this.restoreSessionFeaturesToConfig();
+      this.suspendFeatureSession();
     }
     this.updateVisibility();
   };
@@ -202,15 +208,16 @@ export class FeatureTool implements Extension {
             if (this.isFeatureSessionActive) {
               return { ok: true };
             }
-            const original = this.getCommittedFeatures();
-            this.sessionOriginalFeatures = this.cloneFeatures(original);
+            if (!this.hasFeatureSessionDraft()) {
+              const original = this.getCommittedFeatures();
+              this.sessionOriginalFeatures = this.cloneFeatures(original);
+              this.setWorkingFeatures(this.cloneFeatures(original));
+              this.hasWorkingChanges = false;
+            }
             this.isFeatureSessionActive = true;
             await this.refreshGeometry();
-            this.setWorkingFeatures(this.cloneFeatures(original));
-            this.hasWorkingChanges = false;
             this.redraw();
             this.emitWorkingChange();
-            this.updateCommittedFeatures([]);
             return { ok: true };
           },
         },
@@ -244,25 +251,6 @@ export class FeatureTool implements Extension {
             this.redraw();
             this.emitWorkingChange();
             return true;
-          },
-        },
-        {
-          command: "getWorkingFeatures",
-          title: "Get Working Features",
-          handler: () => {
-            return this.cloneFeatures(this.workingFeatures);
-          },
-        },
-        {
-          command: "setWorkingFeatures",
-          title: "Set Working Features",
-          handler: async (features: ConstraintFeature[]) => {
-            await this.refreshGeometry();
-            this.setWorkingFeatures(this.cloneFeatures(features || []));
-            this.hasWorkingChanges = true;
-            this.redraw();
-            this.emitWorkingChange();
-            return { ok: true };
           },
         },
         {
@@ -336,18 +324,27 @@ export class FeatureTool implements Extension {
     }
   }
 
+  private hasFeatureSessionDraft(): boolean {
+    return Array.isArray(this.sessionOriginalFeatures);
+  }
+
   private clearFeatureSessionState() {
     this.isFeatureSessionActive = false;
     this.sessionOriginalFeatures = null;
   }
 
-  private restoreSessionFeaturesToConfig() {
-    if (!this.isFeatureSessionActive) return;
+  private restoreCommittedFeaturesToConfig() {
+    if (!this.hasFeatureSessionDraft()) return;
     const original = this.cloneFeatures(
       this.sessionOriginalFeatures || this.getCommittedFeatures(),
     );
     this.updateCommittedFeatures(original);
-    this.clearFeatureSessionState();
+  }
+
+  private suspendFeatureSession() {
+    if (!this.isFeatureSessionActive) return;
+    this.restoreCommittedFeaturesToConfig();
+    this.isFeatureSessionActive = false;
   }
 
   private emitWorkingChange() {
@@ -370,9 +367,7 @@ export class FeatureTool implements Extension {
 
   private async resetWorkingFeaturesFromSource() {
     const next = this.cloneFeatures(
-      this.isFeatureSessionActive && this.sessionOriginalFeatures
-        ? this.sessionOriginalFeatures
-        : this.getCommittedFeatures(),
+      this.sessionOriginalFeatures || this.getCommittedFeatures(),
     );
     await this.refreshGeometry();
     this.setWorkingFeatures(next);
