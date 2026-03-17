@@ -1,6 +1,6 @@
 {
   "name": "@pooder/kit",
-  "version": "6.2.0",
+  "version": "6.2.1",
   "description": "Standard plugins for Pooder editor",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
