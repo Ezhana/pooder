@@ -1,5 +1,9 @@
 import type { Pattern } from "fabric";
-import type { RenderEffectSpec, RenderObjectSpec, VisibilityExpr } from "../../services";
+import type {
+  RenderEffectSpec,
+  RenderObjectSpec,
+  VisibilityExpr,
+} from "../../services";
 import type { SceneLayoutSnapshot } from "../../shared/scene/sceneLayoutModel";
 import { generateBleedZonePath, generateDielinePath } from "../geometry";
 import {
@@ -60,7 +64,8 @@ export function buildDielineRenderBundle(
     clipTargetPassIds = [IMAGE_OBJECT_LAYER_ID],
     clipVisibility,
   } = options;
-  const { shape, shapeStyle, radius, mainLine, offsetLine, insideColor } = state;
+  const { shape, shapeStyle, radius, mainLine, offsetLine, insideColor } =
+    state;
 
   const scale = sceneLayout.scale;
   const cx = sceneLayout.trimRect.centerX;
@@ -117,6 +122,13 @@ export function buildDielineRenderBundle(
     customSourceHeightPx: state.customSourceHeightPx,
     canvasWidth,
     canvasHeight,
+  };
+  const cutFrameRect = {
+    left: cx - cutW / 2,
+    top: cy - cutH / 2,
+    width: cutW,
+    height: cutH,
+    space: "screen" as const,
   };
 
   const specs: RenderObjectSpec[] = [];
@@ -258,9 +270,13 @@ export function buildDielineRenderBundle(
     width: cutW,
     height: cutH,
     radius: cutR,
-    x: cx,
-    y: cy,
+    // Build the clip path in the cut frame's local coordinates so Fabric
+    // does not have to infer placement from the standalone path bounds.
+    x: cutW / 2,
+    y: cutH / 2,
     features: cutFeatures,
+    canvasWidth: cutW,
+    canvasHeight: cutH,
   });
 
   if (!clipPathData) {
@@ -279,6 +295,12 @@ export function buildDielineRenderBundle(
           id: ids.clipSource,
           type: "path",
           space: "screen",
+          layout: {
+            reference: "custom",
+            referenceRect: cutFrameRect,
+            alignX: "start",
+            alignY: "start",
+          },
           data: {
             id: ids.clipSource,
             type: "dieline-effect",
