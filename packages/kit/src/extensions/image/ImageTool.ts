@@ -651,10 +651,21 @@ export class ImageTool implements Extension {
     }
   }
 
+  private clearSnapGuideContext() {
+    const topContext = this.canvasService?.canvas.contextTop;
+    if (!this.canvasService || !topContext) return;
+    this.canvasService.canvas.clearContext(topContext);
+  }
+
   private clearSnapPreview() {
+    const shouldClearCanvas =
+      this.hasRenderedSnapGuides || !!this.activeSnapX || !!this.activeSnapY;
     this.activeSnapX = null;
     this.activeSnapY = null;
     this.hasRenderedSnapGuides = false;
+    if (shouldClearCanvas) {
+      this.clearSnapGuideContext();
+    }
     this.canvasService?.requestRenderAll();
   }
 
