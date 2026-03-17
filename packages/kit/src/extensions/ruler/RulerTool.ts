@@ -25,6 +25,7 @@ const DEFAULT_FONT_SIZE = 10;
 const DEFAULT_BACKGROUND_COLOR = "#f0f0f0";
 const DEFAULT_TEXT_COLOR = "#333333";
 const DEFAULT_LINE_COLOR = "#999999";
+const RULER_DEBUG_KEY = "ruler.debug";
 
 const RULER_THICKNESS_MIN = 10;
 const RULER_THICKNESS_MAX = 100;
@@ -48,6 +49,7 @@ export class RulerTool implements Extension {
   private textColor = DEFAULT_TEXT_COLOR;
   private lineColor = DEFAULT_LINE_COLOR;
   private fontSize = DEFAULT_FONT_SIZE;
+  private debugEnabled = false;
   private renderSeq = 0;
   private readonly numericProps = new Set(["thickness", "gap", "fontSize"]);
   private specs: RenderObjectSpec[] = [];
@@ -112,7 +114,14 @@ export class RulerTool implements Extension {
       this.syncConfig(configService);
       configService.onAnyChange((e: { key: string; value: any }) => {
         let shouldUpdate = false;
-        if (e.key.startsWith("ruler.")) {
+        if (e.key === RULER_DEBUG_KEY) {
+          this.debugEnabled = e.value === true;
+          this.log("config:update", {
+            key: e.key,
+            raw: e.value,
+            normalized: this.debugEnabled,
+          });
+        } else if (e.key.startsWith("ruler.")) {
           const prop = e.key.split(".")[1];
           if (prop && prop in this) {
             if (this.numericProps.has(prop)) {
@@ -203,6 +212,12 @@ export class RulerTool implements Extension {
           max: RULER_FONT_SIZE_MAX,
           default: DEFAULT_FONT_SIZE,
         },
+        {
+          id: RULER_DEBUG_KEY,
+          type: "boolean",
+          label: "Ruler Debug Log",
+          default: false,
+        },
       ] as ConfigurationContribution[],
       [ContributionPointIds.COMMANDS]: [
         {
@@ -249,7 +264,12 @@ export class RulerTool implements Extension {
     };
   }
 
+  private isDebugEnabled(): boolean {
+    return this.debugEnabled;
+  }
+
   private log(step: string, payload?: Record<string, unknown>) {
+    if (!this.isDebugEnabled()) return;
     if (payload) {
       console.debug(`[RulerTool] ${step}`, payload);
       return;
@@ -279,6 +299,8 @@ export class RulerTool implements Extension {
       configService.get("ruler.fontSize", this.fontSize),
       DEFAULT_FONT_SIZE,
     );
+    this.debugEnabled =
+      configService.get(RULER_DEBUG_KEY, this.debugEnabled) === true;
 
     this.log("config:loaded", {
       thickness: this.thickness,
