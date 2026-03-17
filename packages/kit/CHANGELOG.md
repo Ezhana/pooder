@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 6.2.2
+
+### Patch Changes
+
+- bugfix
+
 ## 6.2.1
 
 ### Patch Changes
