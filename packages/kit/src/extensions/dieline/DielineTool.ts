@@ -26,6 +26,10 @@ import {
   readDielineState,
 } from "./model";
 import { buildDielineRenderBundle } from "./renderBuilder";
+import {
+  projectPlacedFeatures,
+  resolveFeaturePlacements,
+} from "../featurePlacement";
 
 export class DielineTool implements Extension {
   id = "pooder.kit.dieline";
@@ -320,15 +324,31 @@ export class DielineTool implements Extension {
     const cutR =
       visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
 
-    const absoluteFeatures = (features || []).map((f) => ({
-      ...f,
-      x: f.x,
-      y: f.y,
-      width: (f.width || 0) * scale,
-      height: (f.height || 0) * scale,
-      radius: (f.radius || 0) * scale,
-    }));
-    const cutFeatures = absoluteFeatures.filter((f) => !f.skipCut);
+    const placements = resolveFeaturePlacements(features || [], {
+      shape,
+      shapeStyle,
+      pathData,
+      customSourceWidthPx: this.state.customSourceWidthPx,
+      customSourceHeightPx: this.state.customSourceHeightPx,
+      canvasWidth: canvasW,
+      canvasHeight: canvasH,
+      x: cx,
+      y: cy,
+      width: sceneLayout.trimRect.width,
+      height: sceneLayout.trimRect.height,
+      radius: visualRadius,
+      scale,
+    });
+    const cutFeatures = projectPlacedFeatures(
+      placements.filter((placement) => !placement.feature.skipCut),
+      {
+        x: cx,
+        y: cy,
+        width: cutW,
+        height: cutH,
+      },
+      scale,
+    );
 
     const generatedPathData = generateDielinePath({
       shape,

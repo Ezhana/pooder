@@ -13,9 +13,9 @@ import {
   RenderObjectSpec,
   RenderPassSpec,
 } from "../../services";
-import { resolveFeaturePosition } from "../geometry";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
+import { resolveFeaturePlacements } from "../featurePlacement";
 import {
   computeSceneLayout,
   readSizeState,
@@ -935,10 +935,30 @@ export class FeatureTool implements Extension {
 
     const groups = new Map<string, MarkerRenderState[]>();
     const singles: MarkerRenderState[] = [];
+    const placements = resolveFeaturePlacements(
+      this.workingFeatures,
+      {
+        shape: this.currentGeometry.shape,
+        shapeStyle: this.currentGeometry.shapeStyle,
+        pathData: this.currentGeometry.pathData,
+        customSourceWidthPx: this.currentGeometry.customSourceWidthPx,
+        customSourceHeightPx: this.currentGeometry.customSourceHeightPx,
+        x: this.currentGeometry.x,
+        y: this.currentGeometry.y,
+        width: this.currentGeometry.width,
+        height: this.currentGeometry.height,
+        radius: this.currentGeometry.radius,
+        scale: this.currentGeometry.scale || 1,
+      },
+    );
 
-    this.workingFeatures.forEach((feature, index) => {
+    placements.forEach((placement, index) => {
+      const feature = placement.feature;
       const geometry = this.getGeometryForFeature(this.currentGeometry!, feature);
-      const position = resolveFeaturePosition(feature, geometry);
+      const position = {
+        x: placement.centerX,
+        y: placement.centerY,
+      };
       const scale = geometry.scale || 1;
       const marker: MarkerRenderState = {
         feature,

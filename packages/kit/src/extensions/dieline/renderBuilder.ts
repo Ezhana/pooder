@@ -2,6 +2,10 @@ import type { Pattern } from "fabric";
 import type { RenderEffectSpec, RenderObjectSpec, VisibilityExpr } from "../../services";
 import type { SceneLayoutSnapshot } from "../../shared/scene/sceneLayoutModel";
 import { generateBleedZonePath, generateDielinePath } from "../geometry";
+import {
+  projectPlacedFeatures,
+  resolveFeaturePlacements,
+} from "../featurePlacement";
 import { IMAGE_OBJECT_LAYER_ID } from "../../shared/constants/layers";
 import type { DielineState } from "./model";
 
@@ -41,17 +45,6 @@ const DEFAULT_IDS: DielineRenderIds = {
   clipSource: "dieline.effect.clip-path",
 };
 
-function scaleFeatures(state: DielineState, scale: number) {
-  return (state.features || []).map((feature) => ({
-    ...feature,
-    x: feature.x,
-    y: feature.y,
-    width: (feature.width || 0) * scale,
-    height: (feature.height || 0) * scale,
-    radius: (feature.radius || 0) * scale,
-  }));
-}
-
 export function buildDielineRenderBundle(
   options: DielineRenderOptions,
 ): DielineRenderBundle {
@@ -80,8 +73,41 @@ export function buildDielineRenderBundle(
   const visualOffset = (cutW - visualWidth) / 2;
   const cutR =
     visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
-  const absoluteFeatures = scaleFeatures(state, scale);
-  const cutFeatures = absoluteFeatures.filter((feature) => !feature.skipCut);
+  const placements = resolveFeaturePlacements(state.features || [], {
+    shape,
+    shapeStyle,
+    pathData: state.pathData,
+    customSourceWidthPx: state.customSourceWidthPx,
+    customSourceHeightPx: state.customSourceHeightPx,
+    canvasWidth,
+    canvasHeight,
+    x: cx,
+    y: cy,
+    width: visualWidth,
+    height: visualHeight,
+    radius: visualRadius,
+    scale,
+  });
+  const absoluteFeatures = projectPlacedFeatures(
+    placements,
+    {
+      x: cx,
+      y: cy,
+      width: visualWidth,
+      height: visualHeight,
+    },
+    scale,
+  );
+  const cutFeatures = projectPlacedFeatures(
+    placements.filter((placement) => !placement.feature.skipCut),
+    {
+      x: cx,
+      y: cy,
+      width: cutW,
+      height: cutH,
+    },
+    scale,
+  );
 
   const common = {
     shape,

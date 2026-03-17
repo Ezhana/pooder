@@ -21,6 +21,10 @@ import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
 import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
+import {
+  normalizePointInGeometry,
+  resolveFeaturePosition,
+} from "../src/extensions/featureCoordinates";
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -118,6 +122,38 @@ function testEdgeScale() {
   assert(scale === 2, `expected scale 2, got ${scale}`);
   assert(width === 140, `expected width 140, got ${width}`);
   assert(height === 80, `expected height 80, got ${height}`);
+}
+
+function testFeaturePlacementProjection() {
+  const trimGeometry = {
+    x: 100,
+    y: 120,
+    width: 120,
+    height: 180,
+  };
+  const cutGeometry = {
+    x: 100,
+    y: 120,
+    width: 150,
+    height: 210,
+  };
+  const trimFeature = {
+    x: 0.82,
+    y: 0.68,
+  };
+
+  const trimCenter = resolveFeaturePosition(trimFeature, trimGeometry);
+  const cutFeature = normalizePointInGeometry(trimCenter, cutGeometry);
+  const cutCenter = resolveFeaturePosition(cutFeature, cutGeometry);
+
+  assert(
+    Math.abs(trimCenter.x - cutCenter.x) < 1e-6,
+    `expected projected feature x to stay fixed, got ${trimCenter.x} vs ${cutCenter.x}`,
+  );
+  assert(
+    Math.abs(trimCenter.y - cutCenter.y) < 1e-6,
+    `expected projected feature y to stay fixed, got ${trimCenter.y} vs ${cutCenter.y}`,
+  );
 }
 
 function testVisibilityDsl() {
@@ -396,6 +432,7 @@ function main() {
   testBridgeSelection();
   testMaskOps();
   testEdgeScale();
+  testFeaturePlacementProjection();
   testVisibilityDsl();
   testContributionCompatibility();
   console.log("ok");
