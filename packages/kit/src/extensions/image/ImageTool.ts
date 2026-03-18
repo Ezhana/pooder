@@ -58,6 +58,25 @@ export interface ImageItem {
   committedUrl?: string;
 }
 
+export interface ImageTransformUpdates {
+  scale?: number;
+  angle?: number;
+  left?: number;
+  top?: number;
+  opacity?: number;
+}
+
+export interface ImageViewState {
+  items: ImageItem[];
+  hasAnyImage: boolean;
+  focusedId: string | null;
+  focusedItem: ImageItem | null;
+  isToolActive: boolean;
+  isImageSelectionActive: boolean;
+  hasWorkingChanges: boolean;
+  source: "working" | "committed";
+}
+
 interface RenderImageState {
   src: string;
   left: number;
@@ -97,6 +116,7 @@ interface UpsertImageOptions {
   id?: string;
   mode?: "replace" | "add";
   addOptions?: Partial<ImageItem>;
+  operation?: ImageOperation;
 }
 
 interface UpdateImageOptions {
@@ -367,6 +387,7 @@ export class ImageTool implements Extension {
     this.clearRenderedImages();
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
+    this.emitImageStateChange();
     if (this.canvasService) {
       void this.canvasService.flushRenderFromProducers();
       this.canvasService = undefined;
@@ -929,9 +950,9 @@ export class ImageTool implements Extension {
           name: "Image",
           interaction: "session",
           commands: {
-            begin: "resetWorkingImages",
+            begin: "imageSessionReset",
             commit: "completeImages",
-            rollback: "resetWorkingImages",
+            rollback: "imageSessionReset",
           },
           session: {
             autoBegin: true,
@@ -974,6 +995,34 @@ export class ImageTool implements Extension {
 
   private cloneItems(items: ImageItem[]): ImageItem[] {
     return this.normalizeItems((items || []).map((i) => ({ ...i })));
+  }
+
+  private getViewItems(): ImageItem[] {
+    return this.isToolActive ? this.workingItems : this.items;
+  }
+
+  private getImageViewState(): ImageViewState {
+    this.syncToolActiveFromWorkbench();
+    const items = this.cloneItems(this.getViewItems());
+    const focusedItem =
+      this.focusedImageId == null
+        ? null
+        : items.find((item) => item.id === this.focusedImageId) || null;
+
+    return {
+      items,
+      hasAnyImage: items.length > 0,
+      focusedId: this.focusedImageId,
+      focusedItem,
+      isToolActive: this.isToolActive,
+      isImageSelectionActive: this.isImageSelectionActive,
+      hasWorkingChanges: this.hasWorkingChanges,
+      source: this.isToolActive ? "working" : "committed",
+    };
+  }
+
+  private emitImageStateChange() {
+    this.context?.eventBus.emit("image:state:change", this.getImageViewState());
   }
 
   private emitWorkingChange(changedId: string | null = null) {
@@ -1023,6 +1072,8 @@ export class ImageTool implements Extension {
 
     if (!options.skipRender) {
       this.updateImages();
+    } else {
+      this.emitImageStateChange();
     }
 
     return { ok: true, id };
@@ -1031,7 +1082,9 @@ export class ImageTool implements Extension {
   private async addImageEntry(
     url: string,
     options?: Partial<ImageItem>,
+    operation?: ImageOperation,
   ): Promise<string> {
+    this.syncToolActiveFromWorkbench();
     const id = this.generateId();
     const newItem = this.normalizeItem({
       id,
@@ -1040,11 +1093,21 @@ export class ImageTool implements Extension {
       ...options,
     } as ImageItem);
 
-    const sessionDirtyBeforeAdd = this.isToolActive && this.hasWorkingChanges;
     const waitLoaded = this.waitImageLoaded(id, true);
-    this.updateConfig([...this.items, newItem]);
-    this.addItemToWorkingSessionIfNeeded(newItem, sessionDirtyBeforeAdd);
+    if (this.isToolActive) {
+      this.workingItems = this.cloneItems([...this.workingItems, newItem]);
+      this.hasWorkingChanges = true;
+      this.updateImages();
+      this.emitWorkingChange(id);
+    } else {
+      this.updateConfig([...this.items, newItem]);
+    }
     const loaded = await waitLoaded;
+    if (loaded && operation) {
+      await this.applyImageOperation(id, operation, {
+        target: this.isToolActive ? "working" : "config",
+      });
+    }
     if (loaded) {
       this.setImageFocus(id);
     }
@@ -1055,6 +1118,7 @@ export class ImageTool implements Extension {
     url: string,
     options: UpsertImageOptions = {},
   ): Promise<{ id: string; mode: "replace" | "add" }> {
+    this.syncToolActiveFromWorkbench();
     const mode = options.mode || (options.id ? "replace" : "add");
     if (mode === "replace") {
       if (!options.id) {
@@ -1064,27 +1128,33 @@ export class ImageTool implements Extension {
       if (!this.hasImageItem(targetId)) {
         throw new Error("replace-target-not-found");
       }
-      await this.updateImageInConfig(targetId, { url });
+      if (this.isToolActive) {
+        const current =
+          this.workingItems.find((item) => item.id === targetId) ||
+          this.items.find((item) => item.id === targetId);
+        this.purgeSourceSizeCacheForItem(current);
+        this.updateImageInWorking(targetId, {
+          url,
+          sourceUrl: url,
+          committedUrl: undefined,
+        });
+      } else {
+        await this.updateImageInConfig(targetId, { url });
+      }
       const loaded = await this.waitImageLoaded(targetId, true);
+      if (loaded && options.operation) {
+        await this.applyImageOperation(targetId, options.operation, {
+          target: this.isToolActive ? "working" : "config",
+        });
+      }
       if (loaded) {
         this.setImageFocus(targetId);
       }
       return { id: targetId, mode: "replace" };
     }
 
-    const id = await this.addImageEntry(url, options.addOptions);
+    const id = await this.addImageEntry(url, options.addOptions, options.operation);
     return { id, mode: "add" };
-  }
-
-  private addItemToWorkingSessionIfNeeded(
-    item: ImageItem,
-    sessionDirtyBeforeAdd: boolean,
-  ) {
-    if (!sessionDirtyBeforeAdd || !this.isToolActive) return;
-    if (this.workingItems.some((existing) => existing.id === item.id)) return;
-    this.workingItems = this.cloneItems([...this.workingItems, item]);
-    this.updateImages();
-    this.emitWorkingChange(item.id);
   }
 
   private async updateImage(
@@ -1551,11 +1621,46 @@ export class ImageTool implements Extension {
       isImageSelectionActive: this.isImageSelectionActive,
       focusedImageId: this.focusedImageId,
     });
+    this.emitImageStateChange();
     this.canvasService.requestRenderAll();
   }
 
   private clampNormalized(value: number): number {
     return Math.max(-1, Math.min(2, value));
+  }
+
+  private async setImageTransform(
+    id: string,
+    updates: ImageTransformUpdates,
+    options: UpdateImageOptions = {},
+  ) {
+    const next: Partial<ImageItem> = {};
+
+    if (Number.isFinite(updates.scale as number)) {
+      next.scale = Math.max(0.05, Number(updates.scale));
+    }
+    if (Number.isFinite(updates.angle as number)) {
+      next.angle = Number(updates.angle);
+    }
+    if (Number.isFinite(updates.left as number)) {
+      next.left = this.clampNormalized(Number(updates.left));
+    }
+    if (Number.isFinite(updates.top as number)) {
+      next.top = this.clampNormalized(Number(updates.top));
+    }
+    if (Number.isFinite(updates.opacity as number)) {
+      next.opacity = Math.max(0, Math.min(1, Number(updates.opacity)));
+    }
+
+    if (!Object.keys(next).length) return;
+    await this.updateImage(id, next, options);
+  }
+
+  private resetImageSession() {
+    this.workingItems = this.cloneItems(this.items);
+    this.hasWorkingChanges = false;
+    this.updateImages();
+    this.emitWorkingChange();
   }
 
   private onObjectModified = (e: any) => {

@@ -25,6 +25,7 @@ import {
   normalizePointInGeometry,
   resolveFeaturePosition,
 } from "../src/extensions/featureCoordinates";
+import { hasAnyImageInViewState } from "../src/extensions/image/model";
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -288,6 +289,46 @@ function testVisibilityDsl() {
   );
 }
 
+function testImageViewStateHelper() {
+  assert(hasAnyImageInViewState(null) === false, "null image state should be empty");
+  assert(
+    hasAnyImageInViewState({
+      items: [],
+      hasAnyImage: false,
+      focusedId: null,
+      focusedItem: null,
+      isToolActive: false,
+      isImageSelectionActive: false,
+      hasWorkingChanges: false,
+      source: "committed",
+    }) === false,
+    "empty image state should report false",
+  );
+  assert(
+    hasAnyImageInViewState({
+      items: [
+        {
+          id: "img-1",
+          url: "blob:test",
+          opacity: 1,
+        },
+      ],
+      hasAnyImage: true,
+      focusedId: "img-1",
+      focusedItem: {
+        id: "img-1",
+        url: "blob:test",
+        opacity: 1,
+      },
+      isToolActive: true,
+      isImageSelectionActive: true,
+      hasWorkingChanges: true,
+      source: "working",
+    }) === true,
+    "non-empty image state should report true",
+  );
+}
+
 function testContributionCompatibility() {
   const imageCommandNames = createImageCommands({} as any).map(
     (entry) => entry.command,
@@ -304,9 +345,9 @@ function testContributionCompatibility() {
     "addImage",
     "upsertImage",
     "applyImageOperation",
-    "getWorkingImages",
-    "setWorkingImage",
-    "resetWorkingImages",
+    "getImageViewState",
+    "setImageTransform",
+    "imageSessionReset",
     "completeImages",
     "exportUserCroppedImage",
     "focusImage",
@@ -431,9 +472,10 @@ function main() {
   testBridgeSelection();
   testMaskOps();
   testEdgeScale();
-  testFeaturePlacementProjection();
-  testVisibilityDsl();
-  testContributionCompatibility();
+testFeaturePlacementProjection();
+testVisibilityDsl();
+testImageViewStateHelper();
+testContributionCompatibility();
   console.log("ok");
 }
 

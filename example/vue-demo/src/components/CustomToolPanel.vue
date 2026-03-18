@@ -304,18 +304,20 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, watch, reactive, onUnmounted, computed } from "vue";
+import type { ImageViewState, PooderEditorExposed } from "@pooder/vue";
+import { hasAnyImageInViewState } from "@pooder/vue";
 import {
   CATEGORY_TEMPLATE_MAP,
   HOLE_PRESETS,
   TEMPLATE_HOLE_PRESETS,
 } from "../constants/productTemplates";
 
-const props = defineProps({
-  editor: Object,
-  category: String,
-});
+const props = defineProps<{
+  editor: PooderEditorExposed | null;
+  category?: string;
+}>();
 
 const editor = computed(() => {
   const e = props.editor;
@@ -324,13 +326,13 @@ const editor = computed(() => {
 });
 
 const currentMode = ref("");
-const imageInput = ref(null);
-const whiteInkInput = ref(null);
-const dielineInput = ref(null);
-const pendingImageUploadMode = ref("add");
-const imageItems = ref([]);
-const imageNaturalSizeById = reactive({});
-const imageSizeCacheByUrl = new Map();
+const imageInput = ref<HTMLInputElement | null>(null);
+const whiteInkInput = ref<HTMLInputElement | null>(null);
+const dielineInput = ref<HTMLInputElement | null>(null);
+const pendingImageUploadMode = ref<"add" | "replace">("add");
+const imageItems = ref<any[]>([]);
+const imageNaturalSizeById = reactive<Record<string, { width: number; height: number }>>({});
+const imageSizeCacheByUrl = new Map<string, { width: number; height: number } | null>();
 
 const imageState = reactive({
   id: null,
@@ -364,7 +366,7 @@ const sizeState = reactive({
   cutMarginMm: 0,
 });
 
-const selectedImageSize = ref(null);
+const selectedImageSize = ref<any>(null);
 
 const imageOriginalMm = computed(() => {
   const w = imageState.originalWidth;
@@ -414,7 +416,7 @@ const featureState = reactive({
   radius: 0,
   constraints: null,
 });
-const featureWorkingItems = ref([]);
+const featureWorkingItems = ref<any[]>([]);
 
 const completeStatus = reactive({
   message: "",
@@ -532,6 +534,19 @@ const applyImageItems = (items) => {
   syncFocusedImageState();
 };
 
+const applyImageViewState = (state: ImageViewState | null | undefined) => {
+  if (!state || !hasAnyImageInViewState(state)) {
+    applyImageItems([]);
+    imageState.id = null;
+    syncFocusedImageState();
+    return;
+  }
+
+  applyImageItems(state.items || []);
+  imageState.id = state.focusedId || null;
+  syncFocusedImageState();
+};
+
 const syncImageItems = async () => {
   if (!editor.value) {
     applyImageItems([]);
@@ -539,24 +554,15 @@ const syncImageItems = async () => {
   }
 
   try {
-    const items = await editor.value.executeCommand("getWorkingImages");
-    applyImageItems(items || []);
-    return;
-  } catch (e) {}
-
-  try {
-    const items =
-      typeof editor.value.getImages === "function"
-        ? editor.value.getImages()
-        : [];
-    applyImageItems(items || []);
+    const state = await editor.value.getImageState();
+    applyImageViewState(state);
   } catch (e) {
     applyImageItems([]);
   }
 };
 
 const focusImageById = async (
-  id,
+  id: string | null,
   options = {
     syncCanvasSelection: true,
   },
@@ -614,11 +620,11 @@ const resetPanelState = () => {
   completeStatus.issues = [];
 };
 
-const rollbackWorkingByTool = async (toolId) => {
+const rollbackWorkingByTool = async (toolId: string | null) => {
   if (!editor.value || !toolId) return;
 
   if (toolId === "pooder.kit.image") {
-    await editor.value.executeCommand("resetWorkingImages");
+    await editor.value.executeCommand("imageSessionReset");
     return;
   }
   if (toolId === "pooder.kit.white-ink") {
@@ -729,8 +735,9 @@ const updateSizeCut = async () => {
   await refreshSelectedImageSize();
 };
 
-const handleImageUpload = async (e) => {
-  const file = e.target.files[0];
+const handleImageUpload = async (e: Event) => {
+  const target = e.target as HTMLInputElement | null;
+  const file = target?.files?.[0];
   if (!file || !editor.value) return;
   const url = URL.createObjectURL(file);
   imageCompleteStatus.message = "";
@@ -749,13 +756,14 @@ const handleImageUpload = async (e) => {
         ? {
             mode: "replace",
             id: imageState.id,
+            operation: { type: "cover" },
           }
         : {
             mode: "add",
+            operation: { type: "cover" },
           },
     );
 
-    await editor.value.executeCommand("resetWorkingImages");
     await syncImageItems();
     if (result?.id) {
       await focusImageById(result.id, {
@@ -767,22 +775,24 @@ const handleImageUpload = async (e) => {
   } finally {
     URL.revokeObjectURL(url);
     pendingImageUploadMode.value = "add";
-    e.target.value = "";
+    if (target) target.value = "";
   }
 };
 
-const handleWhiteInkReplace = async (e) => {
-  const file = e.target.files[0];
+const handleWhiteInkReplace = async (e: Event) => {
+  const target = e.target as HTMLInputElement | null;
+  const file = target?.files?.[0];
   if (!file || !editor.value) return;
   const url = URL.createObjectURL(file);
   whiteInkActionStatus.message = "";
   await editor.value.executeCommand("setWhiteInkImage", url);
   await syncWhiteInkSettings();
-  e.target.value = "";
+  if (target) target.value = "";
 };
 
-const handleDielineDetect = async (e) => {
-  const file = e.target.files[0];
+const handleDielineDetect = async (e: Event) => {
+  const target = e.target as HTMLInputElement | null;
+  const file = target?.files?.[0];
   if (!file) return;
   const url = URL.createObjectURL(file);
   await editor.value.detectDieline(url);
@@ -794,7 +804,7 @@ const updateImageState = () => {
   if (!editor.value || !imageState.id) return;
   imageCompleteStatus.message = "";
   imageCompleteStatus.issues = [];
-  editor.value.executeCommand("setWorkingImage", imageState.id, {
+  editor.value.setImageTransform(imageState.id, {
     scale: imageState.scale,
     angle: imageState.angle,
   });
@@ -859,8 +869,15 @@ const completeImageWorking = async () => {
   if (!imageRows.value.length) return;
   const res = await editor.value.executeCommand("completeImages");
   if (res && res.ok) {
-    imageCompleteStatus.message = "Completed";
     await syncImageItems();
+    const nextState = await editor.value.getImageState();
+    applyImageViewState(nextState);
+    if (nextState.focusedId) {
+      await focusImageById(nextState.focusedId, {
+        syncCanvasSelection: true,
+      });
+    }
+    imageCompleteStatus.message = "Completed";
     return;
   }
   imageCompleteStatus.message = "Complete failed";
@@ -1098,7 +1115,7 @@ const onSelectionCleared = async () => {
   // Let's assume Image mode is selection-based, others are Tool-based.
 };
 
-const onToolActivated = ({ id }) => {
+const onToolActivated = ({ id }: { id: string | null }) => {
   if (id === "pooder.kit.size") {
     currentMode.value = "Size";
     void syncSizeState();
@@ -1151,7 +1168,7 @@ const onToolActivated = ({ id }) => {
   }
 };
 
-const onWorkingChange = (e) => {
+const onWorkingChange = (e: any) => {
   featureWorkingItems.value = Array.isArray(e?.features)
     ? cloneFeatureItems(e.features)
     : [];
@@ -1160,16 +1177,14 @@ const onWorkingChange = (e) => {
   }
 };
 
-const onImageWorkingChange = (e) => {
+const onImageStateChange = (state: ImageViewState) => {
   if (currentMode.value !== "Image") return;
-  if (Array.isArray(e?.items)) {
-    applyImageItems(e.items);
-    return;
-  }
-  void syncImageItems();
+  applyImageViewState(state);
 };
 
-const onSizeStateChanged = (state) => {
+let stopImageStateSubscription: (() => void) | null = null;
+
+const onSizeStateChanged = (state: any) => {
   if (!state) return;
   sizeState.width = Number(state.actualWidth ?? 0);
   sizeState.height = Number(state.actualHeight ?? 0);
@@ -1201,8 +1216,8 @@ watch(
       editor.on("selection:cleared", onSelectionCleared);
       editor.on("tool:activated", onToolActivated);
       editor.on("feature:working:change", onWorkingChange);
-      editor.on("image:working:change", onImageWorkingChange);
       editor.on("size:state:changed", onSizeStateChanged);
+      stopImageStateSubscription = editor.onImageStateChange(onImageStateChange);
 
       // Initial sync
       if (editor.services && editor.services.workbench) {
@@ -1221,9 +1236,10 @@ onUnmounted(() => {
     props.editor.off("selection:cleared", onSelectionCleared);
     props.editor.off("tool:activated", onToolActivated);
     props.editor.off("feature:working:change", onWorkingChange);
-    props.editor.off("image:working:change", onImageWorkingChange);
     props.editor.off("size:state:changed", onSizeStateChanged);
   }
+  stopImageStateSubscription?.();
+  stopImageStateSubscription = null;
 });
 </script>
 

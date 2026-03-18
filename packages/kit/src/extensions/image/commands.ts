@@ -36,30 +36,31 @@ export function createImageCommands(tool: any): CommandContribution[] {
       },
     },
     {
-      command: "getWorkingImages",
-      id: "getWorkingImages",
-      title: "Get Working Images",
+      command: "getImageViewState",
+      id: "getImageViewState",
+      title: "Get Image View State",
       handler: () => {
-        return tool.cloneItems(tool.workingItems);
+        return tool.getImageViewState();
       },
     },
     {
-      command: "setWorkingImage",
-      id: "setWorkingImage",
-      title: "Set Working Image",
-      handler: (id: string, updates: Record<string, any>) => {
-        tool.updateImageInWorking(id, updates);
+      command: "setImageTransform",
+      id: "setImageTransform",
+      title: "Set Image Transform",
+      handler: async (
+        id: string,
+        updates: Record<string, any>,
+        options: Record<string, any> = {},
+      ) => {
+        await tool.setImageTransform(id, updates, options);
       },
     },
     {
-      command: "resetWorkingImages",
-      id: "resetWorkingImages",
-      title: "Reset Working Images",
+      command: "imageSessionReset",
+      id: "imageSessionReset",
+      title: "Reset Image Session",
       handler: () => {
-        tool.workingItems = tool.cloneItems(tool.items);
-        tool.hasWorkingChanges = false;
-        tool.updateImages();
-        tool.emitWorkingChange();
+        tool.resetImageSession();
       },
     },
     {
@@ -94,15 +95,23 @@ export function createImageCommands(tool: any): CommandContribution[] {
       id: "removeImage",
       title: "Remove Image",
       handler: (id: string) => {
-        const removed = tool.items.find((item: any) => item.id === id);
-        const next = tool.items.filter((item: any) => item.id !== id);
-        if (next.length !== tool.items.length) {
+        const sourceItems = tool.isToolActive ? tool.workingItems : tool.items;
+        const removed = sourceItems.find((item: any) => item.id === id);
+        const next = sourceItems.filter((item: any) => item.id !== id);
+        if (next.length !== sourceItems.length) {
           tool.purgeSourceSizeCacheForItem(removed);
           if (tool.focusedImageId === id) {
             tool.setImageFocus(null, {
               syncCanvasSelection: true,
               skipRender: true,
             });
+          }
+          if (tool.isToolActive) {
+            tool.workingItems = tool.cloneItems(next);
+            tool.hasWorkingChanges = true;
+            tool.updateImages();
+            tool.emitWorkingChange(id);
+            return;
           }
           tool.updateConfig(next);
         }
@@ -130,6 +139,13 @@ export function createImageCommands(tool: any): CommandContribution[] {
           syncCanvasSelection: true,
           skipRender: true,
         });
+        if (tool.isToolActive) {
+          tool.workingItems = [];
+          tool.hasWorkingChanges = true;
+          tool.updateImages();
+          tool.emitWorkingChange();
+          return;
+        }
         tool.updateConfig([]);
       },
     },
@@ -138,11 +154,19 @@ export function createImageCommands(tool: any): CommandContribution[] {
       id: "bringToFront",
       title: "Bring Image to Front",
       handler: (id: string) => {
-        const index = tool.items.findIndex((item: any) => item.id === id);
-        if (index !== -1 && index < tool.items.length - 1) {
-          const next = [...tool.items];
+        const sourceItems = tool.isToolActive ? tool.workingItems : tool.items;
+        const index = sourceItems.findIndex((item: any) => item.id === id);
+        if (index !== -1 && index < sourceItems.length - 1) {
+          const next = [...sourceItems];
           const [item] = next.splice(index, 1);
           next.push(item);
+          if (tool.isToolActive) {
+            tool.workingItems = tool.cloneItems(next);
+            tool.hasWorkingChanges = true;
+            tool.updateImages();
+            tool.emitWorkingChange(id);
+            return;
+          }
           tool.updateConfig(next);
         }
       },
@@ -152,11 +176,19 @@ export function createImageCommands(tool: any): CommandContribution[] {
       id: "sendToBack",
       title: "Send Image to Back",
       handler: (id: string) => {
-        const index = tool.items.findIndex((item: any) => item.id === id);
+        const sourceItems = tool.isToolActive ? tool.workingItems : tool.items;
+        const index = sourceItems.findIndex((item: any) => item.id === id);
         if (index > 0) {
-          const next = [...tool.items];
+          const next = [...sourceItems];
           const [item] = next.splice(index, 1);
           next.unshift(item);
+          if (tool.isToolActive) {
+            tool.workingItems = tool.cloneItems(next);
+            tool.hasWorkingChanges = true;
+            tool.updateImages();
+            tool.emitWorkingChange(id);
+            return;
+          }
           tool.updateConfig(next);
         }
       },

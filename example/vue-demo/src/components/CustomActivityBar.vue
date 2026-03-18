@@ -12,46 +12,62 @@
   </div>
 </template>
 
-<script setup>
-import { ref, onUnmounted, watch } from 'vue';
+<script setup lang="ts">
+import { computed, ref, onUnmounted, watch } from "vue";
+import type { PooderEditorExposed } from "@pooder/vue";
 
-const props = defineProps({
-  editor: Object
+const props = defineProps<{
+  editor: PooderEditorExposed | null;
+}>();
+
+const editor = computed(() => {
+  const e = props.editor;
+  if (e && typeof e === "object" && "value" in e) return e.value;
+  return e;
 });
 
-const activeTool = ref('');
+const activeTool = ref("");
 
 const tools = [
-  { id: 'pooder.kit.size', label: 'Size' },
-  { id: 'pooder.kit.image', label: 'Image' },
-  { id: 'pooder.kit.white-ink', label: 'White Ink' },
-  { id: 'pooder.kit.dieline', label: 'Dieline' },
-  { id: 'pooder.kit.feature', label: 'Hole' }
+  { id: "pooder.kit.size", label: "Size" },
+  { id: "pooder.kit.image", label: "Image" },
+  { id: "pooder.kit.white-ink", label: "White Ink" },
+  { id: "pooder.kit.dieline", label: "Dieline" },
+  { id: "pooder.kit.feature", label: "Hole" },
 ];
 
-const activate = (id) => {
-  if (props.editor) {
-    props.editor.activateTool(id);
+const activate = (id: string) => {
+  if (editor.value) {
+    void editor.value.activateTool(id);
   }
 };
 
-const updateActiveTool = (event) => {
-    activeTool.value = event.id;
-}
+const updateActiveTool = (event: { id: string | null }) => {
+  activeTool.value = event.id || "";
+};
 
-watch(() => props.editor, (editor) => {
-    if (editor) {
-        editor.on('tool:activated', updateActiveTool);
-        if (editor.services && editor.services.workbench) {
-             activeTool.value = editor.services.workbench.activeToolId;
-        }
+watch(
+  editor,
+  (nextEditor, previousEditor) => {
+    if (previousEditor) {
+      previousEditor.off("tool:activated", updateActiveTool);
     }
-}, { immediate: true });
+    if (nextEditor) {
+      nextEditor.on("tool:activated", updateActiveTool);
+      if (nextEditor.services && nextEditor.services.workbench) {
+        activeTool.value = nextEditor.services.workbench.activeToolId || "";
+      }
+    } else {
+      activeTool.value = "";
+    }
+  },
+  { immediate: true },
+);
 
 onUnmounted(() => {
-    if (props.editor) {
-        props.editor.off('tool:activated', updateActiveTool);
-    }
+  if (editor.value) {
+    editor.value.off("tool:activated", updateActiveTool);
+  }
 });
 </script>
 

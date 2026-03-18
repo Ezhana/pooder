@@ -1,12 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
-import { PooderEditor } from "@pooder/vue";
+import { ref, onMounted, onUnmounted, watch } from "vue";
+import {
+  hasAnyImageInViewState,
+  PooderEditor,
+  type ImageViewState,
+  type PooderEditorExposed,
+} from "@pooder/vue";
 import CustomActivityBar from "./components/CustomActivityBar.vue";
 import CustomToolPanel from "./components/CustomToolPanel.vue";
 import { getTemplateConfig } from "./constants/productTemplates";
 
-const editorRef = ref<any>(null);
+const editorRef = ref<PooderEditorExposed | null>(null);
 const currentCategory = ref("Thick Acrylic Keychains");
+let stopImageStateSubscription: (() => void) | null = null;
 
 const cloneConfigValue = (value: any) => {
   if (value && typeof value === "object") {
@@ -39,21 +45,38 @@ watch(currentCategory, () => {
 
 watch(
   editorRef,
-  (editor) => {
-    if (editor) applyCategoryTemplate();
+  async (editor) => {
+    stopImageStateSubscription?.();
+    stopImageStateSubscription = null;
+
+    if (!editor) return;
+
+    applyCategoryTemplate();
+
+    const state = await editor.getImageState();
+    handleImageStateChange(state);
+    stopImageStateSubscription = editor.onImageStateChange(
+      handleImageStateChange,
+    );
   },
   { immediate: true },
 );
 
-const handleImageChange = (images: any[]) => {
-  console.log("Images Changed (App.vue):", images);
+onUnmounted(() => {
+  stopImageStateSubscription?.();
+  stopImageStateSubscription = null;
+});
+
+const handleImageStateChange = (state: ImageViewState) => {
+  console.log("Image State Changed (App.vue):", state);
+  console.log("Has Any Image:", hasAnyImageInViewState(state));
 };
 </script>
 
 <template>
   <div class="app-container">
     <main class="editor-wrapper">
-      <PooderEditor ref="editorRef" @image-change="handleImageChange" />
+      <PooderEditor ref="editorRef" />
       <CustomActivityBar :editor="editorRef" />
       <CustomToolPanel :editor="editorRef" :category="currentCategory" />
     </main>
