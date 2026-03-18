@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 6.3.0
+
+### Minor Changes
+
+- pooder facade
+
 ## 6.2.2
 
 ### Patch Changes

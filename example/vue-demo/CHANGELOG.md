@@ -1,5 +1,16 @@
 # vue-demo
 
+## 3.1.0
+
+### Minor Changes
+
+- pooder facade
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/vue@4.5.0
+
 ## 3.0.17
 
 ### Patch Changes

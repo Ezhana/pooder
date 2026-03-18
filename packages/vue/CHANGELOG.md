@@ -1,5 +1,16 @@
 # @pooder/vue
 
+## 4.5.0
+
+### Minor Changes
+
+- pooder facade
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/kit@6.3.0
+
 ## 4.4.5
 
 ### Patch Changes
