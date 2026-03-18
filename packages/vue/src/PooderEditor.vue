@@ -23,6 +23,7 @@ import {
   MirrorTool,
   SizeTool,
   SceneLayoutService,
+  type ImageOperation,
 } from "@pooder/kit";
 import CanvasArea from "./components/CanvasArea.vue";
 
@@ -82,14 +83,12 @@ const upsertImage = async (
     id?: string;
     mode?: "replace" | "add";
     addOptions?: any;
-    fitOnAdd?: boolean;
   },
 ) => {
   const result = await cmdSvc.executeCommand("upsertImage", url, {
     id: options?.id,
     mode: options?.mode,
     addOptions: options?.addOptions,
-    fitOnAdd: options?.fitOnAdd,
   });
 
   return result;
@@ -99,10 +98,22 @@ const addImage = async (url: string, options?: any) => {
   const result = await upsertImage(url, {
     mode: "add",
     addOptions: options,
-    fitOnAdd: true,
   });
 
   return result.id;
+};
+
+const applyImageOperation = async (
+  id: string,
+  operation: ImageOperation,
+  options?: { target?: "auto" | "config" | "working" },
+) => {
+  return await cmdSvc.executeCommand(
+    "applyImageOperation",
+    id,
+    operation,
+    options,
+  );
 };
 
 const updateImage = async (id: string, options?: any) => {
@@ -483,6 +494,7 @@ defineExpose({
   generateCutImage,
   addImage,
   upsertImage,
+  applyImageOperation,
   updateImage,
   clearImages,
   exportUserCroppedImage,

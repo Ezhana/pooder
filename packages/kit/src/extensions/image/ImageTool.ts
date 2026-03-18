@@ -39,6 +39,11 @@ import {
 } from "../../shared/constants/layers";
 import { createImageCommands } from "./commands";
 import { createImageConfigurations } from "./config";
+import {
+  computeImageOperationUpdates,
+  resolveImageOperationArea,
+  type ImageOperation,
+} from "./imageOperations";
 import { buildImageSessionOverlaySpecs } from "./sessionOverlay";
 
 export interface ImageItem {
@@ -92,14 +97,6 @@ interface UpsertImageOptions {
   id?: string;
   mode?: "replace" | "add";
   addOptions?: Partial<ImageItem>;
-  fitOnAdd?: boolean;
-}
-
-interface DielineFitArea {
-  width: number;
-  height: number;
-  left: number;
-  top: number;
 }
 
 interface UpdateImageOptions {
@@ -1034,7 +1031,6 @@ export class ImageTool implements Extension {
   private async addImageEntry(
     url: string,
     options?: Partial<ImageItem>,
-    fitOnAdd = true,
   ): Promise<string> {
     const id = this.generateId();
     const newItem = this.normalizeItem({
@@ -1049,9 +1045,6 @@ export class ImageTool implements Extension {
     this.updateConfig([...this.items, newItem]);
     this.addItemToWorkingSessionIfNeeded(newItem, sessionDirtyBeforeAdd);
     const loaded = await waitLoaded;
-    if (loaded && fitOnAdd) {
-      await this.fitImageToDefaultArea(id);
-    }
     if (loaded) {
       this.setImageFocus(id);
     }
@@ -1063,7 +1056,6 @@ export class ImageTool implements Extension {
     options: UpsertImageOptions = {},
   ): Promise<{ id: string; mode: "replace" | "add" }> {
     const mode = options.mode || (options.id ? "replace" : "add");
-    const fitOnAdd = options.fitOnAdd !== false;
     if (mode === "replace") {
       if (!options.id) {
         throw new Error("replace-target-id-required");
@@ -1073,10 +1065,14 @@ export class ImageTool implements Extension {
         throw new Error("replace-target-not-found");
       }
       await this.updateImageInConfig(targetId, { url });
+      const loaded = await this.waitImageLoaded(targetId, true);
+      if (loaded) {
+        this.setImageFocus(targetId);
+      }
       return { id: targetId, mode: "replace" };
     }
 
-    const id = await this.addImageEntry(url, options.addOptions, fitOnAdd);
+    const id = await this.addImageEntry(url, options.addOptions);
     return { id, mode: "add" };
   }
 
@@ -1163,38 +1159,6 @@ export class ImageTool implements Extension {
       return { left: 0, top: 0, width: 0, height: 0 };
     }
     return this.canvasService.toScreenRect(frame || this.getFrameRect());
-  }
-
-  private async resolveDefaultFitArea(): Promise<DielineFitArea | null> {
-    if (!this.canvasService) return null;
-    const frame = this.getFrameRect();
-    if (frame.width <= 0 || frame.height <= 0) return null;
-    return {
-      width: Math.max(1, frame.width),
-      height: Math.max(1, frame.height),
-      left: frame.left + frame.width / 2,
-      top: frame.top + frame.height / 2,
-    };
-  }
-
-  private async fitImageToDefaultArea(id: string) {
-    if (!this.canvasService) return;
-    const area = await this.resolveDefaultFitArea();
-
-    if (area) {
-      await this.fitImageToArea(id, area);
-      return;
-    }
-
-    const viewport = this.canvasService.getSceneViewportRect();
-    const canvasW = Math.max(1, viewport.width || 0);
-    const canvasH = Math.max(1, viewport.height || 0);
-    await this.fitImageToArea(id, {
-      width: canvasW,
-      height: canvasH,
-      left: viewport.left + canvasW / 2,
-      top: viewport.top + canvasH / 2,
-    });
   }
 
   private getImageObjects(): any[] {
@@ -1669,10 +1633,6 @@ export class ImageTool implements Extension {
             url: replacingUrl,
             sourceUrl: replacingUrl,
             committedUrl: undefined,
-            scale: updates.scale ?? 1,
-            angle: updates.angle ?? 0,
-            left: updates.left ?? 0.5,
-            top: updates.top ?? 0.5,
           }
         : {}),
     });
@@ -1680,14 +1640,7 @@ export class ImageTool implements Extension {
     this.updateConfig(next);
 
     if (replacingSource) {
-      this.debug("replace:image:begin", { id, replacingUrl });
       this.purgeSourceSizeCacheForItem(base);
-      const loaded = await this.waitImageLoaded(id, true);
-      this.debug("replace:image:loaded", { id, loaded });
-      if (loaded) {
-        await this.refitImageToFrame(id);
-        this.setImageFocus(id);
-      }
     }
   }
 
@@ -1709,93 +1662,62 @@ export class ImageTool implements Extension {
     });
   }
 
-  private async refitImageToFrame(id: string) {
+  private async resolveImageSourceSize(
+    id: string,
+    src: string,
+  ): Promise<SourceSize | null> {
     const obj = this.getImageObject(id);
-    if (!obj || !this.canvasService) return;
-    const current = this.items.find((item) => item.id === id);
-    if (!current) return;
-    const render = this.resolveRenderImageState(current);
+    if (obj) {
+      this.rememberSourceSize(src, obj);
+    }
+    const ensured = await this.ensureSourceSize(src);
+    if (ensured) return ensured;
+    if (!obj) return null;
 
-    this.rememberSourceSize(render.src, obj);
-    const source = this.getSourceSize(render.src, obj);
-    const frame = this.getFrameRect();
-    const coverScale = this.getCoverScale(frame, source);
-
-    const currentScale = this.toSceneObjectScale(obj.scaleX || 1);
-    const zoom = Math.max(0.05, currentScale / coverScale);
-
-    const updated: Partial<ImageItem> = {
-      scale: Number.isFinite(zoom) ? zoom : 1,
-      angle: 0,
-      left: 0.5,
-      top: 0.5,
-    };
-
-    const index = this.items.findIndex((item) => item.id === id);
-    if (index < 0) return;
-
-    const next = [...this.items];
-    next[index] = this.normalizeItem({ ...next[index], ...updated });
-    this.updateConfig(next);
-    this.workingItems = this.cloneItems(next);
-    this.hasWorkingChanges = false;
-    this.updateImages();
-    this.emitWorkingChange(id);
+    const width = Number(obj?.width || 0);
+    const height = Number(obj?.height || 0);
+    if (width <= 0 || height <= 0) return null;
+    return { width, height };
   }
 
-  private async fitImageToArea(
+  private async applyImageOperation(
     id: string,
-    area: { width: number; height: number; left?: number; top?: number },
+    operation: ImageOperation,
+    options: UpdateImageOptions = {},
   ) {
     if (!this.canvasService) return;
 
-    const loaded = await this.waitImageLoaded(id, false);
-    if (!loaded) return;
-
-    const obj = this.getImageObject(id);
-    if (!obj) return;
-    const renderItems = this.isToolActive ? this.workingItems : this.items;
+    this.syncToolActiveFromWorkbench();
+    const target = options.target || "auto";
+    const renderItems =
+      target === "working" || (target === "auto" && this.isToolActive)
+        ? this.workingItems
+        : this.items;
     const current = renderItems.find((item) => item.id === id);
     if (!current) return;
+
     const render = this.resolveRenderImageState(current);
+    const source = await this.resolveImageSourceSize(id, render.src);
+    if (!source) return;
 
-    this.rememberSourceSize(render.src, obj);
-    const source = this.getSourceSize(render.src, obj);
     const frame = this.getFrameRect();
-    const baseCover = this.getCoverScale(frame, source);
-
-    const desiredScale = Math.max(
-      Math.max(1, area.width) / Math.max(1, source.width),
-      Math.max(1, area.height) / Math.max(1, source.height),
-    );
-
     const viewport = this.canvasService.getSceneViewportRect();
-    const canvasW = viewport.width || 1;
-    const canvasH = viewport.height || 1;
+    const area =
+      operation.type === "resetTransform"
+        ? resolveImageOperationArea({ frame, viewport })
+        : resolveImageOperationArea({
+            frame,
+            viewport,
+            area: operation.area,
+          });
+    const updates = computeImageOperationUpdates({
+      frame,
+      source,
+      operation,
+      area,
+    });
 
-    const areaLeftInput = area.left ?? 0.5;
-    const areaTopInput = area.top ?? 0.5;
-
-    const areaLeftPx =
-      areaLeftInput <= 1.5
-        ? viewport.left + areaLeftInput * canvasW
-        : areaLeftInput;
-    const areaTopPx =
-      areaTopInput <= 1.5
-        ? viewport.top + areaTopInput * canvasH
-        : areaTopInput;
-
-    const updates: Partial<ImageItem> = {
-      scale: Math.max(0.05, desiredScale / baseCover),
-      left: this.clampNormalized(
-        (areaLeftPx - frame.left) / Math.max(1, frame.width),
-      ),
-      top: this.clampNormalized(
-        (areaTopPx - frame.top) / Math.max(1, frame.height),
-      ),
-    };
-
-    if (this.isToolActive) {
+    if (target === "working" || (target === "auto" && this.isToolActive)) {
       this.updateImageInWorking(id, updates);
       return;
     }

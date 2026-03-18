@@ -1,4 +1,5 @@
 import type { CommandContribution } from "@pooder/core";
+import type { ImageOperation } from "./imageOperations";
 
 export function createImageCommands(tool: any): CommandContribution[] {
   return [
@@ -20,6 +21,18 @@ export function createImageCommands(tool: any): CommandContribution[] {
       title: "Upsert Image",
       handler: async (url: string, options: Record<string, any> = {}) => {
         return await tool.upsertImageEntry(url, options);
+      },
+    },
+    {
+      command: "applyImageOperation",
+      id: "applyImageOperation",
+      title: "Apply Image Operation",
+      handler: async (
+        id: string,
+        operation: ImageOperation,
+        options: Record<string, any> = {},
+      ) => {
+        await tool.applyImageOperation(id, operation, options);
       },
     },
     {
@@ -63,30 +76,6 @@ export function createImageCommands(tool: any): CommandContribution[] {
       title: "Export User Cropped Image",
       handler: async (options: Record<string, any> = {}) => {
         return await tool.exportUserCroppedImage(options);
-      },
-    },
-    {
-      command: "fitImageToArea",
-      id: "fitImageToArea",
-      title: "Fit Image to Area",
-      handler: async (
-        id: string,
-        area: {
-          width: number;
-          height: number;
-          left?: number;
-          top?: number;
-        },
-      ) => {
-        await tool.fitImageToArea(id, area);
-      },
-    },
-    {
-      command: "fitImageToDefaultArea",
-      id: "fitImageToDefaultArea",
-      title: "Fit Image to Default Area",
-      handler: async (id: string) => {
-        await tool.fitImageToDefaultArea(id);
       },
     },
     {
