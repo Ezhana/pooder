@@ -1,5 +1,13 @@
 # @pooder/kit
 
+## 6.3.1
+
+### Patch Changes
+
+- image placement constraint
+- Updated dependencies
+  - @pooder/core@2.2.2
+
 ## 6.3.0
 
 ### Minor Changes

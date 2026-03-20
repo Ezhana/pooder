@@ -1,5 +1,11 @@
 # @pooder/core
 
+## 2.2.2
+
+### Patch Changes
+
+- image placement constraint
+
 ## 2.2.1
 
 ### Patch Changes
