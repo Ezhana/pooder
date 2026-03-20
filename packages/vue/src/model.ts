@@ -5,6 +5,7 @@ import type {
 } from "@pooder/core";
 import type {
   ImageOperation,
+  ImageSessionNotice,
   ImageTransformUpdates,
   ImageViewState,
 } from "@pooder/kit";
@@ -13,6 +14,9 @@ export type PooderImageTarget = "auto" | "config" | "working";
 export type PooderEditorEventHandler = (data: any) => void;
 export type PooderEditorImageStateChangeHandler = (
   state: ImageViewState,
+) => void;
+export type PooderEditorImageSessionNoticeHandler = (
+  notice: ImageSessionNotice | null,
 ) => void;
 
 export interface PooderGenerateCutImageOptions {
@@ -99,8 +103,7 @@ export interface PooderDetectDielineFromFrameOptions {
   commit?: boolean;
 }
 
-export interface PooderDetectDielineFromFrameResult
-  extends PooderDetectEdgeResult {
+export interface PooderDetectDielineFromFrameResult extends PooderDetectEdgeResult {
   sourceImage?: PooderExportUserCroppedImageResult;
   diagnostics?: PooderDetectFrameDiagnostics;
   postCommitDiagnostics?: PooderDetectPostCommitDiagnostics | null;
@@ -133,12 +136,15 @@ export interface PooderToolSwitchResult {
   from: string | null;
   to: string | null;
   reason?: string;
+  detail?: any;
 }
 
 export interface PooderEditorExposed {
   importConfig(config: Record<string, any>): void;
   exportConfig(): Record<string, any>;
-  generateCutImage(options?: PooderGenerateCutImageOptions): Promise<string | null>;
+  generateCutImage(
+    options?: PooderGenerateCutImageOptions,
+  ): Promise<string | null>;
   addImage(url: string, options?: any): Promise<string>;
   upsertImage(
     url: string,
@@ -146,6 +152,9 @@ export interface PooderEditorExposed {
   ): Promise<{ id: string; mode: "replace" | "add" }>;
   getImageState(): Promise<ImageViewState>;
   onImageStateChange(handler: PooderEditorImageStateChangeHandler): () => void;
+  onImageSessionNotice(
+    handler: PooderEditorImageSessionNoticeHandler,
+  ): () => void;
   applyImageOperation(
     id: string,
     operation: ImageOperation,
@@ -190,6 +199,7 @@ export type PooderEditorImageApi = Pick<
   | "upsertImage"
   | "getImageState"
   | "onImageStateChange"
+  | "onImageSessionNotice"
   | "applyImageOperation"
   | "setImageTransform"
   | "updateImage"

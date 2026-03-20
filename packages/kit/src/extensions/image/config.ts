@@ -124,5 +124,12 @@ export function createImageConfigurations(): ConfigurationContribution[] {
       label: "Image Frame Outer Background",
       default: "#f5f5f5",
     },
+    {
+      id: "image.session.placementPolicy",
+      type: "select",
+      label: "Image Session Placement Policy",
+      options: ["free", "warn", "strict"],
+      default: "free",
+    },
   ];
 }

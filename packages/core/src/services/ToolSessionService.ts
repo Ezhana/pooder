@@ -21,6 +21,7 @@ export type LeaveDecision = "allow" | "blocked";
 export interface LeaveResult {
   decision: LeaveDecision;
   reason?: string;
+  detail?: any;
 }
 
 interface ToolSessionServiceDependencies {
@@ -108,11 +109,12 @@ export default class ToolSessionService implements Service {
     return false;
   }
 
-  private emitSessionChange(toolId: string, reason: string) {
+  private emitSessionChange(toolId: string, reason: string, detail?: any) {
     if (!this.eventBus) return;
     this.eventBus.emit("tool:session:change", {
       toolId,
       reason,
+      detail,
       state: this.getState(toolId),
     });
   }
@@ -171,9 +173,16 @@ export default class ToolSessionService implements Service {
       return { ok: true };
     }
     const result = await this.runCommand(tool.commands.validate);
-    if (result === false) return { ok: false, result };
+    if (result === false) {
+      this.emitSessionChange(toolId, "validate-failed", result);
+      return { ok: false, result };
+    }
     if (result && typeof result === "object" && "ok" in result) {
-      return { ok: Boolean((result as any).ok), result };
+      const ok = Boolean((result as any).ok);
+      if (!ok) {
+        this.emitSessionChange(toolId, "validate-failed", result);
+      }
+      return { ok, result };
     }
     return { ok: true, result };
   }
@@ -215,22 +224,43 @@ export default class ToolSessionService implements Service {
     if (tool.interaction !== "session") return { decision: "allow" };
 
     const dirty = this.isDirty(toolId);
+    const leavePolicy = tool.session?.leavePolicy ?? "block";
+    console.info("[ToolSessionService] handleBeforeLeave:check", {
+      toolId,
+      dirty,
+      leavePolicy,
+      status: this.ensureSession(toolId).status,
+    });
     if (!dirty) return { decision: "allow" };
 
-    const leavePolicy = tool.session?.leavePolicy ?? "block";
     if (leavePolicy === "commit") {
       const committed = await this.commit(toolId);
+      console.info("[ToolSessionService] handleBeforeLeave:commit-policy", {
+        toolId,
+        committed,
+      });
       if (!committed.ok) {
-        return { decision: "blocked", reason: "session-validation-failed" };
+        return {
+          decision: "blocked",
+          reason: "session-validation-failed",
+          detail: committed.result,
+        };
       }
       return { decision: "allow" };
     }
 
     if (leavePolicy === "rollback") {
       await this.rollback(toolId);
+      console.info("[ToolSessionService] handleBeforeLeave:rollback-policy", {
+        toolId,
+      });
       return { decision: "allow" };
     }
 
+    console.warn("[ToolSessionService] handleBeforeLeave:block-dirty", {
+      toolId,
+      leavePolicy,
+    });
     return { decision: "blocked", reason: "session-dirty" };
   }
 

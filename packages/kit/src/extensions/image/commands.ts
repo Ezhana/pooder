@@ -64,11 +64,19 @@ export function createImageCommands(tool: any): CommandContribution[] {
       },
     },
     {
+      command: "validateImageSession",
+      id: "validateImageSession",
+      title: "Validate Image Session",
+      handler: async () => {
+        return await tool.validateImageSession();
+      },
+    },
+    {
       command: "completeImages",
       id: "completeImages",
       title: "Complete Images",
       handler: async () => {
-        return await tool.commitWorkingImagesAsCropped();
+        return await tool.completeImageSession();
       },
     },
     {

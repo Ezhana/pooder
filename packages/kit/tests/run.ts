@@ -33,7 +33,10 @@ function assert(condition: unknown, message: string) {
 
 function testWrappedOffsets() {
   assert(wrappedDistance(100, 10, 30) === 20, "distance 10->30 should be 20");
-  assert(wrappedDistance(100, 90, 10) === 20, "distance 90->10 should wrap to 20");
+  assert(
+    wrappedDistance(100, 90, 10) === 20,
+    "distance 90->10 should wrap to 20",
+  );
 
   const a = sampleWrappedOffsets(100, 10, 30, 5);
   assert(
@@ -76,9 +79,18 @@ function testMaskOps() {
 
   const r = findMinimalConnectRadius(mask, width, height, 20);
   const closed = circularMorphology(mask, width, height, r, "closing");
-  assert(isMaskConnected8(closed, width, height), `closed mask should be connected (r=${r})`);
+  assert(
+    isMaskConnected8(closed, width, height),
+    `closed mask should be connected (r=${r})`,
+  );
   if (r > 0) {
-    const closedPrev = circularMorphology(mask, width, height, r - 1, "closing");
+    const closedPrev = circularMorphology(
+      mask,
+      width,
+      height,
+      r - 1,
+      "closing",
+    );
     assert(
       !isMaskConnected8(closedPrev, width, height),
       `r should be minimal (r=${r})`,
@@ -97,10 +109,12 @@ function testMaskOps() {
 
   const imgW = 2;
   const imgH = 1;
-  const rgba = new Uint8ClampedArray([
-    255, 255, 255, 255, 10, 10, 10, 254,
-  ]);
-  const imageData = { width: imgW, height: imgH, data: rgba } as unknown as ImageData;
+  const rgba = new Uint8ClampedArray([255, 255, 255, 255, 10, 10, 10, 254]);
+  const imageData = {
+    width: imgW,
+    height: imgH,
+    data: rgba,
+  } as unknown as ImageData;
   const paddedWidth = imgW + 4;
   const paddedHeight = imgH + 4;
   const created = createMask(imageData, {
@@ -111,15 +125,25 @@ function testMaskOps() {
     maskMode: "auto",
     alphaOpaqueCutoff: 250,
   });
-  assert(created[2 * paddedWidth + 2] === 0, "white pixel should be background");
-  assert(created[2 * paddedWidth + 3] === 1, "non-white pixel should be foreground");
+  assert(
+    created[2 * paddedWidth + 2] === 0,
+    "white pixel should be background",
+  );
+  assert(
+    created[2 * paddedWidth + 3] === 1,
+    "non-white pixel should be foreground",
+  );
 }
 
 function testEdgeScale() {
   const currentMax = 100;
   const baseBounds = { width: 50, height: 20 };
   const expandedBounds = { width: 70, height: 40 };
-  const { width, height, scale } = computeDetectEdgeSize(currentMax, baseBounds, expandedBounds);
+  const { width, height, scale } = computeDetectEdgeSize(
+    currentMax,
+    baseBounds,
+    expandedBounds,
+  );
   assert(scale === 2, `expected scale 2, got ${scale}`);
   assert(width === 140, `expected width 140, got ${width}`);
   assert(height === 80, `expected height 80, got ${height}`);
@@ -290,7 +314,10 @@ function testVisibilityDsl() {
 }
 
 function testImageViewStateHelper() {
-  assert(hasAnyImageInViewState(null) === false, "null image state should be empty");
+  assert(
+    hasAnyImageInViewState(null) === false,
+    "null image state should be empty",
+  );
   assert(
     hasAnyImageInViewState({
       items: [],
@@ -301,6 +328,8 @@ function testImageViewStateHelper() {
       isImageSelectionActive: false,
       hasWorkingChanges: false,
       source: "committed",
+      placementPolicy: "free",
+      sessionNotice: null,
     }) === false,
     "empty image state should report false",
   );
@@ -324,6 +353,8 @@ function testImageViewStateHelper() {
       isImageSelectionActive: true,
       hasWorkingChanges: true,
       source: "working",
+      placementPolicy: "free",
+      sessionNotice: null,
     }) === true,
     "non-empty image state should report true",
   );
@@ -348,6 +379,7 @@ function testContributionCompatibility() {
     "getImageViewState",
     "setImageTransform",
     "imageSessionReset",
+    "validateImageSession",
     "completeImages",
     "exportUserCroppedImage",
     "focusImage",
@@ -427,6 +459,7 @@ function testContributionCompatibility() {
     "image.frame.dashLength",
     "image.frame.innerBackground",
     "image.frame.outerBackground",
+    "image.session.placementPolicy",
   ];
   const expectedWhiteInkConfigKeys = [
     "whiteInk.items",
@@ -472,10 +505,10 @@ function main() {
   testBridgeSelection();
   testMaskOps();
   testEdgeScale();
-testFeaturePlacementProjection();
-testVisibilityDsl();
-testImageViewStateHelper();
-testContributionCompatibility();
+  testFeaturePlacementProjection();
+  testVisibilityDsl();
+  testImageViewStateHelper();
+  testContributionCompatibility();
   console.log("ok");
 }
 

@@ -16,6 +16,7 @@ export interface ToolSwitchResult {
   from: string | null;
   to: string | null;
   reason?: string;
+  detail?: any;
 }
 
 export type ToolSwitchGuard = (
@@ -112,6 +113,7 @@ export default class WorkbenchService implements Service {
     const eventBus = this.getEventBus();
     const toolRegistry = this.getToolRegistry();
     const sessionService = this.getSessionService();
+    const contextReason = options?.reason;
 
     if (this._activeToolId === id) {
       return { ok: true, from: this._activeToolId, to: id };
@@ -129,11 +131,19 @@ export default class WorkbenchService implements Service {
     const context: ToolSwitchContext = {
       from: this._activeToolId,
       to: id,
-      reason: options?.reason,
+      reason: contextReason,
     };
+
+    console.info("[WorkbenchService] switchTool:start", {
+      from: context.from,
+      to: context.to,
+      reason: contextReason,
+      fromDirty: context.from ? sessionService.isDirty(context.from) : false,
+    });
 
     const guardAllowed = await this.runGuards(context);
     if (!guardAllowed) {
+      console.warn("[WorkbenchService] switchTool:blocked-by-guard", context);
       eventBus.emit("tool:switch:blocked", {
         ...context,
         reason: "blocked-by-guard",
@@ -148,16 +158,30 @@ export default class WorkbenchService implements Service {
 
     if (context.from) {
       const leaveResult = await sessionService.handleBeforeLeave(context.from);
+      console.info("[WorkbenchService] switchTool:before-leave", {
+        from: context.from,
+        to: context.to,
+        reason: contextReason,
+        leaveResult,
+      });
       if (leaveResult.decision === "blocked") {
+        console.warn("[WorkbenchService] switchTool:blocked-by-session", {
+          from: context.from,
+          to: context.to,
+          reason: contextReason,
+          leaveResult,
+        });
         eventBus.emit("tool:switch:blocked", {
           ...context,
           reason: leaveResult.reason || "session-blocked",
+          detail: leaveResult.detail,
         });
         return {
           ok: false,
           from: this._activeToolId,
           to: id,
           reason: leaveResult.reason || "session-blocked",
+          detail: leaveResult.detail,
         };
       }
       sessionService.deactivateSession(context.from);
@@ -165,14 +189,26 @@ export default class WorkbenchService implements Service {
 
     if (id) {
       const tool = toolRegistry.getTool(id);
-      if (tool?.interaction === "session" && tool.session?.autoBegin !== false) {
+      if (
+        tool?.interaction === "session" &&
+        tool.session?.autoBegin !== false
+      ) {
         await sessionService.begin(id);
+        console.info("[WorkbenchService] switchTool:auto-begin-session", {
+          toolId: id,
+          reason: contextReason,
+        });
       }
     }
 
     const previous = this._activeToolId;
     this._activeToolId = id;
-    const reason = options?.reason;
+    const reason = contextReason;
+    console.info("[WorkbenchService] switchTool:success", {
+      previous,
+      activeToolId: this._activeToolId,
+      reason,
+    });
     eventBus.emit("tool:activated", { id, previous, reason });
     eventBus.emit("tool:switch", { from: previous, to: id, reason });
     return { ok: true, from: previous, to: id };

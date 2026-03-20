@@ -24,6 +24,7 @@ import {
   SizeTool,
   SceneLayoutService,
   type ImageOperation,
+  type ImageSessionNotice,
   type ImageTransformUpdates,
   type ImageViewState,
 } from "@pooder/kit";
@@ -37,6 +38,7 @@ import type {
   PooderDetectMarginDiagnostics as DetectMarginDiagnostics,
   PooderEditorExposed,
   PooderEditorImageStateChangeHandler,
+  PooderEditorImageSessionNoticeHandler,
   PooderExportUserCroppedImageOptions,
   PooderExportUserCroppedImageResult as ExportUserCroppedImageResult,
   PooderFocusImageOptions,
@@ -58,13 +60,19 @@ const wbSvc = pooder.getService<WorkbenchService>("WorkbenchService")!;
 
 const emit = defineEmits<{
   (e: "image-state-change", state: ImageViewState): void;
+  (e: "image-session-notice", notice: ImageSessionNotice | null): void;
 }>();
 
 const onImageStateChangeEvent = (state: ImageViewState) => {
   emit("image-state-change", state);
 };
 
+const onImageSessionNoticeEvent = (notice: ImageSessionNotice | null) => {
+  emit("image-session-notice", notice);
+};
+
 pooder.eventBus.on("image:state:change", onImageStateChangeEvent);
+pooder.eventBus.on("image:session:notice", onImageSessionNoticeEvent);
 
 const importConfig = (config: Record<string, any>) => {
   cfgSvc.import(config);
@@ -94,10 +102,7 @@ const generateCutImage = async (options?: PooderGenerateCutImageOptions) => {
   }
 };
 
-const upsertImage = async (
-  url: string,
-  options?: PooderUpsertImageOptions,
-) => {
+const upsertImage = async (url: string, options?: PooderUpsertImageOptions) => {
   const result = await cmdSvc.executeCommand("upsertImage", url, {
     id: options?.id,
     mode: options?.mode,
@@ -145,6 +150,13 @@ const setImageTransform = async (
 const onImageStateChange = (handler: PooderEditorImageStateChangeHandler) => {
   pooder.eventBus.on("image:state:change", handler);
   return () => pooder.eventBus.off("image:state:change", handler);
+};
+
+const onImageSessionNotice = (
+  handler: PooderEditorImageSessionNoticeHandler,
+) => {
+  pooder.eventBus.on("image:session:notice", handler);
+  return () => pooder.eventBus.off("image:session:notice", handler);
 };
 
 const updateImage = async (id: string, options?: any) => {
@@ -455,6 +467,7 @@ const exposed = {
   upsertImage,
   getImageState,
   onImageStateChange,
+  onImageSessionNotice,
   applyImageOperation,
   setImageTransform,
   updateImage,
@@ -469,9 +482,9 @@ const exposed = {
   on: (event: string, handler: any) => pooder.eventBus.on(event, handler),
   off: (event: string, handler: any) => pooder.eventBus.off(event, handler),
   emit: (event: string, data: any) => pooder.eventBus.emit(event, data),
-  executeCommand: <T = unknown>(id: string, ...args: any[]) =>
+  executeCommand: <T = unknown,>(id: string, ...args: any[]) =>
     cmdSvc.executeCommand<T>(id, ...args),
-  getConfig: <T = unknown>(key: string) => cfgSvc.get(key) as T,
+  getConfig: <T = unknown,>(key: string) => cfgSvc.get(key) as T,
   updateConfig: (key: string, val: any) => cfgSvc.update(key, val),
   services: {
     workbench: wbSvc,
@@ -516,6 +529,7 @@ const onResize = (width: number, height: number) => {
 
 onUnmounted(() => {
   pooder.eventBus.off("image:state:change", onImageStateChangeEvent);
+  pooder.eventBus.off("image:session:notice", onImageSessionNoticeEvent);
   pooder.extensionManager.destroy();
   pooder.unregisterService(SCENE_LAYOUT_SERVICE_ID);
   pooder.unregisterService("CanvasService");

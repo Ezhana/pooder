@@ -44,6 +44,7 @@ import {
   resolveImageOperationArea,
   type ImageOperation,
 } from "./imageOperations";
+import { validateImagePlacement } from "./imagePlacement";
 import { buildImageSessionOverlaySpecs } from "./sessionOverlay";
 
 export interface ImageItem {
@@ -75,6 +76,18 @@ export interface ImageViewState {
   isImageSelectionActive: boolean;
   hasWorkingChanges: boolean;
   source: "working" | "committed";
+  placementPolicy: ImageSessionPlacementPolicy;
+  sessionNotice: ImageSessionNotice | null;
+}
+
+export type ImageSessionPlacementPolicy = "free" | "warn" | "strict";
+
+export interface ImageSessionNotice {
+  code: "image-outside-frame";
+  level: "warning" | "error";
+  message: string;
+  imageIds: string[];
+  policy: ImageSessionPlacementPolicy;
 }
 
 interface RenderImageState {
@@ -238,6 +251,7 @@ export class ImageTool implements Extension {
   private activeSnapX: SnapMatch | null = null;
   private activeSnapY: SnapMatch | null = null;
   private movingImageId: string | null = null;
+  private sessionNotice: ImageSessionNotice | null = null;
   private hasRenderedSnapGuides = false;
   private canvasObjectMovingHandler?: (e: any) => void;
   private canvasMouseUpHandler?: (e: any) => void;
@@ -349,8 +363,12 @@ export class ImageTool implements Extension {
           if (
             e.key.startsWith("size.") ||
             e.key.startsWith("image.frame.") ||
+            e.key.startsWith("image.session.") ||
             e.key.startsWith("image.control.")
           ) {
+            if (e.key === "image.session.placementPolicy") {
+              this.clearSessionNotice();
+            }
             if (e.key.startsWith("image.control.")) {
               this.imageControlsByCapabilityKey.clear();
             }
@@ -951,6 +969,7 @@ export class ImageTool implements Extension {
           interaction: "session",
           commands: {
             begin: "imageSessionReset",
+            validate: "validateImageSession",
             commit: "completeImages",
             rollback: "imageSessionReset",
           },
@@ -1001,6 +1020,47 @@ export class ImageTool implements Extension {
     return this.isToolActive ? this.workingItems : this.items;
   }
 
+  private getPlacementPolicy(): ImageSessionPlacementPolicy {
+    const policy = this.getConfig<ImageSessionPlacementPolicy>(
+      "image.session.placementPolicy",
+      "free",
+    );
+    return policy === "warn" || policy === "strict" ? policy : "free";
+  }
+
+  private areSessionNoticesEqual(
+    a: ImageSessionNotice | null,
+    b: ImageSessionNotice | null,
+  ): boolean {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return (
+      a.code === b.code &&
+      a.level === b.level &&
+      a.message === b.message &&
+      a.policy === b.policy &&
+      JSON.stringify(a.imageIds) === JSON.stringify(b.imageIds)
+    );
+  }
+
+  private setSessionNotice(
+    notice: ImageSessionNotice | null,
+    options: { emit?: boolean } = {},
+  ) {
+    if (this.areSessionNoticesEqual(this.sessionNotice, notice)) {
+      return;
+    }
+    this.sessionNotice = notice;
+    if (options.emit !== false) {
+      this.context?.eventBus.emit("image:session:notice", this.sessionNotice);
+      this.emitImageStateChange();
+    }
+  }
+
+  private clearSessionNotice(options: { emit?: boolean } = {}) {
+    this.setSessionNotice(null, options);
+  }
+
   private getImageViewState(): ImageViewState {
     this.syncToolActiveFromWorkbench();
     const items = this.cloneItems(this.getViewItems());
@@ -1018,6 +1078,8 @@ export class ImageTool implements Extension {
       isImageSelectionActive: this.isImageSelectionActive,
       hasWorkingChanges: this.hasWorkingChanges,
       source: this.isToolActive ? "working" : "committed",
+      placementPolicy: this.getPlacementPolicy(),
+      sessionNotice: this.sessionNotice,
     };
   }
 
@@ -1085,6 +1147,7 @@ export class ImageTool implements Extension {
     operation?: ImageOperation,
   ): Promise<string> {
     this.syncToolActiveFromWorkbench();
+    this.clearSessionNotice({ emit: false });
     const id = this.generateId();
     const newItem = this.normalizeItem({
       id,
@@ -1153,7 +1216,11 @@ export class ImageTool implements Extension {
       return { id: targetId, mode: "replace" };
     }
 
-    const id = await this.addImageEntry(url, options.addOptions, options.operation);
+    const id = await this.addImageEntry(
+      url,
+      options.addOptions,
+      options.operation,
+    );
     return { id, mode: "add" };
   }
 
@@ -1200,6 +1267,7 @@ export class ImageTool implements Extension {
 
   private updateConfig(newItems: ImageItem[], skipCanvasUpdate = false) {
     if (!this.context) return;
+    this.clearSessionNotice({ emit: false });
     this.applyCommittedItems(newItems);
     runDeferredConfigUpdate(
       this,
@@ -1311,6 +1379,82 @@ export class ImageTool implements Extension {
 
   private getCoverScale(frame: FrameRect, size: SourceSize): number {
     return getCoverScaleFromRect(frame, size);
+  }
+
+  private resolvePlacementState(item: ImageItem) {
+    return {
+      left: Number.isFinite(item.left as any) ? (item.left as number) : 0.5,
+      top: Number.isFinite(item.top as any) ? (item.top as number) : 0.5,
+      scale: Math.max(0.05, item.scale ?? 1),
+      angle: Number.isFinite(item.angle as any) ? (item.angle as number) : 0,
+    };
+  }
+
+  private async validatePlacementForItem(item: ImageItem): Promise<boolean> {
+    const frame = this.getFrameRect();
+    if (!frame.width || !frame.height) {
+      return true;
+    }
+
+    const src = item.sourceUrl || item.url;
+    if (!src) {
+      return true;
+    }
+
+    const source = await this.resolveImageSourceSize(item.id, src);
+    if (!source) {
+      return true;
+    }
+
+    return validateImagePlacement({
+      frame,
+      source,
+      placement: this.resolvePlacementState(item),
+    }).ok;
+  }
+
+  private async validateImageSession() {
+    const policy = this.getPlacementPolicy();
+    if (policy === "free") {
+      this.clearSessionNotice();
+      return { ok: true, policy };
+    }
+
+    const invalidImageIds: string[] = [];
+    for (const item of this.workingItems) {
+      const valid = await this.validatePlacementForItem(item);
+      if (!valid) {
+        invalidImageIds.push(item.id);
+      }
+    }
+
+    if (!invalidImageIds.length) {
+      this.clearSessionNotice();
+      return { ok: true, policy };
+    }
+
+    const notice: ImageSessionNotice = {
+      code: "image-outside-frame",
+      level: policy === "strict" ? "error" : "warning",
+      message:
+        policy === "strict"
+          ? "图片位置不能超出 frame，请调整后再提交。"
+          : "图片位置已超出 frame，建议调整后再提交。",
+      imageIds: invalidImageIds,
+      policy,
+    };
+    this.setSessionNotice(notice);
+    this.setImageFocus(invalidImageIds[0], {
+      syncCanvasSelection: true,
+      skipRender: true,
+    });
+    return {
+      ok: policy !== "strict",
+      reason: notice.code,
+      message: notice.message,
+      imageIds: notice.imageIds,
+      policy: notice.policy,
+    };
   }
 
   private getFrameVisualConfig(): FrameVisualConfig {
@@ -1657,6 +1801,7 @@ export class ImageTool implements Extension {
   }
 
   private resetImageSession() {
+    this.clearSessionNotice({ emit: false });
     this.workingItems = this.cloneItems(this.items);
     this.hasWorkingChanges = false;
     this.updateImages();
@@ -1706,6 +1851,7 @@ export class ImageTool implements Extension {
     const index = this.workingItems.findIndex((item) => item.id === id);
     if (index < 0) return;
 
+    this.clearSessionNotice({ emit: false });
     const next = [...this.workingItems];
     next[index] = this.normalizeItem({ ...next[index], ...updates });
     this.workingItems = next;
@@ -1724,6 +1870,7 @@ export class ImageTool implements Extension {
     const index = this.items.findIndex((item) => item.id === id);
     if (index < 0) return;
 
+    this.clearSessionNotice({ emit: false });
     const replacingSource =
       typeof updates.url === "string" && updates.url.length > 0;
     const next = [...this.items];
@@ -1868,10 +2015,42 @@ export class ImageTool implements Extension {
     }
 
     this.hasWorkingChanges = false;
+    this.clearSessionNotice({ emit: false });
     this.workingItems = this.cloneItems(next);
     this.updateConfig(next);
     this.emitWorkingChange(this.focusedImageId);
     return { ok: true };
+  }
+
+  private async completeImageSession() {
+    const sessionState =
+      this.context?.services.get<ToolSessionService>("ToolSessionService");
+    const workbench = this.context?.services.get<any>("WorkbenchService");
+    console.info("[ImageTool] completeImageSession:start", {
+      activeToolId: workbench?.activeToolId ?? null,
+      isToolActive: this.isToolActive,
+      dirtyBeforeComplete: this.hasWorkingChanges,
+      workingCount: this.workingItems.length,
+      committedCount: this.items.length,
+      sessionDirty: sessionState?.isDirty(this.id),
+    });
+    const validation = await this.validateImageSession();
+    if (!validation.ok) {
+      console.warn("[ImageTool] completeImageSession:validation-failed", {
+        validation,
+        dirtyAfterValidation: this.hasWorkingChanges,
+      });
+      return validation;
+    }
+    const result = await this.commitWorkingImagesAsCropped();
+    console.info("[ImageTool] completeImageSession:done", {
+      result,
+      dirtyAfterComplete: this.hasWorkingChanges,
+      workingCount: this.workingItems.length,
+      committedCount: this.items.length,
+      sessionDirty: sessionState?.isDirty(this.id),
+    });
+    return result;
   }
 
   private async exportCroppedImageByIds(
