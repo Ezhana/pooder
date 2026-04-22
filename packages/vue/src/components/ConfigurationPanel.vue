@@ -9,7 +9,6 @@
       <div v-for="config in group.items" :key="config.id" class="config-item">
         <label :for="config.id">{{ config.label || config.id }}</label>
 
-        <!-- Select Input -->
         <select
           v-if="config.type === 'select'"
           :id="config.id"
@@ -19,12 +18,11 @@
               updateConfig(config.id, (e.target as HTMLSelectElement).value)
           "
         >
-          <option v-for="opt in config.options" :key="opt" :value="opt">
+          <option v-for="opt in config.options" :key="String(opt)" :value="opt">
             {{ opt }}
           </option>
         </select>
 
-        <!-- Color Input -->
         <input
           v-else-if="config.type === 'color'"
           type="color"
@@ -35,7 +33,6 @@
           "
         />
 
-        <!-- Number Input -->
         <input
           v-else-if="config.type === 'number'"
           type="number"
@@ -53,7 +50,6 @@
           "
         />
 
-        <!-- Boolean Input -->
         <input
           v-else-if="config.type === 'boolean'"
           type="checkbox"
@@ -65,7 +61,6 @@
           "
         />
 
-        <!-- Array/JSON Input -->
         <textarea
           v-else-if="config.type === 'array' || config.type === 'json'"
           :id="config.id"
@@ -83,7 +78,6 @@
           rows="5"
         ></textarea>
 
-        <!-- String/Default Input -->
         <input
           v-else
           type="text"
@@ -99,57 +93,51 @@
 </template>
 
 <script setup lang="ts">
-import { inject, ref, onMounted, onUnmounted, watch } from "vue";
+import { inject, onMounted, onUnmounted, ref } from "vue";
 import {
-  Pooder,
-  ContributionPointIds,
-  ConfigurationContribution,
   ConfigurationService,
+  Pooder,
+  RegisteredConfigurationDefinition,
 } from "@pooder/core";
 
 type ConfigGroup = {
   extensionId: string;
-  items: ConfigurationContribution[];
+  items: RegisteredConfigurationDefinition[];
 };
 
 const pooder = inject<Pooder>("pooder");
 const configurations = ref<ConfigGroup[]>([]);
 const values = ref<Record<string, any>>({});
 let configService: ConfigurationService | undefined;
-let disposable: any;
+let definitionsDisposable: { dispose(): void } | undefined;
+let valuesDisposable: { dispose(): void } | undefined;
 
 const refreshConfigs = () => {
   if (!pooder) return;
 
-  // Get all configuration definitions
-  const contribs = pooder.getContributions<ConfigurationContribution>(
-    ContributionPointIds.CONFIGURATIONS,
-  );
+  const definitions = pooder.config.listDefinitions();
+  const groups: Record<string, RegisteredConfigurationDefinition[]> = {};
 
-  // Group by extension
-  const groups: Record<string, ConfigurationContribution[]> = {};
-  contribs.forEach((c) => {
-    const extId = c.metadata?.extensionId || "General";
-    if (!groups[extId]) {
-      groups[extId] = [];
+  definitions.forEach((definition) => {
+    const extensionId = definition.extensionId || "General";
+    if (!groups[extensionId]) {
+      groups[extensionId] = [];
     }
-    groups[extId].push(c.data);
+    groups[extensionId].push(definition);
   });
 
-  // Convert to array and sort
   configurations.value = Object.keys(groups)
     .sort((a, b) => {
       if (a === "General") return -1;
       if (b === "General") return 1;
       return a.localeCompare(b);
     })
-    .map((id) => ({
-      extensionId: id,
-      items: groups[id],
+    .map((extensionId) => ({
+      extensionId,
+      items: groups[extensionId],
     }));
 
-  // Get current values
-  configService = pooder.getService<ConfigurationService>(
+  configService = pooder.services.get<ConfigurationService>(
     "ConfigurationService",
   );
   if (configService) {
@@ -162,37 +150,37 @@ const refreshConfigs = () => {
 };
 
 const updateConfig = (key: string, value: any) => {
-  if (configService) {
-    configService.update(key, value);
-    values.value[key] = value;
+  if (!configService) {
+    return;
   }
+  configService.update(key, value);
+  values.value[key] = value;
 };
 
 onMounted(() => {
   refreshConfigs();
 
-  if (pooder) {
-    // Listen for new contributions (in case plugins load late)
-    pooder.eventBus.on("contribution:register", (event: any) => {
-      if (event.pointId === ContributionPointIds.CONFIGURATIONS) {
-        refreshConfigs();
-      }
-    });
+  if (!pooder) {
+    return;
+  }
 
-    // Listen for external config changes
-    configService = pooder.getService<ConfigurationService>(
-      "ConfigurationService",
-    );
-    if (configService) {
-      disposable = configService.onAnyChange(({ key, value }) => {
-        values.value[key] = value;
-      });
-    }
+  configService = pooder.services.get<ConfigurationService>(
+    "ConfigurationService",
+  );
+
+  if (configService) {
+    definitionsDisposable = configService.onDefinitionsChange(() => {
+      refreshConfigs();
+    });
+    valuesDisposable = configService.onAnyChange(({ key, value }) => {
+      values.value[key] = value;
+    });
   }
 });
 
 onUnmounted(() => {
-  if (disposable) disposable.dispose();
+  definitionsDisposable?.dispose();
+  valuesDisposable?.dispose();
 });
 </script>
 
@@ -202,7 +190,7 @@ onUnmounted(() => {
   background: #f9f9f9;
   border-top: 1px solid #ddd;
   overflow-y: auto;
-  max-height: 300px; /* Optional limit */
+  max-height: 300px;
 }
 
 .config-group {
@@ -222,7 +210,7 @@ onUnmounted(() => {
   margin-bottom: 12px;
   display: flex;
   flex-direction: column;
-  padding-left: 10px; /* Indent items */
+  padding-left: 10px;
 }
 
 label {
@@ -239,19 +227,16 @@ textarea {
   padding: 6px;
   border: 1px solid #ccc;
   border-radius: 4px;
-  font-size: 14px;
-  font-family: monospace;
+  font-size: 0.95em;
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
 }
 
 textarea {
+  font-family: monospace;
   resize: vertical;
-}
-
-input[type="color"] {
-  width: 100%;
-  height: 30px;
-  padding: 0;
-  border: none;
-  cursor: pointer;
 }
 </style>

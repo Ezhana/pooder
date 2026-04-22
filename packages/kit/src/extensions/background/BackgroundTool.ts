@@ -1,9 +1,8 @@
 import {
-  Extension,
+  CONFIGURATION_SERVICE,
+  ExtensionContributions,
+  ExtensionDefinition,
   ExtensionContext,
-  ContributionPointIds,
-  CommandContribution,
-  ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
 import { FabricImage } from "fabric";
@@ -369,11 +368,14 @@ function configSignature(config: BackgroundConfig): string {
   return JSON.stringify(config);
 }
 
-export class BackgroundTool implements Extension {
+export class BackgroundTool implements ExtensionDefinition {
   id = "pooder.kit.background";
 
   public metadata = {
     name: "BackgroundTool",
+  };
+  activation = {
+    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
   };
 
   private config: BackgroundConfig = cloneConfig(DEFAULT_BACKGROUND_CONFIG);
@@ -409,11 +411,8 @@ export class BackgroundTool implements Extension {
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    if (!this.canvasService) {
-      console.warn("CanvasService not found for BackgroundTool");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
 
     this.configService = context.services.get<ConfigurationService>(
       "ConfigurationService",
@@ -491,23 +490,25 @@ export class BackgroundTool implements Extension {
     this.configService = undefined;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.CONFIGURATIONS]: [
+      configurations: [
         {
           id: BACKGROUND_CONFIG_KEY,
           type: "json",
           label: "Background Config",
           default: cloneConfig(DEFAULT_BACKGROUND_CONFIG),
         },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
+      ],
+      commands: [
         {
+          id: "background.getConfig",
           command: "background.getConfig",
           title: "Get Background Config",
           handler: () => cloneConfig(this.config),
         },
         {
+          id: "background.resetConfig",
           command: "background.resetConfig",
           title: "Reset Background Config",
           handler: () => {
@@ -516,6 +517,7 @@ export class BackgroundTool implements Extension {
           },
         },
         {
+          id: "background.replaceConfig",
           command: "background.replaceConfig",
           title: "Replace Background Config",
           handler: (config: BackgroundConfig) => {
@@ -524,6 +526,7 @@ export class BackgroundTool implements Extension {
           },
         },
         {
+          id: "background.patchConfig",
           command: "background.patchConfig",
           title: "Patch Background Config",
           handler: (patch: Partial<BackgroundConfig>) => {
@@ -532,6 +535,7 @@ export class BackgroundTool implements Extension {
           },
         },
         {
+          id: "background.upsertLayer",
           command: "background.upsertLayer",
           title: "Upsert Background Layer",
           handler: (layer: Partial<BackgroundLayer> & { id: string }) => {
@@ -569,6 +573,7 @@ export class BackgroundTool implements Extension {
           },
         },
         {
+          id: "background.removeLayer",
           command: "background.removeLayer",
           title: "Remove Background Layer",
           handler: (id: string) => {
@@ -584,7 +589,7 @@ export class BackgroundTool implements Extension {
             return true;
           },
         },
-      ] as CommandContribution[],
+      ],
     };
   }
 

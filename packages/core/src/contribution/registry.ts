@@ -1,4 +1,4 @@
-import { Contribution, ContributionPoint, ContributionPointIds } from "./index";
+import { Contribution, ContributionPoint } from "./index";
 import Disposable from "../disposable";
 
 export class ContributionRegistry {
@@ -68,12 +68,6 @@ export class ContributionRegistry {
 
     arr.push(contribution);
     this.contributions.byId.set(contribution.id, contribution);
-
-    // Auto-register if this is a contribution point contribution
-    if (pointId === ContributionPointIds.CONTRIBUTIONS) {
-      this.registerPoint(contribution.data as ContributionPoint);
-    }
-
     return {
       dispose: () => {
         this.unregister(pointId, contribution.id);

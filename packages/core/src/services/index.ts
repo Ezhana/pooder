@@ -25,3 +25,19 @@ export {
   WORKBENCH_SERVICE,
   CORE_SERVICE_TOKENS,
 };
+
+export type {
+  ConfigurationDefinitionsChangeEvent,
+  RegisteredConfigurationDefinition,
+} from "./ConfigurationService";
+export type {
+  LeaveDecision,
+  LeaveResult,
+  ToolSessionState,
+  ToolSessionStatus,
+} from "./ToolSessionService";
+export type {
+  ToolSwitchContext,
+  ToolSwitchGuard,
+  ToolSwitchResult,
+} from "./WorkbenchService";

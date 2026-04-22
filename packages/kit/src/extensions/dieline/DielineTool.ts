@@ -1,7 +1,8 @@
 import {
-  Extension,
+  CONFIGURATION_SERVICE,
+  ExtensionContributions,
+  ExtensionDefinition,
   ExtensionContext,
-  ContributionPointIds,
   ConfigurationService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
@@ -31,10 +32,13 @@ import {
   resolveFeaturePlacements,
 } from "../featurePlacement";
 
-export class DielineTool implements Extension {
+export class DielineTool implements ExtensionDefinition {
   id = "pooder.kit.dieline";
   public metadata = {
     name: "DielineTool",
+  };
+  activation = {
+    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
   };
 
   private state: DielineState = createDefaultDielineState();
@@ -74,11 +78,8 @@ export class DielineTool implements Extension {
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    if (!this.canvasService) {
-      console.warn("CanvasService not found for DielineTool");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -137,9 +138,9 @@ export class DielineTool implements Extension {
     this.context = undefined;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.TOOLS]: [
+      tools: [
         {
           id: this.id,
           name: "Dieline",
@@ -150,8 +151,8 @@ export class DielineTool implements Extension {
           },
         },
       ],
-      [ContributionPointIds.CONFIGURATIONS]: createDielineConfigurations(this.state),
-      [ContributionPointIds.COMMANDS]: createDielineCommands(this, this.state),
+      configurations: createDielineConfigurations(this.state),
+      commands: createDielineCommands(this, this.state),
     };
   }
 

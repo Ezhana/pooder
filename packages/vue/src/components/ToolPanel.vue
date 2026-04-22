@@ -3,8 +3,19 @@
     <div class="panel-section">
       <h3>Tools</h3>
       <div class="tool-list">
-        <div v-for="cmd in commands" :key="cmd.command" class="tool-item">
-          <button @click="executeCommand(cmd)">{{ cmd.title }}</button>
+        <div v-for="tool in tools" :key="tool.id" class="tool-item">
+          <button @click="activateTool(tool.id)">{{ tool.name }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <h3>Commands</h3>
+      <div class="tool-list">
+        <div v-for="command in commands" :key="command.id" class="tool-item">
+          <button @click="executeCommand(command.id)">
+            {{ command.title || command.id }}
+          </button>
         </div>
       </div>
     </div>
@@ -17,49 +28,69 @@
 </template>
 
 <script setup lang="ts">
-import { inject, ref, onMounted, onUnmounted } from "vue";
+import { inject, onMounted, onUnmounted, ref } from "vue";
 import {
+  COMMAND_SERVICE,
   Pooder,
-  ContributionPointIds,
-  CommandContribution,
+  ToolContribution,
+  ToolRegistryService,
+  WorkbenchService,
+  WORKBENCH_SERVICE,
 } from "@pooder/core";
-import CommandService from "@pooder/core/src/services/CommandService";
 import ConfigurationPanel from "./ConfigurationPanel.vue";
 
 const pooder = inject<Pooder>("pooder");
-const commands = ref<CommandContribution[]>([]);
+const tools = ref<ToolContribution[]>([]);
+const commands = ref<Array<{ id: string; title?: string }>>([]);
 
-const updateCommands = () => {
-  if (pooder) {
-    const contribs = pooder.getContributions<CommandContribution>(
-      ContributionPointIds.COMMANDS,
-    );
-    commands.value = contribs.map((c) => c.data);
+const refreshLists = () => {
+  if (!pooder) return;
+
+  const toolRegistry =
+    pooder.services.get<ToolRegistryService>("ToolRegistryService");
+  tools.value = toolRegistry?.listTools() || [];
+
+  const commandService = pooder.services.get(COMMAND_SERVICE);
+  commands.value = Array.from(commandService?.getCommands().values() || []).map(
+    (command) => ({
+      id: command.id,
+      title: command.title,
+    }),
+  );
+};
+
+const executeCommand = async (id: string) => {
+  if (!pooder) return;
+  try {
+    await pooder.commands.execute(id);
+  } catch (error) {
+    console.error("Command execution failed", error);
   }
 };
 
-const executeCommand = async (cmd: CommandContribution) => {
+const activateTool = async (id: string) => {
   if (!pooder) return;
-  const commandService = pooder.getService<CommandService>("CommandService");
-  if (commandService) {
-    try {
-      await commandService.executeCommand(cmd.command);
-    } catch (e) {
-      console.error("Command execution failed", e);
-    }
+  const workbench = pooder.services.get<WorkbenchService>(WORKBENCH_SERVICE);
+  if (!workbench) {
+    return;
+  }
+  try {
+    await workbench.activate(id);
+  } catch (error) {
+    console.error("Tool activation failed", error);
   }
 };
 
 onMounted(() => {
-  updateCommands();
+  refreshLists();
   if (pooder) {
-    pooder.eventBus.on("contribution:register", updateCommands);
+    pooder.eventBus.on("extension:state-change", refreshLists);
   }
 });
 
 onUnmounted(() => {
   if (pooder) {
-    pooder.eventBus.off("contribution:register", updateCommands);
+    pooder.eventBus.off("extension:state-change", refreshLists);
   }
 });
 </script>

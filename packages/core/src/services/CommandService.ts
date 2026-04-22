@@ -16,6 +16,7 @@ export default class CommandService implements Service {
     commandId: string,
     handler: (...args: any[]) => any,
     thisArg?: any,
+    metadata: Partial<Omit<Command, "id" | "handler">> = {},
   ): Disposable {
     if (this.commands.has(commandId)) {
       console.warn(
@@ -26,6 +27,10 @@ export default class CommandService implements Service {
     const command: Command = {
       id: commandId,
       handler: thisArg ? handler.bind(thisArg) : handler,
+      title: metadata.title,
+      category: metadata.category,
+      description: metadata.description,
+      schema: metadata.schema,
     };
 
     this.commands.set(commandId, command);

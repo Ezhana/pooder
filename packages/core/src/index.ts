@@ -7,14 +7,11 @@ import {
   ServiceRegistry,
 } from "./service";
 import EventBus from "./event";
-import { ExtensionManager } from "./extension";
-import Disposable from "./disposable";
 import {
-  Contribution,
-  ContributionPoint,
-  ContributionPointIds,
-  ContributionRegistry,
-} from "./contribution";
+  ExtensionManager,
+  type ExtensionDefinition,
+  type ExtensionStateSnapshot,
+} from "./extension";
 import {
   CORE_SERVICE_TOKENS,
   CommandService,
@@ -32,100 +29,183 @@ export * from "./service";
 export * from "./services";
 export { default as EventBus } from "./event";
 
+type RuntimeServicesApi = {
+  register<T extends Service>(
+    service: T,
+    identifier?: ServiceIdentifier<T>,
+    options?: RegisterServiceOptions,
+  ): boolean;
+  registerAsync<T extends Service>(
+    service: T,
+    identifier?: ServiceIdentifier<T>,
+    options?: RegisterServiceOptions,
+  ): Promise<boolean>;
+  unregister(
+    serviceOrIdentifier: Service | ServiceIdentifier<Service>,
+    id?: ServiceIdentifier<Service>,
+  ): boolean;
+  unregisterAsync(
+    serviceOrIdentifier: Service | ServiceIdentifier<Service>,
+    id?: ServiceIdentifier<Service>,
+  ): Promise<boolean>;
+  get<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined;
+  getOrThrow<T extends Service>(
+    identifier: ServiceIdentifier<T>,
+    errorMessage?: string,
+  ): T;
+  has(identifier: ServiceIdentifier<Service>): boolean;
+};
+
+type RuntimeExtensionsApi = {
+  register(extension: ExtensionDefinition): ExtensionStateSnapshot;
+  registerMany(
+    extensions: Iterable<ExtensionDefinition>,
+  ): ExtensionStateSnapshot[];
+  flushActivation(): Promise<ExtensionStateSnapshot[]>;
+  getState(id: string): ExtensionStateSnapshot | undefined;
+  listStates(): ExtensionStateSnapshot[];
+  unregister(id: string): Promise<boolean>;
+};
+
+type RuntimeCommandsApi = {
+  execute<T = unknown>(id: string, ...args: any[]): Promise<T>;
+};
+
+type RuntimeConfigApi = {
+  get<T = unknown>(key: string, defaultValue?: T): T;
+  update(key: string, value: any): void;
+  import(data: Record<string, any>): void;
+  export(): Record<string, any>;
+  listDefinitions(): ReturnType<ConfigurationService["listDefinitions"]>;
+  getDefinition(id: string): ReturnType<ConfigurationService["getDefinition"]>;
+};
+
+type RuntimeWorkbenchApi = {
+  activate(
+    id: string | null,
+  ): Promise<Awaited<ReturnType<WorkbenchService["activate"]>>>;
+  deactivate(): Promise<Awaited<ReturnType<WorkbenchService["deactivate"]>>>;
+  readonly activeToolId: string | null;
+};
+
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();
-  private readonly services: ServiceRegistry = new ServiceRegistry();
+  private readonly serviceRegistry: ServiceRegistry = new ServiceRegistry();
   private readonly serviceContext: ServiceContext = {
     eventBus: this.eventBus,
     get: <T extends Service>(identifier: ServiceIdentifier<T>) =>
-      this.services.get(identifier),
+      this.serviceRegistry.get(identifier),
     getOrThrow: <T extends Service>(
       identifier: ServiceIdentifier<T>,
       errorMessage?: string,
-    ) => this.services.getOrThrow(identifier, errorMessage),
-    has: (identifier: ServiceIdentifier<Service>) => this.services.has(identifier),
+    ) => this.serviceRegistry.getOrThrow(identifier, errorMessage),
+    has: (identifier: ServiceIdentifier<Service>) =>
+      this.serviceRegistry.has(identifier),
   };
-  private readonly contributions: ContributionRegistry =
-    new ContributionRegistry();
-  readonly extensionManager: ExtensionManager;
+  private readonly commandService = new CommandService();
+  private readonly configurationService = new ConfigurationService();
+  private readonly toolRegistryService = new ToolRegistryService();
+  private readonly toolSessionService = new ToolSessionService({
+    commandService: this.commandService,
+    toolRegistry: this.toolRegistryService,
+  });
+  private readonly workbenchService = new WorkbenchService({
+    eventBus: this.eventBus,
+    toolRegistry: this.toolRegistryService,
+    sessionService: this.toolSessionService,
+  });
+  private readonly extensionManager: ExtensionManager;
+
+  readonly services: RuntimeServicesApi;
+  readonly extensions: RuntimeExtensionsApi;
+  readonly commands: RuntimeCommandsApi;
+  readonly config: RuntimeConfigApi;
+  readonly workbench: RuntimeWorkbenchApi;
 
   constructor() {
-    // Initialize default contribution points
-    this.initDefaultContributionPoints();
+    this.registerService(this.commandService, CORE_SERVICE_TOKENS.COMMAND);
+    this.registerService(
+      this.configurationService,
+      CORE_SERVICE_TOKENS.CONFIGURATION,
+    );
+    this.registerService(
+      this.toolRegistryService,
+      CORE_SERVICE_TOKENS.TOOL_REGISTRY,
+    );
+    this.registerService(
+      this.toolSessionService,
+      CORE_SERVICE_TOKENS.TOOL_SESSION,
+    );
+    this.registerService(this.workbenchService, CORE_SERVICE_TOKENS.WORKBENCH);
 
-    const commandService = new CommandService();
-    this.registerService(commandService, CORE_SERVICE_TOKENS.COMMAND);
-
-    const configurationService = new ConfigurationService();
-    this.registerService(configurationService, CORE_SERVICE_TOKENS.CONFIGURATION);
-
-    const toolRegistryService = new ToolRegistryService();
-    this.registerService(toolRegistryService, CORE_SERVICE_TOKENS.TOOL_REGISTRY);
-
-    const toolSessionService = new ToolSessionService({
-      commandService,
-      toolRegistry: toolRegistryService,
-    });
-    this.registerService(toolSessionService, CORE_SERVICE_TOKENS.TOOL_SESSION);
-
-    const workbenchService = new WorkbenchService({
-      eventBus: this.eventBus,
-      toolRegistry: toolRegistryService,
-      sessionService: toolSessionService,
-    });
-    this.registerService(workbenchService, CORE_SERVICE_TOKENS.WORKBENCH);
-
-    // Create a restricted context for extensions
     const context: ExtensionContext = {
       eventBus: this.eventBus,
       services: {
         get: <T extends Service>(identifier: ServiceIdentifier<T>) =>
-          this.services.get(identifier),
+          this.serviceRegistry.get(identifier),
         getOrThrow: <T extends Service>(
           identifier: ServiceIdentifier<T>,
           errorMessage?: string,
-        ) => this.services.getOrThrow(identifier, errorMessage),
+        ) => this.serviceRegistry.getOrThrow(identifier, errorMessage),
         has: (identifier: ServiceIdentifier<Service>) =>
-          this.services.has(identifier),
-      },
-      contributions: {
-        get: <T>(pointId: string) => this.getContributions<T>(pointId),
-        register: <T>(pointId: string, contribution: Contribution<T>) =>
-          this.registerContribution(pointId, contribution),
+          this.serviceRegistry.has(identifier),
       },
     };
 
-    this.extensionManager = new ExtensionManager(context);
+    this.extensionManager = new ExtensionManager(context, {
+      eventBus: this.eventBus,
+      configurationService: this.configurationService,
+      commandService: this.commandService,
+      toolRegistry: this.toolRegistryService,
+    });
+
+    this.services = {
+      register: (service, identifier, options) =>
+        this.registerService(service, identifier, options),
+      registerAsync: (service, identifier, options) =>
+        this.registerServiceAsync(service, identifier, options),
+      unregister: (serviceOrIdentifier, id) =>
+        this.unregisterServiceEntry(serviceOrIdentifier, id),
+      unregisterAsync: (serviceOrIdentifier, id) =>
+        this.unregisterServiceEntryAsync(serviceOrIdentifier, id),
+      get: (identifier) => this.getService(identifier),
+      getOrThrow: (identifier, errorMessage) =>
+        this.getServiceOrThrow(identifier, errorMessage),
+      has: (identifier) => this.hasService(identifier),
+    };
+
+    this.extensions = {
+      register: (extension) => this.extensionManager.register(extension),
+      registerMany: (extensions) => this.extensionManager.registerMany(extensions),
+      flushActivation: () => this.extensionManager.flushActivation(),
+      getState: (id) => this.extensionManager.getState(id),
+      listStates: () => this.extensionManager.listStates(),
+      unregister: (id) => this.extensionManager.unregister(id),
+    };
+
+    this.commands = {
+      execute: (id, ...args) => this.commandService.executeCommand(id, ...args),
+    };
+
+    this.config = {
+      get: (key, defaultValue) => this.configurationService.get(key, defaultValue),
+      update: (key, value) => this.configurationService.update(key, value),
+      import: (data) => this.configurationService.import(data),
+      export: () => this.configurationService.export(),
+      listDefinitions: () => this.configurationService.listDefinitions(),
+      getDefinition: (id) => this.configurationService.getDefinition(id),
+    };
+
+    this.workbench = {
+      activate: (id) => this.workbenchService.activate(id),
+      deactivate: () => this.workbenchService.deactivate(),
+      get activeToolId() {
+        return context.services
+          .getOrThrow(CORE_SERVICE_TOKENS.WORKBENCH)
+          .activeToolId;
+      },
+    };
   }
-
-  private initDefaultContributionPoints() {
-    this.registerContributionPoint({
-      id: ContributionPointIds.CONTRIBUTIONS,
-      description: "Contribution point for contribution points",
-    });
-
-    this.registerContributionPoint({
-      id: ContributionPointIds.COMMANDS,
-      description: "Contribution point for commands",
-    });
-
-    this.registerContributionPoint({
-      id: ContributionPointIds.TOOLS,
-      description: "Contribution point for tools",
-    });
-
-    this.registerContributionPoint({
-      id: ContributionPointIds.VIEWS,
-      description: "Contribution point for UI views",
-    });
-
-    this.registerContributionPoint({
-      id: ContributionPointIds.CONFIGURATIONS,
-      description: "Contribution point for configurations",
-    });
-  }
-
-  // --- Service Management ---
 
   registerService<T extends Service>(
     service: T,
@@ -143,7 +223,7 @@ export class Pooder {
         );
       }
 
-      this.services.register(serviceIdentifier, service, options);
+      this.serviceRegistry.register(serviceIdentifier, service, options);
       this.eventBus.emit("service:register", service, { id: serviceId });
       return true;
     } catch (error) {
@@ -162,7 +242,7 @@ export class Pooder {
 
     try {
       await this.invokeServiceHookAsync(service, "init");
-      this.services.register(serviceIdentifier, service, options);
+      this.serviceRegistry.register(serviceIdentifier, service, options);
       this.eventBus.emit("service:register", service, { id: serviceId });
       return true;
     } catch (error) {
@@ -182,7 +262,7 @@ export class Pooder {
       id,
     );
     const serviceId = this.getServiceLabel(resolvedIdentifier);
-    const registeredService = this.services.get(resolvedIdentifier);
+    const registeredService = this.serviceRegistry.get(resolvedIdentifier);
 
     if (!registeredService) {
       console.warn(`Service ${serviceId} is not registered.`);
@@ -201,8 +281,10 @@ export class Pooder {
       return false;
     }
 
-    this.services.delete(resolvedIdentifier);
-    this.eventBus.emit("service:unregister", registeredService, { id: serviceId });
+    this.serviceRegistry.delete(resolvedIdentifier);
+    this.eventBus.emit("service:unregister", registeredService, {
+      id: serviceId,
+    });
     return true;
   }
 
@@ -215,7 +297,7 @@ export class Pooder {
       id,
     );
     const serviceId = this.getServiceLabel(resolvedIdentifier);
-    const registeredService = this.services.get(resolvedIdentifier);
+    const registeredService = this.serviceRegistry.get(resolvedIdentifier);
 
     if (!registeredService) {
       console.warn(`Service ${serviceId} is not registered.`);
@@ -229,56 +311,39 @@ export class Pooder {
       return false;
     }
 
-    this.services.delete(resolvedIdentifier);
-    this.eventBus.emit("service:unregister", registeredService, { id: serviceId });
+    this.serviceRegistry.delete(resolvedIdentifier);
+    this.eventBus.emit("service:unregister", registeredService, {
+      id: serviceId,
+    });
     return true;
   }
 
   getService<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined {
-    return this.services.get<T>(identifier);
+    return this.serviceRegistry.get<T>(identifier);
   }
 
   getServiceOrThrow<T extends Service>(
     identifier: ServiceIdentifier<T>,
     errorMessage?: string,
   ): T {
-    return this.services.getOrThrow(identifier, errorMessage);
+    return this.serviceRegistry.getOrThrow(identifier, errorMessage);
   }
 
   hasService(identifier: ServiceIdentifier<Service>): boolean {
-    return this.services.has(identifier);
+    return this.serviceRegistry.has(identifier);
   }
 
   async dispose(): Promise<void> {
-    this.extensionManager.destroy();
+    await this.extensionManager.destroy();
 
-    const registrations = this.services.list().slice().reverse();
+    const registrations = this.serviceRegistry.list().slice().reverse();
     for (const item of registrations) {
       const identifier = item.token ?? item.id;
       await this.unregisterServiceAsync(identifier);
     }
 
-    this.services.clear();
-  }
-
-  // --- Contribution Management ---
-
-  registerContributionPoint<T>(point: ContributionPoint<T>): void {
-    this.contributions.registerPoint(point);
-    this.eventBus.emit("contribution:point:register", point);
-  }
-
-  registerContribution<T>(
-    pointId: string,
-    contribution: Contribution<T>,
-  ): Disposable {
-    const disposable = this.contributions.register(pointId, contribution);
-    this.eventBus.emit("contribution:register", { ...contribution, pointId });
-    return disposable;
-  }
-
-  getContributions<T>(pointId: string): Contribution<T>[] {
-    return this.contributions.get<T>(pointId);
+    this.serviceRegistry.clear();
+    this.eventBus.clear();
   }
 
   private resolveServiceIdentifier<T extends Service>(
@@ -286,6 +351,26 @@ export class Pooder {
     identifier?: ServiceIdentifier<T>,
   ): ServiceIdentifier<T> {
     return identifier ?? service.constructor.name;
+  }
+
+  private unregisterServiceEntry(
+    serviceOrIdentifier: Service | ServiceIdentifier<Service>,
+    id?: ServiceIdentifier<Service>,
+  ): boolean {
+    return this.unregisterService(
+      serviceOrIdentifier as Service,
+      id,
+    );
+  }
+
+  private async unregisterServiceEntryAsync(
+    serviceOrIdentifier: Service | ServiceIdentifier<Service>,
+    id?: ServiceIdentifier<Service>,
+  ): Promise<boolean> {
+    return await this.unregisterServiceAsync(
+      serviceOrIdentifier as Service,
+      id,
+    );
   }
 
   private resolveUnregisterIdentifier(

@@ -4,9 +4,6 @@ export interface ContributionPoint<T = any> {
   validate?: (data: T) => boolean;
 }
 
-/**
- * Command Contribution Data Definition
- */
 export interface CommandContribution {
   id: string;
   command: string;
@@ -14,9 +11,6 @@ export interface CommandContribution {
   handler?: (...args: any[]) => any;
 }
 
-/**
- * Tool Contribution Data Definition
- */
 export type ToolInteraction = "instant" | "session" | "hybrid";
 
 export type ToolSessionLeavePolicy = "block" | "commit" | "rollback";
@@ -38,33 +32,12 @@ export interface ToolContribution {
   interaction: ToolInteraction;
   parameters?: Record<string, any>;
   commands?: ToolCommandBindings;
-  view?: {
-    id?: string;
-    type?: "sidebar" | "panel" | "editor" | "dialog";
-    location?: string;
-  };
   session?: {
     autoBegin?: boolean;
     leavePolicy?: ToolSessionLeavePolicy;
   };
 }
 
-/**
- * View Contribution Data Definition
- */
-export interface ViewContribution {
-  id: string;
-  name: string;
-  type: "sidebar" | "panel" | "editor" | "dialog" | "status-bar";
-  component: any; // The component implementation (e.g., React component or generic render function)
-  location?: string;
-  icon?: string;
-  priority?: number;
-}
-
-/**
- * Configuration Contribution Data Definition
- */
 export interface ConfigurationContribution {
   id: string;
   type:
@@ -78,17 +51,20 @@ export interface ConfigurationContribution {
   label: string;
   default?: any;
   description?: string;
-  options?: string[]; // For select type
+  options?: Array<string | number>;
   min?: number;
   max?: number;
   step?: number;
 }
 
-// Built-in Contribution Point IDs
+export interface ExtensionContributions {
+  configurations?: ConfigurationContribution[];
+  commands?: CommandContribution[];
+  tools?: ToolContribution[];
+}
+
 export const ContributionPointIds = {
-  CONTRIBUTIONS: "contribution.point.contributions",
   COMMANDS: "contribution.point.commands",
   TOOLS: "contribution.point.tools",
-  VIEWS: "contribution.point.views",
   CONFIGURATIONS: "contribution.point.configurations",
-};
+} as const;

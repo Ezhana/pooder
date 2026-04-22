@@ -1,9 +1,8 @@
 import {
-  CommandContribution,
-  ConfigurationContribution,
+  CONFIGURATION_SERVICE,
+  ExtensionContributions,
+  ExtensionDefinition,
   ConfigurationService,
-  ContributionPointIds,
-  Extension,
   ExtensionContext,
 } from "@pooder/core";
 import { CanvasService } from "../../services";
@@ -30,10 +29,13 @@ interface UpdateSizeDimensionsInput {
   changed?: ChangedField;
 }
 
-export class SizeTool implements Extension {
+export class SizeTool implements ExtensionDefinition {
   id = "pooder.kit.size";
   metadata = {
     name: "SizeTool",
+  };
+  activation = {
+    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
   };
 
   private context?: ExtensionContext;
@@ -41,11 +43,11 @@ export class SizeTool implements Extension {
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    const configService = context.services.get<ConfigurationService>(
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
+    const configService = context.services.getOrThrow<ConfigurationService>(
       "ConfigurationService",
     );
-    if (!configService) return;
     this.ensureDefaults(configService);
     this.emitStateChanged();
   }
@@ -55,16 +57,16 @@ export class SizeTool implements Extension {
     this.canvasService = undefined;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.TOOLS]: [
+      tools: [
         {
           id: this.id,
           name: "Size",
           interaction: "instant",
         },
       ],
-      [ContributionPointIds.CONFIGURATIONS]: [
+      configurations: [
         {
           id: "size.unit",
           type: "select",
@@ -156,41 +158,47 @@ export class SizeTool implements Extension {
           step: 0.001,
           default: 0.1,
         },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
+      ],
+      commands: [
         {
+          id: "getSizeState",
           command: "getSizeState",
           title: "Get Size State",
           handler: () => this.getStateForUI(),
         },
         {
+          id: "updateSizeDimensions",
           command: "updateSizeDimensions",
           title: "Update Size Dimensions",
           handler: (input: UpdateSizeDimensionsInput = {}) =>
             this.updateDimensions(input),
         },
         {
+          id: "setSizeConstraintMode",
           command: "setSizeConstraintMode",
           title: "Set Size Constraint Mode",
           handler: (mode: SizeConstraintMode) => this.setConstraintMode(mode),
         },
         {
+          id: "setSizeDisplayUnit",
           command: "setSizeDisplayUnit",
           title: "Set Size Display Unit",
           handler: (unit: Unit) => this.setUnit(unit),
         },
         {
+          id: "setSizeCut",
           command: "setSizeCut",
           title: "Set Size Cut",
           handler: (cutMode: string, cutMarginMm: number = 0) =>
             this.setCut(cutMode, cutMarginMm),
         },
         {
+          id: "getSelectedImageSize",
           command: "getSelectedImageSize",
           title: "Get Selected Image Size",
           handler: (id?: string) => this.getSelectedImageSize(id),
         },
-      ] as CommandContribution[],
+      ],
     };
   }
 

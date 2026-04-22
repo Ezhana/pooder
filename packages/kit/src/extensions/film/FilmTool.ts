@@ -1,9 +1,8 @@
 import {
-  Extension,
+  CONFIGURATION_SERVICE,
+  ExtensionContributions,
+  ExtensionDefinition,
   ExtensionContext,
-  ContributionPointIds,
-  CommandContribution,
-  ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
 import { FabricImage } from "fabric";
@@ -20,11 +19,14 @@ const FILM_IMAGE_ID = "film-image";
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
 
-export class FilmTool implements Extension {
+export class FilmTool implements ExtensionDefinition {
   id = "pooder.kit.film";
 
   public metadata = {
     name: "FilmTool",
+  };
+  activation = {
+    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
   };
 
   private url: string = "";
@@ -56,11 +58,8 @@ export class FilmTool implements Extension {
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    if (!this.canvasService) {
-      console.warn("CanvasService not found for FilmTool");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
 
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
@@ -122,9 +121,9 @@ export class FilmTool implements Extension {
     this.canvasService = undefined;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.CONFIGURATIONS]: [
+      configurations: [
         {
           id: "film.url",
           type: "string",
@@ -140,9 +139,10 @@ export class FilmTool implements Extension {
           step: 0.1,
           default: 0.5,
         },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
+      ],
+      commands: [
         {
+          id: "setFilmImage",
           command: "setFilmImage",
           title: "Set Film Image",
           handler: (url: string, opacity: number) => {
@@ -156,7 +156,7 @@ export class FilmTool implements Extension {
             return true;
           },
         },
-      ] as CommandContribution[],
+      ],
     };
   }
 

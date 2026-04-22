@@ -26,9 +26,105 @@ import {
   resolveFeaturePosition,
 } from "../src/extensions/featureCoordinates";
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
+import { WhiteInkTool } from "../src/extensions/white-ink/WhiteInkTool";
+import { Pooder, ToolRegistryService } from "@pooder/core";
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
+}
+
+class FakeCanvasService {
+  canvas = {
+    width: 800,
+    height: 600,
+    contextTop: null,
+    viewportTransform: [1, 0, 0, 1, 0, 0],
+    on: () => {},
+    off: () => {},
+    getObjects: () => [],
+    clearContext: () => {},
+    discardActiveObject: () => {},
+    setActiveObject: () => {},
+    requestRenderAll: () => {},
+    setViewportTransform: () => {},
+  };
+
+  viewport = {
+    layout: {
+      scale: 1,
+      width: 800,
+      height: 600,
+      offsetX: 0,
+      offsetY: 0,
+    },
+    updateContainer: (width: number, height: number) => {
+      this.viewport.layout.width = width;
+      this.viewport.layout.height = height;
+    },
+    setPadding: () => {},
+    updatePhysical: () => {
+      this.viewport.layout.scale = 1;
+      this.viewport.layout.offsetX = 0;
+      this.viewport.layout.offsetY = 0;
+    },
+  };
+
+  registerRenderProducer() {
+    return {
+      dispose: () => {},
+    };
+  }
+
+  async flushRenderFromProducers() {}
+
+  requestRenderFromProducers() {}
+
+  requestRenderAll() {}
+
+  getSceneScale() {
+    return 1;
+  }
+
+  toSceneRect<T extends { left: number; top: number; width: number; height: number }>(
+    rect: T,
+  ) {
+    return { ...rect };
+  }
+
+  toScreenRect<T extends { left: number; top: number; width: number; height: number }>(
+    rect: T,
+  ) {
+    return { ...rect };
+  }
+
+  toSceneLength(value: number) {
+    return value;
+  }
+
+  toScreenLength(value: number) {
+    return value;
+  }
+
+  toScenePoint(point: { x: number; y: number }) {
+    return { ...point };
+  }
+
+  toScreenPoint(point: { x: number; y: number }) {
+    return { ...point };
+  }
+
+  getScreenViewportRect() {
+    return {
+      left: 0,
+      top: 0,
+      width: this.canvas.width,
+      height: this.canvas.height,
+    };
+  }
+
+  getPassObjects() {
+    return [];
+  }
 }
 
 function testWrappedOffsets() {
@@ -500,7 +596,65 @@ function testContributionCompatibility() {
   );
 }
 
-function main() {
+async function testExtensionDependencyActivation() {
+  const runtime = new Pooder();
+  runtime.extensions.register(new WhiteInkTool());
+  runtime.extensions.register({
+    id: "pooder.kit.image",
+    activation: {
+      requiresServices: ["CanvasService"],
+    },
+    contribute() {
+      return {
+        tools: [
+          {
+            id: "pooder.kit.image",
+            name: "Image",
+            interaction: "session",
+          },
+        ],
+      };
+    },
+    activate() {},
+  });
+
+  await runtime.extensions.flushActivation();
+
+  assert(
+    runtime.extensions.getState("pooder.kit.image")?.state === "pending",
+    "image dependency should stay pending without CanvasService",
+  );
+  assert(
+    runtime.extensions.getState("pooder.kit.white-ink")?.state === "pending",
+    "white-ink tool should stay pending until its hard dependency is active",
+  );
+
+  runtime.services.register(new FakeCanvasService() as any, "CanvasService");
+  await runtime.extensions.flushActivation();
+
+  assert(
+    runtime.extensions.getState("pooder.kit.image")?.state === "active",
+    "image dependency should activate after CanvasService registration",
+  );
+  assert(
+    runtime.extensions.getState("pooder.kit.white-ink")?.state === "active",
+    "white-ink tool should activate after image and CanvasService are ready",
+  );
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    toolRegistry.hasTool("pooder.kit.image"),
+    "image dependency should register in the tool registry",
+  );
+  assert(
+    toolRegistry.hasTool("pooder.kit.white-ink"),
+    "white-ink tool should register in the tool registry",
+  );
+}
+
+async function main() {
   testWrappedOffsets();
   testBridgeSelection();
   testMaskOps();
@@ -509,7 +663,8 @@ function main() {
   testVisibilityDsl();
   testImageViewStateHelper();
   testContributionCompatibility();
+  await testExtensionDependencyActivation();
   console.log("ok");
 }
 
-main();
+void main();

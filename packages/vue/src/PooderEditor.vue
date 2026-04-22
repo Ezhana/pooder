@@ -7,9 +7,12 @@
 <script setup lang="ts">
 import { provide, onUnmounted } from "vue";
 import {
+  COMMAND_SERVICE,
   CommandService,
+  CONFIGURATION_SERVICE,
   ConfigurationService,
   Pooder,
+  WORKBENCH_SERVICE,
   WorkbenchService,
 } from "@pooder/core";
 import {
@@ -54,9 +57,23 @@ const SCENE_LAYOUT_SERVICE_ID = "SceneLayoutService";
 
 const pooder = new Pooder();
 provide("pooder", pooder);
-const cmdSvc = pooder.getService<CommandService>("CommandService")!;
-const cfgSvc = pooder.getService<ConfigurationService>("ConfigurationService")!;
-const wbSvc = pooder.getService<WorkbenchService>("WorkbenchService")!;
+const cmdSvc = pooder.services.getOrThrow<CommandService>(COMMAND_SERVICE);
+const cfgSvc =
+  pooder.services.getOrThrow<ConfigurationService>(CONFIGURATION_SERVICE);
+const wbSvc = pooder.services.getOrThrow<WorkbenchService>(WORKBENCH_SERVICE);
+let runtimeReady: Promise<void> = Promise.resolve();
+
+const ensureRuntimeReady = async () => {
+  await runtimeReady;
+};
+
+const executeRuntimeCommand = async <T = unknown,>(
+  id: string,
+  ...args: any[]
+): Promise<T> => {
+  await ensureRuntimeReady();
+  return await pooder.commands.execute<T>(id, ...args);
+};
 
 const emit = defineEmits<{
   (e: "image-state-change", state: ImageViewState): void;
@@ -84,7 +101,7 @@ const exportConfig = () => {
 
 const generateCutImage = async (options?: PooderGenerateCutImageOptions) => {
   try {
-    const result = await cmdSvc.executeCommand<string | null>(
+    const result = await executeRuntimeCommand<string | null>(
       "exportCutImage",
       options,
     );
@@ -92,7 +109,7 @@ const generateCutImage = async (options?: PooderGenerateCutImageOptions) => {
       console.warn("[PooderEditor] generateCutImage returned null", {
         options,
         imageCount: (cfgSvc.get("image.items") || []).length,
-        hasCanvasService: !!pooder.getService<CanvasService>("CanvasService"),
+        hasCanvasService: !!pooder.services.get<CanvasService>("CanvasService"),
       });
     }
     return result;
@@ -103,7 +120,10 @@ const generateCutImage = async (options?: PooderGenerateCutImageOptions) => {
 };
 
 const upsertImage = async (url: string, options?: PooderUpsertImageOptions) => {
-  const result = await cmdSvc.executeCommand("upsertImage", url, {
+  const result = await executeRuntimeCommand<{
+    id: string;
+    mode: "replace" | "add";
+  }>("upsertImage", url, {
     id: options?.id,
     mode: options?.mode,
     addOptions: options?.addOptions,
@@ -127,7 +147,7 @@ const applyImageOperation = async (
   operation: ImageOperation,
   options?: { target?: PooderImageTarget },
 ) => {
-  return await cmdSvc.executeCommand(
+  return await executeRuntimeCommand<void>(
     "applyImageOperation",
     id,
     operation,
@@ -136,7 +156,7 @@ const applyImageOperation = async (
 };
 
 const getImageState = async () => {
-  return (await cmdSvc.executeCommand("getImageViewState")) as ImageViewState;
+  return (await executeRuntimeCommand("getImageViewState")) as ImageViewState;
 };
 
 const setImageTransform = async (
@@ -144,7 +164,12 @@ const setImageTransform = async (
   updates: ImageTransformUpdates,
   options?: { target?: PooderImageTarget },
 ) => {
-  return await cmdSvc.executeCommand("setImageTransform", id, updates, options);
+  return await executeRuntimeCommand<void>(
+    "setImageTransform",
+    id,
+    updates,
+    options,
+  );
 };
 
 const onImageStateChange = (handler: PooderEditorImageStateChangeHandler) => {
@@ -160,17 +185,17 @@ const onImageSessionNotice = (
 };
 
 const updateImage = async (id: string, options?: any) => {
-  return await cmdSvc.executeCommand("updateImage", id, options);
+  return await executeRuntimeCommand<void>("updateImage", id, options);
 };
 
 const clearImages = async () => {
-  return await cmdSvc.executeCommand("clearImages");
+  return await executeRuntimeCommand<void>("clearImages");
 };
 
 const exportUserCroppedImage = async (
   options?: PooderExportUserCroppedImageOptions,
 ) => {
-  return (await cmdSvc.executeCommand(
+  return (await executeRuntimeCommand(
     "exportUserCroppedImage",
     options,
   )) as ExportUserCroppedImageResult;
@@ -180,7 +205,7 @@ const focusImage = async (
   id: string | null,
   options?: PooderFocusImageOptions,
 ) => {
-  return await cmdSvc.executeCommand("focusImage", id, options);
+  return await executeRuntimeCommand("focusImage", id, options);
 };
 const applyDetectedDielineConfig = (
   result: DetectEdgeResult,
@@ -323,7 +348,7 @@ const detectPostCommitDiagnostics = async (
   if (!verifyUrl) return null;
 
   try {
-    const verifyResult = (await cmdSvc.executeCommand("detectEdge", verifyUrl, {
+    const verifyResult = (await executeRuntimeCommand("detectEdge", verifyUrl, {
       expand: options?.detect?.expand ?? 0,
       smoothing: options?.detect?.smoothing ?? true,
       simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
@@ -343,7 +368,7 @@ const detectPostCommitDiagnostics = async (
 };
 
 const detectDieline = async (url: string) => {
-  const result = (await cmdSvc.executeCommand("detectEdge", url, {
+  const result = (await executeRuntimeCommand("detectEdge", url, {
     expand: 10, // 安全距离（像素）
     smoothing: true, // 是否平滑
     simplifyTolerance: 2, // 平滑度容差，值越大越圆润
@@ -374,7 +399,7 @@ const detectDielineFromFrame = async (
   }
 
   try {
-    const result = (await cmdSvc.executeCommand("detectEdge", sourceUrl, {
+    const result = (await executeRuntimeCommand("detectEdge", sourceUrl, {
       expand: options?.detect?.expand ?? 0,
       smoothing: options?.detect?.smoothing ?? true,
       simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
@@ -447,7 +472,7 @@ const uploadAndDetectEdge = async (
   options?: PooderUploadAndDetectEdgeOptions,
 ): Promise<PooderUploadAndDetectEdgeResult | null> => {
   const imageId = await addImage(url);
-  const result = (await cmdSvc.executeCommand("detectEdge", url, {
+  const result = (await executeRuntimeCommand("detectEdge", url, {
     expand: options?.expand ?? 10,
     smoothing: options?.smoothing ?? true,
     simplifyTolerance: options?.simplifyTolerance ?? 2,
@@ -477,13 +502,19 @@ const exposed = {
   detectDieline,
   detectDielineFromFrame,
   uploadAndDetectEdge,
-  activateTool: async (id: string | null) => await wbSvc.switchTool(id),
-  deactivateTool: async () => await wbSvc.deactivate(),
+  activateTool: async (id: string | null) => {
+    await ensureRuntimeReady();
+    return await pooder.workbench.activate(id);
+  },
+  deactivateTool: async () => {
+    await ensureRuntimeReady();
+    return await pooder.workbench.deactivate();
+  },
   on: (event: string, handler: any) => pooder.eventBus.on(event, handler),
   off: (event: string, handler: any) => pooder.eventBus.off(event, handler),
   emit: (event: string, data: any) => pooder.eventBus.emit(event, data),
   executeCommand: <T = unknown,>(id: string, ...args: any[]) =>
-    cmdSvc.executeCommand<T>(id, ...args),
+    executeRuntimeCommand<T>(id, ...args),
   getConfig: <T = unknown,>(key: string) => cfgSvc.get(key) as T,
   updateConfig: (key: string, val: any) => cfgSvc.update(key, val),
   services: {
@@ -500,9 +531,6 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
     eventBus: pooder.eventBus,
   });
 
-  pooder.registerService(canvasService, "CanvasService");
-  pooder.registerService(new SceneLayoutService(), SCENE_LAYOUT_SERVICE_ID);
-
   const tools = [
     new BackgroundTool(),
     new SizeTool(),
@@ -515,13 +543,20 @@ const onCanvasReady = (canvasEl: HTMLCanvasElement) => {
     new FeatureTool(),
   ];
 
-  tools.forEach((tool) => {
-    pooder.extensionManager.register(tool);
-  });
+  runtimeReady = (async () => {
+    pooder.services.register(canvasService, "CanvasService");
+    pooder.services.register(new SceneLayoutService(), SCENE_LAYOUT_SERVICE_ID);
+    pooder.extensions.registerMany(tools);
+    const states = await pooder.extensions.flushActivation();
+    const failed = states.filter((state) => state.state === "failed");
+    if (failed.length > 0) {
+      console.error("[PooderEditor] runtime activation failed", failed);
+    }
+  })();
 };
 
 const onResize = (width: number, height: number) => {
-  const canvasService = pooder.getService<CanvasService>("CanvasService");
+  const canvasService = pooder.services.get<CanvasService>("CanvasService");
   if (canvasService) {
     canvasService.resize(width, height);
   }
@@ -530,9 +565,7 @@ const onResize = (width: number, height: number) => {
 onUnmounted(() => {
   pooder.eventBus.off("image:state:change", onImageStateChangeEvent);
   pooder.eventBus.off("image:session:notice", onImageSessionNoticeEvent);
-  pooder.extensionManager.destroy();
-  pooder.unregisterService(SCENE_LAYOUT_SERVICE_ID);
-  pooder.unregisterService("CanvasService");
+  void pooder.dispose();
 });
 </script>
 

@@ -1,17 +1,19 @@
 import {
-  Extension,
+  CONFIGURATION_SERVICE,
+  ExtensionContributions,
+  ExtensionDefinition,
   ExtensionContext,
-  ContributionPointIds,
-  CommandContribution,
-  ConfigurationContribution,
 } from "@pooder/core";
 import { CanvasService } from "../../services";
 
-export class MirrorTool implements Extension {
+export class MirrorTool implements ExtensionDefinition {
   id = "pooder.kit.mirror";
 
   public metadata = {
     name: "MirrorTool",
+  };
+  activation = {
+    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
   };
   private enabled = false;
 
@@ -38,11 +40,8 @@ export class MirrorTool implements Extension {
   }
 
   activate(context: ExtensionContext) {
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    if (!this.canvasService) {
-      console.warn("CanvasService not found for MirrorTool");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
 
     const configService = context.services.get<any>("ConfigurationService");
     if (configService) {
@@ -68,18 +67,19 @@ export class MirrorTool implements Extension {
     this.canvasService = undefined;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.CONFIGURATIONS]: [
+      configurations: [
         {
           id: "mirror.enabled",
           type: "boolean",
           label: "Enable Mirror",
           default: false,
         },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
+      ],
+      commands: [
         {
+          id: "setMirror",
           command: "setMirror",
           title: "Set Mirror",
           handler: (enabled: boolean) => {
@@ -87,7 +87,7 @@ export class MirrorTool implements Extension {
             return true;
           },
         },
-      ] as CommandContribution[],
+      ],
     };
   }
 

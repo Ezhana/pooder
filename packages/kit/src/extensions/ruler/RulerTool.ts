@@ -1,9 +1,8 @@
 import {
-  Extension,
+  CONFIGURATION_SERVICE,
+  ExtensionContributions,
+  ExtensionDefinition,
   ExtensionContext,
-  ContributionPointIds,
-  CommandContribution,
-  ConfigurationContribution,
   ConfigurationService,
 } from "@pooder/core";
 import { CanvasService, RenderObjectSpec } from "../../services";
@@ -36,11 +35,14 @@ const RULER_FONT_SIZE_MAX = 24;
 
 type Point = { x: number; y: number };
 
-export class RulerTool implements Extension {
+export class RulerTool implements ExtensionDefinition {
   id = "pooder.kit.ruler";
 
   public metadata = {
     name: "RulerTool",
+  };
+  activation = {
+    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
   };
 
   private thickness = DEFAULT_THICKNESS;
@@ -78,11 +80,8 @@ export class RulerTool implements Extension {
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    if (!this.canvasService) {
-      console.warn("[RulerTool] CanvasService not found.");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -167,9 +166,9 @@ export class RulerTool implements Extension {
     this.renderSeq = 0;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.CONFIGURATIONS]: [
+      configurations: [
         {
           id: "ruler.thickness",
           type: "number",
@@ -218,9 +217,10 @@ export class RulerTool implements Extension {
           label: "Ruler Debug Log",
           default: false,
         },
-      ] as ConfigurationContribution[],
-      [ContributionPointIds.COMMANDS]: [
+      ],
+      commands: [
         {
+          id: "setTheme",
           command: "setTheme",
           title: "Set Ruler Theme",
           handler: (
@@ -260,7 +260,7 @@ export class RulerTool implements Extension {
             return true;
           },
         },
-      ] as CommandContribution[],
+      ],
     };
   }
 

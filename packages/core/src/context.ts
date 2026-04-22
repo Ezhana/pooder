@@ -1,7 +1,5 @@
 import EventBus from "./event";
-import { Contribution } from "./contribution";
 import { Service, ServiceIdentifier } from "./service";
-import Disposable from "./disposable";
 
 interface ExtensionContext {
   readonly eventBus: EventBus;
@@ -12,10 +10,6 @@ interface ExtensionContext {
       errorMessage?: string,
     ): T;
     has(identifier: ServiceIdentifier<Service>): boolean;
-  };
-  readonly contributions: {
-    get<T>(pointId: string): Contribution<T>[];
-    register<T>(pointId: string, contribution: Contribution<T>): Disposable;
   };
 }
 

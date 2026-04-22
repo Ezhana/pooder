@@ -1,9 +1,12 @@
 import {
-  Extension,
+  CONFIGURATION_SERVICE,
   ExtensionContext,
-  ContributionPointIds,
+  ExtensionContributions,
+  ExtensionDefinition,
   ConfigurationService,
+  TOOL_SESSION_SERVICE,
   ToolSessionService,
+  WORKBENCH_SERVICE,
   WorkbenchService,
 } from "@pooder/core";
 import {
@@ -221,11 +224,19 @@ const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
   },
 ];
 
-export class ImageTool implements Extension {
+export class ImageTool implements ExtensionDefinition {
   id = "pooder.kit.image";
 
   metadata = {
     name: "ImageTool",
+  };
+  activation = {
+    requiresServices: [
+      "CanvasService",
+      CONFIGURATION_SERVICE,
+      TOOL_SESSION_SERVICE,
+      WORKBENCH_SERVICE,
+    ],
   };
 
   private items: ImageItem[] = [];
@@ -265,11 +276,8 @@ export class ImageTool implements Extension {
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    if (!this.canvasService) {
-      console.warn("CanvasService not found for ImageTool");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -378,9 +386,10 @@ export class ImageTool implements Extension {
       );
     }
 
-    const toolSessionService =
-      context.services.get<ToolSessionService>("ToolSessionService");
-    this.dirtyTrackerDisposable = toolSessionService?.registerDirtyTracker(
+    const toolSessionService = context.services.getOrThrow<ToolSessionService>(
+      "ToolSessionService",
+    );
+    this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
       this.id,
       () => this.hasWorkingChanges,
     );
@@ -960,9 +969,9 @@ export class ImageTool implements Extension {
     console.log(`[ImageTool] ${message}`, payload);
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.TOOLS]: [
+      tools: [
         {
           id: this.id,
           name: "Image",
@@ -979,8 +988,8 @@ export class ImageTool implements Extension {
           },
         },
       ],
-      [ContributionPointIds.CONFIGURATIONS]: createImageConfigurations(),
-      [ContributionPointIds.COMMANDS]: createImageCommands(this),
+      configurations: createImageConfigurations(),
+      commands: createImageCommands(this),
     };
   }
 

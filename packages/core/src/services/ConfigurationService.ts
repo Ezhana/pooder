@@ -2,13 +2,26 @@ import { Service } from "../service";
 import EventBus from "../event";
 import { ConfigurationContribution } from "../contribution";
 
-export default class ConfigurationService implements Service {
-  private configValues: Map<string, any> = new Map();
-  private eventBus: EventBus = new EventBus();
+export interface RegisteredConfigurationDefinition
+  extends ConfigurationContribution {
+  extensionId: string;
+}
 
-  /**
-   * Get a configuration value.
-   */
+export interface ConfigurationDefinitionsChangeEvent {
+  added: string[];
+  removed: string[];
+  extensionId: string;
+}
+
+export default class ConfigurationService implements Service {
+  private readonly configValues: Map<string, any> = new Map();
+  private readonly eventBus: EventBus = new EventBus();
+  private readonly definitionsById = new Map<
+    string,
+    RegisteredConfigurationDefinition
+  >();
+  private readonly definitionIdsByExtension = new Map<string, Set<string>>();
+
   get<T = any>(key: string, defaultValue?: T): T {
     if (this.configValues.has(key)) {
       return this.configValues.get(key);
@@ -16,10 +29,6 @@ export default class ConfigurationService implements Service {
     return defaultValue as T;
   }
 
-  /**
-   * Update a configuration value.
-   * Emits 'change' event.
-   */
   update(key: string, value: any) {
     const oldValue = this.configValues.get(key);
     if (oldValue !== value) {
@@ -29,9 +38,6 @@ export default class ConfigurationService implements Service {
     }
   }
 
-  /**
-   * Listen for changes to a specific configuration key.
-   */
   onDidChange(
     key: string,
     callback: (event: { key: string; value: any; oldValue: any }) => void,
@@ -42,9 +48,6 @@ export default class ConfigurationService implements Service {
     };
   }
 
-  /**
-   * Listen for any configuration change.
-   */
   onAnyChange(
     callback: (event: { key: string; value: any; oldValue: any }) => void,
   ) {
@@ -54,10 +57,6 @@ export default class ConfigurationService implements Service {
     };
   }
 
-  /**
-   * Export current configuration state as a JSON-serializable object.
-   * Useful for saving configuration templates.
-   */
   export(): Record<string, any> {
     const exportData: Record<string, any> = {};
     for (const [key, value] of this.configValues) {
@@ -66,11 +65,6 @@ export default class ConfigurationService implements Service {
     return exportData;
   }
 
-  /**
-   * Import configuration from a JSON object.
-   * This will merge the provided configuration with the current state,
-   * overwriting existing keys and triggering change events.
-   */
   import(data: Record<string, any>): void {
     if (!data || typeof data !== "object") {
       console.warn("ConfigurationService: Import data must be an object.");
@@ -81,27 +75,100 @@ export default class ConfigurationService implements Service {
     });
   }
 
-  /**
-   * Initialize configuration with defaults from contributions.
-   * This should be called when a contribution is registered.
-   */
-  initializeDefaults(contributions: ConfigurationContribution[]) {
-    contributions.forEach((contrib) => {
-      if (!contrib.id) {
+  registerDefinitions(
+    extensionId: string,
+    contributions: ConfigurationContribution[] = [],
+  ) {
+    const extensionDefinitions =
+      this.definitionIdsByExtension.get(extensionId) ?? new Set<string>();
+    const added: string[] = [];
+
+    contributions.forEach((contribution) => {
+      if (!contribution.id) {
         console.warn(
-          "Configuration contribution missing 'id'. Skipping default initialization.",
-          contrib,
+          "Configuration contribution missing 'id'. Skipping registration.",
+          contribution,
         );
         return;
       }
-      if (!this.configValues.has(contrib.id) && contrib.default !== undefined) {
-        this.configValues.set(contrib.id, contrib.default);
+
+      const definition: RegisteredConfigurationDefinition = {
+        ...contribution,
+        extensionId,
+      };
+
+      this.definitionsById.set(definition.id, definition);
+      extensionDefinitions.add(definition.id);
+      added.push(definition.id);
+
+      if (
+        !this.configValues.has(definition.id) &&
+        definition.default !== undefined
+      ) {
+        this.configValues.set(definition.id, definition.default);
       }
     });
+
+    this.definitionIdsByExtension.set(extensionId, extensionDefinitions);
+
+    if (added.length > 0) {
+      this.eventBus.emit("definitions:change", {
+        added,
+        removed: [],
+        extensionId,
+      } satisfies ConfigurationDefinitionsChangeEvent);
+    }
+
+    return {
+      dispose: () => {
+        this.unregisterDefinitions(extensionId);
+      },
+    };
+  }
+
+  unregisterDefinitions(extensionId: string) {
+    const ids = this.definitionIdsByExtension.get(extensionId);
+    if (!ids || ids.size === 0) {
+      return;
+    }
+
+    const removed = Array.from(ids.values());
+    removed.forEach((id) => {
+      this.definitionsById.delete(id);
+    });
+    this.definitionIdsByExtension.delete(extensionId);
+
+    this.eventBus.emit("definitions:change", {
+      added: [],
+      removed,
+      extensionId,
+    } satisfies ConfigurationDefinitionsChangeEvent);
+  }
+
+  listDefinitions(): RegisteredConfigurationDefinition[] {
+    return Array.from(this.definitionsById.values())
+      .map((definition) => ({ ...definition }))
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  getDefinition(id: string): RegisteredConfigurationDefinition | undefined {
+    const definition = this.definitionsById.get(id);
+    return definition ? { ...definition } : undefined;
+  }
+
+  onDefinitionsChange(
+    callback: (event: ConfigurationDefinitionsChangeEvent) => void,
+  ) {
+    this.eventBus.on("definitions:change", callback);
+    return {
+      dispose: () => this.eventBus.off("definitions:change", callback),
+    };
   }
 
   dispose() {
     this.configValues.clear();
-    // EventBus doesn't have a clear/dispose in the snippet, but it's fine for now.
+    this.definitionsById.clear();
+    this.definitionIdsByExtension.clear();
+    this.eventBus.clear();
   }
 }

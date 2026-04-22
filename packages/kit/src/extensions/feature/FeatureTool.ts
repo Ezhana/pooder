@@ -1,9 +1,11 @@
 import {
-  Extension,
+  COMMAND_SERVICE,
+  CONFIGURATION_SERVICE,
   ExtensionContext,
-  ContributionPointIds,
-  CommandContribution,
+  ExtensionContributions,
+  ExtensionDefinition,
   ConfigurationService,
+  TOOL_SESSION_SERVICE,
   ToolSessionService,
 } from "@pooder/core";
 import { Pattern } from "fabric";
@@ -65,11 +67,20 @@ interface MarkerData {
   memberOffsets?: GroupMemberOffset[];
 }
 
-export class FeatureTool implements Extension {
+export class FeatureTool implements ExtensionDefinition {
   id = "pooder.kit.feature";
 
   public metadata = {
     name: "FeatureTool",
+  };
+  activation = {
+    requiresExtensions: ["pooder.kit.dieline"],
+    requiresServices: [
+      "CanvasService",
+      CONFIGURATION_SERVICE,
+      TOOL_SESSION_SERVICE,
+      COMMAND_SERVICE,
+    ],
   };
 
   private workingFeatures: ConstraintFeature[] = [];
@@ -109,12 +120,8 @@ export class FeatureTool implements Extension {
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-
-    if (!this.canvasService) {
-      console.warn("CanvasService not found for FeatureTool");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
 
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
@@ -230,9 +237,9 @@ export class FeatureTool implements Extension {
     return this.isToolActive && this.isFeatureSessionActive;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.TOOLS]: [
+      tools: [
         {
           id: this.id,
           name: "Feature",
@@ -248,8 +255,9 @@ export class FeatureTool implements Extension {
           },
         },
       ],
-      [ContributionPointIds.COMMANDS]: [
+      commands: [
         {
+          id: "beginFeatureSession",
           command: "beginFeatureSession",
           title: "Begin Feature Session",
           handler: async () => {
@@ -270,6 +278,7 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "addFeature",
           command: "addFeature",
           title: "Add Edge Feature",
           handler: (type: "add" | "subtract" = "subtract") => {
@@ -277,6 +286,7 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "addHole",
           command: "addHole",
           title: "Add Hole",
           handler: () => {
@@ -284,6 +294,7 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "addDoubleLayerHole",
           command: "addDoubleLayerHole",
           title: "Add Double Layer Hole",
           handler: () => {
@@ -291,6 +302,7 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "clearFeatures",
           command: "clearFeatures",
           title: "Clear Features",
           handler: () => {
@@ -302,6 +314,7 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "rollbackFeatureSession",
           command: "rollbackFeatureSession",
           title: "Rollback Feature Session",
           handler: async () => {
@@ -319,6 +332,7 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "resetWorkingFeatures",
           command: "resetWorkingFeatures",
           title: "Reset Working Features",
           handler: async () => {
@@ -327,6 +341,7 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "updateWorkingGroupPosition",
           command: "updateWorkingGroupPosition",
           title: "Update Working Group Position",
           handler: (groupId: string, x: number, y: number) => {
@@ -334,13 +349,14 @@ export class FeatureTool implements Extension {
           },
         },
         {
+          id: "completeFeatures",
           command: "completeFeatures",
           title: "Complete Features",
           handler: () => {
             return this.completeFeatures();
           },
         },
-      ] as CommandContribution[],
+      ],
     };
   }
 

@@ -1,9 +1,12 @@
 import {
-  Extension,
+  CONFIGURATION_SERVICE,
   ExtensionContext,
-  ContributionPointIds,
+  ExtensionContributions,
+  ExtensionDefinition,
   ConfigurationService,
+  TOOL_SESSION_SERVICE,
   ToolSessionService,
+  WORKBENCH_SERVICE,
   WorkbenchService,
 } from "@pooder/core";
 import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../../services";
@@ -103,11 +106,20 @@ const WHITE_INK_COVER_OPACITY_MAX = 0.65;
 const WHITE_MASK_TINT: MaskTint = { r: 255, g: 255, b: 255, key: "white" };
 const COVER_MASK_TINT: MaskTint = { r: 52, g: 136, b: 255, key: "blue" };
 
-export class WhiteInkTool implements Extension {
+export class WhiteInkTool implements ExtensionDefinition {
   id = "pooder.kit.white-ink";
 
   metadata = {
     name: "WhiteInkTool",
+  };
+  activation = {
+    requiresExtensions: ["pooder.kit.image"],
+    requiresServices: [
+      "CanvasService",
+      CONFIGURATION_SERVICE,
+      TOOL_SESSION_SERVICE,
+      WORKBENCH_SERVICE,
+    ],
   };
 
   private items: WhiteInkItem[] = [];
@@ -138,11 +150,8 @@ export class WhiteInkTool implements Extension {
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService = context.services.get<CanvasService>("CanvasService");
-    if (!this.canvasService) {
-      console.warn("CanvasService not found for WhiteInkTool");
-      return;
-    }
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>("CanvasService");
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -249,9 +258,10 @@ export class WhiteInkTool implements Extension {
       );
     }
 
-    const toolSessionService =
-      context.services.get<ToolSessionService>("ToolSessionService");
-    this.dirtyTrackerDisposable = toolSessionService?.registerDirtyTracker(
+    const toolSessionService = context.services.getOrThrow<ToolSessionService>(
+      "ToolSessionService",
+    );
+    this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
       this.id,
       () => this.hasWorkingChanges,
     );
@@ -276,9 +286,9 @@ export class WhiteInkTool implements Extension {
     this.context = undefined;
   }
 
-  contribute() {
+  contribute(): ExtensionContributions {
     return {
-      [ContributionPointIds.TOOLS]: [
+      tools: [
         {
           id: this.id,
           name: "White Ink",
@@ -294,8 +304,8 @@ export class WhiteInkTool implements Extension {
           },
         },
       ],
-      [ContributionPointIds.CONFIGURATIONS]: createWhiteInkConfigurations(),
-      [ContributionPointIds.COMMANDS]: createWhiteInkCommands(this),
+      configurations: createWhiteInkConfigurations(),
+      commands: createWhiteInkCommands(this),
     };
   }
 
