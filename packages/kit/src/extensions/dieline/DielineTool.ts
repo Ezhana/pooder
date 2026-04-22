@@ -6,7 +6,12 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, Path, Pattern } from "fabric";
-import { CanvasService, RenderEffectSpec, RenderObjectSpec } from "../../services";
+import {
+  CANVAS_SERVICE,
+  CanvasService,
+  RenderEffectSpec,
+  RenderObjectSpec,
+} from "../../services";
 import { generateDielinePath } from "../geometry";
 import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
 import {
@@ -38,7 +43,7 @@ export class DielineTool implements ExtensionDefinition {
     name: "DielineTool",
   };
   activation = {
-    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
   };
 
   private state: DielineState = createDefaultDielineState();
@@ -78,8 +83,9 @@ export class DielineTool implements ExtensionDefinition {
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -105,20 +111,18 @@ export class DielineTool implements ExtensionDefinition {
       { priority: 250 },
     );
 
-    const configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    const configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
     );
-    if (configService) {
-      Object.assign(this.state, readDielineState(configService, this.state));
+    Object.assign(this.state, readDielineState(configService, this.state));
 
-      // Listen for changes
-      configService.onAnyChange((e: { key: string; value: any }) => {
-        if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
-          Object.assign(this.state, readDielineState(configService, this.state));
-          this.updateDieline();
-        }
-      });
-    }
+    // Listen for changes
+    configService.onAnyChange((e: { key: string; value: any }) => {
+      if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
+        Object.assign(this.state, readDielineState(configService, this.state));
+        this.updateDieline();
+      }
+    });
 
     context.eventBus.on("canvas:resized", this.onCanvasResized);
     this.updateDieline();
@@ -182,9 +186,34 @@ export class DielineTool implements ExtensionDefinition {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
+    return this.context?.services.get<ConfigurationService>(CONFIGURATION_SERVICE);
+  }
+
+  private getConfigServiceOrThrow(): ConfigurationService {
+    if (!this.context) {
+      throw new Error("[DielineTool] Extension context is not available.");
+    }
+    return this.context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
     );
+  }
+
+  public updateFeaturePosition(groupId: string, x: number, y: number) {
+    const configService = this.getConfigServiceOrThrow();
+    const features = configService.get("dieline.features") || [];
+
+    let changed = false;
+    const nextFeatures = features.map((feature: any) => {
+      if (feature.groupId === groupId && (feature.x !== x || feature.y !== y)) {
+        changed = true;
+        return { ...feature, x, y };
+      }
+      return feature;
+    });
+
+    if (changed) {
+      configService.update("dieline.features", nextFeatures);
+    }
   }
 
   private hasImageItems(): boolean {

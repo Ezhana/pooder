@@ -7,11 +7,13 @@
 <script setup lang="ts">
 import type { Pooder } from "@pooder/core";
 import { onMounted, onUnmounted, ref } from "vue";
-import { CanvasService, SceneLayoutService } from "@pooder/kit";
+import {
+  CANVAS_SERVICE,
+  CanvasService,
+  SCENE_LAYOUT_SERVICE,
+  SceneLayoutService,
+} from "@pooder/kit";
 import { usePooderRuntime } from "./runtime";
-
-const CANVAS_SERVICE_ID = "CanvasService";
-const SCENE_LAYOUT_SERVICE_ID = "SceneLayoutService";
 
 const props = defineProps<{
   runtime?: Pooder;
@@ -50,8 +52,8 @@ onMounted(() => {
     eventBus: runtime.eventBus,
   });
   sceneLayoutService = new SceneLayoutService();
-  runtime.services.register(canvasService, CANVAS_SERVICE_ID);
-  runtime.services.register(sceneLayoutService, SCENE_LAYOUT_SERVICE_ID);
+  runtime.services.register(canvasService, CANVAS_SERVICE);
+  runtime.services.register(sceneLayoutService, SCENE_LAYOUT_SERVICE);
   registeredRuntime = runtime;
 
   emit("ready");
@@ -78,11 +80,11 @@ onUnmounted(() => {
   if (registeredRuntime && sceneLayoutService) {
     registeredRuntime.services.unregister(
       sceneLayoutService,
-      SCENE_LAYOUT_SERVICE_ID,
+      SCENE_LAYOUT_SERVICE,
     );
   }
   if (registeredRuntime && canvasService) {
-    registeredRuntime.services.unregister(canvasService, CANVAS_SERVICE_ID);
+    registeredRuntime.services.unregister(canvasService, CANVAS_SERVICE);
   }
 
   sceneLayoutService = null;

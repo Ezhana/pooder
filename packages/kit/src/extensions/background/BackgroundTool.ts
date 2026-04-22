@@ -6,7 +6,11 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { FabricImage } from "fabric";
-import { CanvasService, RenderObjectSpec } from "../../services";
+import {
+  CANVAS_SERVICE,
+  CanvasService,
+  RenderObjectSpec,
+} from "../../services";
 import {
   computeSceneLayout,
   readSizeState,
@@ -375,7 +379,7 @@ export class BackgroundTool implements ExtensionDefinition {
     name: "BackgroundTool",
   };
   activation = {
-    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
   };
 
   private config: BackgroundConfig = cloneConfig(DEFAULT_BACKGROUND_CONFIG);
@@ -411,35 +415,31 @@ export class BackgroundTool implements ExtensionDefinition {
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
-
-    this.configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
     );
-    if (this.configService) {
-      this.config = normalizeConfig(
-        this.configService.get(
-          BACKGROUND_CONFIG_KEY,
-          DEFAULT_BACKGROUND_CONFIG,
-        ),
-      );
-      this.subscriptions.onConfigChange(
-        this.configService,
-        (e: { key: string; value: any }) => {
-          if (e.key === BACKGROUND_CONFIG_KEY) {
-            this.config = normalizeConfig(e.value);
-            this.updateBackground();
-            return;
-          }
 
-          if (e.key.startsWith("size.")) {
-            this.latestSceneLayout = null;
-            this.updateBackground();
-          }
-        },
-      );
-    }
+    this.configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
+    this.config = normalizeConfig(
+      this.configService.get(BACKGROUND_CONFIG_KEY, DEFAULT_BACKGROUND_CONFIG),
+    );
+    this.subscriptions.onConfigChange(
+      this.configService,
+      (e: { key: string; value: any }) => {
+        if (e.key === BACKGROUND_CONFIG_KEY) {
+          this.config = normalizeConfig(e.value);
+          this.updateBackground();
+          return;
+        }
+
+        if (e.key.startsWith("size.")) {
+          this.latestSceneLayout = null;
+          this.updateBackground();
+        }
+      },
+    );
 
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(

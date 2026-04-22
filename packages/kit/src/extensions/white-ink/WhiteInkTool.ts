@@ -9,7 +9,12 @@ import {
   WORKBENCH_SERVICE,
   WorkbenchService,
 } from "@pooder/core";
-import { CanvasService, RenderLayoutRect, RenderObjectSpec } from "../../services";
+import {
+  CANVAS_SERVICE,
+  CanvasService,
+  RenderLayoutRect,
+  RenderObjectSpec,
+} from "../../services";
 import {
   type FrameRect,
   resolveCutFrameRect,
@@ -115,7 +120,7 @@ export class WhiteInkTool implements ExtensionDefinition {
   activation = {
     requiresExtensions: ["pooder.kit.image"],
     requiresServices: [
-      "CanvasService",
+      CANVAS_SERVICE,
       CONFIGURATION_SERVICE,
       TOOL_SESSION_SERVICE,
       WORKBENCH_SERVICE,
@@ -150,8 +155,9 @@ export class WhiteInkTool implements ExtensionDefinition {
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -203,63 +209,61 @@ export class WhiteInkTool implements ExtensionDefinition {
       this.onImageWorkingChanged,
     );
 
-    const configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    const configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
     );
-    if (configService) {
-      this.applyCommittedItems(configService.get("whiteInk.items", []) || []);
-      this.printWithWhiteInk = !!configService.get(
-        "whiteInk.printWithWhiteInk",
-        true,
-      );
-      this.previewImageVisible = !!configService.get(
-        WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
-        true,
-      );
+    this.applyCommittedItems(configService.get("whiteInk.items", []) || []);
+    this.printWithWhiteInk = !!configService.get(
+      "whiteInk.printWithWhiteInk",
+      true,
+    );
+    this.previewImageVisible = !!configService.get(
+      WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
+      true,
+    );
 
-      this.migrateLegacyConfigIfNeeded(configService);
+    this.migrateLegacyConfigIfNeeded(configService);
 
-      this.subscriptions.onConfigChange(
-        configService,
-        (e: { key: string; value: any }) => {
-          if (this.isUpdatingConfig) return;
+    this.subscriptions.onConfigChange(
+      configService,
+      (e: { key: string; value: any }) => {
+        if (this.isUpdatingConfig) return;
 
-          if (e.key === "whiteInk.items") {
-            this.applyCommittedItems(e.value || []);
-            this.updateWhiteInks();
-            return;
-          }
+        if (e.key === "whiteInk.items") {
+          this.applyCommittedItems(e.value || []);
+          this.updateWhiteInks();
+          return;
+        }
 
-          if (e.key === "whiteInk.printWithWhiteInk") {
-            this.printWithWhiteInk = !!e.value;
-            this.updateWhiteInks();
-            return;
-          }
+        if (e.key === "whiteInk.printWithWhiteInk") {
+          this.printWithWhiteInk = !!e.value;
+          this.updateWhiteInks();
+          return;
+        }
 
-          if (e.key === WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY) {
-            this.previewImageVisible = !!e.value;
-            this.updateWhiteInks();
-            return;
-          }
+        if (e.key === WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY) {
+          this.previewImageVisible = !!e.value;
+          this.updateWhiteInks();
+          return;
+        }
 
-          if (e.key === "image.items") {
-            this.updateWhiteInks();
-            return;
-          }
+        if (e.key === "image.items") {
+          this.updateWhiteInks();
+          return;
+        }
 
-          if (e.key === WHITE_INK_DEBUG_KEY) {
-            return;
-          }
+        if (e.key === WHITE_INK_DEBUG_KEY) {
+          return;
+        }
 
-          if (e.key.startsWith("size.")) {
-            this.updateWhiteInks();
-          }
-        },
-      );
-    }
+        if (e.key.startsWith("size.")) {
+          this.updateWhiteInks();
+        }
+      },
+    );
 
     const toolSessionService = context.services.getOrThrow<ToolSessionService>(
-      "ToolSessionService",
+      TOOL_SESSION_SERVICE,
     );
     this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
       this.id,
@@ -368,7 +372,7 @@ export class WhiteInkTool implements ExtensionDefinition {
   }
 
   private syncToolActiveFromWorkbench(fallbackId?: string | null) {
-    const wb = this.context?.services.get<WorkbenchService>("WorkbenchService");
+    const wb = this.context?.services.get<WorkbenchService>(WORKBENCH_SERVICE);
     const activeId = wb?.activeToolId;
     if (typeof activeId === "string" || activeId === null) {
       this.isToolActive = activeId === this.id;
@@ -448,10 +452,39 @@ export class WhiteInkTool implements ExtensionDefinition {
   private getConfig<T>(key: string, fallback?: T): T | undefined {
     if (!this.context) return fallback;
     const configService = this.context.services.get<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     if (!configService) return fallback;
     return (configService.get(key, fallback) as T) ?? fallback;
+  }
+
+  private getConfigServiceOrThrow(): ConfigurationService {
+    if (!this.context) {
+      throw new Error("[WhiteInkTool] Extension context is not available.");
+    }
+    return this.context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
+  }
+
+  public setWhiteInkPrintEnabled(enabled: boolean) {
+    this.printWithWhiteInk = !!enabled;
+    this.getConfigServiceOrThrow().update(
+      "whiteInk.printWithWhiteInk",
+      this.printWithWhiteInk,
+    );
+    this.updateWhiteInks();
+    return { ok: true };
+  }
+
+  public setWhiteInkPreviewImageVisible(visible: boolean) {
+    this.previewImageVisible = !!visible;
+    this.getConfigServiceOrThrow().update(
+      WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
+      this.previewImageVisible,
+    );
+    this.updateWhiteInks();
+    return { ok: true };
   }
 
   private resolveReplaceTargetId(explicitId?: string | null): string | null {
@@ -487,7 +520,7 @@ export class WhiteInkTool implements ExtensionDefinition {
       this,
       () => {
         const configService = this.context?.services.get<ConfigurationService>(
-          "ConfigurationService",
+          CONFIGURATION_SERVICE,
         );
         configService?.update("whiteInk.items", this.items);
 
@@ -629,9 +662,9 @@ export class WhiteInkTool implements ExtensionDefinition {
   }
 
   private getFrameRect(): FrameRect {
-    const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
+      const configService = this.context?.services.get<ConfigurationService>(
+        CONFIGURATION_SERVICE,
+      );
     return resolveCutFrameRect(this.canvasService, configService);
   }
 

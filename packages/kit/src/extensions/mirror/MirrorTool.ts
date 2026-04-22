@@ -1,10 +1,11 @@
 import {
   CONFIGURATION_SERVICE,
+  ConfigurationService,
   ExtensionContributions,
   ExtensionDefinition,
   ExtensionContext,
 } from "@pooder/core";
-import { CanvasService } from "../../services";
+import { CANVAS_SERVICE, CanvasService } from "../../services";
 
 export class MirrorTool implements ExtensionDefinition {
   id = "pooder.kit.mirror";
@@ -13,7 +14,7 @@ export class MirrorTool implements ExtensionDefinition {
     name: "MirrorTool",
   };
   activation = {
-    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
   };
   private enabled = false;
 
@@ -40,21 +41,19 @@ export class MirrorTool implements ExtensionDefinition {
   }
 
   activate(context: ExtensionContext) {
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
 
-    const configService = context.services.get<any>("ConfigurationService");
-    if (configService) {
-      // Load initial config
-      this.enabled = configService.get("mirror.enabled", this.enabled);
-
-      // Listen for changes
-      configService.onAnyChange((e: { key: string; value: any }) => {
-        if (e.key === "mirror.enabled") {
-          this.applyMirror(e.value);
-        }
-      });
-    }
+    const configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
+    this.enabled = configService.get("mirror.enabled", this.enabled);
+    configService.onAnyChange((e: { key: string; value: any }) => {
+      if (e.key === "mirror.enabled") {
+        this.applyMirror(e.value);
+      }
+    });
 
     // Initialize with current state (if enabled was persisted)
     if (this.enabled) {

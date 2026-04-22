@@ -5,7 +5,7 @@ import {
   ConfigurationService,
   ExtensionContext,
 } from "@pooder/core";
-import { CanvasService } from "../../services";
+import { CANVAS_SERVICE, CanvasService } from "../../services";
 import {
   fromMm,
   normalizeConstraintMode,
@@ -35,7 +35,7 @@ export class SizeTool implements ExtensionDefinition {
     name: "SizeTool",
   };
   activation = {
-    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
   };
 
   private context?: ExtensionContext;
@@ -43,10 +43,11 @@ export class SizeTool implements ExtensionDefinition {
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
     const configService = context.services.getOrThrow<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     this.ensureDefaults(configService);
     this.emitStateChanged();
@@ -203,9 +204,7 @@ export class SizeTool implements ExtensionDefinition {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
+    return this.context?.services.get<ConfigurationService>(CONFIGURATION_SERVICE);
   }
 
   private ensureDefaults(configService: ConfigurationService) {

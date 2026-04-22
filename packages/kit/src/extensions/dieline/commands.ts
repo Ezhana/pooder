@@ -7,25 +7,7 @@ export function createDielineCommands(tool: any, state: any): CommandContributio
       id: "updateFeaturePosition",
       title: "Update Feature Position",
       handler: (groupId: string, x: number, y: number) => {
-        const configService = tool.context?.services.get("ConfigurationService");
-        if (!configService) return;
-
-        const features = configService.get("dieline.features") || [];
-
-        let changed = false;
-        const newFeatures = features.map((f: any) => {
-          if (f.groupId === groupId) {
-            if (f.x !== x || f.y !== y) {
-              changed = true;
-              return { ...f, x, y };
-            }
-          }
-          return f;
-        });
-
-        if (changed) {
-          configService.update("dieline.features", newFeatures);
-        }
+        tool.updateFeaturePosition(groupId, x, y);
       },
     },
     {

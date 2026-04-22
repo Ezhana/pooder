@@ -1,5 +1,6 @@
 import {
   COMMAND_SERVICE,
+  CommandService,
   CONFIGURATION_SERVICE,
   ExtensionContext,
   ExtensionContributions,
@@ -10,6 +11,7 @@ import {
 } from "@pooder/core";
 import { Pattern } from "fabric";
 import {
+  CANVAS_SERVICE,
   CanvasService,
   RenderEffectSpec,
   RenderObjectSpec,
@@ -76,7 +78,7 @@ export class FeatureTool implements ExtensionDefinition {
   activation = {
     requiresExtensions: ["pooder.kit.dieline"],
     requiresServices: [
-      "CanvasService",
+      CANVAS_SERVICE,
       CONFIGURATION_SERVICE,
       TOOL_SESSION_SERVICE,
       COMMAND_SERVICE,
@@ -120,8 +122,9 @@ export class FeatureTool implements ExtensionDefinition {
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
 
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
@@ -161,46 +164,45 @@ export class FeatureTool implements ExtensionDefinition {
       { priority: 350 },
     );
 
-    const configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    const configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
     );
-    if (configService) {
-      const features = (configService.get("dieline.features", []) ||
-        []) as ConstraintFeature[];
-      this.workingFeatures = this.cloneFeatures(features);
-      this.hasWorkingChanges = false;
+    const features = (configService.get("dieline.features", []) ||
+      []) as ConstraintFeature[];
+    this.workingFeatures = this.cloneFeatures(features);
+    this.hasWorkingChanges = false;
 
-      this.subscriptions.onConfigChange(
-        configService,
-        (e: { key: string; value: any }) => {
-          if (this.isUpdatingConfig) return;
+    this.subscriptions.onConfigChange(
+      configService,
+      (e: { key: string; value: any }) => {
+        if (this.isUpdatingConfig) return;
 
-          if (e.key === "dieline.features") {
-            if (this.isFeatureSessionActive && this.hasFeatureSessionDraft()) {
-              return;
-            }
-            if (this.hasFeatureSessionDraft()) {
-              this.clearFeatureSessionState();
-            }
-            const next = (e.value || []) as ConstraintFeature[];
-            this.workingFeatures = this.cloneFeatures(next);
-            this.hasWorkingChanges = false;
-            this.redraw();
-            this.emitWorkingChange();
+        if (e.key === "dieline.features") {
+          if (this.isFeatureSessionActive && this.hasFeatureSessionDraft()) {
             return;
           }
-
-          if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
-            void this.refreshGeometry();
-            this.redraw({ enforceConstraints: true });
+          if (this.hasFeatureSessionDraft()) {
+            this.clearFeatureSessionState();
           }
-        },
-      );
-    }
+          const next = (e.value || []) as ConstraintFeature[];
+          this.workingFeatures = this.cloneFeatures(next);
+          this.hasWorkingChanges = false;
+          this.redraw();
+          this.emitWorkingChange();
+          return;
+        }
 
-    const toolSessionService =
-      context.services.get<ToolSessionService>("ToolSessionService");
-    this.dirtyTrackerDisposable = toolSessionService?.registerDirtyTracker(
+        if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
+          void this.refreshGeometry();
+          this.redraw({ enforceConstraints: true });
+        }
+      },
+    );
+
+    const toolSessionService = context.services.getOrThrow<ToolSessionService>(
+      TOOL_SESSION_SERVICE,
+    );
+    this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
       this.id,
       () => this.hasWorkingChanges,
     );
@@ -365,9 +367,7 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
-    );
+    return this.context?.services.get<ConfigurationService>(CONFIGURATION_SERVICE);
   }
 
   private getCommittedFeatures(): ConstraintFeature[] {
@@ -419,7 +419,8 @@ export class FeatureTool implements ExtensionDefinition {
 
   private async refreshGeometry() {
     if (!this.context) return;
-    const commandService = this.context.services.get<any>("CommandService");
+    const commandService =
+      this.context.services.get<CommandService>(COMMAND_SERVICE);
     if (!commandService) return;
     try {
       const g = await Promise.resolve(
@@ -448,7 +449,7 @@ export class FeatureTool implements ExtensionDefinition {
     if (!groupId) return { ok: false };
 
     const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     if (!configService) return { ok: false };
 
@@ -496,7 +497,7 @@ export class FeatureTool implements ExtensionDefinition {
     }>;
   } {
     const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     if (!configService) {
       return {
@@ -618,7 +619,8 @@ export class FeatureTool implements ExtensionDefinition {
       );
     }
 
-    const commandService = this.context.services.get<any>("CommandService");
+    const commandService =
+      this.context.services.get<CommandService>(COMMAND_SERVICE);
     if (commandService) {
       try {
         Promise.resolve(commandService.executeCommand("getSceneGeometry")).then(

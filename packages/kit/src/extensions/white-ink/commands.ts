@@ -51,11 +51,7 @@ export function createWhiteInkCommands(tool: any): CommandContribution[] {
       id: "setWhiteInkPrintEnabled",
       title: "Set White Ink Preview Enabled",
       handler: (enabled: boolean) => {
-        tool.printWithWhiteInk = !!enabled;
-        const configService = tool.context?.services.get("ConfigurationService");
-        configService?.update("whiteInk.printWithWhiteInk", tool.printWithWhiteInk);
-        tool.updateWhiteInks();
-        return { ok: true };
+        return tool.setWhiteInkPrintEnabled(enabled);
       },
     },
     {
@@ -63,14 +59,7 @@ export function createWhiteInkCommands(tool: any): CommandContribution[] {
       id: "setWhiteInkPreviewImageVisible",
       title: "Set White Ink Cover Visible",
       handler: (visible: boolean) => {
-        tool.previewImageVisible = !!visible;
-        const configService = tool.context?.services.get("ConfigurationService");
-        configService?.update(
-          WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
-          tool.previewImageVisible,
-        );
-        tool.updateWhiteInks();
-        return { ok: true };
+        return tool.setWhiteInkPreviewImageVisible(visible);
       },
     },
     {

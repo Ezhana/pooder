@@ -6,7 +6,11 @@ import {
   ConfigurationService,
 } from "@pooder/core";
 import { FabricImage } from "fabric";
-import { CanvasService, RenderObjectSpec } from "../../services";
+import {
+  CANVAS_SERVICE,
+  CanvasService,
+  RenderObjectSpec,
+} from "../../services";
 import { FILM_LAYER_ID } from "../../shared/constants/layers";
 import {
   createSourceSizeCache,
@@ -26,7 +30,7 @@ export class FilmTool implements ExtensionDefinition {
     name: "FilmTool",
   };
   activation = {
-    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
   };
 
   private url: string = "";
@@ -58,8 +62,9 @@ export class FilmTool implements ExtensionDefinition {
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
 
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
@@ -77,31 +82,25 @@ export class FilmTool implements ExtensionDefinition {
       { priority: 500 },
     );
 
-    const configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    const configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
     );
-    if (configService) {
-      // Load initial config
-      this.url = configService.get("film.url", this.url);
-      this.opacity = configService.get("film.opacity", this.opacity);
+    this.url = configService.get("film.url", this.url);
+    this.opacity = configService.get("film.opacity", this.opacity);
 
-      // Listen for changes
-      this.subscriptions.onConfigChange(
-        configService,
-        (e: { key: string; value: any }) => {
-          if (e.key.startsWith("film.")) {
-            const prop = e.key.split(".")[1];
-            console.log(
-              `[FilmTool] Config change detected: ${e.key} -> ${e.value}`,
-            );
-            if (prop && prop in this) {
-              (this as any)[prop] = e.value;
-              this.updateFilm();
-            }
+    this.subscriptions.onConfigChange(
+      configService,
+      (e: { key: string; value: any }) => {
+        if (e.key.startsWith("film.")) {
+          const prop = e.key.split(".")[1];
+          console.log(`[FilmTool] Config change detected: ${e.key} -> ${e.value}`);
+          if (prop && prop in this) {
+            (this as any)[prop] = e.value;
+            this.updateFilm();
           }
         }
-      );
-    }
+      },
+    );
 
     this.subscriptions.on(context.eventBus, "canvas:resized", this.onCanvasResized);
     this.updateFilm();

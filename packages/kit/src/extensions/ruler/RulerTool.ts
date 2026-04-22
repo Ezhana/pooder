@@ -5,7 +5,11 @@ import {
   ExtensionContext,
   ConfigurationService,
 } from "@pooder/core";
-import { CanvasService, RenderObjectSpec } from "../../services";
+import {
+  CANVAS_SERVICE,
+  CanvasService,
+  RenderObjectSpec,
+} from "../../services";
 import {
   buildSceneGeometry,
   computeSceneLayout,
@@ -42,7 +46,7 @@ export class RulerTool implements ExtensionDefinition {
     name: "RulerTool",
   };
   activation = {
-    requiresServices: ["CanvasService", CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
   };
 
   private thickness = DEFAULT_THICKNESS;
@@ -80,8 +84,9 @@ export class RulerTool implements ExtensionDefinition {
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -106,48 +111,46 @@ export class RulerTool implements ExtensionDefinition {
       { priority: 400 },
     );
 
-    const configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    const configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
     );
-    if (configService) {
-      this.syncConfig(configService);
-      configService.onAnyChange((e: { key: string; value: any }) => {
-        let shouldUpdate = false;
-        if (e.key === RULER_DEBUG_KEY) {
-          this.debugEnabled = e.value === true;
+    this.syncConfig(configService);
+    configService.onAnyChange((e: { key: string; value: any }) => {
+      let shouldUpdate = false;
+      if (e.key === RULER_DEBUG_KEY) {
+        this.debugEnabled = e.value === true;
+        this.log("config:update", {
+          key: e.key,
+          raw: e.value,
+          normalized: this.debugEnabled,
+        });
+      } else if (e.key.startsWith("ruler.")) {
+        const prop = e.key.split(".")[1];
+        if (prop && prop in this) {
+          if (this.numericProps.has(prop)) {
+            (this as any)[prop] = this.toFiniteNumber(
+              e.value,
+              (this as any)[prop],
+            );
+          } else {
+            (this as any)[prop] = e.value;
+          }
+          shouldUpdate = true;
           this.log("config:update", {
             key: e.key,
             raw: e.value,
-            normalized: this.debugEnabled,
+            normalized: (this as any)[prop],
           });
-        } else if (e.key.startsWith("ruler.")) {
-          const prop = e.key.split(".")[1];
-          if (prop && prop in this) {
-            if (this.numericProps.has(prop)) {
-              (this as any)[prop] = this.toFiniteNumber(
-                e.value,
-                (this as any)[prop],
-              );
-            } else {
-              (this as any)[prop] = e.value;
-            }
-            shouldUpdate = true;
-            this.log("config:update", {
-              key: e.key,
-              raw: e.value,
-              normalized: (this as any)[prop],
-            });
-          }
-        } else if (e.key.startsWith("size.")) {
-          shouldUpdate = true;
-          this.log("size:update", { key: e.key, value: e.value });
         }
+      } else if (e.key.startsWith("size.")) {
+        shouldUpdate = true;
+        this.log("size:update", { key: e.key, value: e.value });
+      }
 
-        if (shouldUpdate) {
-          this.updateRuler();
-        }
-      });
-    }
+      if (shouldUpdate) {
+        this.updateRuler();
+      }
+    });
 
     context.eventBus.on("canvas:resized", this.onCanvasResized);
     this.updateRuler();
@@ -606,7 +609,7 @@ export class RulerTool implements ExtensionDefinition {
   private async updateRulerAsync() {
     if (!this.canvasService) return;
     const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     if (!configService) return;
 

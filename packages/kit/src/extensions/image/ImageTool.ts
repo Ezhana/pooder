@@ -17,7 +17,11 @@ import {
   Point,
   controlsUtils,
 } from "fabric";
-import { CanvasService, RenderObjectSpec } from "../../services";
+import {
+  CANVAS_SERVICE,
+  CanvasService,
+  RenderObjectSpec,
+} from "../../services";
 import {
   buildSceneGeometry,
   computeSceneLayout,
@@ -232,7 +236,7 @@ export class ImageTool implements ExtensionDefinition {
   };
   activation = {
     requiresServices: [
-      "CanvasService",
+      CANVAS_SERVICE,
       CONFIGURATION_SERVICE,
       TOOL_SESSION_SERVICE,
       WORKBENCH_SERVICE,
@@ -276,8 +280,9 @@ export class ImageTool implements ExtensionDefinition {
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService =
-      context.services.getOrThrow<CanvasService>("CanvasService");
+    this.canvasService = context.services.getOrThrow<CanvasService>(
+      CANVAS_SERVICE,
+    );
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -351,43 +356,41 @@ export class ImageTool implements ExtensionDefinition {
       this.onSceneGeometryChanged,
     );
 
-    const configService = context.services.get<ConfigurationService>(
-      "ConfigurationService",
+    const configService = context.services.getOrThrow<ConfigurationService>(
+      CONFIGURATION_SERVICE,
     );
-    if (configService) {
-      this.applyCommittedItems(configService.get("image.items", []) || []);
+    this.applyCommittedItems(configService.get("image.items", []) || []);
 
-      this.subscriptions.onConfigChange(
-        configService,
-        (e: { key: string; value: any }) => {
-          if (this.isUpdatingConfig) return;
+    this.subscriptions.onConfigChange(
+      configService,
+      (e: { key: string; value: any }) => {
+        if (this.isUpdatingConfig) return;
 
-          if (e.key === "image.items") {
-            this.applyCommittedItems(e.value || []);
-            this.updateImages();
-            return;
+        if (e.key === "image.items") {
+          this.applyCommittedItems(e.value || []);
+          this.updateImages();
+          return;
+        }
+
+        if (
+          e.key.startsWith("size.") ||
+          e.key.startsWith("image.frame.") ||
+          e.key.startsWith("image.session.") ||
+          e.key.startsWith("image.control.")
+        ) {
+          if (e.key === "image.session.placementPolicy") {
+            this.clearSessionNotice();
           }
-
-          if (
-            e.key.startsWith("size.") ||
-            e.key.startsWith("image.frame.") ||
-            e.key.startsWith("image.session.") ||
-            e.key.startsWith("image.control.")
-          ) {
-            if (e.key === "image.session.placementPolicy") {
-              this.clearSessionNotice();
-            }
-            if (e.key.startsWith("image.control.")) {
-              this.imageControlsByCapabilityKey.clear();
-            }
-            this.updateImages();
+          if (e.key.startsWith("image.control.")) {
+            this.imageControlsByCapabilityKey.clear();
           }
-        },
-      );
-    }
+          this.updateImages();
+        }
+      },
+    );
 
     const toolSessionService = context.services.getOrThrow<ToolSessionService>(
-      "ToolSessionService",
+      TOOL_SESSION_SERVICE,
     );
     this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
       this.id,
@@ -834,7 +837,7 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private syncToolActiveFromWorkbench(fallbackId?: string | null) {
-    const wb = this.context?.services.get<WorkbenchService>("WorkbenchService");
+    const wb = this.context?.services.get<WorkbenchService>(WORKBENCH_SERVICE);
     const activeId = wb?.activeToolId;
     if (typeof activeId === "string" || activeId === null) {
       this.isToolActive = activeId === this.id;
@@ -1252,7 +1255,7 @@ export class ImageTool implements ExtensionDefinition {
   private getConfig<T>(key: string, fallback?: T): T | undefined {
     if (!this.context) return fallback;
     const configService = this.context.services.get<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     if (!configService) return fallback;
     return (configService.get(key, fallback) as T) ?? fallback;
@@ -1282,7 +1285,7 @@ export class ImageTool implements ExtensionDefinition {
       this,
       () => {
         const configService = this.context?.services.get<ConfigurationService>(
-          "ConfigurationService",
+          CONFIGURATION_SERVICE,
         );
         configService?.update("image.items", this.items);
 
@@ -1296,7 +1299,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private getFrameRect(): FrameRect {
     const configService = this.context?.services.get<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     return resolveCutFrameRect(this.canvasService, configService);
   }
@@ -1506,7 +1509,7 @@ export class ImageTool implements ExtensionDefinition {
       return null;
     }
     const configService = this.context.services.get<ConfigurationService>(
-      "ConfigurationService",
+      CONFIGURATION_SERVICE,
     );
     if (!configService) {
       return null;
@@ -2033,8 +2036,9 @@ export class ImageTool implements ExtensionDefinition {
 
   private async completeImageSession() {
     const sessionState =
-      this.context?.services.get<ToolSessionService>("ToolSessionService");
-    const workbench = this.context?.services.get<any>("WorkbenchService");
+      this.context?.services.get<ToolSessionService>(TOOL_SESSION_SERVICE);
+    const workbench =
+      this.context?.services.get<WorkbenchService>(WORKBENCH_SERVICE);
     console.info("[ImageTool] completeImageSession:start", {
       activeToolId: workbench?.activeToolId ?? null,
       isToolActive: this.isToolActive,

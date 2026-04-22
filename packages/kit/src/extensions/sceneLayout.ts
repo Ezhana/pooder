@@ -1,1 +1,1 @@
-export { SceneLayoutService } from "../services/SceneLayoutService";
+export { SceneLayoutService } from "../services/browser/SceneLayoutService";

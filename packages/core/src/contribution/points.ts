@@ -1,9 +1,3 @@
-export interface ContributionPoint<T = any> {
-  id: string;
-  description?: string;
-  validate?: (data: T) => boolean;
-}
-
 export interface CommandContribution {
   id: string;
   command: string;
@@ -62,9 +56,3 @@ export interface ExtensionContributions {
   commands?: CommandContribution[];
   tools?: ToolContribution[];
 }
-
-export const ContributionPointIds = {
-  COMMANDS: "contribution.point.commands",
-  TOOLS: "contribution.point.tools",
-  CONFIGURATIONS: "contribution.point.configurations",
-} as const;
