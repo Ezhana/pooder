@@ -93,19 +93,19 @@
 </template>
 
 <script setup lang="ts">
-import { inject, onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import {
   ConfigurationService,
-  Pooder,
   RegisteredConfigurationDefinition,
 } from "@pooder/core";
+import { usePooderRuntime } from "../runtime";
 
 type ConfigGroup = {
   extensionId: string;
   items: RegisteredConfigurationDefinition[];
 };
 
-const pooder = inject<Pooder>("pooder");
+const pooder = usePooderRuntime();
 const configurations = ref<ConfigGroup[]>([]);
 const values = ref<Record<string, any>>({});
 let configService: ConfigurationService | undefined;
@@ -159,10 +159,6 @@ const updateConfig = (key: string, value: any) => {
 
 onMounted(() => {
   refreshConfigs();
-
-  if (!pooder) {
-    return;
-  }
 
   configService = pooder.services.get<ConfigurationService>(
     "ConfigurationService",

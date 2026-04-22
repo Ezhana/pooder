@@ -1,31 +1,23 @@
 <template>
   <div class="custom-activity-bar">
-    <div 
-      v-for="tool in tools" 
+    <button
+      v-for="tool in tools"
       :key="tool.id"
+      type="button"
       class="tool-btn"
       :class="{ active: activeTool === tool.id }"
       @click="activate(tool.id)"
     >
       {{ tool.label }}
-    </div>
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onUnmounted, watch } from "vue";
-import type { PooderEditorExposed } from "@pooder/vue";
+import { onMounted, onUnmounted, ref } from "vue";
+import { usePooderRuntime } from "@pooder/vue";
 
-const props = defineProps<{
-  editor: PooderEditorExposed | null;
-}>();
-
-const editor = computed(() => {
-  const e = props.editor;
-  if (e && typeof e === "object" && "value" in e) return e.value;
-  return e;
-});
-
+const runtime = usePooderRuntime();
 const activeTool = ref("");
 
 const tools = [
@@ -37,37 +29,23 @@ const tools = [
 ];
 
 const activate = (id: string) => {
-  if (editor.value) {
-    void editor.value.activateTool(id);
+  if (activeTool.value === id) {
+    runtime.eventBus.emit("tool:clicked", { id });
   }
+  void runtime.workbench.activate(id);
 };
 
 const updateActiveTool = (event: { id: string | null }) => {
   activeTool.value = event.id || "";
 };
 
-watch(
-  editor,
-  (nextEditor, previousEditor) => {
-    if (previousEditor) {
-      previousEditor.off("tool:activated", updateActiveTool);
-    }
-    if (nextEditor) {
-      nextEditor.on("tool:activated", updateActiveTool);
-      if (nextEditor.services && nextEditor.services.workbench) {
-        activeTool.value = nextEditor.services.workbench.activeToolId || "";
-      }
-    } else {
-      activeTool.value = "";
-    }
-  },
-  { immediate: true },
-);
+onMounted(() => {
+  runtime.eventBus.on("tool:activated", updateActiveTool);
+  activeTool.value = runtime.workbench.activeToolId || "";
+});
 
 onUnmounted(() => {
-  if (editor.value) {
-    editor.value.off("tool:activated", updateActiveTool);
-  }
+  runtime.eventBus.off("tool:activated", updateActiveTool);
 });
 </script>
 
@@ -77,10 +55,10 @@ onUnmounted(() => {
   right: 20px;
   top: 50%;
   transform: translateY(-50%);
-  background: white;
+  background: rgba(255, 255, 255, 0.92);
   padding: 10px;
-  border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -90,18 +68,20 @@ onUnmounted(() => {
 .tool-btn {
   padding: 10px 20px;
   cursor: pointer;
-  border-radius: 4px;
-  background: #f0f0f0;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: #f8fafc;
   text-align: center;
   user-select: none;
+  font-weight: 600;
 }
 
 .tool-btn:hover {
-  background: #e0e0e0;
+  background: #eef2ff;
 }
 
 .tool-btn.active {
-  background: #007bff;
+  background: #0f172a;
   color: white;
 }
 </style>

@@ -1,6 +1,5 @@
-import PooderEditor from "./PooderEditor.vue";
-export { PooderEditor };
-export * from "./model";
+import PooderCanvasHost from "./PooderCanvasHost.vue";
+import PooderRuntimeProvider from "./PooderRuntimeProvider.vue";
 
-export * from "@pooder/core";
-export * from "@pooder/kit";
+export { PooderRuntimeProvider, PooderCanvasHost };
+export { POODER_RUNTIME_KEY, usePooderRuntime } from "./runtime";

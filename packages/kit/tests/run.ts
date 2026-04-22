@@ -27,10 +27,24 @@ import {
 } from "../src/extensions/featureCoordinates";
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
 import { WhiteInkTool } from "../src/extensions/white-ink/WhiteInkTool";
-import { Pooder, ToolRegistryService } from "@pooder/core";
+import { DielineWorkflowExtension } from "../src/extensions/dieline-workflow";
+import {
+  COMMAND_SERVICE,
+  type CommandContribution,
+  type CommandService,
+  type ExtensionDefinition,
+  Pooder,
+  ToolRegistryService,
+} from "@pooder/core";
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
+}
+
+function assertEqual<T>(actual: T, expected: T, message: string) {
+  if (actual !== expected) {
+    throw new Error(`${message} (expected ${String(expected)}, got ${String(actual)})`);
+  }
 }
 
 class FakeCanvasService {
@@ -125,6 +139,27 @@ class FakeCanvasService {
   getPassObjects() {
     return [];
   }
+}
+
+function createCommandExtension(
+  id: string,
+  options: {
+    activation?: ExtensionDefinition["activation"];
+    commands?: CommandContribution[];
+    tools?: Array<{ id: string; name: string; interaction: "instant" | "session" | "hybrid" }>;
+  } = {},
+): ExtensionDefinition {
+  return {
+    id,
+    activation: options.activation,
+    contribute() {
+      return {
+        commands: options.commands ?? [],
+        tools: options.tools ?? [],
+      };
+    },
+    activate() {},
+  };
 }
 
 function testWrappedOffsets() {
@@ -654,6 +689,286 @@ async function testExtensionDependencyActivation() {
   );
 }
 
+async function testDielineWorkflowExtensionActivation() {
+  const runtime = new Pooder();
+  const commandService =
+    runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
+
+  runtime.extensions.register(new DielineWorkflowExtension());
+  runtime.extensions.register(
+    createCommandExtension("pooder.kit.image", {
+      activation: {
+        requiresServices: ["CanvasService"],
+      },
+      tools: [
+        {
+          id: "pooder.kit.image",
+          name: "Image",
+          interaction: "session",
+        },
+      ],
+      commands: [
+        {
+          id: "upsertImage",
+          command: "upsertImage",
+          title: "Upsert Image",
+          handler: async () => ({ id: "image-1", mode: "add" as const }),
+        },
+        {
+          id: "exportUserCroppedImage",
+          command: "exportUserCroppedImage",
+          title: "Export User Cropped Image",
+          handler: async () => ({
+            url: "blob:frame",
+            width: 100,
+            height: 80,
+            multiplier: 2,
+            format: "png" as const,
+            imageIds: ["image-1"],
+          }),
+        },
+      ],
+    }),
+  );
+  runtime.extensions.register(
+    createCommandExtension("pooder.kit.dieline", {
+      activation: {
+        requiresServices: ["CanvasService"],
+      },
+      commands: [
+        {
+          id: "detectEdge",
+          command: "detectEdge",
+          title: "Detect Edge",
+          handler: async () => ({
+            pathData: "M0 0",
+          }),
+        },
+      ],
+    }),
+  );
+
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState("pooder.kit.dieline-workflow")?.state,
+    "pending",
+    "workflow extension should stay pending until its hard dependencies are active",
+  );
+  assertEqual(
+    commandService.getCommand("detectDielineFromFrame"),
+    undefined,
+    "workflow commands should not leak before activation",
+  );
+
+  runtime.services.register(new FakeCanvasService() as any, "CanvasService");
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState("pooder.kit.dieline-workflow")?.state,
+    "active",
+    "workflow extension should activate once image and dieline dependencies are ready",
+  );
+  assert(
+    !!commandService.getCommand("detectDielineFromFrame"),
+    "workflow command should register after activation",
+  );
+  assert(
+    !!commandService.getCommand("uploadAndDetectEdge"),
+    "uploadAndDetectEdge should register after activation",
+  );
+}
+
+async function testDielineWorkflowExtensionCommands() {
+  const runtime = new Pooder();
+  const exportResponses = [
+    {
+      url: "blob:preview-source",
+      width: 120,
+      height: 80,
+      multiplier: 2,
+      format: "png" as const,
+      imageIds: ["image-1"],
+    },
+    {
+      url: "blob:commit-source",
+      width: 120,
+      height: 80,
+      multiplier: 2,
+      format: "png" as const,
+      imageIds: ["image-1"],
+    },
+    {
+      url: "blob:verify-source",
+      width: 120,
+      height: 80,
+      multiplier: 2,
+      format: "png" as const,
+      imageIds: ["image-1"],
+    },
+  ];
+  const detectResponses = [
+    {
+      pathData: "M0 0 L1 1",
+      rawBounds: { x: 8, y: 10, width: 90, height: 56 },
+      baseBounds: { x: 12, y: 14, width: 82, height: 48 },
+      imageWidth: 120,
+      imageHeight: 80,
+    },
+    {
+      pathData: "M2 2 L3 3",
+      rawBounds: { x: 6, y: 8, width: 96, height: 60 },
+      baseBounds: { x: 12, y: 14, width: 84, height: 48 },
+      imageWidth: 120,
+      imageHeight: 80,
+    },
+    {
+      pathData: "M4 4 L5 5",
+      rawBounds: { x: 4, y: 6, width: 104, height: 68 },
+      baseBounds: { x: 12, y: 14, width: 88, height: 52 },
+      imageWidth: 120,
+      imageHeight: 80,
+    },
+    {
+      pathData: "M6 6 L7 7",
+      rawBounds: { x: 10, y: 12, width: 88, height: 52 },
+      baseBounds: { x: 14, y: 16, width: 80, height: 44 },
+      imageWidth: 120,
+      imageHeight: 80,
+    },
+  ];
+
+  runtime.extensions.register(new DielineWorkflowExtension());
+  runtime.extensions.register(
+    createCommandExtension("pooder.kit.image", {
+      commands: [
+        {
+          id: "upsertImage",
+          command: "upsertImage",
+          title: "Upsert Image",
+          handler: async () => ({ id: "image-99", mode: "add" as const }),
+        },
+        {
+          id: "exportUserCroppedImage",
+          command: "exportUserCroppedImage",
+          title: "Export User Cropped Image",
+          handler: async () => exportResponses.shift() ?? null,
+        },
+      ],
+    }),
+  );
+  runtime.extensions.register(
+    createCommandExtension("pooder.kit.dieline", {
+      commands: [
+        {
+          id: "detectEdge",
+          command: "detectEdge",
+          title: "Detect Edge",
+          handler: async () => detectResponses.shift() ?? null,
+        },
+      ],
+    }),
+  );
+
+  await runtime.extensions.flushActivation();
+
+  const preview = await runtime.commands.execute<{
+    pathData: string;
+    diagnostics?: { sourceWidth: number };
+    sourceImage?: { url: string };
+    postCommitDiagnostics?: unknown;
+  }>("detectDielineFromFrame", {
+    commit: false,
+    detect: {
+      expand: 6,
+    },
+    inspect: {
+      includeCroppedImage: true,
+      includeDiagnostics: true,
+    },
+  });
+
+  assertEqual(
+    preview.pathData,
+    "M0 0 L1 1",
+    "preview branch should return the first detectEdge result",
+  );
+  assertEqual(
+    preview.diagnostics?.sourceWidth,
+    120,
+    "preview branch should compute frame diagnostics",
+  );
+  assertEqual(
+    preview.sourceImage?.url,
+    "blob:preview-source",
+    "preview branch should retain the exported source image when requested",
+  );
+  assertEqual(
+    runtime.config.get("dieline.shape"),
+    undefined,
+    "preview branch should not commit dieline config",
+  );
+
+  const committed = await runtime.commands.execute<{
+    pathData: string;
+    postCommitDiagnostics?: { expectedExpand: number; margin?: { left: number } | null };
+  }>("detectDielineFromFrame", {
+    detect: {
+      expand: 6,
+    },
+    inspect: {
+      includeDiagnostics: true,
+    },
+  });
+
+  assertEqual(
+    committed.pathData,
+    "M2 2 L3 3",
+    "commit branch should return the committed detectEdge result",
+  );
+  assertEqual(
+    runtime.config.get("dieline.shape"),
+    "custom",
+    "commit branch should update the dieline shape",
+  );
+  assertEqual(
+    runtime.config.get("dieline.pathData"),
+    "M2 2 L3 3",
+    "commit branch should update the dieline path data",
+  );
+  assertEqual(
+    runtime.config.get("size.cutMode"),
+    "trim",
+    "commit branch should normalize the cut mode",
+  );
+  assertEqual(
+    committed.postCommitDiagnostics?.expectedExpand,
+    6,
+    "commit branch should report post-commit diagnostics when requested",
+  );
+  assertEqual(
+    committed.postCommitDiagnostics?.margin?.left,
+    8,
+    "post-commit diagnostics should be derived from raw/base bounds",
+  );
+
+  const uploaded = await runtime.commands.execute<{
+    imageId: string;
+    pathData: string;
+  }>("uploadAndDetectEdge", "https://example.com/image.png");
+
+  assertEqual(
+    uploaded.imageId,
+    "image-99",
+    "uploadAndDetectEdge should return the upserted image id",
+  );
+  assertEqual(
+    uploaded.pathData,
+    "M6 6 L7 7",
+    "uploadAndDetectEdge should return the detectEdge path",
+  );
+}
+
 async function main() {
   testWrappedOffsets();
   testBridgeSelection();
@@ -664,6 +979,8 @@ async function main() {
   testImageViewStateHelper();
   testContributionCompatibility();
   await testExtensionDependencyActivation();
+  await testDielineWorkflowExtensionActivation();
+  await testDielineWorkflowExtensionCommands();
   console.log("ok");
 }
 

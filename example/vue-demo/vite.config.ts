@@ -11,6 +11,7 @@ export default defineConfig({
         __dirname,
         "../../packages/core/src/index.ts",
       ),
+      "@pooder/kit": path.resolve(__dirname, "../../packages/kit/src/index.ts"),
     },
   },
 });

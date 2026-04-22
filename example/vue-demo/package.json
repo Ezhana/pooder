@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@pooder/core": "workspace:*",
+    "@pooder/kit": "workspace:*",
     "vue": "^3.4.0",
     "@pooder/vue": "workspace:*"
   },

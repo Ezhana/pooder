@@ -28,18 +28,18 @@
 </template>
 
 <script setup lang="ts">
-import { inject, onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import {
   COMMAND_SERVICE,
-  Pooder,
   ToolContribution,
   ToolRegistryService,
   WorkbenchService,
   WORKBENCH_SERVICE,
 } from "@pooder/core";
 import ConfigurationPanel from "./ConfigurationPanel.vue";
+import { usePooderRuntime } from "../runtime";
 
-const pooder = inject<Pooder>("pooder");
+const pooder = usePooderRuntime();
 const tools = ref<ToolContribution[]>([]);
 const commands = ref<Array<{ id: string; title?: string }>>([]);
 
@@ -83,15 +83,11 @@ const activateTool = async (id: string) => {
 
 onMounted(() => {
   refreshLists();
-  if (pooder) {
-    pooder.eventBus.on("extension:state-change", refreshLists);
-  }
+  pooder.eventBus.on("extension:state-change", refreshLists);
 });
 
 onUnmounted(() => {
-  if (pooder) {
-    pooder.eventBus.off("extension:state-change", refreshLists);
-  }
+  pooder.eventBus.off("extension:state-change", refreshLists);
 });
 </script>
 
