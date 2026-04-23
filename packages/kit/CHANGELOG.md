@@ -1,5 +1,16 @@
 # @pooder/kit
 
+## 7.0.0
+
+### Major Changes
+
+- Rebuild the runtime boundaries around a headless core, explicit kit capability dependencies, and a shell-only Vue package.
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/core@3.0.0
+
 ## 6.3.1
 
 ### Patch Changes

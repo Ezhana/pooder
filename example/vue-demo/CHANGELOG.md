@@ -1,5 +1,14 @@
 # vue-demo
 
+## 3.1.2
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/core@3.0.0
+  - @pooder/kit@7.0.0
+  - @pooder/vue@5.0.0
+
 ## 3.1.1
 
 ### Patch Changes
