@@ -1,17 +1,17 @@
 import type { ConfigurationService } from "@pooder/core";
-import type { CanvasService } from "@pooder/platform-browser";
-import { Coordinate, Unit } from "../../coordinate";
-import { parseLengthToMm } from "../../units";
+import type CanvasService from "../CanvasService";
+import { Coordinate, Unit } from "../coordinate";
+import { parseLengthToMm } from "../units";
 import {
   DEFAULT_DIELINE_SHAPE,
   DEFAULT_DIELINE_SHAPE_STYLE,
   normalizeShapeStyle,
   normalizeDielineShape,
-} from "../../extensions/dielineShape";
+} from "../dielineShape";
 import type {
   DielineShape,
   DielineShapeStyle,
-} from "../../extensions/dielineShape";
+} from "../dielineShape";
 
 export type SizeConstraintMode = "free" | "lockAspect" | "equal";
 export type CutMode = "trim" | "outset" | "inset";

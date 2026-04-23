@@ -14,7 +14,6 @@ import {
   isMaskConnected8,
 } from "../src/extensions/maskOps";
 import { computeDetectEdgeSize } from "../src/extensions/edgeScale";
-import { evaluateVisibilityExpr } from "../src/services/browser/visibility";
 import { createImageCommands } from "../src/extensions/image/commands";
 import { createImageConfigurations } from "../src/extensions/image/config";
 import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
@@ -28,7 +27,7 @@ import {
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
 import { WhiteInkTool } from "../src/extensions/white-ink/WhiteInkTool";
 import { DielineWorkflowExtension } from "../src/extensions/dieline-workflow";
-import { CANVAS_SERVICE } from "../src/services";
+import { CANVAS_SERVICE, evaluateVisibilityExpr } from "@pooder/platform-browser";
 import {
   COMMAND_SERVICE,
   type CommandContribution,

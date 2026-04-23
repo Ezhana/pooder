@@ -7,7 +7,7 @@ import {
   normalizeDielineShape,
 } from "../dielineShape";
 import type { DielineShape, DielineShapeStyle } from "../dielineShape";
-import { readSizeState } from "../../shared/scene/sceneLayoutModel";
+import { readSizeState } from "@pooder/platform-browser";
 import type { DielineFeature } from "../geometry";
 
 export interface DielineGeometry {

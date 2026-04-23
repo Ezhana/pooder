@@ -12,6 +12,10 @@ export default defineConfig({
         "../../packages/core/src/index.ts",
       ),
       "@pooder/kit": path.resolve(__dirname, "../../packages/kit/src/index.ts"),
+      "@pooder/platform-browser": path.resolve(
+        __dirname,
+        "../../packages/platform-browser/src/index.ts",
+      ),
     },
   },
 });

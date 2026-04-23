@@ -14,8 +14,8 @@ import {
   readSizeState,
   type SceneGeometrySnapshot,
   type SceneLayoutSnapshot,
-} from "@pooder/platform-browser";
-import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+} from "./scene/sceneLayoutModel";
+import { SubscriptionBag } from "./subscriptions";
 
 interface ConfigChangeEvent {
   key: string;

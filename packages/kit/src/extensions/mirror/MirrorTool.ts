@@ -5,7 +5,7 @@ import {
   ExtensionDefinition,
   ExtensionContext,
 } from "@pooder/core";
-import { CANVAS_SERVICE, CanvasService } from "../../services";
+import { CANVAS_SERVICE, CanvasService } from "@pooder/platform-browser";
 
 export class MirrorTool implements ExtensionDefinition {
   id = "pooder.kit.mirror";

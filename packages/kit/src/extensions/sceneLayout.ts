@@ -1,1 +1,1 @@
-export { SceneLayoutService } from "../services/browser/SceneLayoutService";
+export { SceneLayoutService } from "@pooder/platform-browser";

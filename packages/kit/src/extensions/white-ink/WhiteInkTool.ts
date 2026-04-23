@@ -14,7 +14,7 @@ import {
   CanvasService,
   RenderLayoutRect,
   RenderObjectSpec,
-} from "../../services";
+} from "@pooder/platform-browser";
 import {
   type FrameRect,
   resolveCutFrameRect,

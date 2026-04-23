@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@pooder/core": "workspace:*",
-    "@pooder/kit": "workspace:*"
+    "@pooder/platform-browser": "workspace:*"
   },
   "peerDependencies": {
     "vue": "^3.0.0"

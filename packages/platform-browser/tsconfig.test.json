@@ -3,16 +3,12 @@
     "target": "ES2020",
     "module": "CommonJS",
     "lib": ["ES2020", "DOM"],
-    "baseUrl": ".",
     "moduleResolution": "Node",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,
     "outDir": ".test-dist",
-    "rootDir": ".",
-    "paths": {
-      "@pooder/platform-browser": ["../platform-browser/src/index.ts"]
-    }
+    "rootDir": "."
   },
   "include": ["tests/**/*.ts", "src/**/*.ts"]
 }

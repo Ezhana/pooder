@@ -11,14 +11,14 @@ import {
   CanvasService,
   RenderEffectSpec,
   RenderObjectSpec,
-} from "../../services";
+} from "@pooder/platform-browser";
 import { generateDielinePath } from "../geometry";
 import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   readSizeState,
-} from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
 import {
   DIELINE_LAYER_ID,
   IMAGE_OBJECT_LAYER_ID,

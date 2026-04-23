@@ -21,14 +21,14 @@ import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "../../services";
+} from "@pooder/platform-browser";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   readSizeState,
   type SceneGeometrySnapshot,
   type SceneLayoutSnapshot,
-} from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
 import { type FrameRect, resolveCutFrameRect } from "../../shared/scene/frame";
 import {
   createSourceSizeCache,

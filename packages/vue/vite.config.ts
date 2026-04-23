@@ -7,6 +7,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@pooder/core": resolve(__dirname, "../core/src/index.ts"),
+      "@pooder/platform-browser": resolve(
+        __dirname,
+        "../platform-browser/src/index.ts",
+      ),
     },
   },
   plugins: [
@@ -23,12 +27,12 @@ export default defineConfig({
       fileName: (format) => `index.${format}.js`,
     },
     rollupOptions: {
-      external: ["vue", "@pooder/core", "@pooder/kit"],
+      external: ["vue", "@pooder/core", "@pooder/platform-browser"],
       output: {
         globals: {
           vue: "Vue",
           "@pooder/core": "PooderCore",
-          "@pooder/kit": "PooderKit",
+          "@pooder/platform-browser": "PooderPlatformBrowser",
         },
       },
     },

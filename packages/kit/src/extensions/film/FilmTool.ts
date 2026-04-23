@@ -10,7 +10,7 @@ import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "../../services";
+} from "@pooder/platform-browser";
 import { FILM_LAYER_ID } from "../../shared/constants/layers";
 import {
   createSourceSizeCache,

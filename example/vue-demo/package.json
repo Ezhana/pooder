@@ -11,6 +11,7 @@
   "dependencies": {
     "@pooder/core": "workspace:*",
     "@pooder/kit": "workspace:*",
+    "@pooder/platform-browser": "workspace:*",
     "vue": "^3.4.0",
     "@pooder/vue": "workspace:*"
   },

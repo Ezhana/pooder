@@ -3,12 +3,11 @@
 </template>
 
 <script setup lang="ts">
-import type { Pooder } from "@pooder/core";
 import { provide } from "vue";
-import { POODER_RUNTIME_KEY } from "./runtime";
+import { POODER_RUNTIME_KEY, type PooderRuntimeLike } from "./runtime";
 
 const props = defineProps<{
-  runtime: Pooder;
+  runtime: PooderRuntimeLike;
 }>();
 
 provide(POODER_RUNTIME_KEY, props.runtime);

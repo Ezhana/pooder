@@ -1,10 +1,10 @@
 import type { Pattern } from "fabric";
-import type { RenderObjectSpec } from "../../services";
+import type { RenderObjectSpec } from "@pooder/platform-browser";
 import type {
   SceneGeometrySnapshot,
   SceneLayoutSnapshot,
   SceneRect,
-} from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
 import { generateDielinePath } from "../geometry";
 
 export interface ImageSessionOverlayVisualConfig {

@@ -5,18 +5,15 @@
 </template>
 
 <script setup lang="ts">
-import type { Pooder } from "@pooder/core";
 import { onMounted, onUnmounted, ref } from "vue";
 import {
-  CANVAS_SERVICE,
-  CanvasService,
-  SCENE_LAYOUT_SERVICE,
-  SceneLayoutService,
-} from "@pooder/kit";
-import { usePooderRuntime } from "./runtime";
+  attachBrowserHost,
+  type BrowserHostAttachment,
+} from "@pooder/platform-browser";
+import { usePooderRuntime, type PooderRuntimeLike } from "./runtime";
 
 const props = defineProps<{
-  runtime?: Pooder;
+  runtime?: PooderRuntimeLike;
 }>();
 
 const emit = defineEmits<{
@@ -27,12 +24,9 @@ const injectedRuntime = props.runtime ? null : usePooderRuntime();
 const container = ref<HTMLDivElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 
-let resizeObserver: ResizeObserver | null = null;
-let registeredRuntime: Pooder | null = null;
-let canvasService: CanvasService | null = null;
-let sceneLayoutService: SceneLayoutService | null = null;
+let browserHost: BrowserHostAttachment | null = null;
 
-function getRuntime(): Pooder {
+function getRuntime(): PooderRuntimeLike {
   return props.runtime ?? injectedRuntime!;
 }
 
@@ -42,54 +36,17 @@ onMounted(() => {
   }
 
   const runtime = getRuntime();
-  const width = container.value.clientWidth;
-  const height = container.value.clientHeight;
-
-  canvas.value.width = width;
-  canvas.value.height = height;
-
-  canvasService = new CanvasService(canvas.value, {
-    eventBus: runtime.eventBus,
+  browserHost = attachBrowserHost(runtime as any, {
+    canvas: canvas.value,
+    container: container.value,
   });
-  sceneLayoutService = new SceneLayoutService();
-  runtime.services.register(canvasService, CANVAS_SERVICE);
-  runtime.services.register(sceneLayoutService, SCENE_LAYOUT_SERVICE);
-  registeredRuntime = runtime;
 
   emit("ready");
-
-  resizeObserver = new ResizeObserver((entries) => {
-    const currentCanvasService = canvasService;
-    if (!currentCanvasService) {
-      return;
-    }
-
-    for (const entry of entries) {
-      const nextWidth = entry.contentRect.width;
-      const nextHeight = entry.contentRect.height;
-      currentCanvasService.resize(nextWidth, nextHeight);
-    }
-  });
-  resizeObserver.observe(container.value);
 });
 
 onUnmounted(() => {
-  resizeObserver?.disconnect();
-  resizeObserver = null;
-
-  if (registeredRuntime && sceneLayoutService) {
-    registeredRuntime.services.unregister(
-      sceneLayoutService,
-      SCENE_LAYOUT_SERVICE,
-    );
-  }
-  if (registeredRuntime && canvasService) {
-    registeredRuntime.services.unregister(canvasService, CANVAS_SERVICE);
-  }
-
-  sceneLayoutService = null;
-  canvasService = null;
-  registeredRuntime = null;
+  browserHost?.dispose();
+  browserHost = null;
 });
 </script>
 

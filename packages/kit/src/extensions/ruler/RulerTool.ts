@@ -9,13 +9,13 @@ import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "../../services";
+} from "@pooder/platform-browser";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   fromMm,
   readSizeState,
-} from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
 import type { Unit } from "../../coordinate";
 import { RULER_LAYER_ID } from "../../shared/constants/layers";
 const EXTENSION_LINE_LENGTH = 5;

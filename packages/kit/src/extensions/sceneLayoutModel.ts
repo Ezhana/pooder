@@ -1,1 +1,1 @@
-export * from "../shared/scene/sceneLayoutModel";
+export * from "@pooder/platform-browser";

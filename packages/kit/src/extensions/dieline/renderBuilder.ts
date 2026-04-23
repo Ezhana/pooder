@@ -3,8 +3,8 @@ import type {
   RenderEffectSpec,
   RenderObjectSpec,
   VisibilityExpr,
-} from "../../services";
-import type { SceneLayoutSnapshot } from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
+import type { SceneLayoutSnapshot } from "@pooder/platform-browser";
 import { generateBleedZonePath, generateDielinePath } from "../geometry";
 import {
   projectPlacedFeatures,

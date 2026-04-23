@@ -10,12 +10,12 @@ import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "../../services";
+} from "@pooder/platform-browser";
 import {
   computeSceneLayout,
   readSizeState,
   type SceneLayoutSnapshot,
-} from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
 import { BACKGROUND_LAYER_ID } from "../../shared/constants/layers";
 import {
   createSourceSizeCache,

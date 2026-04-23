@@ -1,7 +1,7 @@
 {
-  "name": "@pooder/kit",
-  "version": "7.0.0",
-  "description": "Standard plugins for Pooder editor",
+  "name": "@pooder/platform-browser",
+  "version": "1.0.0",
+  "description": "Browser host services for Pooder runtimes",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -16,15 +16,13 @@
   "publishConfig": {
     "access": "public"
   },
-  "devDependencies": {
-    "@types/paper": "^0.12.3",
-    "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
-  },
   "dependencies": {
     "@pooder/core": "workspace:*",
-    "@pooder/platform-browser": "workspace:*",
-    "paper": "^0.12.18",
     "fabric": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.8.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
   }
 }

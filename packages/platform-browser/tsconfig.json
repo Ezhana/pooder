@@ -2,16 +2,12 @@
   "compilerOptions": {
     "target": "es2018",
     "module": "esnext",
-    "baseUrl": ".",
     "moduleResolution": "bundler",
     "lib": ["esnext", "dom"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "declaration": true,
-    "paths": {
-      "@pooder/platform-browser": ["../platform-browser/src/index.ts"]
-    }
+    "declaration": true
   },
   "include": ["src"]
 }

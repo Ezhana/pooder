@@ -1,1 +1,1 @@
-export type { RenderEffectSpec, RenderObjectSpec } from "../../services";
+export type { RenderEffectSpec, RenderObjectSpec } from "@pooder/platform-browser";

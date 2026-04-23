@@ -16,7 +16,7 @@ import {
   RenderEffectSpec,
   RenderObjectSpec,
   RenderPassSpec,
-} from "../../services";
+} from "@pooder/platform-browser";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
 import { resolveFeaturePlacements } from "../featurePlacement";
@@ -24,7 +24,7 @@ import {
   computeSceneLayout,
   readSizeState,
   type SceneGeometrySnapshot as DielineGeometry,
-} from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
 import {
   DIELINE_LAYER_ID,
   FEATURE_DIELINE_LAYER_ID,

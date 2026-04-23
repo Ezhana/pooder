@@ -5,7 +5,7 @@ import {
   ConfigurationService,
   ExtensionContext,
 } from "@pooder/core";
-import { CANVAS_SERVICE, CanvasService } from "../../services";
+import { CANVAS_SERVICE, CanvasService } from "@pooder/platform-browser";
 import {
   fromMm,
   normalizeConstraintMode,
@@ -16,7 +16,7 @@ import {
   toMm,
   type SizeConstraintMode,
   computeSceneLayout,
-} from "../../shared/scene/sceneLayoutModel";
+} from "@pooder/platform-browser";
 import type { Unit } from "../../coordinate";
 import { IMAGE_OBJECT_LAYER_ID } from "../../shared/constants/layers";
 
