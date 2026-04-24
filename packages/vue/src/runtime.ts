@@ -1,5 +1,6 @@
 import type { InjectionKey } from "vue";
 import { inject } from "vue";
+import { Pooder } from "@pooder/core";
 import type {
   ExtensionDefinition,
   ExtensionStateSnapshot,
@@ -77,6 +78,10 @@ export interface PooderRuntimeLike {
 export const POODER_RUNTIME_KEY: InjectionKey<PooderRuntimeLike> = Symbol(
   "PooderRuntime",
 );
+
+export function createPooderRuntime(): PooderRuntimeLike {
+  return new Pooder();
+}
 
 export function usePooderRuntime(): PooderRuntimeLike {
   const runtime = inject(POODER_RUNTIME_KEY, null);
