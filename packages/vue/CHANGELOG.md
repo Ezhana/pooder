@@ -1,5 +1,13 @@
 # @pooder/vue
 
+## 5.0.1
+
+### Patch Changes
+
+- Publish the browser platform package and update Vue/kit adapters to consume it.
+- Updated dependencies
+  - @pooder/platform-browser@1.0.1
+
 ## 5.0.0
 
 ### Major Changes
