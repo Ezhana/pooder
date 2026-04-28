@@ -21,6 +21,10 @@ import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
 import {
+  normalizeTemplateOverlayConfig,
+  patchTemplateOverlayConfig,
+} from "../src/extensions/template-overlay/model";
+import {
   normalizePointInGeometry,
   resolveFeaturePosition,
 } from "../src/extensions/featureCoordinates";
@@ -263,6 +267,90 @@ function testMaskOps() {
   assert(
     created[2 * paddedWidth + 3] === 1,
     "non-white pixel should be foreground",
+  );
+}
+
+function testTemplateOverlayConfig() {
+  const normalized = normalizeTemplateOverlayConfig({
+    version: 1,
+    slots: {
+      normal: {
+        src: " /normal.png ",
+        opacity: 2,
+      },
+      back: {
+        src: "/back.png",
+        enabled: false,
+      },
+      render: {
+        src: "",
+      },
+      unknown: {
+        src: "/unknown.png",
+      },
+    },
+  });
+
+  assertEqual(normalized.version, 1, "template overlay version should be v1");
+  assertEqual(
+    normalized.slots.normal?.src,
+    "/normal.png",
+    "template overlay should trim slot src",
+  );
+  assertEqual(
+    normalized.slots.normal?.opacity,
+    1,
+    "template overlay opacity should be clamped",
+  );
+  assertEqual(
+    normalized.slots.back?.src,
+    "/back.png",
+    "template overlay should preserve the back slot in config",
+  );
+  assertEqual(
+    normalized.slots.back?.enabled,
+    false,
+    "template overlay should preserve slot enabled",
+  );
+  assert(
+    !normalized.slots.render,
+    "template overlay should drop empty src slots",
+  );
+  assert(
+    !("unknown" in normalized.slots),
+    "template overlay should drop unknown slots",
+  );
+
+  const patched = patchTemplateOverlayConfig(normalized, {
+    slots: {
+      normal: {
+        opacity: 0.25,
+      },
+      frame: {
+        src: "/frame.png",
+      },
+      back: null,
+    },
+  });
+
+  assertEqual(
+    patched.slots.normal?.src,
+    "/normal.png",
+    "template overlay patch should preserve existing slot src",
+  );
+  assertEqual(
+    patched.slots.normal?.opacity,
+    0.25,
+    "template overlay patch should update slot opacity",
+  );
+  assertEqual(
+    patched.slots.frame?.src,
+    "/frame.png",
+    "template overlay patch should add slots",
+  );
+  assert(
+    !patched.slots.back,
+    "template overlay patch should remove null slots",
   );
 }
 
@@ -973,6 +1061,7 @@ async function main() {
   testWrappedOffsets();
   testBridgeSelection();
   testMaskOps();
+  testTemplateOverlayConfig();
   testEdgeScale();
   testFeaturePlacementProjection();
   testVisibilityDsl();

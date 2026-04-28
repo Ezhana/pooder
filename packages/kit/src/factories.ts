@@ -5,6 +5,7 @@ import { FeatureTool } from "./extensions/feature";
 import { ImageTool } from "./extensions/image";
 import { RulerTool } from "./extensions/ruler";
 import { SizeTool } from "./extensions/size";
+import { TemplateOverlayTool } from "./extensions/template-overlay";
 import { WhiteInkTool } from "./extensions/white-ink";
 
 export const createBackgroundExtension = (
@@ -29,5 +30,7 @@ export const createRulerExtension = (
 ) => new RulerTool(options);
 
 export const createSizeExtension = () => new SizeTool();
+
+export const createTemplateOverlayExtension = () => new TemplateOverlayTool();
 
 export const createWhiteInkExtension = () => new WhiteInkTool();

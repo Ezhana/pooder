@@ -1,4 +1,9 @@
 export const BACKGROUND_LAYER_ID = "background";
+export const TEMPLATE_OVERLAY_NORMAL_LAYER_ID = "template-overlay.normal";
+export const TEMPLATE_OVERLAY_FRAME_LAYER_ID = "template-overlay.frame";
+export const TEMPLATE_OVERLAY_PROD_LAYER_ID = "template-overlay.prod";
+export const TEMPLATE_OVERLAY_SMALL_LAYER_ID = "template-overlay.small";
+export const TEMPLATE_OVERLAY_RENDER_LAYER_ID = "template-overlay.render";
 export const IMAGE_OBJECT_LAYER_ID = "image.user";
 export const IMAGE_OVERLAY_LAYER_ID = "image-overlay";
 export const WHITE_INK_OBJECT_LAYER_ID = "white-ink.user";
@@ -12,6 +17,11 @@ export const FILM_LAYER_ID = "overlay";
 
 export const LAYER_IDS = {
   background: BACKGROUND_LAYER_ID,
+  templateOverlayNormal: TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
+  templateOverlayFrame: TEMPLATE_OVERLAY_FRAME_LAYER_ID,
+  templateOverlayProd: TEMPLATE_OVERLAY_PROD_LAYER_ID,
+  templateOverlaySmall: TEMPLATE_OVERLAY_SMALL_LAYER_ID,
+  templateOverlayRender: TEMPLATE_OVERLAY_RENDER_LAYER_ID,
   imageObject: IMAGE_OBJECT_LAYER_ID,
   imageOverlay: IMAGE_OVERLAY_LAYER_ID,
   whiteInkObject: WHITE_INK_OBJECT_LAYER_ID,

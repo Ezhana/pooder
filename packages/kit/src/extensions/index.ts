@@ -1,6 +1,7 @@
 export * from "./background";
 export * from "./image";
 export * from "./size";
+export * from "./template-overlay";
 export * from "./dieline";
 export * from "./feature";
 export * from "./film";
