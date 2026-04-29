@@ -273,10 +273,21 @@ function testMaskOps() {
 function testTemplateOverlayConfig() {
   const normalized = normalizeTemplateOverlayConfig({
     version: 1,
+    clip: {
+      enabled: true,
+      targetLayerIds: [" image.user ", "image.user", ""],
+    },
     slots: {
       normal: {
         src: " /normal.png ",
         opacity: 2,
+        placement: {
+          space: "surfaceFrameRatio",
+          x: 0,
+          y: "0",
+          width: 1,
+          height: 1,
+        },
       },
       back: {
         src: "/back.png",
@@ -298,9 +309,19 @@ function testTemplateOverlayConfig() {
     "template overlay should trim slot src",
   );
   assertEqual(
+    normalized.clip?.targetLayerIds?.length,
+    1,
+    "template overlay should normalize clip target layer ids",
+  );
+  assertEqual(
     normalized.slots.normal?.opacity,
     1,
     "template overlay opacity should be clamped",
+  );
+  assertEqual(
+    normalized.slots.normal?.placement?.height,
+    1,
+    "template overlay should normalize slot placement",
   );
   assertEqual(
     normalized.slots.back?.src,
@@ -322,12 +343,22 @@ function testTemplateOverlayConfig() {
   );
 
   const patched = patchTemplateOverlayConfig(normalized, {
+    clip: {
+      enabled: false,
+    },
     slots: {
       normal: {
         opacity: 0.25,
       },
       frame: {
         src: "/frame.png",
+        placement: {
+          space: "surfaceFrameRatio",
+          x: 0.1,
+          y: 0.12,
+          width: 0.3,
+          height: 0.2,
+        },
       },
       back: null,
     },
@@ -344,9 +375,19 @@ function testTemplateOverlayConfig() {
     "template overlay patch should update slot opacity",
   );
   assertEqual(
+    patched.clip?.enabled,
+    false,
+    "template overlay patch should update clip config",
+  );
+  assertEqual(
     patched.slots.frame?.src,
     "/frame.png",
     "template overlay patch should add slots",
+  );
+  assertEqual(
+    patched.slots.frame?.placement?.x,
+    0.1,
+    "template overlay patch should add slot placement",
   );
   assert(
     !patched.slots.back,

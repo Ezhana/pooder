@@ -15,19 +15,36 @@ export interface TemplateOverlaySlotConfig {
   src: string;
   opacity?: number;
   enabled?: boolean;
+  placement?: TemplateOverlayPlacement;
 }
 
 export interface TemplateOverlayConfig {
   version: 1;
+  clip?: TemplateOverlayClipConfig;
   slots: Partial<Record<TemplateOverlaySlotName, TemplateOverlaySlotConfig>>;
 }
 
 export type TemplateOverlayConfigPatch = Partial<{
+  clip: TemplateOverlayClipConfig | null;
   version: 1;
   slots: Partial<
     Record<TemplateOverlaySlotName, Partial<TemplateOverlaySlotConfig> | null>
   >;
 }>;
+
+export interface TemplateOverlayPlacement {
+  space: "surfaceFrameRatio";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TemplateOverlayClipConfig {
+  enabled?: boolean;
+  placement?: TemplateOverlayPlacement;
+  targetLayerIds?: string[];
+}
 
 export const createEmptyTemplateOverlayConfig = (): TemplateOverlayConfig => ({
   version: 1,
@@ -45,6 +62,67 @@ const clampOpacity = (value: unknown): number | undefined => {
   return Math.max(0, Math.min(1, parsed));
 };
 
+const normalizePositiveNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+};
+
+const normalizeFiniteNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const normalizePlacement = (
+  value: unknown,
+): TemplateOverlayPlacement | undefined => {
+  if (!isRecord(value)) return undefined;
+
+  const space = value.space === "surfaceFrameRatio" ? value.space : undefined;
+  const x = normalizeFiniteNumber(value.x);
+  const y = normalizeFiniteNumber(value.y);
+  const width = normalizePositiveNumber(value.width);
+  const height = normalizePositiveNumber(value.height);
+
+  if (
+    space === undefined ||
+    x === undefined ||
+    y === undefined ||
+    width === undefined ||
+    height === undefined
+  ) {
+    return undefined;
+  }
+
+  return { space, x, y, width, height };
+};
+
+const normalizeClipConfig = (
+  value: unknown,
+): TemplateOverlayClipConfig | undefined => {
+  if (!isRecord(value)) return undefined;
+
+  const targetLayerIds = Array.isArray(value.targetLayerIds)
+    ? value.targetLayerIds
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean)
+    : undefined;
+  const placement = normalizePlacement(value.placement);
+  const normalized: TemplateOverlayClipConfig = {};
+
+  if (typeof value.enabled === "boolean") {
+    normalized.enabled = value.enabled;
+  }
+  if (placement) {
+    normalized.placement = placement;
+  }
+  if (targetLayerIds?.length) {
+    normalized.targetLayerIds = Array.from(new Set(targetLayerIds));
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+};
+
 export const normalizeTemplateOverlayConfig = (
   value: unknown,
 ): TemplateOverlayConfig => {
@@ -55,6 +133,7 @@ export const normalizeTemplateOverlayConfig = (
   const version = value.version === 1 ? 1 : 1;
   const rawSlots = isRecord(value.slots) ? value.slots : {};
   const slots: TemplateOverlayConfig["slots"] = {};
+  const clip = normalizeClipConfig(value.clip);
 
   TEMPLATE_OVERLAY_SLOT_NAMES.forEach((slotName) => {
     const rawSlot = rawSlots[slotName];
@@ -71,14 +150,24 @@ export const normalizeTemplateOverlayConfig = (
     if (typeof rawSlot.enabled === "boolean") {
       normalized.enabled = rawSlot.enabled;
     }
+    const placement = normalizePlacement(rawSlot.placement);
+    if (placement) {
+      normalized.placement = placement;
+    }
 
     slots[slotName] = normalized;
   });
 
-  return {
+  const config: TemplateOverlayConfig = {
     version,
     slots,
   };
+
+  if (clip) {
+    config.clip = clip;
+  }
+
+  return config;
 };
 
 export const patchTemplateOverlayConfig = (
@@ -91,9 +180,23 @@ export const patchTemplateOverlayConfig = (
   }
 
   const next: TemplateOverlayConfig = {
+    ...(base.clip ? { clip: base.clip } : {}),
     version: 1,
     slots: { ...base.slots },
   };
+
+  if (Object.prototype.hasOwnProperty.call(patch, "clip")) {
+    if (patch.clip === null) {
+      delete next.clip;
+    } else {
+      const clip = normalizeClipConfig(patch.clip);
+      if (clip) {
+        next.clip = clip;
+      } else {
+        delete next.clip;
+      }
+    }
+  }
 
   const rawSlotPatches = patch.slots;
   if (isRecord(rawSlotPatches)) {

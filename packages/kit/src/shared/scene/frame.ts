@@ -17,7 +17,7 @@ export function emptyFrameRect(): FrameRect {
   return { left: 0, top: 0, width: 0, height: 0 };
 }
 
-export function resolveCutFrameRect(
+export function resolveSurfaceFrameRect(
   canvasService?: CanvasService,
   configService?: ConfigurationService,
 ): FrameRect {

@@ -29,7 +29,7 @@ import {
   type SceneGeometrySnapshot,
   type SceneLayoutSnapshot,
 } from "@pooder/platform-browser";
-import { type FrameRect, resolveCutFrameRect } from "../../shared/scene/frame";
+import { type FrameRect, resolveSurfaceFrameRect } from "../../shared/scene/frame";
 import {
   createSourceSizeCache,
   getCoverScale as getCoverScaleFromRect,
@@ -729,7 +729,7 @@ export class ImageTool implements ExtensionDefinition {
     if (!this.canvasService) {
       return { x: null, y: null };
     }
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     if (frame.width <= 0 || frame.height <= 0) {
       return { x: null, y: null };
     }
@@ -787,11 +787,11 @@ export class ImageTool implements ExtensionDefinition {
       return;
     }
 
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     if (frame.width <= 0 || frame.height <= 0) {
       return;
     }
-    const frameScreen = this.getFrameRectScreen(frame);
+    const frameScreen = this.getSurfaceFrameRectScreen(frame);
     let drew = false;
 
     if (this.activeSnapX) {
@@ -826,7 +826,7 @@ export class ImageTool implements ExtensionDefinition {
     this.movingImageId =
       typeof target?.data?.id === "string" ? target.data.id : null;
 
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     if (frame.width <= 0 || frame.height <= 0) {
       this.endMoveSnapInteraction();
       return;
@@ -1297,18 +1297,18 @@ export class ImageTool implements ExtensionDefinition {
     );
   }
 
-  private getFrameRect(): FrameRect {
+  private getSurfaceFrameRect(): FrameRect {
     const configService = this.context?.services.get<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    return resolveCutFrameRect(this.canvasService, configService);
+    return resolveSurfaceFrameRect(this.canvasService, configService);
   }
 
-  private getFrameRectScreen(frame?: FrameRect): FrameRect {
+  private getSurfaceFrameRectScreen(frame?: FrameRect): FrameRect {
     if (!this.canvasService) {
       return { left: 0, top: 0, width: 0, height: 0 };
     }
-    return this.canvasService.toScreenRect(frame || this.getFrameRect());
+    return this.canvasService.toScreenRect(frame || this.getSurfaceFrameRect());
   }
 
   private getImageObjects(): any[] {
@@ -1403,7 +1403,7 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private async validatePlacementForItem(item: ImageItem): Promise<boolean> {
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     if (!frame.width || !frame.height) {
       return true;
     }
@@ -1731,7 +1731,7 @@ export class ImageTool implements ExtensionDefinition {
     const seq = ++this.renderSeq;
 
     const renderItems = this.isToolActive ? this.workingItems : this.items;
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     const desiredIds = new Set(renderItems.map((item) => item.id));
     if (this.focusedImageId && !desiredIds.has(this.focusedImageId)) {
       this.setImageFocus(null, {
@@ -1829,7 +1829,7 @@ export class ImageTool implements ExtensionDefinition {
     if (this.movingImageId === id) {
       this.applyMoveSnapToTarget(target);
     }
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     this.endMoveSnapInteraction();
     if (!frame.width || !frame.height) return;
 
@@ -1964,7 +1964,7 @@ export class ImageTool implements ExtensionDefinition {
     const source = await this.resolveImageSourceSize(id, render.src);
     if (!source) return;
 
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     const viewport = this.canvasService.getSceneViewportRect();
     const area =
       operation.type === "resetTransform"
@@ -1996,7 +1996,7 @@ export class ImageTool implements ExtensionDefinition {
 
     await this.updateImagesAsync();
 
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     if (!frame.width || !frame.height) {
       return { ok: false, reason: "frame-not-ready" };
     }
@@ -2081,8 +2081,8 @@ export class ImageTool implements ExtensionDefinition {
       throw new Error("image-ids-required");
     }
 
-    const frameScene = this.getFrameRect();
-    const frame = this.getFrameRectScreen(frameScene);
+    const frameScene = this.getSurfaceFrameRect();
+    const frame = this.getSurfaceFrameRectScreen(frameScene);
     const multiplier = Math.max(1, options.multiplier ?? 2);
     const format: "png" | "jpeg" = options.format === "jpeg" ? "jpeg" : "png";
 

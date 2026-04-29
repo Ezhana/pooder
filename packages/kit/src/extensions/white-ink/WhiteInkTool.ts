@@ -17,7 +17,7 @@ import {
 } from "@pooder/platform-browser";
 import {
   type FrameRect,
-  resolveCutFrameRect,
+  resolveSurfaceFrameRect,
   toLayoutSceneRect as toSceneLayoutRect,
 } from "../../shared/scene/frame";
 import {
@@ -661,11 +661,11 @@ export class WhiteInkTool implements ExtensionDefinition {
     return { ok: true };
   }
 
-  private getFrameRect(): FrameRect {
-      const configService = this.context?.services.get<ConfigurationService>(
-        CONFIGURATION_SERVICE,
-      );
-    return resolveCutFrameRect(this.canvasService, configService);
+  private getSurfaceFrameRect(): FrameRect {
+    const configService = this.context?.services.get<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
+    return resolveSurfaceFrameRect(this.canvasService, configService);
   }
 
   private toLayoutSceneRect(rect: FrameRect): RenderLayoutRect {
@@ -814,7 +814,7 @@ export class WhiteInkTool implements ExtensionDefinition {
       return snapshot;
     }
 
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     if (frame.width <= 0 || frame.height <= 0) {
       return snapshot;
     }
@@ -1204,7 +1204,7 @@ export class WhiteInkTool implements ExtensionDefinition {
 
     const previewActive = this.isPreviewActive();
 
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     const frameSpecs = this.buildFrameSpecs(frame);
 
     let whiteSpecs: RenderObjectSpec[] = [];

@@ -8,11 +8,12 @@ import {
 import {
   CANVAS_SERVICE,
   type CanvasService,
+  type RenderEffectSpec,
   type RenderObjectSpec,
   type RenderPassSpec,
 } from "@pooder/platform-browser";
 import { Image as FabricImage } from "fabric";
-import { type FrameRect, resolveCutFrameRect } from "../../shared/scene/frame";
+import { type FrameRect, resolveSurfaceFrameRect } from "../../shared/scene/frame";
 import {
   createSourceSizeCache,
   type SourceSize,
@@ -24,6 +25,7 @@ import {
   TEMPLATE_OVERLAY_PROD_LAYER_ID,
   TEMPLATE_OVERLAY_RENDER_LAYER_ID,
   TEMPLATE_OVERLAY_SMALL_LAYER_ID,
+  IMAGE_OBJECT_LAYER_ID,
 } from "../../shared/constants/layers";
 import { createTemplateOverlayCommands } from "./commands";
 import { createTemplateOverlayConfigurations } from "./config";
@@ -34,11 +36,13 @@ import {
   TEMPLATE_OVERLAY_CONFIG_KEY,
   type TemplateOverlayConfig,
   type TemplateOverlayConfigPatch,
+  type TemplateOverlayPlacement,
   type TemplateOverlaySlotName,
 } from "./model";
 
 const TEMPLATE_OVERLAY_UNDERLAY_STACK = 100;
 const TEMPLATE_OVERLAY_OVERLAY_STACK = 650;
+const DEFAULT_CLIP_TARGET_LAYER_IDS = [IMAGE_OBJECT_LAYER_ID];
 
 const RENDERED_OVERLAY_SLOTS: Array<{
   layerId: string;
@@ -189,16 +193,19 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     );
   }
 
-  private getFrameRect(): FrameRect {
-    return resolveCutFrameRect(this.canvasService, this.getConfigService());
+  private getSurfaceFrameRect(): FrameRect {
+    return resolveSurfaceFrameRect(this.canvasService, this.getConfigService());
   }
 
   private buildRenderPasses(): RenderPassSpec[] {
+    const clipEffects = this.buildClipEffects();
+
     return [
       {
         id: TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
         stack: TEMPLATE_OVERLAY_UNDERLAY_STACK,
         order: 0,
+        effects: clipEffects,
         objects: this.normalSpecs,
       },
       ...RENDERED_OVERLAY_SLOTS.map(({ layerId, order }) => ({
@@ -210,6 +217,50 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     ];
   }
 
+  private buildClipEffects(): RenderEffectSpec[] {
+    const clip = this.config.clip;
+    if (!clip || clip.enabled === false) {
+      return [];
+    }
+
+    const frame = this.getSurfaceFrameRect();
+    if (frame.width <= 0 || frame.height <= 0) {
+      return [];
+    }
+
+    const targetPassIds =
+      Array.isArray(clip.targetLayerIds) && clip.targetLayerIds.length > 0
+        ? clip.targetLayerIds
+        : DEFAULT_CLIP_TARGET_LAYER_IDS;
+    const clipFrame = this.resolveSlotFrame(frame, clip.placement);
+
+    return [
+      {
+        id: "template-overlay.clip.user-surface",
+        type: "clipPath",
+        source: {
+          id: "template-overlay.clip.user-surface.source",
+          type: "rect",
+          data: {
+            id: "template-overlay.clip.user-surface.source",
+            type: "template-overlay-clip",
+          },
+          props: {
+            fill: "#000000",
+            height: clipFrame.height,
+            left: clipFrame.left,
+            originX: "left",
+            originY: "top",
+            selectable: false,
+            evented: false,
+            width: clipFrame.width,
+          },
+        },
+        targetPassIds,
+      },
+    ];
+  }
+
   private updateOverlays() {
     void this.updateOverlaysAsync();
   }
@@ -217,7 +268,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   private async updateOverlaysAsync() {
     if (!this.canvasService) return;
     const seq = ++this.renderSeq;
-    const frame = this.getFrameRect();
+    const frame = this.getSurfaceFrameRect();
     if (frame.width <= 0 || frame.height <= 0) {
       this.normalSpecs = [];
       this.overlaySpecsByLayerId = {};
@@ -268,7 +319,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     }
 
     return this.createStretchImageSpec({
-      frame,
+      frame: this.resolveSlotFrame(frame, slotConfig.placement),
       layerId,
       opacity:
         typeof slotConfig.opacity === "number" ? slotConfig.opacity : 1,
@@ -276,6 +327,22 @@ export class TemplateOverlayTool implements ExtensionDefinition {
       slot,
       src,
     });
+  }
+
+  private resolveSlotFrame(
+    frame: FrameRect,
+    placement: TemplateOverlayPlacement | undefined,
+  ): FrameRect {
+    if (!placement || placement.space !== "surfaceFrameRatio") {
+      return frame;
+    }
+
+    return {
+      left: frame.left + placement.x * frame.width,
+      top: frame.top + placement.y * frame.height,
+      width: placement.width * frame.width,
+      height: placement.height * frame.height,
+    };
   }
 
   private createStretchImageSpec(options: {
