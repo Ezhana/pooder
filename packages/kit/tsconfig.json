@@ -9,6 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": true,
+    "noEmit": true,
     "paths": {
       "@pooder/platform-browser": ["../platform-browser/src/index.ts"]
     }

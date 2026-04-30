@@ -21,7 +21,6 @@ import {
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import {
   TEMPLATE_OVERLAY_FRAME_LAYER_ID,
-  TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
   TEMPLATE_OVERLAY_PROD_LAYER_ID,
   TEMPLATE_OVERLAY_RENDER_LAYER_ID,
   TEMPLATE_OVERLAY_SMALL_LAYER_ID,
@@ -40,8 +39,7 @@ import {
   type TemplateOverlaySlotName,
 } from "./model";
 
-const TEMPLATE_OVERLAY_UNDERLAY_STACK = 100;
-const TEMPLATE_OVERLAY_OVERLAY_STACK = 650;
+const TEMPLATE_OVERLAY_OVERLAY_STACK = 780;
 const DEFAULT_CLIP_TARGET_LAYER_IDS = [IMAGE_OBJECT_LAYER_ID];
 
 const RENDERED_OVERLAY_SLOTS: Array<{
@@ -71,7 +69,6 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   private context?: ExtensionContext;
   private renderSeq = 0;
   private isUpdatingConfig = false;
-  private normalSpecs: RenderObjectSpec[] = [];
   private overlaySpecsByLayerId: Record<string, RenderObjectSpec[]> = {};
   private renderProducerDisposable?: { dispose: () => void };
   private readonly subscriptions = new SubscriptionBag();
@@ -132,7 +129,6 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
     context.eventBus.off("canvas:resized", this.onSceneLayoutChanged);
     this.renderSeq += 1;
-    this.normalSpecs = [];
     this.overlaySpecsByLayerId = {};
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
@@ -200,26 +196,18 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   private buildRenderPasses(): RenderPassSpec[] {
     const clipEffects = this.buildClipEffects();
 
-    return [
-      {
-        id: TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
-        stack: TEMPLATE_OVERLAY_UNDERLAY_STACK,
-        order: 0,
-        effects: clipEffects,
-        objects: this.normalSpecs,
-      },
-      ...RENDERED_OVERLAY_SLOTS.map(({ layerId, order }) => ({
-        id: layerId,
-        stack: TEMPLATE_OVERLAY_OVERLAY_STACK,
-        order,
-        objects: this.overlaySpecsByLayerId[layerId] || [],
-      })),
-    ];
+    return RENDERED_OVERLAY_SLOTS.map(({ layerId, order }, index) => ({
+      id: layerId,
+      stack: TEMPLATE_OVERLAY_OVERLAY_STACK,
+      order,
+      effects: index === 0 ? clipEffects : [],
+      objects: this.overlaySpecsByLayerId[layerId] || [],
+    }));
   }
 
   private buildClipEffects(): RenderEffectSpec[] {
     const clip = this.config.clip;
-    if (!clip || clip.enabled === false) {
+    if (!this.canvasService || !clip || clip.enabled === false) {
       return [];
     }
 
@@ -228,11 +216,17 @@ export class TemplateOverlayTool implements ExtensionDefinition {
       return [];
     }
 
+    const clipFrame = this.canvasService.toScreenRect(
+      this.resolveSlotFrame(frame, clip.placement),
+    );
+    if (clipFrame.width <= 0 || clipFrame.height <= 0) {
+      return [];
+    }
+
     const targetPassIds =
       Array.isArray(clip.targetLayerIds) && clip.targetLayerIds.length > 0
         ? clip.targetLayerIds
         : DEFAULT_CLIP_TARGET_LAYER_IDS;
-    const clipFrame = this.resolveSlotFrame(frame, clip.placement);
 
     return [
       {
@@ -240,20 +234,32 @@ export class TemplateOverlayTool implements ExtensionDefinition {
         type: "clipPath",
         source: {
           id: "template-overlay.clip.user-surface.source",
-          type: "rect",
+          type: "path",
+          space: "screen",
+          layout: {
+            reference: "custom",
+            referenceRect: {
+              left: clipFrame.left,
+              top: clipFrame.top,
+              width: clipFrame.width,
+              height: clipFrame.height,
+              space: "screen",
+            },
+            alignX: "start",
+            alignY: "start",
+          },
           data: {
             id: "template-overlay.clip.user-surface.source",
             type: "template-overlay-clip",
           },
           props: {
             fill: "#000000",
-            height: clipFrame.height,
-            left: clipFrame.left,
+            pathData: `M 0 0 H ${clipFrame.width} V ${clipFrame.height} H 0 Z`,
             originX: "left",
             originY: "top",
             selectable: false,
             evented: false,
-            width: clipFrame.width,
+            stroke: null,
           },
         },
         targetPassIds,
@@ -270,17 +276,11 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     const seq = ++this.renderSeq;
     const frame = this.getSurfaceFrameRect();
     if (frame.width <= 0 || frame.height <= 0) {
-      this.normalSpecs = [];
       this.overlaySpecsByLayerId = {};
       await this.canvasService.flushRenderFromProducers();
       return;
     }
 
-    const normalSpec = await this.buildSlotSpec(
-      "normal",
-      TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
-      frame,
-    );
     const overlayEntries = await Promise.all(
       RENDERED_OVERLAY_SLOTS.map(async ({ layerId, slot }) => ({
         layerId,
@@ -289,7 +289,6 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     );
     if (seq !== this.renderSeq) return;
 
-    this.normalSpecs = normalSpec ? [normalSpec] : [];
     this.overlaySpecsByLayerId = Object.fromEntries(
       overlayEntries.map(({ layerId, spec }) => [layerId, spec ? [spec] : []]),
     );

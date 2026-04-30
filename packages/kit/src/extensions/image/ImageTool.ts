@@ -200,6 +200,9 @@ const IMAGE_DEFAULT_CONTROL_CAPABILITIES: ImageControlCapability[] = [
   "scale",
 ];
 
+const IMAGE_OBJECT_STACK = 660;
+const IMAGE_OBJECT_ACTIVE_STACK = 760;
+const IMAGE_OVERLAY_STACK = 800;
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
 const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
   {
@@ -290,7 +293,9 @@ export class ImageTool implements ExtensionDefinition {
         passes: [
           {
             id: IMAGE_OBJECT_LAYER_ID,
-            stack: 500,
+            stack: this.isToolActive
+              ? IMAGE_OBJECT_ACTIVE_STACK
+              : IMAGE_OBJECT_STACK,
             order: 0,
             visibility: {
               op: "not",
@@ -303,7 +308,7 @@ export class ImageTool implements ExtensionDefinition {
           },
           {
             id: IMAGE_OVERLAY_LAYER_ID,
-            stack: 800,
+            stack: IMAGE_OVERLAY_STACK,
             order: 0,
             visibility: {
               op: "not",
@@ -348,6 +353,11 @@ export class ImageTool implements ExtensionDefinition {
     this.subscriptions.on(
       context.eventBus,
       "scene:layout:change",
+      this.onSceneLayoutChanged,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "canvas:resized",
       this.onSceneLayoutChanged,
     );
     this.subscriptions.on(
@@ -2003,25 +2013,17 @@ export class ImageTool implements ExtensionDefinition {
 
     const next: ImageItem[] = [];
     for (const item of this.workingItems) {
-      const exported = await this.exportCroppedImageByIds([item.id], {
-        multiplier: 2,
-        format: "png",
-      });
-      const url = exported.url;
-
       const sourceUrl = item.sourceUrl || item.url;
       const previousCommitted = item.committedUrl;
       next.push(
         this.normalizeItem({
           ...item,
-          url,
-          // Keep original source for next image-tool session editing,
-          // and use committedUrl as non-image-tools render source.
+          url: sourceUrl,
           sourceUrl,
-          committedUrl: url,
+          committedUrl: undefined,
         }),
       );
-      if (previousCommitted && previousCommitted !== url) {
+      if (previousCommitted && previousCommitted !== sourceUrl) {
         this.sourceSizeCache.deleteSourceSize(previousCommitted);
       }
     }
@@ -2120,6 +2122,8 @@ export class ImageTool implements ExtensionDefinition {
           ? source.getCenterPoint()
           : new Point(source.left ?? 0, source.top ?? 0);
 
+        clone.set({ clipPath: undefined });
+        delete clone.__pooderEffectClipKey;
         clone.set({
           originX: "center",
           originY: "center",
@@ -2136,13 +2140,13 @@ export class ImageTool implements ExtensionDefinition {
       }
 
       tempCanvas.renderAll();
-      const blob = await tempCanvas.toBlob({ format, multiplier: 1 });
-      if (!blob) {
+      const dataUrl = tempCanvas.toDataURL({ format, multiplier: 1 });
+      if (!dataUrl) {
         throw new Error("image-export-failed");
       }
 
       return {
-        url: URL.createObjectURL(blob),
+        url: dataUrl,
         width,
         height,
         multiplier,
