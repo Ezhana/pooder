@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 7.0.2
+
+### Patch Changes
+
+- 6bc4e3c: Improve template overlay clipping and image layer rendering behavior.
+
 ## 7.0.1
 
 ### Patch Changes
