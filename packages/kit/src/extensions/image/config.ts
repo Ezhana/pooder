@@ -129,7 +129,7 @@ export function createImageConfigurations(): ConfigurationContribution[] {
       type: "select",
       label: "Image Session Placement Policy",
       options: ["free", "warn", "strict"],
-      default: "free",
+      default: "warn",
     },
   ];
 }
