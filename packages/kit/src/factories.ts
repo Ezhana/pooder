@@ -1,4 +1,5 @@
 import { BackgroundTool } from "./extensions/background";
+import { DesignExportExtension } from "./extensions/design-export";
 import { DielineWorkflowExtension } from "./extensions/dieline-workflow";
 import { DielineTool } from "./extensions/dieline";
 import { FeatureTool } from "./extensions/feature";
@@ -11,6 +12,8 @@ import { WhiteInkTool } from "./extensions/white-ink";
 export const createBackgroundExtension = (
   options?: ConstructorParameters<typeof BackgroundTool>[0],
 ) => new BackgroundTool(options);
+
+export const createDesignExportExtension = () => new DesignExportExtension();
 
 export const createDielineExtension = (
   options?: ConstructorParameters<typeof DielineTool>[0],

@@ -6,9 +6,9 @@ import {
   Service,
   ServiceContext,
 } from "@pooder/core";
-import CanvasService from "./CanvasService";
-import { CANVAS_SERVICE } from "./tokens";
 import {
+  CANVAS_SERVICE,
+  CanvasService,
   buildSceneGeometry,
   computeSceneLayout,
   readSizeState,

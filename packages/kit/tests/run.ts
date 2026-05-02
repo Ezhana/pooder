@@ -16,6 +16,8 @@ import {
 import { computeDetectEdgeSize } from "../src/extensions/edgeScale";
 import { createImageCommands } from "../src/extensions/image/commands";
 import { createImageConfigurations } from "../src/extensions/image/config";
+import { createDesignExportCommands } from "../src/extensions/design-export/commands";
+import { DesignExportExtension } from "../src/extensions/design-export";
 import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
 import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
@@ -624,6 +626,9 @@ function testContributionCompatibility() {
   const imageCommandNames = createImageCommands({} as any).map(
     (entry) => entry.command,
   );
+  const designExportCommandNames = createDesignExportCommands({} as any).map(
+    (entry) => entry.command,
+  );
   const whiteInkCommandNames = createWhiteInkCommands({} as any).map(
     (entry) => entry.command,
   );
@@ -649,6 +654,7 @@ function testContributionCompatibility() {
     "bringToFront",
     "sendToBack",
   ];
+  const expectedDesignExportCommands = ["exportImage"];
   const expectedWhiteInkCommands = [
     "addWhiteInk",
     "upsertWhiteInk",
@@ -667,13 +673,17 @@ function testContributionCompatibility() {
   ];
   const expectedDielineCommands = [
     "updateFeaturePosition",
-    "exportCutImage",
     "detectEdge",
   ];
 
   assert(
     JSON.stringify(imageCommandNames) === JSON.stringify(expectedImageCommands),
     `image command set changed: ${JSON.stringify(imageCommandNames)}`,
+  );
+  assert(
+    JSON.stringify(designExportCommandNames) ===
+      JSON.stringify(expectedDesignExportCommands),
+    `design export command set changed: ${JSON.stringify(designExportCommandNames)}`,
   );
   assert(
     JSON.stringify(whiteInkCommandNames) ===
@@ -758,6 +768,41 @@ function testContributionCompatibility() {
       JSON.stringify(expectedDielineConfigKeys),
     `dieline config keys changed: ${JSON.stringify(dielineConfigKeys)}`,
   );
+}
+
+async function testDesignExportExtensionCommand() {
+  const runtime = new Pooder();
+  const commandService =
+    runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
+
+  runtime.extensions.register(new DesignExportExtension());
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  await runtime.extensions.flushActivation();
+
+  assert(
+    !!commandService.getCommand("exportImage"),
+    "design export extension should register exportImage",
+  );
+  assertEqual(
+    commandService.getCommand("exportCutImage"),
+    undefined,
+    "design export extension should not expose exportCutImage",
+  );
+
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    await runtime.commands.execute("exportImage");
+    throw new Error("exportImage should reject when there are no design objects");
+  } catch (error) {
+    assert(
+      error instanceof Error &&
+        error.message.includes("no-design-objects-to-export"),
+      `unexpected exportImage empty-state error: ${String(error)}`,
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
 }
 
 async function testExtensionDependencyActivation() {
@@ -1108,6 +1153,7 @@ async function main() {
   testVisibilityDsl();
   testImageViewStateHelper();
   testContributionCompatibility();
+  await testDesignExportExtensionCommand();
   await testExtensionDependencyActivation();
   await testDielineWorkflowExtensionActivation();
   await testDielineWorkflowExtensionCommands();

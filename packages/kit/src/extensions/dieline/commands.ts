@@ -11,14 +11,6 @@ export function createDielineCommands(tool: any, state: any): CommandContributio
       },
     },
     {
-      command: "exportCutImage",
-      id: "exportCutImage",
-      title: "Export Cut Image",
-      handler: (options?: { debug?: boolean }) => {
-        return tool.exportCutImage(options);
-      },
-    },
-    {
       command: "detectEdge",
       id: "detectEdge",
       title: "Detect Edge from Image",

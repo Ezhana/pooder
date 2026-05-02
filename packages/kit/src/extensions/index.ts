@@ -1,4 +1,5 @@
 export * from "./background";
+export * from "./design-export";
 export * from "./image";
 export * from "./size";
 export * from "./template-overlay";

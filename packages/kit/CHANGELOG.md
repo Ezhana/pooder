@@ -1,5 +1,11 @@
 # @pooder/kit
 
+## 8.0.0
+
+### Major Changes
+
+- Add editor-level design image export and remove the old dieline cut image command.
+
 ## 7.0.3
 
 ### Patch Changes
