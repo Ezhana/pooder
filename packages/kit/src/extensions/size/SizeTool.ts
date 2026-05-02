@@ -43,9 +43,8 @@ export class SizeTool implements ExtensionDefinition {
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
@@ -130,7 +129,7 @@ export class SizeTool implements ExtensionDefinition {
           type: "select",
           label: "View Padding",
           options: [0, 10, 20, 40, 60, 100, "2%", "5%", "10%", "15%", "20%"],
-          default: 140,
+          default: "10%",
         },
         {
           id: "size.minMm",
@@ -204,7 +203,9 @@ export class SizeTool implements ExtensionDefinition {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>(CONFIGURATION_SERVICE);
+    return this.context?.services.get<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
   }
 
   private ensureDefaults(configService: ConfigurationService) {
@@ -372,7 +373,8 @@ export class SizeTool implements ExtensionDefinition {
     const target =
       all.find(
         (obj) =>
-          obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID && obj?.data?.id === targetId,
+          obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID &&
+          obj?.data?.id === targetId,
       ) || all.find((obj) => obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID);
     if (!target) return null;
 

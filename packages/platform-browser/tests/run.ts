@@ -1,5 +1,10 @@
 import type { Service } from "@pooder/core";
-import { attachBrowserHost, CANVAS_SERVICE, SCENE_LAYOUT_SERVICE } from "../src";
+import {
+  attachBrowserHost,
+  CANVAS_SERVICE,
+  resolveViewPaddingPx,
+  SCENE_LAYOUT_SERVICE,
+} from "../src";
 
 declare const process: {
   exit(code: number): never;
@@ -8,6 +13,14 @@ declare const process: {
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
+  }
+}
+
+function assertEqual<T>(actual: T, expected: T, message: string) {
+  if (actual !== expected) {
+    throw new Error(
+      `${message} (expected ${String(expected)}, got ${String(actual)})`,
+    );
   }
 }
 
@@ -35,7 +48,10 @@ function createRuntime() {
           registered.set(identifier ?? service.constructor.name, service);
           return true;
         },
-        unregister(serviceOrIdentifier: Service | unknown, identifier?: unknown) {
+        unregister(
+          serviceOrIdentifier: Service | unknown,
+          identifier?: unknown,
+        ) {
           const key =
             identifier ??
             (serviceOrIdentifier && typeof serviceOrIdentifier === "object"
@@ -81,32 +97,50 @@ function testAttachAndDetach() {
     },
   });
 
-  assert(canvas.width === 320, "canvas width should be initialized from container");
-  assert(canvas.height === 180, "canvas height should be initialized from container");
-  assert(attachment.canvasService === (canvasService as any), "canvas service should be exposed");
+  assert(
+    canvas.width === 320,
+    "canvas width should be initialized from container",
+  );
+  assert(
+    canvas.height === 180,
+    "canvas height should be initialized from container",
+  );
+  assert(
+    attachment.canvasService === (canvasService as any),
+    "canvas service should be exposed",
+  );
   assert(
     attachment.sceneLayoutService === (sceneLayoutService as any),
     "scene layout service should be exposed",
   );
-  assert(registered.get(CANVAS_SERVICE) === (canvasService as any), "canvas service should register");
+  assert(
+    registered.get(CANVAS_SERVICE) === (canvasService as any),
+    "canvas service should register",
+  );
   assert(
     registered.get(SCENE_LAYOUT_SERVICE) === (sceneLayoutService as any),
     "scene layout service should register",
   );
-  assert(observedTarget === container, "resize observer should watch host container");
+  assert(
+    observedTarget === container,
+    "resize observer should watch host container",
+  );
   const callback = observerCallback;
   if (!callback) {
     throw new Error("resize observer callback should be installed");
   }
 
-  (callback as ResizeObserverCallback)([
-    {
-      contentRect: {
-        height: 240,
-        width: 480,
-      },
-    } as ResizeObserverEntry,
-  ], {} as ResizeObserver);
+  (callback as ResizeObserverCallback)(
+    [
+      {
+        contentRect: {
+          height: 240,
+          width: 480,
+        },
+      } as ResizeObserverEntry,
+    ],
+    {} as ResizeObserver,
+  );
 
   assert(
     canvasService.resizeCalls.length === 1 &&
@@ -118,7 +152,10 @@ function testAttachAndDetach() {
   attachment.dispose();
 
   assert(disconnected, "dispose should disconnect the resize observer");
-  assert(!registered.has(CANVAS_SERVICE), "dispose should unregister the canvas service");
+  assert(
+    !registered.has(CANVAS_SERVICE),
+    "dispose should unregister the canvas service",
+  );
   assert(
     !registered.has(SCENE_LAYOUT_SERVICE),
     "dispose should unregister the scene layout service",
@@ -168,12 +205,39 @@ function testFailedLayoutRegistrationRollsBackCanvasService() {
   }
 
   assert(threw, "failed scene layout registration should throw");
-  assert(!registered.has(CANVAS_SERVICE), "failed attach should roll back canvas service");
+  assert(
+    !registered.has(CANVAS_SERVICE),
+    "failed attach should roll back canvas service",
+  );
+}
+
+function testViewPaddingResolvesResponsively() {
+  assertEqual(
+    resolveViewPaddingPx("10%", 320, 480),
+    32,
+    "percentage padding should use the short side",
+  );
+  assertEqual(
+    resolveViewPaddingPx(140, 320, 480),
+    38.4,
+    "fixed padding should shrink on compact canvases",
+  );
+  assertEqual(
+    resolveViewPaddingPx("90%", 320, 480),
+    80,
+    "padding should preserve a minimum content area",
+  );
+  assertEqual(
+    resolveViewPaddingPx("", 320, 480),
+    0,
+    "empty padding should be ignored",
+  );
 }
 
 async function main() {
   testAttachAndDetach();
   testFailedLayoutRegistrationRollsBackCanvasService();
+  testViewPaddingResolvesResponsively();
 }
 
 main().catch((error) => {

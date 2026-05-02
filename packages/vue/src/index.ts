@@ -1,6 +1,10 @@
-import PooderCanvasHost from "./PooderCanvasHost.vue";
-import PooderRuntimeProvider from "./PooderRuntimeProvider.vue";
+import PooderCanvasHost from "./pooder-canvas-host.vue";
+import PooderRuntimeProvider from "./pooder-runtime-provider.vue";
 
 export { PooderRuntimeProvider, PooderCanvasHost };
-export { createPooderRuntime, POODER_RUNTIME_KEY, usePooderRuntime } from "./runtime";
+export {
+  createPooderRuntime,
+  POODER_RUNTIME_KEY,
+  usePooderRuntime,
+} from "./runtime";
 export type { PooderRuntimeLike } from "./runtime";

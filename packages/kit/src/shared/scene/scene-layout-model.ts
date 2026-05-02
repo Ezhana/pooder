@@ -1,17 +1,17 @@
 import type { ConfigurationService } from "@pooder/core";
-import type CanvasService from "../CanvasService";
-import { Coordinate, Unit } from "../coordinate";
-import { parseLengthToMm } from "../units";
+import type { CanvasService } from "@pooder/platform-browser";
+import { Coordinate, Unit } from "../../coordinate";
+import { parseLengthToMm } from "../../units";
 import {
   DEFAULT_DIELINE_SHAPE,
   DEFAULT_DIELINE_SHAPE_STYLE,
   normalizeShapeStyle,
   normalizeDielineShape,
-} from "../dielineShape";
+} from "../../extensions/dielineShape";
 import type {
   DielineShape,
   DielineShapeStyle,
-} from "../dielineShape";
+} from "../../extensions/dielineShape";
 
 export type SizeConstraintMode = "free" | "lockAspect" | "equal";
 export type CutMode = "trim" | "outset" | "inset";
@@ -78,11 +78,14 @@ const DEFAULT_SIZE_STATE: SizeState = {
   aspectRatio: 1,
   cutMode: "trim",
   cutMarginMm: 0,
-  viewPadding: 140,
+  viewPadding: "10%",
   minMm: 10,
   maxMm: 2000,
   stepMm: 0.1,
 };
+
+const FIXED_VIEW_PADDING_LIMIT_RATIO = 0.12;
+const MIN_VIEW_CONTENT_SIDE_PX = 160;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -125,23 +128,67 @@ export function fromMm(valueMm: number, toUnit: Unit): number {
   return Coordinate.convertUnit(valueMm, "mm", toUnit);
 }
 
-export function resolvePaddingPx(
+function getContainerShortSide(
+  containerWidth: number,
+  containerHeight: number,
+): number {
+  return Math.min(Math.max(0, containerWidth), Math.max(0, containerHeight));
+}
+
+function limitViewPaddingPx(
+  paddingPx: number,
+  containerWidth: number,
+  containerHeight: number,
+  options: { capFixedPadding?: boolean } = {},
+): number {
+  const shortSide = getContainerShortSide(containerWidth, containerHeight);
+  if (!Number.isFinite(paddingPx) || paddingPx <= 0 || shortSide <= 0) {
+    return 0;
+  }
+
+  const minContentSide = Math.min(MIN_VIEW_CONTENT_SIDE_PX, shortSide);
+  const contentLimit = Math.max(0, (shortSide - minContentSide) / 2);
+  const fixedLimit = options.capFixedPadding
+    ? shortSide * FIXED_VIEW_PADDING_LIMIT_RATIO
+    : Number.POSITIVE_INFINITY;
+
+  return Math.min(paddingPx, contentLimit, fixedLimit);
+}
+
+export function resolveViewPaddingPx(
   raw: number | string,
   containerWidth: number,
   containerHeight: number,
 ): number {
-  if (typeof raw === "number") return Math.max(0, raw);
+  if (typeof raw === "number") {
+    return limitViewPaddingPx(raw, containerWidth, containerHeight, {
+      capFixedPadding: true,
+    });
+  }
   if (typeof raw === "string") {
-    if (raw.endsWith("%")) {
-      const percent = parseFloat(raw) / 100;
+    const value = raw.trim();
+    if (!value) return 0;
+
+    if (value.endsWith("%")) {
+      const percent = parseFloat(value) / 100;
       if (!Number.isFinite(percent)) return 0;
-      return Math.max(0, Math.min(containerWidth, containerHeight) * percent);
+      return limitViewPaddingPx(
+        getContainerShortSide(containerWidth, containerHeight) * percent,
+        containerWidth,
+        containerHeight,
+      );
     }
-    const fixed = parseFloat(raw);
-    return Number.isFinite(fixed) ? Math.max(0, fixed) : 0;
+    const fixed = parseFloat(value);
+    return Number.isFinite(fixed)
+      ? limitViewPaddingPx(fixed, containerWidth, containerHeight, {
+          capFixedPadding: true,
+        })
+      : 0;
   }
   return 0;
 }
+
+export const resolvePaddingPx = resolveViewPaddingPx;
 
 export function readSizeState(configService: ConfigurationService): SizeState {
   const unit = normalizeUnit(
@@ -277,13 +324,13 @@ export function computeSceneLayout(
     return null;
   }
 
-  const paddingPx = resolvePaddingPx(
+  const viewPaddingPx = resolveViewPaddingPx(
     size.viewPadding,
     canvasWidth,
     canvasHeight,
   );
   canvasService.viewport.updateContainer(canvasWidth, canvasHeight);
-  canvasService.viewport.setPadding(paddingPx);
+  canvasService.viewport.setPadding(viewPaddingPx);
   canvasService.viewport.updatePhysical(viewWidthMm, viewHeightMm);
 
   const layout = canvasService.viewport.layout;
@@ -337,7 +384,9 @@ export function buildSceneGeometry(
     "mm",
   );
   const offset = (layout.cutRect.width - layout.trimRect.width) / 2;
-  const sourceWidth = Number(configService.get("dieline.customSourceWidthPx", 0));
+  const sourceWidth = Number(
+    configService.get("dieline.customSourceWidthPx", 0),
+  );
   const sourceHeight = Number(
     configService.get("dieline.customSourceHeightPx", 0),
   );
@@ -362,6 +411,8 @@ export function buildSceneGeometry(
     customSourceWidthPx:
       Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,
     customSourceHeightPx:
-      Number.isFinite(sourceHeight) && sourceHeight > 0 ? sourceHeight : undefined,
+      Number.isFinite(sourceHeight) && sourceHeight > 0
+        ? sourceHeight
+        : undefined,
   };
 }

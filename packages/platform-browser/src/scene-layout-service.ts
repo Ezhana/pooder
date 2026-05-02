@@ -6,7 +6,7 @@ import {
   Service,
   ServiceContext,
 } from "@pooder/core";
-import CanvasService from "./CanvasService";
+import CanvasService from "./canvas-service";
 import { CANVAS_SERVICE } from "./tokens";
 import {
   buildSceneGeometry,
@@ -14,7 +14,7 @@ import {
   readSizeState,
   type SceneGeometrySnapshot,
   type SceneLayoutSnapshot,
-} from "./scene/sceneLayoutModel";
+} from "./scene/scene-layout-model";
 import { SubscriptionBag } from "./subscriptions";
 
 interface ConfigChangeEvent {
@@ -42,8 +42,9 @@ export class SceneLayoutService implements Service {
     }
 
     const canvasService = context.get<CanvasService>(CANVAS_SERVICE);
-    const configService =
-      context.get<ConfigurationService>(CONFIGURATION_SERVICE);
+    const configService = context.get<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
     const commandService = context.get<CommandService>(COMMAND_SERVICE);
 
     if (!canvasService || !configService || !commandService) {
@@ -67,7 +68,11 @@ export class SceneLayoutService implements Service {
 
     this.subscriptions.disposeAll();
     this.subscriptions.onConfigChange(configService, this.onConfigChanged);
-    this.subscriptions.on(context.eventBus, "canvas:resized", this.onCanvasResized);
+    this.subscriptions.on(
+      context.eventBus,
+      "canvas:resized",
+      this.onCanvasResized,
+    );
     this.refresh();
   }
 

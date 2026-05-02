@@ -8,7 +8,7 @@ import {
   WORKBENCH_SERVICE,
   WorkbenchService,
 } from "@pooder/core";
-import { ViewportSystem } from "./ViewportSystem";
+import { ViewportSystem } from "./viewport-system";
 import type {
   RenderCoordinateSpace,
   RenderEffectSpec,
@@ -17,8 +17,11 @@ import type {
   RenderObjectLayoutSpec,
   RenderObjectSpec,
   RenderPassSpec,
-} from "./renderSpec";
-import { evaluateVisibilityExpr, type VisibilityLayerState } from "./visibility";
+} from "./render-spec";
+import {
+  evaluateVisibilityExpr,
+  type VisibilityLayerState,
+} from "./visibility";
 
 export interface RenderProducerResult {
   passes?: RenderPassSpec[];
@@ -304,9 +307,7 @@ export default class CanvasService implements Service {
       order: Number.isFinite(spec.order) ? Number(spec.order) : 0,
       replace: spec.replace !== false,
       visibility: spec.visibility,
-      effects: Array.isArray(spec.effects)
-        ? [...spec.effects]
-        : [],
+      effects: Array.isArray(spec.effects) ? [...spec.effects] : [],
       objects: Array.isArray(spec.objects) ? [...spec.objects] : [],
     };
   }
@@ -413,7 +414,9 @@ export default class CanvasService implements Service {
   }
 
   private syncManagedPassStacking(passes: ManagedPassMeta[]) {
-    const orderedPasses = [...passes].sort((a, b) => this.comparePassMeta(a, b));
+    const orderedPasses = [...passes].sort((a, b) =>
+      this.comparePassMeta(a, b),
+    );
     if (!orderedPasses.length) return;
 
     const canvasObjects = this.canvas.getObjects();
@@ -492,7 +495,9 @@ export default class CanvasService implements Service {
     };
   }
 
-  private applyManagedPassVisibility(options: { render?: boolean } = {}): boolean {
+  private applyManagedPassVisibility(
+    options: { render?: boolean } = {},
+  ): boolean {
     if (!this.managedPassMetas.size) return false;
     const layers = this.getPassRuntimeState();
     const context = this.buildVisibilityEvalContext(layers);
@@ -530,7 +535,9 @@ export default class CanvasService implements Service {
           const result = await entry.producer();
           if (!result) continue;
           const specs = Array.isArray(result.passes) ? result.passes : [];
-          specs.forEach((spec) => this.mergePassSpec(passes, spec, entry.toolId));
+          specs.forEach((spec) =>
+            this.mergePassSpec(passes, spec, entry.toolId),
+          );
         } catch (error) {
           console.error(
             `[CanvasService] render producer "${entry.toolId}" failed.`,
@@ -610,9 +617,11 @@ export default class CanvasService implements Service {
       });
     }
 
-    const managedObjects = this.canvas.getObjects().filter((obj: any) =>
-      this.isManagedPassObject(obj as FabricObject),
-    ) as FabricObject[];
+    const managedObjects = this.canvas
+      .getObjects()
+      .filter((obj: any) =>
+        this.isManagedPassObject(obj as FabricObject),
+      ) as FabricObject[];
 
     const effectTemplateCache = new Map<string, FabricObject | null>();
 
@@ -1162,9 +1171,7 @@ export default class CanvasService implements Service {
 
   private readPathDataFromSpec(spec: RenderObjectSpec): string | undefined {
     if (spec.type !== "path") return undefined;
-    const raw =
-      (spec.props as any)?.path ||
-      (spec.props as any)?.pathData;
+    const raw = (spec.props as any)?.path || (spec.props as any)?.pathData;
     if (typeof raw !== "string") return undefined;
     return raw;
   }

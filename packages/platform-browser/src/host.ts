@@ -1,6 +1,6 @@
 import type { EventBus, Service, ServiceIdentifier } from "@pooder/core";
-import CanvasService from "./CanvasService";
-import { SceneLayoutService } from "./SceneLayoutService";
+import CanvasService from "./canvas-service";
+import { SceneLayoutService } from "./scene-layout-service";
 import { CANVAS_SERVICE, SCENE_LAYOUT_SERVICE } from "./tokens";
 
 interface BrowserHostRuntimeServices {
@@ -43,9 +43,10 @@ export interface AttachBrowserHostOptions {
   createSceneLayoutService?: () => SceneLayoutService;
 }
 
-function measureContainer(
-  container: AttachBrowserHostOptions["container"],
-): { height: number; width: number } {
+function measureContainer(container: AttachBrowserHostOptions["container"]): {
+  height: number;
+  width: number;
+} {
   return {
     width: Number(container.clientWidth || 0),
     height: Number(container.clientHeight || 0),
@@ -80,7 +81,9 @@ export function attachBrowserHost(
     CANVAS_SERVICE,
   );
   if (!registeredCanvas) {
-    throw new Error("[@pooder/platform-browser] Failed to register CanvasService.");
+    throw new Error(
+      "[@pooder/platform-browser] Failed to register CanvasService.",
+    );
   }
 
   const registeredLayout = runtime.services.register(

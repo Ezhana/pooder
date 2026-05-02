@@ -1,5 +1,13 @@
 # @pooder/kit
 
+## 7.0.3
+
+### Patch Changes
+
+- Improve small-screen canvas layout by using responsive view padding, removing fixed host minimums, and normalizing canvas-related source file names.
+- Updated dependencies
+  - @pooder/platform-browser@1.0.2
+
 ## 7.0.2
 
 ### Patch Changes

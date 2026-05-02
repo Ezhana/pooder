@@ -1,4 +1,4 @@
-import type { VisibilityExpr } from "./renderSpec";
+import type { VisibilityExpr } from "./render-spec";
 
 export interface VisibilityLayerState {
   exists: boolean;
