@@ -3,9 +3,9 @@ import type { TemplateOverlayConfigPatch } from "./model";
 
 export function createTemplateOverlayCommands(tool: {
   getConfig(): unknown;
-  replaceConfig(config: unknown): unknown;
-  patchConfig(patch: TemplateOverlayConfigPatch): unknown;
-  clearConfig(): unknown;
+  replaceConfig(config: unknown): Promise<unknown> | unknown;
+  patchConfig(patch: TemplateOverlayConfigPatch): Promise<unknown> | unknown;
+  clearConfig(): Promise<unknown> | unknown;
 }): CommandContribution[] {
   return [
     {

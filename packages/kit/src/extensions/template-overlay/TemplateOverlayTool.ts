@@ -154,21 +154,21 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     return normalizeTemplateOverlayConfig(this.config);
   }
 
-  replaceConfig(config: unknown): TemplateOverlayConfig {
+  async replaceConfig(config: unknown): Promise<TemplateOverlayConfig> {
     const next = normalizeTemplateOverlayConfig(config);
-    this.writeConfig(next);
+    await this.writeConfig(next);
     return this.getConfig();
   }
 
-  patchConfig(patch: TemplateOverlayConfigPatch): TemplateOverlayConfig {
+  async patchConfig(patch: TemplateOverlayConfigPatch): Promise<TemplateOverlayConfig> {
     const next = patchTemplateOverlayConfig(this.config, patch);
-    this.writeConfig(next);
+    await this.writeConfig(next);
     return this.getConfig();
   }
 
-  clearConfig(): TemplateOverlayConfig {
+  async clearConfig(): Promise<TemplateOverlayConfig> {
     const next = createEmptyTemplateOverlayConfig();
-    this.writeConfig(next);
+    await this.writeConfig(next);
     return this.getConfig();
   }
 
@@ -176,7 +176,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     this.updateOverlays();
   };
 
-  private writeConfig(next: TemplateOverlayConfig) {
+  private async writeConfig(next: TemplateOverlayConfig) {
     this.config = normalizeTemplateOverlayConfig(next);
     this.isUpdatingConfig = true;
     try {
@@ -184,7 +184,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     } finally {
       this.isUpdatingConfig = false;
     }
-    this.updateOverlays();
+    await this.updateOverlaysAsync();
   }
 
   private getConfigService(): ConfigurationService | undefined {
