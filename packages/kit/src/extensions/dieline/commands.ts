@@ -21,6 +21,8 @@ export function createDielineCommands(tool: any, state: any): CommandContributio
           smoothing?: boolean;
           simplifyTolerance?: number;
           threshold?: number;
+          maxTraceDimension?: number;
+          maskMode?: "auto" | "alpha" | "whitebg";
           debug?: boolean;
         },
       ) => {
@@ -32,6 +34,8 @@ export function createDielineCommands(tool: any, state: any): CommandContributio
             smoothing: detectOptions.smoothing ?? true,
             simplifyTolerance: detectOptions.simplifyTolerance ?? 2,
             threshold: detectOptions.threshold,
+            maxTraceDimension: detectOptions.maxTraceDimension,
+            maskMode: detectOptions.maskMode,
             debug,
           };
 

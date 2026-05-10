@@ -42,6 +42,8 @@ export interface ImageTraceOptions {
   smoothing?: boolean;
   scaleToWidth?: number;
   scaleToHeight?: number;
+  maxTraceDimension?: number;
+  maskMode?: MaskMode;
   debug?: boolean;
 }
 
@@ -64,9 +66,9 @@ export class ImageTracer {
     options: ImageTraceOptions = {},
   ): Promise<{ pathData: string; baseBounds: Bounds; bounds: Bounds }> {
     const img = await this.loadImage(imageUrl);
-    const width = img.width;
-    const height = img.height;
-    if (width <= 0 || height <= 0) {
+    const sourceWidth = img.width;
+    const sourceHeight = img.height;
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
       const w = options.scaleToWidth ?? 0;
       const h = options.scaleToHeight ?? 0;
       return {
@@ -75,6 +77,18 @@ export class ImageTracer {
         bounds: { x: 0, y: 0, width: w, height: h },
       };
     }
+    const maxSourceDim = Math.max(sourceWidth, sourceHeight);
+    const maxTraceDimension = Math.max(
+      1,
+      Math.floor(options.maxTraceDimension ?? 4096),
+    );
+    const traceScale = Math.min(1, maxTraceDimension / maxSourceDim);
+    const width = Math.max(1, Math.round(sourceWidth * traceScale));
+    const height = Math.max(1, Math.round(sourceHeight * traceScale));
+    const outputWidth = options.scaleToWidth ?? sourceWidth;
+    const outputHeight = options.scaleToHeight ?? sourceHeight;
+    const outputScaleX = outputWidth / width;
+    const outputScaleY = outputHeight / height;
     const debug = options.debug === true;
     const debugLog = (message: string, payload?: Record<string, unknown>) => {
       if (!debug) return;
@@ -92,18 +106,19 @@ export class ImageTracer {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Could not get 2D context");
 
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(img, 0, 0, width, height);
     const imageData = ctx.getImageData(0, 0, width, height);
 
     // Strategy: fixed internal morphology + single-component target.
     const threshold = options.threshold ?? 10;
-    const expand = Math.max(0, Math.floor(options.expand ?? 0));
-    const simplifyTolerance = options.simplifyTolerance ?? 2.5;
+    const requestedExpand = Math.max(0, Number(options.expand ?? 0));
+    const expand = Math.max(0, Math.floor(requestedExpand * traceScale));
+    const simplifyTolerance = (options.simplifyTolerance ?? 2.5) * traceScale;
     const useSmoothing = options.smoothing !== false;
     const componentMode: ComponentMode = "all";
     const minComponentArea = 0;
     const maxDim = Math.max(width, height);
-    const maskMode: MaskMode = "auto";
+    const maskMode: MaskMode = options.maskMode ?? "auto";
     const whiteThreshold = 240;
     const alphaOpaqueCutoff = 250;
     const preprocessDilateRadius = Math.max(
@@ -125,15 +140,19 @@ export class ImageTracer {
     );
     const connectMaxDilateRadius = Math.max(
       connectStartDilateRadius,
-      Math.floor(Math.max(maxDim * 0.2, expand * 2.5)),
+      Math.min(128, Math.floor(Math.max(maxDim * 0.2, expand * 2.5))),
     );
     const connectErodeRatio = 0.65;
 
     debugLog("traceWithBounds:start", {
-      width,
-      height,
+      sourceWidth,
+      sourceHeight,
+      traceWidth: width,
+      traceHeight: height,
+      traceScale,
       threshold,
-      expand,
+      expand: requestedExpand,
+      internalExpand: expand,
       simplifyTolerance,
       smoothing: useSmoothing,
       strategy: {
@@ -294,8 +313,8 @@ export class ImageTracer {
 
     if (!baseContours.length) {
       // Fallback: Return a rectangular outline matching dimensions
-      const w = options.scaleToWidth ?? width;
-      const h = options.scaleToHeight ?? height;
+      const w = outputWidth;
+      const h = outputHeight;
       debugLog("fallback:no-base-contour", { width: w, height: h });
       return {
         pathData: `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`,
@@ -314,8 +333,8 @@ export class ImageTracer {
       .filter((contour) => contour.length > 2);
 
     if (!baseUnpaddedContours.length) {
-      const w = options.scaleToWidth ?? width;
-      const h = options.scaleToHeight ?? height;
+      const w = outputWidth;
+      const h = outputHeight;
       debugLog("fallback:empty-base-contours", { width: w, height: h });
       return {
         pathData: `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`,
@@ -357,7 +376,7 @@ export class ImageTracer {
         expand,
       });
       return {
-        pathData: `M 0 0 L ${width} 0 L ${width} ${height} L 0 ${height} Z`,
+        pathData: `M 0 0 L ${outputWidth} 0 L ${outputWidth} ${outputHeight} L 0 ${outputHeight} Z`,
         baseBounds,
         bounds: baseBounds,
       };
@@ -382,7 +401,7 @@ export class ImageTracer {
         expand,
       });
       return {
-        pathData: `M 0 0 L ${width} 0 L ${width} ${height} L 0 ${height} Z`,
+        pathData: `M 0 0 L ${outputWidth} 0 L ${outputWidth} ${outputHeight} L 0 ${outputHeight} Z`,
         baseBounds,
         bounds: baseBounds,
       };
@@ -394,32 +413,34 @@ export class ImageTracer {
 
     // Post-processing (Scale)
     let finalContours = expandedUnpaddedContours;
-    if (options.scaleToWidth && options.scaleToHeight) {
-      finalContours = this.scaleContours(
+    if (outputWidth !== width || outputHeight !== height) {
+      finalContours = this.scaleContoursByFactor(
         expandedUnpaddedContours,
-        options.scaleToWidth,
-        options.scaleToHeight,
-        globalBounds,
+        outputScaleX,
+        outputScaleY,
       );
       globalBounds = this.boundsFromPoints(this.flattenContours(finalContours));
 
-      const baseScaledContours = this.scaleContours(
+      const baseScaledContours = this.scaleContoursByFactor(
         baseUnpaddedContours,
-        options.scaleToWidth,
-        options.scaleToHeight,
-        baseBounds,
+        outputScaleX,
+        outputScaleY,
       );
       baseBounds = this.boundsFromPoints(
         this.flattenContours(baseScaledContours),
       );
     }
 
-    if (expand > 0) {
+    const outputExpand = Math.max(
+      0,
+      expand * ((outputScaleX + outputScaleY) / 2),
+    );
+    if (outputExpand > 0) {
       const expectedExpandedBounds = {
-        x: baseBounds.x - expand,
-        y: baseBounds.y - expand,
-        width: baseBounds.width + expand * 2,
-        height: baseBounds.height + expand * 2,
+        x: baseBounds.x - outputExpand,
+        y: baseBounds.y - outputExpand,
+        width: baseBounds.width + outputExpand * 2,
+        height: baseBounds.height + outputExpand * 2,
       };
       if (
         expectedExpandedBounds.width > 0 &&
@@ -448,7 +469,7 @@ export class ImageTracer {
             this.flattenContours(finalContours),
           );
           debugLog("traceWithBounds:expand-normalized", {
-            expand,
+            expand: outputExpand,
             expectedExpandedBounds,
             beforeNormalize,
             afterNormalize: globalBounds,
@@ -640,12 +661,12 @@ export class ImageTracer {
 
     if (highResult.selectedCount > 1) {
       return {
-        mask: highResult.mask,
-        appliedDilateRadius: highResult.dilateRadius,
-        appliedErodeRadius: highResult.erodeRadius,
+        mask: sourceMask,
+        appliedDilateRadius: 0,
+        appliedErodeRadius: 0,
         reachedSingleComponent: false,
-        rawContourCount: highResult.rawCount,
-        selectedContourCount: highResult.selectedCount,
+        rawContourCount: initial.rawCount,
+        selectedContourCount: initial.selectedCount,
       };
     }
 
@@ -918,6 +939,19 @@ export class ImageTracer {
       x: (p.x - bounds.x) * scaleX,
       y: (p.y - bounds.y) * scaleY,
     }));
+  }
+
+  private static scaleContoursByFactor(
+    contours: Point[][],
+    scaleX: number,
+    scaleY: number,
+  ): Point[][] {
+    return contours.map((points) =>
+      points.map((p) => ({
+        x: p.x * scaleX,
+        y: p.y * scaleY,
+      })),
+    );
   }
 
   private static scaleContours(

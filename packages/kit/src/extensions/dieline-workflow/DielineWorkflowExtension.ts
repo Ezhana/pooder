@@ -54,6 +54,8 @@ export interface DetectDielineOptions {
   smoothing?: boolean;
   simplifyTolerance?: number;
   threshold?: number;
+  maxTraceDimension?: number;
+  maskMode?: "auto" | "alpha" | "whitebg";
   debug?: boolean;
 }
 
@@ -92,6 +94,7 @@ export interface UploadAndDetectEdgeOptions {
   expand?: number;
   smoothing?: boolean;
   simplifyTolerance?: number;
+  maxTraceDimension?: number;
 }
 
 export interface UploadAndDetectEdgeResult {
@@ -316,6 +319,8 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
         smoothing?: boolean;
         simplifyTolerance?: number;
         threshold?: number;
+        maxTraceDimension?: number;
+        maskMode?: "auto" | "alpha" | "whitebg";
       };
     },
   ): Promise<DetectPostCommitDiagnostics | null> {
@@ -346,6 +351,8 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
           smoothing: options?.detect?.smoothing ?? true,
           simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
           threshold: options?.detect?.threshold,
+          maxTraceDimension: options?.detect?.maxTraceDimension,
+          maskMode: options?.detect?.maskMode,
           debug: false,
         },
       );
@@ -395,6 +402,8 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
           smoothing: options.detect?.smoothing ?? true,
           simplifyTolerance: options.detect?.simplifyTolerance ?? 2,
           threshold: options.detect?.threshold,
+          maxTraceDimension: options.detect?.maxTraceDimension,
+          maskMode: options.detect?.maskMode,
           debug,
         },
       );
@@ -415,20 +424,24 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
 
       this.applyDetectedDielineConfig(result, sourceImage);
 
-      const postCommitDiagnostics = await this.detectPostCommitDiagnostics(
-        sourceImage.imageIds,
-        expectedExpand,
-        {
-          multiplier: options.export?.multiplier ?? 2,
-          format: options.export?.format ?? "png",
-          detect: {
-            expand: options.detect?.expand ?? 0,
-            smoothing: options.detect?.smoothing ?? true,
-            simplifyTolerance: options.detect?.simplifyTolerance ?? 2,
-            threshold: options.detect?.threshold,
-          },
-        },
-      );
+      const postCommitDiagnostics = includeDiagnostics
+        ? await this.detectPostCommitDiagnostics(
+            sourceImage.imageIds,
+            expectedExpand,
+            {
+              multiplier: options.export?.multiplier ?? 2,
+              format: options.export?.format ?? "png",
+              detect: {
+                expand: options.detect?.expand ?? 0,
+                smoothing: options.detect?.smoothing ?? true,
+                simplifyTolerance: options.detect?.simplifyTolerance ?? 2,
+                threshold: options.detect?.threshold,
+                maxTraceDimension: options.detect?.maxTraceDimension,
+                maskMode: options.detect?.maskMode,
+              },
+            },
+          )
+        : null;
 
       return {
         ...result,
@@ -465,6 +478,7 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
         expand: options?.expand ?? 10,
         smoothing: options?.smoothing ?? true,
         simplifyTolerance: options?.simplifyTolerance ?? 2,
+        maxTraceDimension: options?.maxTraceDimension,
       },
     );
 

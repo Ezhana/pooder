@@ -2083,10 +2083,11 @@ export class ImageTool implements ExtensionDefinition {
       throw new Error("image-ids-required");
     }
 
-    const frameScene = this.getSurfaceFrameRect();
-    const frame = this.getSurfaceFrameRectScreen(frameScene);
+    const frame = this.getSurfaceFrameRect();
     const multiplier = Math.max(1, options.multiplier ?? 2);
     const format: "png" | "jpeg" = options.format === "jpeg" ? "jpeg" : "png";
+    const sceneScale = this.canvasService.getSceneScale();
+    const scaleBase = sceneScale > 0 ? sceneScale : 1;
 
     const width = Math.max(1, Math.round(frame.width * multiplier));
     const height = Math.max(1, Math.round(frame.height * multiplier));
@@ -2121,16 +2122,20 @@ export class ImageTool implements ExtensionDefinition {
         const center = source.getCenterPoint
           ? source.getCenterPoint()
           : new Point(source.left ?? 0, source.top ?? 0);
+        const sceneCenter = this.canvasService.toScenePoint({
+          x: center.x,
+          y: center.y,
+        });
 
         clone.set({ clipPath: undefined });
         delete clone.__pooderEffectClipKey;
         clone.set({
           originX: "center",
           originY: "center",
-          left: (center.x - frame.left) * multiplier,
-          top: (center.y - frame.top) * multiplier,
-          scaleX: (source.scaleX || 1) * multiplier,
-          scaleY: (source.scaleY || 1) * multiplier,
+          left: (sceneCenter.x - frame.left) * multiplier,
+          top: (sceneCenter.y - frame.top) * multiplier,
+          scaleX: ((source.scaleX || 1) / scaleBase) * multiplier,
+          scaleY: ((source.scaleY || 1) / scaleBase) * multiplier,
           angle: source.angle || 0,
           selectable: false,
           evented: false,
