@@ -123,14 +123,6 @@ export function buildDielineRenderBundle(
     canvasWidth,
     canvasHeight,
   };
-  const cutFrameRect = {
-    left: cx - cutW / 2,
-    top: cy - cutH / 2,
-    width: cutW,
-    height: cutH,
-    space: "screen" as const,
-  };
-
   const specs: RenderObjectSpec[] = [];
 
   if (
@@ -270,13 +262,9 @@ export function buildDielineRenderBundle(
     width: cutW,
     height: cutH,
     radius: cutR,
-    // Build the clip path in the cut frame's local coordinates so Fabric
-    // does not have to infer placement from the standalone path bounds.
-    x: cutW / 2,
-    y: cutH / 2,
+    x: cx,
+    y: cy,
     features: cutFeatures,
-    canvasWidth: cutW,
-    canvasHeight: cutH,
   });
 
   if (!clipPathData) {
@@ -295,12 +283,6 @@ export function buildDielineRenderBundle(
           id: ids.clipSource,
           type: "path",
           space: "screen",
-          layout: {
-            reference: "custom",
-            referenceRect: cutFrameRect,
-            alignX: "start",
-            alignY: "start",
-          },
           data: {
             id: ids.clipSource,
             type: "dieline-effect",

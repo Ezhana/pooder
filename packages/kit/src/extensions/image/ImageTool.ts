@@ -2015,15 +2015,28 @@ export class ImageTool implements ExtensionDefinition {
     for (const item of this.workingItems) {
       const sourceUrl = item.sourceUrl || item.url;
       const previousCommitted = item.committedUrl;
+      const committedImage = await this.exportCroppedImageByIds([item.id], {
+        format: "png",
+        multiplier: 2,
+      });
+      const committedUrl = committedImage.url || sourceUrl;
+      this.sourceSizeCache.rememberSourceSize(committedUrl, {
+        width: committedImage.width,
+        height: committedImage.height,
+      });
       next.push(
         this.normalizeItem({
           ...item,
           url: sourceUrl,
           sourceUrl,
-          committedUrl: undefined,
+          committedUrl,
         }),
       );
-      if (previousCommitted && previousCommitted !== sourceUrl) {
+      if (
+        previousCommitted &&
+        previousCommitted !== sourceUrl &&
+        previousCommitted !== committedUrl
+      ) {
         this.sourceSizeCache.deleteSourceSize(previousCommitted);
       }
     }
