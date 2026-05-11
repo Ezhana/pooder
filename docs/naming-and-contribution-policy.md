@@ -64,6 +64,22 @@ but new public APIs should not copy the legacy `*Tool` pattern.
 - New visibility/session predicates should refer to generic workflow context,
   not hard-coded kit ids such as `pooder.kit.image`.
 
+### Events
+
+- Public runtime event names use owner-scoped namespaces such as
+  `workflow:session:change`, `scene:layout:change`, or
+  `pooder.kit.image-placement:state:change`.
+- Event payload ownership follows the emitter. Core owns core service payloads;
+  platform packages own browser/Fabric adapter payloads; kit capabilities own
+  capability-specific payloads; applications own product workflow payloads.
+- New public events must have exported TypeScript payload types or be exposed
+  through typed subscription methods such as `onDidChange`.
+- Service-local raw names such as `change` may stay private behind typed
+  service APIs. New cross-package listeners must not depend on those raw local
+  names directly.
+- Legacy global events such as `tool:activated` and `tool:session:change` remain
+  compatibility bridges until the deprecation/removal phase.
+
 ## Extension Contribution Rules
 
 ### Commands

@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M1 in progress; P1.S4 next.
+Current milestone: M1 complete; M2 next.
 
 Completed:
 
@@ -26,10 +26,13 @@ Completed:
 - P1.S3 workflow-neutral sessions have been added. Applications can manage
   caller-defined workflow sessions without tool registration, while legacy
   `ToolSessionService` remains available as an adapter.
+- P1.S4 typed runtime facades have been added. Applications can resolve typed
+  capability facades from the runtime while legacy command ids remain available
+  for compatibility and cross-extension orchestration.
 
 Next recommended slice:
 
-- P1.S4 - Typed Runtime Facades.
+- P2.S1 - SceneService Fabric Adapter.
 
 Resume instruction for a new thread:
 

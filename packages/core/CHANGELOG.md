@@ -13,6 +13,9 @@
 - Added `WorkflowSessionService` and public workflow session types so apps can
   manage caller-defined workflow sessions, leave policies, and dirty tracking
   without registering toolbar tools.
+- Added typed runtime capability facade access through `Pooder.capabilities` so
+  apps can call capability APIs directly while legacy command ids remain
+  available through the command bus.
 
 ### Planning Notes
 
@@ -22,6 +25,8 @@
 - Published naming and contribution policy for upcoming capability, scene,
   layer, element, and workflow session contracts. See
   `../../docs/naming-and-contribution-policy.md`.
+- Documented event naming and payload ownership rules for typed runtime and
+  capability-first APIs. See `../../docs/naming-and-contribution-policy.md`.
 
 ## 3.0.0
 

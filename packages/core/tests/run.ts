@@ -326,6 +326,119 @@ async function testCapabilityContributionWithoutTool() {
   });
 }
 
+async function testRuntimeCapabilityFacadeApiKeepsCommandBridge() {
+  await withRuntime(async (runtime) => {
+    type MathCapabilityApi = {
+      add(left: number, right: number): number;
+    };
+    const changes: Array<{ added: string[]; removed: string[] }> = [];
+
+    const subscription = runtime.capabilities.onDidChange((event) => {
+      changes.push({
+        added: event.added.slice(),
+        removed: event.removed.slice(),
+      });
+    });
+
+    runtime.extensions.register({
+      id: "runtime-capability-api",
+      contribute() {
+        return {
+          capabilities: [
+            {
+              id: "pooder.test.math",
+              metadata: {
+                name: "Math Capability",
+              },
+              commands: ["math.add"],
+              facade: {
+                add: (left: number, right: number) => left + right,
+              } satisfies MathCapabilityApi,
+            },
+          ],
+          commands: [
+            {
+              id: "math.add",
+              command: "math.add",
+              title: "Add",
+              handler: (left: number, right: number) => left + right,
+            },
+          ],
+        };
+      },
+      activate() {},
+    });
+
+    await runtime.extensions.flushActivation();
+
+    assertEqual(runtime.capabilities.has("pooder.test.math"), true);
+    assertEqual(
+      runtime.capabilities.get<MathCapabilityApi>("pooder.test.math")?.add(2, 3),
+      5,
+    );
+    assertEqual(
+      runtime.capabilities
+        .getOrThrow<MathCapabilityApi>("pooder.test.math")
+        .add(4, 6),
+      10,
+    );
+    assertEqual(
+      runtime.capabilities.getDefinition("pooder.test.math")?.metadata?.name,
+      "Math Capability",
+    );
+    assertDeepEqual(
+      runtime.capabilities.list().map((capability) => capability.id),
+      ["pooder.test.math"],
+    );
+    assertEqual(await runtime.commands.execute("math.add", 7, 8), 15);
+    assertDeepEqual(changes, [
+      { added: ["pooder.test.math"], removed: [] },
+    ]);
+
+    await runtime.extensions.unregister("runtime-capability-api");
+
+    assertEqual(runtime.capabilities.get("pooder.test.math"), undefined);
+    assertDeepEqual(changes, [
+      { added: ["pooder.test.math"], removed: [] },
+      { added: [], removed: ["pooder.test.math"] },
+    ]);
+
+    subscription.dispose();
+  });
+}
+
+async function testRuntimeCapabilityFacadeApiThrowsForMissingFacade() {
+  await withRuntime(async (runtime) => {
+    runtime.extensions.register({
+      id: "facade-missing",
+      contribute() {
+        return {
+          capabilities: [
+            {
+              id: "pooder.test.facade-missing",
+            },
+          ],
+        };
+      },
+      activate() {},
+    });
+
+    await runtime.extensions.flushActivation();
+
+    try {
+      runtime.capabilities.getOrThrow("pooder.test.facade-missing");
+      throw new Error("Expected missing facade to throw.");
+    } catch (error) {
+      assertEqual(
+        error instanceof Error &&
+          error.message ===
+            'Capability "pooder.test.facade-missing" facade not found.',
+        true,
+      );
+    }
+  });
+}
+
 async function testCapabilityCanCoexistWithLegacyTool() {
   await withRuntime(async (runtime) => {
     runtime.extensions.register({
@@ -810,6 +923,14 @@ async function main() {
     [
       "registers capabilities without toolbar tools",
       testCapabilityContributionWithoutTool,
+    ],
+    [
+      "exposes typed runtime capability facades while keeping command bridge",
+      testRuntimeCapabilityFacadeApiKeepsCommandBridge,
+    ],
+    [
+      "throws clearly when a runtime capability facade is missing",
+      testRuntimeCapabilityFacadeApiThrowsForMissingFacade,
     ],
     [
       "allows capabilities to coexist with legacy tools",

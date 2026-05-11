@@ -7,11 +7,13 @@ import {
   ServiceRegistry,
 } from "./service";
 import EventBus from "./event";
+import type Disposable from "./disposable";
 import {
   ExtensionManager,
   type ExtensionDefinition,
   type ExtensionStateSnapshot,
 } from "./extension";
+import type { RegisteredCapabilityDefinition } from "./capability";
 import {
   CORE_SERVICE_TOKENS,
   CapabilityRegistryService,
@@ -77,6 +79,19 @@ type RuntimeCommandsApi = {
   execute<T = unknown>(id: string, ...args: any[]): Promise<T>;
 };
 
+type RuntimeCapabilitiesApi = {
+  get<TFacade = unknown>(id: string): TFacade | undefined;
+  getOrThrow<TFacade = unknown>(id: string, errorMessage?: string): TFacade;
+  getDefinition<TFacade = unknown>(
+    id: string,
+  ): RegisteredCapabilityDefinition<TFacade> | undefined;
+  list(): RegisteredCapabilityDefinition[];
+  has(id: string): boolean;
+  onDidChange(
+    callback: Parameters<CapabilityRegistryService["onDidChange"]>[0],
+  ): Disposable;
+};
+
 type RuntimeConfigApi = {
   get<T = unknown>(key: string, defaultValue?: T): T;
   update(key: string, value: any): void;
@@ -129,6 +144,7 @@ export class Pooder {
   readonly services: RuntimeServicesApi;
   readonly extensions: RuntimeExtensionsApi;
   readonly commands: RuntimeCommandsApi;
+  readonly capabilities: RuntimeCapabilitiesApi;
   readonly config: RuntimeConfigApi;
   readonly workbench: RuntimeWorkbenchApi;
 
@@ -205,6 +221,17 @@ export class Pooder {
 
     this.commands = {
       execute: (id, ...args) => this.commandService.executeCommand(id, ...args),
+    };
+
+    this.capabilities = {
+      get: (id) => this.capabilityRegistryService.getFacade(id),
+      getOrThrow: (id, errorMessage) =>
+        this.getCapabilityFacadeOrThrow(id, errorMessage),
+      getDefinition: (id) => this.capabilityRegistryService.getCapability(id),
+      list: () => this.capabilityRegistryService.listCapabilities(),
+      has: (id) => this.capabilityRegistryService.hasCapability(id),
+      onDidChange: (callback) =>
+        this.capabilityRegistryService.onDidChange(callback),
     };
 
     this.config = {
@@ -351,6 +378,17 @@ export class Pooder {
 
   hasService(identifier: ServiceIdentifier<Service>): boolean {
     return this.serviceRegistry.has(identifier);
+  }
+
+  getCapabilityFacadeOrThrow<TFacade = unknown>(
+    id: string,
+    errorMessage?: string,
+  ): TFacade {
+    const facade = this.capabilityRegistryService.getFacade<TFacade>(id);
+    if (facade !== undefined) {
+      return facade;
+    }
+    throw new Error(errorMessage ?? `Capability "${id}" facade not found.`);
   }
 
   async dispose(): Promise<void> {
