@@ -181,9 +181,10 @@ export class SizeTool implements ExtensionDefinition {
             "10%",
             "12%",
             "15%",
+            "16%",
             "20%",
           ],
-          default: "12%",
+          default: "16%",
         },
         {
           id: "size.minMm",

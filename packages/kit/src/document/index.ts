@@ -554,7 +554,7 @@ function applySurfaceSizeConfig(
   runtime.config.update("size.maxMm", sizeMetadata.maxMm ?? Math.max(widthMm, heightMm, 2000));
   runtime.config.update("size.minMm", sizeMetadata.minMm ?? 0.1);
   runtime.config.update("size.stepMm", sizeMetadata.stepMm ?? 0.001);
-  runtime.config.update("size.viewPadding", sizeMetadata.viewPadding ?? "12%");
+  runtime.config.update("size.viewPadding", sizeMetadata.viewPadding ?? "16%");
 }
 
 function resolveActiveSurface(document: EditorDocument): EditorSurface | undefined {

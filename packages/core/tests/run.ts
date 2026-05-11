@@ -1226,7 +1226,7 @@ async function testSceneLayoutModelDefaultsAndPadding() {
   };
 
   const state = readSizeState(config as any);
-  assertEqual(state.viewPadding, "12%");
+  assertEqual(state.viewPadding, "16%");
   assertEqual(
     resolveViewPaddingPx("10%", 320, 480),
     32,
@@ -1262,15 +1262,15 @@ async function testSceneLayoutModelComputesCutModes() {
     minMm: 10,
     stepMm: 0.1,
     unit: "mm",
-    viewPadding: "12%",
+    viewPadding: "16%",
   });
 
   assert(layout, "outset layout should resolve");
-  assertClose(layout.scale, 3.8);
-  assertClose(layout.cutRect.left, 172);
-  assertClose(layout.cutRect.width, 456);
-  assertClose(layout.trimRect.left, 210);
-  assertClose(layout.trimRect.width, 380);
+  assertClose(layout.scale, 3.4);
+  assertClose(layout.cutRect.left, 196);
+  assertClose(layout.cutRect.width, 408);
+  assertClose(layout.trimRect.left, 230);
+  assertClose(layout.trimRect.width, 340);
 
   const insetLayout = computeSceneLayout(canvas, {
     actualHeightMm: 100,
@@ -1283,12 +1283,12 @@ async function testSceneLayoutModelComputesCutModes() {
     minMm: 10,
     stepMm: 0.1,
     unit: "mm",
-    viewPadding: "12%",
+    viewPadding: "16%",
   });
 
   assert(insetLayout, "inset layout should resolve");
-  assertClose(insetLayout.trimRect.width, 456);
-  assertClose(insetLayout.cutRect.width, 364.8);
+  assertClose(insetLayout.trimRect.width, 408);
+  assertClose(insetLayout.cutRect.width, 326.4);
 }
 
 async function testSceneLayoutModelBuildsDielineGeometry() {
@@ -1304,7 +1304,7 @@ async function testSceneLayoutModelBuildsDielineGeometry() {
     minMm: 10,
     stepMm: 0.1,
     unit: "mm",
-    viewPadding: "12%",
+    viewPadding: "16%",
   });
   assert(layout, "layout should resolve before geometry");
 
@@ -1328,8 +1328,8 @@ async function testSceneLayoutModelBuildsDielineGeometry() {
   assertEqual(geometry.shapeStyle.fitMode, "contain");
   assertEqual(geometry.shapeStyle.lobeSpread, 1);
   assertEqual(geometry.width, layout.trimRect.width);
-  assertClose(geometry.radius, 19);
-  assertClose(geometry.offset, 38);
+  assertClose(geometry.radius, 17);
+  assertClose(geometry.offset, 34);
   assertEqual(geometry.customSourceWidthPx, 320);
   assertEqual(geometry.customSourceHeightPx, 240);
 }

@@ -25,7 +25,7 @@ export const DEFAULT_SIZE_STATE: SizeState = {
   aspectRatio: 1,
   cutMode: "trim",
   cutMarginMm: 0,
-  viewPadding: "12%",
+  viewPadding: "16%",
   minMm: 10,
   maxMm: 2000,
   stepMm: 0.1,
