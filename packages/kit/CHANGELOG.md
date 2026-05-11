@@ -1,5 +1,15 @@
 # @pooder/kit
 
+## Unreleased
+
+### Planning Notes
+
+- Track the capability-first architecture migration. Kit is planned to stop
+  contributing product tools and instead expose optional capabilities such as
+  image placement, edge detection, dieline geometry, white ink extraction,
+  template overlays, rulers, and export helpers. See
+  `../../docs/architecture-migration-plan.md`.
+
 ## 8.0.0
 
 ### Major Changes

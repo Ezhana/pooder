@@ -1,5 +1,13 @@
 # @pooder/core
 
+## Unreleased
+
+### Planning Notes
+
+- Track the capability-first architecture migration. Core is planned to own the
+  runtime, capability registry, headless scene contracts, and workflow-neutral
+  session contracts. See `../../docs/architecture-migration-plan.md`.
+
 ## 3.0.0
 
 ### Major Changes

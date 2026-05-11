@@ -1,5 +1,14 @@
 # @pooder/vue
 
+## Unreleased
+
+### Planning Notes
+
+- Track the capability-first architecture migration. Vue is planned to remain a
+  runtime and canvas shell while application packages own tool catalogs,
+  activity bars, labels, and workflow composition. See
+  `../../docs/architecture-migration-plan.md`.
+
 ## 5.0.2
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # @pooder/platform-browser
 
+## Unreleased
+
+### Planning Notes
+
+- Track the capability-first architecture migration. The browser platform is
+  planned to implement core scene and render contracts behind Fabric/browser
+  adapters while keeping tool-free layer and element operations available. See
+  `../../docs/architecture-migration-plan.md`.
+
 ## 1.0.2
 
 ### Patch Changes
