@@ -1,8 +1,10 @@
 import type { EventBus, Service, ServiceIdentifier } from "@pooder/core";
+import { BrowserSceneExportService } from "./browser-scene-export-service";
 import CanvasService from "./canvas-service";
 import { FabricSceneAdapter } from "./scene/fabric-scene-adapter";
 import { SceneLayoutService } from "./scene-layout-service";
 import {
+  BROWSER_SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
   FABRIC_SCENE_ADAPTER,
   SCENE_LAYOUT_SERVICE,
@@ -25,6 +27,7 @@ export interface BrowserHostRuntime {
 }
 
 export interface BrowserHostAttachment {
+  readonly browserSceneExportService: BrowserSceneExportService;
   readonly canvasService: CanvasService;
   readonly fabricSceneAdapter: FabricSceneAdapter;
   readonly sceneLayoutService: SceneLayoutService;
@@ -43,6 +46,7 @@ export interface AttachBrowserHostOptions {
     canvas: HTMLCanvasElement,
     runtime: BrowserHostRuntime,
   ) => CanvasService;
+  createBrowserSceneExportService?: () => BrowserSceneExportService;
   createFabricSceneAdapter?: () => FabricSceneAdapter;
   createResizeObserver?: (
     callback: ResizeObserverCallback,
@@ -68,6 +72,9 @@ export function attachBrowserHost(
     options.createCanvasService ??
     ((canvas, currentRuntime) =>
       new CanvasService(canvas, { eventBus: currentRuntime.eventBus }));
+  const createBrowserSceneExportService =
+    options.createBrowserSceneExportService ??
+    (() => new BrowserSceneExportService());
   const createSceneLayoutService =
     options.createSceneLayoutService ?? (() => new SceneLayoutService());
   const createFabricSceneAdapter =
@@ -84,6 +91,7 @@ export function attachBrowserHost(
 
   const canvasService = createCanvasService(canvas, runtime);
   const sceneLayoutService = createSceneLayoutService();
+  const browserSceneExportService = createBrowserSceneExportService();
   const fabricSceneAdapter = createFabricSceneAdapter();
 
   const registeredCanvas = runtime.services.register(
@@ -107,11 +115,27 @@ export function attachBrowserHost(
     );
   }
 
+  const registeredExport = runtime.services.register(
+    browserSceneExportService,
+    BROWSER_SCENE_EXPORT_SERVICE,
+  );
+  if (!registeredExport) {
+    runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
+    runtime.services.unregister(canvasService, CANVAS_SERVICE);
+    throw new Error(
+      "[@pooder/platform-browser] Failed to register BrowserSceneExportService.",
+    );
+  }
+
   const registeredSceneAdapter = runtime.services.register(
     fabricSceneAdapter,
     FABRIC_SCENE_ADAPTER,
   );
   if (!registeredSceneAdapter) {
+    runtime.services.unregister(
+      browserSceneExportService,
+      BROWSER_SCENE_EXPORT_SERVICE,
+    );
     runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
     runtime.services.unregister(canvasService, CANVAS_SERVICE);
     throw new Error(
@@ -130,12 +154,17 @@ export function attachBrowserHost(
   resizeObserver.observe(container);
 
   return {
+    browserSceneExportService,
     canvasService,
     fabricSceneAdapter,
     sceneLayoutService,
     dispose() {
       resizeObserver.disconnect();
       runtime.services.unregister(fabricSceneAdapter, FABRIC_SCENE_ADAPTER);
+      runtime.services.unregister(
+        browserSceneExportService,
+        BROWSER_SCENE_EXPORT_SERVICE,
+      );
       runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
       runtime.services.unregister(canvasService, CANVAS_SERVICE);
     },

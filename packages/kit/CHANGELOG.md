@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Updated the legacy `exportImage` design export command to delegate browser
+  export work to `@pooder/platform-browser` while preserving compatibility
+  layer defaults and result shape.
+
 ### Planning Notes
 
 - Track the capability-first architecture migration. Kit is planned to stop

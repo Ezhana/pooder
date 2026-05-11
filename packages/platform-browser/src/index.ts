@@ -1,3 +1,4 @@
+export * from "./browser-scene-export-service";
 export { default as CanvasService } from "./canvas-service";
 export type { CanvasPassStackingMeta } from "./canvas-service";
 export * from "./host";

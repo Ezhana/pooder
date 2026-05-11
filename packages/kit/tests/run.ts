@@ -33,7 +33,11 @@ import {
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
 import { WhiteInkTool } from "../src/extensions/white-ink/WhiteInkTool";
 import { DielineWorkflowExtension } from "../src/extensions/dieline-workflow";
-import { CANVAS_SERVICE, evaluateVisibilityExpr } from "@pooder/platform-browser";
+import {
+  BROWSER_SCENE_EXPORT_SERVICE,
+  CANVAS_SERVICE,
+  evaluateVisibilityExpr,
+} from "@pooder/platform-browser";
 import {
   COMMAND_SERVICE,
   type CommandContribution,
@@ -50,6 +54,14 @@ function assert(condition: unknown, message: string) {
 function assertEqual<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) {
     throw new Error(`${message} (expected ${String(expected)}, got ${String(actual)})`);
+  }
+}
+
+function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
+  const actualJson = JSON.stringify(actual);
+  const expectedJson = JSON.stringify(expected);
+  if (actualJson !== expectedJson) {
+    throw new Error(`${message} (expected ${expectedJson}, got ${actualJson})`);
   }
 }
 
@@ -144,6 +156,29 @@ class FakeCanvasService {
 
   getPassObjects() {
     return [];
+  }
+}
+
+class FakeBrowserSceneExportService {
+  calls: any[] = [];
+  error: Error | null = new Error("browser-scene-export-empty");
+  response: any = {
+    crop: { left: 0, top: 0, width: 100, height: 80 },
+    format: "png",
+    height: 80,
+    multiplier: 1,
+    sourceElementIds: [],
+    sourceLayerIds: [],
+    url: "data:image/png;base64,test",
+    width: 100,
+  };
+
+  async exportImage(options: Record<string, any>) {
+    this.calls.push(options);
+    if (this.error) {
+      throw this.error;
+    }
+    return this.response;
   }
 }
 
@@ -774,9 +809,14 @@ async function testDesignExportExtensionCommand() {
   const runtime = new Pooder();
   const commandService =
     runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
+  const exportService = new FakeBrowserSceneExportService();
 
   runtime.extensions.register(new DesignExportExtension());
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.services.register(
+    exportService as any,
+    BROWSER_SCENE_EXPORT_SERVICE,
+  );
   await runtime.extensions.flushActivation();
 
   assert(
@@ -803,6 +843,62 @@ async function testDesignExportExtensionCommand() {
   } finally {
     console.error = originalConsoleError;
   }
+
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 0, top: 0, width: 24, height: 12 },
+    format: "jpeg",
+    height: 24,
+    multiplier: 2,
+    sourceElementIds: [],
+    sourceLayerIds: ["image.custom"],
+    url: "data:image/jpeg;base64,test",
+    width: 48,
+  };
+
+  const result = await runtime.commands.execute<any>("exportImage", {
+    format: "jpeg",
+    layerIds: [" image.custom "],
+    multiplier: 2,
+  });
+  const lastCall = exportService.calls[exportService.calls.length - 1];
+  assertDeepEqual(
+    lastCall.sourceLayerIds,
+    ["image.custom"],
+    "legacy exportImage should delegate normalized layer ids",
+  );
+  assertDeepEqual(
+    lastCall.crop,
+    { type: "frame", frame: "cut" },
+    "legacy exportImage should default to cut frame crop",
+  );
+  assertEqual(
+    lastCall.includeHidden,
+    true,
+    "legacy exportImage should preserve hidden-object inclusion",
+  );
+  assertEqual(
+    result.url,
+    "data:image/jpeg;base64,test",
+    "legacy exportImage should map platform export url",
+  );
+  assertEqual(result.width, 48, "legacy exportImage should map export width");
+  assertEqual(result.height, 24, "legacy exportImage should map export height");
+  assertEqual(
+    result.format,
+    "jpeg",
+    "legacy exportImage should map export format",
+  );
+  assertEqual(
+    result.multiplier,
+    2,
+    "legacy exportImage should map export multiplier",
+  );
+  assertDeepEqual(
+    result.layerIds,
+    ["image.custom"],
+    "legacy exportImage should map platform source layers",
+  );
 }
 
 async function testExtensionDependencyActivation() {

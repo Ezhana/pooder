@@ -2,6 +2,8 @@ import type { Service } from "@pooder/core";
 import { Pooder, SCENE_SERVICE } from "@pooder/core";
 import {
   attachBrowserHost,
+  BROWSER_SCENE_EXPORT_SERVICE,
+  BrowserSceneExportService,
   CANVAS_SERVICE,
   CanvasService,
   evaluateVisibilityExpr,
@@ -75,19 +77,57 @@ class FakeCanvasService {
 }
 
 class FakeSceneLayoutService {}
+class FakeBrowserSceneExportService {}
 class FakeFabricSceneAdapter {}
 
 class FakeFabricObject {
   data: Record<string, any> = {};
   type: string;
   visible = true;
+  left = 0;
+  top = 0;
+  width = 1;
+  height = 1;
+  scaleX = 1;
+  scaleY = 1;
+  angle = 0;
+  excludeFromExport = false;
 
-  constructor(type: string) {
+  constructor(type: string, values: Record<string, any> = {}) {
     this.type = type;
+    Object.assign(this, values);
   }
 
   set(values: Record<string, any>) {
     Object.assign(this, values);
+  }
+
+  async clone() {
+    return new FakeFabricObject(this.type, {
+      angle: this.angle,
+      data: { ...this.data },
+      excludeFromExport: this.excludeFromExport,
+      height: this.height,
+      left: this.left,
+      scaleX: this.scaleX,
+      scaleY: this.scaleY,
+      top: this.top,
+      visible: this.visible,
+      width: this.width,
+    });
+  }
+
+  getBoundingRect() {
+    return {
+      left: this.left - this.width / 2,
+      top: this.top - this.height / 2,
+      width: this.width,
+      height: this.height,
+    };
+  }
+
+  getCenterPoint() {
+    return { x: this.left, y: this.top };
   }
 
   setCoords() {}
@@ -222,10 +262,81 @@ function createRuntime() {
   };
 }
 
+function createExportServiceForTests(options: {
+  layout?: {
+    cutRect: { left: number; top: number; width: number; height: number };
+    trimRect: { left: number; top: number; width: number; height: number };
+    bleedRect: { left: number; top: number; width: number; height: number };
+  } | null;
+  objects: FakeFabricObject[];
+}) {
+  const exportCanvases: Array<{
+    added: FakeFabricObject[];
+    height: number;
+    width: number;
+    format?: string;
+  }> = [];
+  const service = new BrowserSceneExportService() as BrowserSceneExportService &
+    any;
+
+  service.canvasService = {
+    canvas: {
+      getObjects: () => options.objects,
+    },
+    flushRenderFromProducers: async () => {},
+    getSceneScale: () => 2,
+    toScenePoint: (point: { x: number; y: number }) => ({
+      x: point.x / 2,
+      y: point.y / 2,
+    }),
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => ({
+      left: rect.left / 2,
+      top: rect.top / 2,
+      width: rect.width / 2,
+      height: rect.height / 2,
+    }),
+  };
+  service.sceneLayoutService = {
+    getLayout: () => options.layout ?? null,
+  };
+  service.createExportCanvas = (width: number, height: number) => {
+    const record = {
+      added: [] as FakeFabricObject[],
+      height,
+      width,
+      format: undefined as string | undefined,
+    };
+    exportCanvases.push(record);
+    return {
+      add(object: FakeFabricObject) {
+        record.added.push(object);
+      },
+      dispose() {},
+      renderAll() {},
+      setDimensions(size: { height: number; width: number }) {
+        record.height = size.height;
+        record.width = size.width;
+      },
+      toDataURL(args: { format: string }) {
+        record.format = args.format;
+        return `data:image/${args.format};base64,test`;
+      },
+    };
+  };
+
+  return { exportCanvases, service };
+}
+
 function testAttachAndDetach() {
   const { registered, runtime } = createRuntime();
   const canvasService = new FakeCanvasService();
   const sceneLayoutService = new FakeSceneLayoutService();
+  const browserSceneExportService = new FakeBrowserSceneExportService();
   const fabricSceneAdapter = new FakeFabricSceneAdapter();
   let observerCallback: ResizeObserverCallback | null = null;
   let disconnected = false;
@@ -241,6 +352,7 @@ function testAttachAndDetach() {
     container,
     canvas,
     createCanvasService: () => canvasService as any,
+    createBrowserSceneExportService: () => browserSceneExportService as any,
     createFabricSceneAdapter: () => fabricSceneAdapter as any,
     createSceneLayoutService: () => sceneLayoutService as any,
     createResizeObserver: (callback) => {
@@ -269,6 +381,11 @@ function testAttachAndDetach() {
     "canvas service should be exposed",
   );
   assert(
+    attachment.browserSceneExportService ===
+      (browserSceneExportService as any),
+    "browser scene export service should be exposed",
+  );
+  assert(
     attachment.sceneLayoutService === (sceneLayoutService as any),
     "scene layout service should be exposed",
   );
@@ -283,6 +400,11 @@ function testAttachAndDetach() {
   assert(
     registered.get(SCENE_LAYOUT_SERVICE) === (sceneLayoutService as any),
     "scene layout service should register",
+  );
+  assert(
+    registered.get(BROWSER_SCENE_EXPORT_SERVICE) ===
+      (browserSceneExportService as any),
+    "browser scene export service should register",
   );
   assert(
     registered.get(FABRIC_SCENE_ADAPTER) === (fabricSceneAdapter as any),
@@ -328,6 +450,10 @@ function testAttachAndDetach() {
     "dispose should unregister the scene layout service",
   );
   assert(
+    !registered.has(BROWSER_SCENE_EXPORT_SERVICE),
+    "dispose should unregister the browser scene export service",
+  );
+  assert(
     !registered.has(FABRIC_SCENE_ADAPTER),
     "dispose should unregister the fabric scene adapter",
   );
@@ -365,6 +491,8 @@ function testFailedLayoutRegistrationRollsBackCanvasService() {
       } as any,
       canvas: { height: 0, width: 0 } as any,
       createCanvasService: () => new FakeCanvasService() as any,
+      createBrowserSceneExportService: () =>
+        new FakeBrowserSceneExportService() as any,
       createFabricSceneAdapter: () => new FakeFabricSceneAdapter() as any,
       createSceneLayoutService: () => new FakeSceneLayoutService() as any,
       createResizeObserver: () => ({
@@ -415,6 +543,8 @@ function testFailedSceneAdapterRegistrationRollsBackHostServices() {
       } as any,
       canvas: { height: 0, width: 0 } as any,
       createCanvasService: () => new FakeCanvasService() as any,
+      createBrowserSceneExportService: () =>
+        new FakeBrowserSceneExportService() as any,
       createFabricSceneAdapter: () => new FakeFabricSceneAdapter() as any,
       createSceneLayoutService: () => new FakeSceneLayoutService() as any,
       createResizeObserver: () => ({
@@ -435,6 +565,129 @@ function testFailedSceneAdapterRegistrationRollsBackHostServices() {
     !registered.has(SCENE_LAYOUT_SERVICE),
     "failed scene adapter attach should roll back scene layout service",
   );
+  assert(
+    !registered.has(BROWSER_SCENE_EXPORT_SERVICE),
+    "failed scene adapter attach should roll back browser scene export service",
+  );
+}
+
+async function testBrowserSceneExportSelectedLayerWithSceneCrop() {
+  const artwork = new FakeFabricObject("rect", {
+    data: { id: "artwork-1", layerId: "app.artwork" },
+    height: 30,
+    left: 60,
+    top: 80,
+    width: 20,
+  });
+  const hidden = new FakeFabricObject("rect", {
+    data: { id: "hidden", layerId: "app.artwork" },
+    visible: false,
+  });
+  const background = new FakeFabricObject("rect", {
+    data: { id: "background", layerId: "app.background" },
+  });
+  const { exportCanvases, service } = createExportServiceForTests({
+    layout: null,
+    objects: [background, hidden, artwork],
+  });
+
+  const result = await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 10, top: 20, width: 50, height: 40 },
+    },
+    format: "jpeg",
+    multiplier: 3,
+    sourceLayerIds: ["app.artwork"],
+  });
+
+  assertEqual(
+    result.url,
+    "data:image/jpeg;base64,test",
+    "export should return data url",
+  );
+  assertEqual(result.width, 150, "scene crop width should scale by multiplier");
+  assertEqual(result.height, 120, "scene crop height should scale by multiplier");
+  assertDeepEqual(
+    result.sourceLayerIds,
+    ["app.artwork"],
+    "export should report selected source layers",
+  );
+  assertDeepEqual(
+    exportCanvases[0]?.added.map((object) => object.data.id),
+    ["artwork-1"],
+    "export should include visible objects from selected layers only",
+  );
+  assertEqual(
+    exportCanvases[0]?.added[0]?.left,
+    60,
+    "exported object should be translated into crop coordinates",
+  );
+}
+
+async function testBrowserSceneExportElementBoundsCrop() {
+  const first = new FakeFabricObject("rect", {
+    data: { id: "first", layerId: "app.artwork", sceneElementId: "scene-a" },
+    height: 20,
+    left: 20,
+    top: 30,
+    width: 20,
+  });
+  const second = new FakeFabricObject("rect", {
+    data: { id: "second", layerId: "app.artwork", sceneElementId: "scene-b" },
+    height: 10,
+    left: 70,
+    top: 40,
+    width: 10,
+  });
+  const { service } = createExportServiceForTests({
+    layout: null,
+    objects: [first, second],
+  });
+
+  const result = await service.exportImage({
+    crop: { type: "elementBounds" },
+    multiplier: 2,
+    sourceElementIds: ["scene-a", "scene-b"],
+  });
+
+  assertDeepEqual(
+    result.crop,
+    { left: 5, top: 10, width: 32.5, height: 12.5 },
+    "element bounds crop should be resolved in scene coordinates",
+  );
+  assertDeepEqual(
+    result.sourceElementIds,
+    ["scene-a", "scene-b"],
+    "export should report selected source elements",
+  );
+}
+
+async function testBrowserSceneExportFrameCrop() {
+  const object = new FakeFabricObject("rect", {
+    data: { id: "frame-object", layerId: "app.artwork" },
+  });
+  const { service } = createExportServiceForTests({
+    layout: {
+      bleedRect: { left: 0, top: 0, width: 240, height: 180 },
+      cutRect: { left: 20, top: 30, width: 200, height: 100 },
+      trimRect: { left: 40, top: 50, width: 120, height: 80 },
+    },
+    objects: [object],
+  });
+
+  const result = await service.exportImage({
+    crop: { type: "frame", frame: "trim" },
+    multiplier: 1,
+  });
+
+  assertDeepEqual(
+    result.crop,
+    { left: 20, top: 25, width: 60, height: 40 },
+    "frame crop should resolve through SceneLayoutService and scene coordinates",
+  );
+  assertEqual(result.width, 60, "frame crop width should be exported");
+  assertEqual(result.height, 40, "frame crop height should be exported");
 }
 
 async function testFabricSceneAdapterSyncsCoreSceneToScopedPasses() {
@@ -816,6 +1069,9 @@ async function main() {
   testAttachAndDetach();
   testFailedLayoutRegistrationRollsBackCanvasService();
   testFailedSceneAdapterRegistrationRollsBackHostServices();
+  await testBrowserSceneExportSelectedLayerWithSceneCrop();
+  await testBrowserSceneExportElementBoundsCrop();
+  await testBrowserSceneExportFrameCrop();
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
   await testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope();
   await testRenderProducerVisibilityIsSourceScoped();

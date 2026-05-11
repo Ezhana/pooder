@@ -12,6 +12,9 @@
   stacking and compatibility pass ids.
 - Added tool-free render visibility predicates for caller-owned context values
   and workflow sessions while preserving legacy tool predicates.
+- Added `BrowserSceneExportService` for platform-owned browser export of
+  selected layers, selected elements, element-bounds crops, and scene frame
+  crops.
 
 ### Planning Notes
 

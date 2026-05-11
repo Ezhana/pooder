@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M2 in progress; P2.S4 next.
+Current milestone: M3 in progress; P3.S1 next.
 
 Completed:
 
@@ -38,10 +38,14 @@ Completed:
 - P2.S3 tool-free visibility predicates have been added. New render specs can
   depend on caller-owned context values and workflow session ids while legacy
   tool and tool-session predicates remain available for compatibility.
+- P2.S4 browser export adapter has been added. Browser export now supports
+  selected source layers, source elements, element-bounds crops, and scene frame
+  crops through platform scene/layer contracts while legacy design export
+  commands delegate through a compatibility bridge.
 
 Next recommended slice:
 
-- P2.S4 - Export Adapter.
+- P3.S1 - Image Placement Capability.
 
 Resume instruction for a new thread:
 
