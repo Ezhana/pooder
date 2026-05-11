@@ -78,7 +78,7 @@ const DEFAULT_SIZE_STATE: SizeState = {
   aspectRatio: 1,
   cutMode: "trim",
   cutMarginMm: 0,
-  viewPadding: "10%",
+  viewPadding: "12%",
   minMm: 10,
   maxMm: 2000,
   stepMm: 0.1,
