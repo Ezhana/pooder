@@ -51,6 +51,10 @@ export const createDielineExtension = (
   options?: ConstructorParameters<typeof DielineTool>[0],
 ) => new DielineTool(options);
 
+/**
+ * Compatibility factory for legacy command-based dieline workflows.
+ * Prefer app-owned orchestration with typed kit capability facades.
+ */
 export const createDielineWorkflowExtension = () =>
   new DielineWorkflowExtension();
 

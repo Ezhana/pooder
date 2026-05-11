@@ -212,6 +212,11 @@ function revokeObjectUrl(url: string | undefined) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Compatibility wrapper for legacy command-based dieline workflows.
+ * Applications should own workflow orchestration with the image placement,
+ * edge detection, and dieline geometry capability facades.
+ */
 export class DielineWorkflowExtension implements ExtensionDefinition {
   id = "pooder.kit.dieline-workflow";
 

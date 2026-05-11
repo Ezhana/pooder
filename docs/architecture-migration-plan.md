@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M5 in progress; P4.S3 next.
+Current milestone: M5 in progress; P4.S4 next.
 
 Completed:
 
@@ -77,10 +77,14 @@ Completed:
   workflows now call typed kit capability facades directly and emit
   app-owned activation events for capability-only sessions without requiring
   kit-contributed workbench tools.
+- P4.S3 dieline workflow orchestration has moved to storefront. Storefront now
+  owns the export-crop, edge-detection, and dieline-apply sequence through typed
+  kit capability facades, while `DielineWorkflowExtension` remains as a
+  compatibility wrapper for legacy command callers.
 
 Next recommended slice:
 
-- P4.S3 - Dieline Workflow Move.
+- P4.S4 - Build And Type Verification.
 
 Resume instruction for a new thread:
 

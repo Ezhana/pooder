@@ -50,6 +50,9 @@
 - Updated capability-only image and white ink sessions to honor app-owned
   activation events so storefront workflows can call typed capability facades
   without requiring kit-contributed workbench tools.
+- Marked `DielineWorkflowExtension` and `createDielineWorkflowExtension` as
+  compatibility surfaces after moving storefront dieline workflow orchestration
+  to app-owned typed capability composition.
 
 ### Planning Notes
 
