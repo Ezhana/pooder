@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M1 complete; M2 next.
+Current milestone: M2 in progress; P2.S2 next.
 
 Completed:
 
@@ -29,10 +29,13 @@ Completed:
 - P1.S4 typed runtime facades have been added. Applications can resolve typed
   capability facades from the runtime while legacy command ids remain available
   for compatibility and cross-extension orchestration.
+- P2.S1 browser scene adapter has been added. The browser platform now syncs
+  core scene layers and elements into scoped Fabric render passes without
+  replacing existing render producer output.
 
 Next recommended slice:
 
-- P2.S1 - SceneService Fabric Adapter.
+- P2.S2 - Layer-Based Render Pipeline.
 
 Resume instruction for a new thread:
 

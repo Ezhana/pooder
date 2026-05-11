@@ -75,6 +75,12 @@ interface ManagedPassMeta {
   visibility?: RenderPassSpec["visibility"];
 }
 
+export interface CanvasPassStackingMeta {
+  id: string;
+  stack?: number;
+  order?: number;
+}
+
 export default class CanvasService implements Service {
   public canvas: Canvas;
   public viewport: ViewportSystem;
@@ -413,15 +419,24 @@ export default class CanvasService implements Service {
     return typeof passId === "string" && this.managedPassMetas.has(passId);
   }
 
-  private syncManagedPassStacking(passes: ManagedPassMeta[]) {
+  syncPassStacking(passes: CanvasPassStackingMeta[]) {
     const orderedPasses = [...passes].sort((a, b) =>
-      this.comparePassMeta(a, b),
+      this.comparePassMeta({
+        id: a.id,
+        stack: Number.isFinite(a.stack) ? Number(a.stack) : 0,
+        order: Number.isFinite(a.order) ? Number(a.order) : 0,
+      }, {
+        id: b.id,
+        stack: Number.isFinite(b.stack) ? Number(b.stack) : 0,
+        order: Number.isFinite(b.order) ? Number(b.order) : 0,
+      }),
     );
     if (!orderedPasses.length) return;
 
     const canvasObjects = this.canvas.getObjects();
+    const passIds = new Set(orderedPasses.map((pass) => pass.id));
     const managedObjects = canvasObjects.filter((obj: any) =>
-      this.isManagedPassObject(obj as FabricObject),
+      passIds.has(obj?.data?.passId),
     );
 
     if (!managedObjects.length) return;
@@ -442,6 +457,10 @@ export default class CanvasService implements Service {
         targetIndex += 1;
       });
     });
+  }
+
+  private syncManagedPassStacking(passes: ManagedPassMeta[]) {
+    this.syncPassStacking(passes);
   }
 
   private getPassRuntimeState(): Map<string, VisibilityLayerState> {
@@ -1081,16 +1100,22 @@ export default class CanvasService implements Service {
     options: {
       render?: boolean;
       replace?: boolean;
+      scope?: string;
     } = {},
   ): Promise<void> {
     const normalizedPassId = String(passId || "").trim();
     if (!normalizedPassId) return;
 
     const replace = options.replace !== false;
+    const scope = String(options.scope || "").trim() || undefined;
     const normalizedSpecs = this.normalizeObjectSpecs(specs);
     const desiredIds = new Set(normalizedSpecs.map((s) => s.id));
+    const matchesScope = (obj: any) =>
+      !scope || obj?.data?.__renderScope === scope;
 
-    const existing = this.getPassCanvasObjects(normalizedPassId) as any[];
+    const existing = (this.getPassCanvasObjects(normalizedPassId) as any[]).filter(
+      matchesScope,
+    );
     if (replace) {
       existing.forEach((obj) => {
         const id = obj?.data?.id;
@@ -1102,6 +1127,7 @@ export default class CanvasService implements Service {
 
     const byId = new Map<string, any>();
     this.getPassCanvasObjects(normalizedPassId).forEach((obj: any) => {
+      if (!matchesScope(obj)) return;
       const id = obj?.data?.id;
       if (typeof id === "string") byId.set(id, obj);
     });
@@ -1134,6 +1160,7 @@ export default class CanvasService implements Service {
           passId: normalizedPassId,
           layerId: normalizedPassId,
           passOrder: index,
+          ...(scope ? { __renderScope: scope } : {}),
         });
         this.canvas.add(created as any);
         byId.set(spec.id, created);
@@ -1144,6 +1171,7 @@ export default class CanvasService implements Service {
         passId: normalizedPassId,
         layerId: normalizedPassId,
         passOrder: index,
+        ...(scope ? { __renderScope: scope } : {}),
       });
     }
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Added `FabricSceneAdapter` and browser host registration so core
+  `SceneService` layers and elements sync into scoped Fabric render passes
+  without replacing existing render producer output.
+
 ### Planning Notes
 
 - Track the capability-first architecture migration. The browser platform is

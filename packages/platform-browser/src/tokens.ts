@@ -1,5 +1,6 @@
 import { createServiceToken } from "@pooder/core";
 import type CanvasService from "./canvas-service";
+import type { FabricSceneAdapter } from "./scene/fabric-scene-adapter";
 import type { SceneLayoutService } from "./scene-layout-service";
 
 export const CANVAS_SERVICE =
@@ -7,3 +8,6 @@ export const CANVAS_SERVICE =
 
 export const SCENE_LAYOUT_SERVICE =
   createServiceToken<SceneLayoutService>("SceneLayoutService");
+
+export const FABRIC_SCENE_ADAPTER =
+  createServiceToken<FabricSceneAdapter>("FabricSceneAdapter");
