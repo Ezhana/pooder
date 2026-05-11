@@ -1,5 +1,4 @@
 export * from "./capability";
-export * from "./DielineTool";
 export * from "./DielineGeometryCapabilityExtension";
 export * from "./model";
 export * from "./renderBuilder";

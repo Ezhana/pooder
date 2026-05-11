@@ -32,6 +32,7 @@ import {
   FEATURE_DIELINE_LAYER_ID,
   FEATURE_OVERLAY_LAYER_ID,
   IMAGE_OBJECT_LAYER_ID,
+  KIT_LEGACY_LAYER_PRESET,
 } from "../../shared/constants/layers";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import { cloneWithJson } from "../../shared/runtime/sessionState";
@@ -148,19 +149,19 @@ export class FeatureTool implements ExtensionDefinition {
     );
     this.markerLayerId = normalizeFeatureLayerId(
       options.layers?.markerLayerId,
-      FEATURE_OVERLAY_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.featureOverlay,
     );
     this.baseDielineLayerId = normalizeFeatureLayerId(
       options.layers?.baseDielineLayerId,
-      DIELINE_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.dieline,
     );
     this.sessionDielineLayerId = normalizeFeatureLayerId(
       options.layers?.sessionDielineLayerId,
-      FEATURE_DIELINE_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.featureDieline,
     );
     this.imageClipLayerIds = options.layers?.imageClipLayerIds?.map((id) =>
-      normalizeFeatureLayerId(id, IMAGE_OBJECT_LAYER_ID),
-    ) || [IMAGE_OBJECT_LAYER_ID];
+      normalizeFeatureLayerId(id, KIT_LEGACY_LAYER_PRESET.imageObject),
+    ) || [KIT_LEGACY_LAYER_PRESET.imageObject];
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.workingFeatures = this.cloneFeatures(options.features || []);
 

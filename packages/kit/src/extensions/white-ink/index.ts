@@ -1,5 +1,4 @@
 export * from "./capability";
-export * from "./WhiteInkTool";
 export * from "./WhiteInkCapabilityExtension";
 export * from "./commands";
 export * from "./config";

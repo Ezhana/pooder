@@ -31,6 +31,7 @@ import {
 } from "../../shared/runtime/sessionState";
 import {
   IMAGE_OBJECT_LAYER_ID,
+  KIT_LEGACY_LAYER_PRESET,
   WHITE_INK_COVER_LAYER_ID,
   WHITE_INK_OBJECT_LAYER_ID,
   WHITE_INK_OVERLAY_LAYER_ID,
@@ -188,19 +189,19 @@ export class WhiteInkTool implements ExtensionDefinition {
       options.configNamespace,
     );
     this.sourceLayerIds = options.layers?.sourceLayerIds?.map((id) =>
-      normalizeWhiteInkLayerId(id, IMAGE_OBJECT_LAYER_ID),
-    ) || [IMAGE_OBJECT_LAYER_ID];
+      normalizeWhiteInkLayerId(id, KIT_LEGACY_LAYER_PRESET.imageObject),
+    ) || [KIT_LEGACY_LAYER_PRESET.imageObject];
     this.whiteLayerId = normalizeWhiteInkLayerId(
       options.layers?.whiteLayerId,
-      WHITE_INK_OBJECT_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.whiteInkObject,
     );
     this.coverLayerId = normalizeWhiteInkLayerId(
       options.layers?.coverLayerId,
-      WHITE_INK_COVER_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.whiteInkCover,
     );
     this.overlayLayerId = normalizeWhiteInkLayerId(
       options.layers?.overlayLayerId,
-      WHITE_INK_OVERLAY_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.whiteInkOverlay,
     );
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =

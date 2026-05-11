@@ -43,6 +43,7 @@ import {
 import {
   IMAGE_OBJECT_LAYER_ID,
   IMAGE_OVERLAY_LAYER_ID,
+  KIT_LEGACY_LAYER_PRESET,
 } from "../../shared/constants/layers";
 import { createImageCommands } from "./commands";
 import {
@@ -310,11 +311,11 @@ export class ImageTool implements ExtensionDefinition {
     );
     this.imageLayerId = normalizeImagePlacementLayerId(
       options.layers?.imageLayerId,
-      IMAGE_OBJECT_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.imageObject,
     );
     this.overlayLayerId = normalizeImagePlacementLayerId(
       options.layers?.overlayLayerId,
-      IMAGE_OVERLAY_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.imageOverlay,
     );
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =

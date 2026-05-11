@@ -7,9 +7,10 @@ This inventory was first published before the capability-first migration. It is
 primarily descriptive historical context, with the summary table updated as
 tool contributions are removed.
 
-P5.S2 update: legacy kit wrappers no longer contribute product tools. The
-detailed sections still describe the original coupling unless they explicitly
-note a later migration slice.
+P5.S3 update: deprecated kit wrapper factory exports and public wrapper barrels
+have been removed. Former storefront layer defaults are exposed only through
+the explicit `KIT_LEGACY_LAYER_PRESET`. The detailed sections still describe
+the original coupling unless they explicitly note a later migration slice.
 
 ## Ownership Labels
 
@@ -28,16 +29,16 @@ note a later migration slice.
 
 | Extension | Contributes `tools` | Primary target |
 | --- | --- | --- |
-| `ImageTool` | No; formerly `pooder.kit.image` | Image placement kit capability plus compatibility wrapper |
-| `WhiteInkTool` | No; formerly `pooder.kit.white-ink` | White ink kit capability plus compatibility wrapper |
-| `DielineTool` | No; formerly `pooder.kit.dieline` | Dieline geometry/render kit capability plus compatibility wrapper |
-| `FeatureTool` | No; formerly `pooder.kit.feature` | Feature geometry kit capability; feature placement workflow moves to app |
-| `SizeTool` | No; formerly `pooder.kit.size` | Size/session-independent scene config capability plus compatibility wrapper |
+| `ImageTool` | Removed public wrapper; formerly `pooder.kit.image` | Image placement kit capability |
+| `WhiteInkTool` | Removed public wrapper; formerly `pooder.kit.white-ink` | White ink kit capability |
+| `DielineTool` | Removed public wrapper; formerly `pooder.kit.dieline` | Dieline geometry/render kit capability |
+| `FeatureTool` | Removed public wrapper; formerly `pooder.kit.feature` | Feature geometry kit capability; feature placement workflow moves to app |
+| `SizeTool` | Removed public wrapper; formerly `pooder.kit.size` | Size/session-independent scene config capability |
 | `TemplateOverlayTool` | No | Template overlay kit capability |
 | `BackgroundTool` | No | Background layer kit capability |
 | `RulerTool` | No | Ruler overlay kit capability |
 | `DesignExportExtension` | No | Export kit/platform capability |
-| `DielineWorkflowExtension` | No | App workflow or compatibility orchestration |
+| `DielineWorkflowExtension` | Removed | App workflow |
 | `MirrorTool` | No | Browser/platform viewport helper or optional compatibility utility |
 | `FilmTool` | No | Overlay kit capability or compatibility utility |
 

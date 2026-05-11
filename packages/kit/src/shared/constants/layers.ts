@@ -15,7 +15,7 @@ export const FEATURE_OVERLAY_LAYER_ID = "feature-overlay";
 export const RULER_LAYER_ID = "ruler-overlay";
 export const FILM_LAYER_ID = "overlay";
 
-export const LAYER_IDS = {
+export const KIT_LEGACY_LAYER_PRESET = {
   background: BACKGROUND_LAYER_ID,
   templateOverlayNormal: TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
   templateOverlayFrame: TEMPLATE_OVERLAY_FRAME_LAYER_ID,
@@ -33,3 +33,7 @@ export const LAYER_IDS = {
   rulerOverlay: RULER_LAYER_ID,
   filmOverlay: FILM_LAYER_ID,
 } as const;
+
+export type KitLegacyLayerPreset = typeof KIT_LEGACY_LAYER_PRESET;
+
+export const LAYER_IDS = KIT_LEGACY_LAYER_PRESET;

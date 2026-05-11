@@ -27,6 +27,8 @@
   feature extension for feature geometry, constraints, placement, projection,
   and session render support while keeping `FeatureTool` as the compatibility
   wrapper.
+- Added `KIT_LEGACY_LAYER_PRESET` for callers that intentionally need the
+  former storefront-oriented kit layer ids during migration.
 
 ### Changed
 
@@ -56,6 +58,9 @@
 - Removed kit-owned product tool contributions from legacy image, white ink,
   dieline, feature, and size compatibility wrappers while keeping capability,
   command bridge, config, and render producer contributions.
+- Moved former app-specific default layer ids behind the explicit
+  `KIT_LEGACY_LAYER_PRESET`; capability options should pass caller-owned layer
+  ids through their `layers` option.
 
 ### Deprecated
 
@@ -84,6 +89,28 @@
 - Removed legacy `tools` contributions for `pooder.kit.image`,
   `pooder.kit.white-ink`, `pooder.kit.dieline`, `pooder.kit.feature`, and
   `pooder.kit.size` so installing kit no longer adds product tools.
+- Removed public compatibility factories `createImageExtension`,
+  `createWhiteInkExtension`, `createDielineExtension`,
+  `createFeatureExtension`, `createSizeExtension`, and
+  `createDielineWorkflowExtension`. Use `createImagePlacementCapability`,
+  `createWhiteInkCapability`, `createDielineGeometryCapability`,
+  `createFeatureCapability`, and `createSizeCapability` instead.
+- Removed public wrapper barrel exports for `ImageTool`, `WhiteInkTool`,
+  `DielineTool`, `FeatureTool`, and `SizeTool`.
+- Removed the legacy kit-owned `DielineWorkflowExtension`; applications should
+  compose export, edge detection, and dieline geometry through typed
+  capability facades.
+
+### Migration Examples
+
+- Replace `createImageExtension()` with
+  `createImagePlacementCapability({ layers: { imageLayerId: "app.image" } })`.
+- Replace `createWhiteInkExtension()` with
+  `createWhiteInkCapability({ layers: { sourceLayerIds: ["app.image"] } })`.
+- Replace `createDielineExtension()` with
+  `createDielineGeometryCapability({ layers: { targetLayerId: "app.dieline" } })`.
+- Use `KIT_LEGACY_LAYER_PRESET` only when intentionally preserving the former
+  kit layer ids during a major-version migration.
 
 ### Planning Notes
 

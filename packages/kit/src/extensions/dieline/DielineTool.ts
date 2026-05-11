@@ -19,6 +19,7 @@ import { computeSceneLayout, readSizeState } from "@pooder/platform-browser";
 import {
   DIELINE_LAYER_ID,
   IMAGE_OBJECT_LAYER_ID,
+  KIT_LEGACY_LAYER_PRESET,
 } from "../../shared/constants/layers";
 import { createDielineCommands } from "./commands";
 import { createDielineConfigurations } from "./config";
@@ -93,11 +94,11 @@ export class DielineTool implements ExtensionDefinition {
     );
     this.targetLayerId = normalizeDielineGeometryLayerId(
       options.layers?.targetLayerId,
-      DIELINE_LAYER_ID,
+      KIT_LEGACY_LAYER_PRESET.dieline,
     );
     this.imageClipLayerIds = options.layers?.imageClipLayerIds?.map((id) =>
-      normalizeDielineGeometryLayerId(id, IMAGE_OBJECT_LAYER_ID),
-    ) || [IMAGE_OBJECT_LAYER_ID];
+      normalizeDielineGeometryLayerId(id, KIT_LEGACY_LAYER_PRESET.imageObject),
+    ) || [KIT_LEGACY_LAYER_PRESET.imageObject];
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =
       options.contributeConfigurations !== false;

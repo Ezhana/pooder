@@ -7,10 +7,7 @@ import {
   BROWSER_SCENE_EXPORT_SERVICE,
   BrowserSceneExportService,
 } from "@pooder/platform-browser";
-import {
-  IMAGE_OBJECT_LAYER_ID,
-  WHITE_INK_OBJECT_LAYER_ID,
-} from "../../shared/constants/layers";
+import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import {
   createDesignExportCapabilityDefinition,
   DESIGN_EXPORT_CAPABILITY_ID,
@@ -29,8 +26,8 @@ export type {
 } from "./capability";
 
 const DEFAULT_EXPORT_LAYER_IDS = [
-  IMAGE_OBJECT_LAYER_ID,
-  WHITE_INK_OBJECT_LAYER_ID,
+  KIT_LEGACY_LAYER_PRESET.imageObject,
+  KIT_LEGACY_LAYER_PRESET.whiteInkObject,
 ] as const;
 
 export interface DesignExportExtensionOptions

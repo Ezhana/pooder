@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M7 next; P5.S3 next.
+Current milestone: P6 hardening next; P6.S1 next.
 
 Completed:
 
@@ -44,31 +44,33 @@ Completed:
   commands delegate through a compatibility bridge.
 - P3.S1 image placement capability has been added. Applications can resolve a
   typed `pooder.kit.image-placement` facade for image placement state,
-  transforms, validation, and export while `ImageTool` remains as the legacy
-  tool wrapper.
+  transforms, validation, and export; the legacy `ImageTool` wrapper was kept
+  during the compatibility window and removed from public exports in P5.S3.
 - P3.S2 edge detection and dieline geometry capabilities have been added.
   Applications can resolve typed `pooder.kit.edge-detection` and
   `pooder.kit.dieline-geometry` facades to detect image edges, apply detected
-  paths, target caller-owned layers, and upsert scene path elements while
-  legacy dieline commands and workflow wrappers remain available.
+  paths, target caller-owned layers, and upsert scene path elements; legacy
+  dieline commands and workflow wrappers were kept during the compatibility
+  window.
 - P3.S3 white ink capability has been added. Applications can resolve a typed
   `pooder.kit.white-ink` facade for white ink mask generation, print settings,
-  preview refresh, session state, and caller-owned source/target layers while
-  `WhiteInkTool` remains as the legacy tool wrapper.
+  preview refresh, session state, and caller-owned source/target layers; the
+  legacy `WhiteInkTool` wrapper was kept during the compatibility window and
+  removed from public exports in P5.S3.
 - P3.S4 template overlay, background, size, and ruler capabilities have been
   added. Applications can resolve typed `pooder.kit.template-overlay`,
   `pooder.kit.background`, `pooder.kit.size`, and `pooder.kit.ruler` facades,
   enable each capability independently, and provide caller-owned config
-  namespaces or layer ids where supported while legacy wrapper exports remain
-  available.
+  namespaces or layer ids where supported.
 - P3.S5 export capability has been added. Applications can resolve a typed
   `pooder.kit.design-export` facade for layer, element, scene-rect, and frame
   exports while the legacy `exportImage` command remains available as a
   compatibility bridge.
 - P3.S6 feature capability has been added. Applications can resolve a typed
   `pooder.kit.feature` facade for feature geometry, constraints, placement,
-  projection, and session render support while `FeatureTool` remains as the
-  legacy tool wrapper.
+  projection, and session render support; the legacy `FeatureTool` wrapper was
+  kept during the compatibility window and removed from public exports in
+  P5.S3.
 - P4.S1 storefront tool catalog has been added. Storefront customization now
   owns tool ids, labels, icons, visibility, session policies, workflow handler
   keys, and legacy kit id aliases while activity bar rendering reads app tool
@@ -79,8 +81,8 @@ Completed:
   kit-contributed workbench tools.
 - P4.S3 dieline workflow orchestration has moved to storefront. Storefront now
   owns the export-crop, edge-detection, and dieline-apply sequence through typed
-  kit capability facades, while `DielineWorkflowExtension` remains as a
-  compatibility wrapper for legacy command callers.
+  kit capability facades; the legacy kit-owned `DielineWorkflowExtension` was
+  removed in P5.S3.
 - P4.S4 build and type verification has passed. Pooder package builds and
   storefront type/build integration checks now verify the migrated
   capability-first slices without a manual walkthrough.
@@ -90,17 +92,21 @@ Completed:
 - P5.S2 kit-owned business tool contributions have been removed. Legacy kit
   wrappers now contribute capabilities, command bridges, configuration
   definitions, and render producers without registering product tools.
+- P5.S3 major release cleanup has been completed. Kit no longer publicly
+  exports the deprecated image, white ink, dieline, feature, and size wrapper
+  factories or `*Tool` wrapper barrels, the legacy kit-owned dieline workflow
+  has been removed, and former storefront layer defaults are available through
+  the explicit `KIT_LEGACY_LAYER_PRESET`.
 
 Next recommended slice:
 
-- P5.S3 - Major Release Cleanup.
+- P6.S1 - Contract Tests.
 
 Resume instruction for a new thread:
 
 > Read `docs/architecture-migration-plan.md`, continue from `Current Progress`,
-> and execute the next incomplete slice. Keep changes scoped to that slice,
-> preserve compatibility wrappers, and update `Current Progress` plus relevant
-> package changelogs before finishing.
+> and execute the next incomplete slice. Keep changes scoped to that slice and
+> update `Current Progress` plus relevant package changelogs before finishing.
 
 ## Target Boundary
 
