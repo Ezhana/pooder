@@ -1,0 +1,24 @@
+import {
+  DIELINE_GEOMETRY_CAPABILITY_ID,
+  type DielineGeometryCapabilityOptions,
+} from "./capability";
+import { DielineTool, type DielineToolOptions } from "./DielineTool";
+
+export interface DielineGeometryCapabilityExtensionOptions extends DielineGeometryCapabilityOptions {
+  id?: string;
+  contributeConfigurations?: boolean;
+}
+
+export class DielineGeometryCapabilityExtension extends DielineTool {
+  constructor(options: DielineGeometryCapabilityExtensionOptions = {}) {
+    const toolOptions: DielineToolOptions = {
+      ...options,
+      capabilityId: options.capabilityId || DIELINE_GEOMETRY_CAPABILITY_ID,
+      contributeCommands: false,
+      contributeTool: false,
+      id: options.id || DIELINE_GEOMETRY_CAPABILITY_ID,
+      legacyVisibility: false,
+    };
+    super(toolOptions);
+  }
+}

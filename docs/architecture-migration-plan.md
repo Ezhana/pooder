@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M3 in progress; P3.S2 next.
+Current milestone: M4 in progress; P3.S3 next.
 
 Completed:
 
@@ -46,10 +46,15 @@ Completed:
   typed `pooder.kit.image-placement` facade for image placement state,
   transforms, validation, and export while `ImageTool` remains as the legacy
   tool wrapper.
+- P3.S2 edge detection and dieline geometry capabilities have been added.
+  Applications can resolve typed `pooder.kit.edge-detection` and
+  `pooder.kit.dieline-geometry` facades to detect image edges, apply detected
+  paths, target caller-owned layers, and upsert scene path elements while
+  legacy dieline commands and workflow wrappers remain available.
 
 Next recommended slice:
 
-- P3.S2 - Edge Detection And Dieline Geometry Capabilities.
+- P3.S3 - White Ink Capability.
 
 Resume instruction for a new thread:
 

@@ -1,17 +1,22 @@
 import type { ConfigurationContribution } from "@pooder/core";
 import { DIELINE_SHAPES } from "../dielineShape";
+import { getDielineConfigKey } from "./model";
 
-export function createDielineConfigurations(state: any): ConfigurationContribution[] {
+export function createDielineConfigurations(
+  state: any,
+  namespace?: string,
+): ConfigurationContribution[] {
+  const configKey = (path: string) => getDielineConfigKey(namespace, path);
   return [
     {
-      id: "dieline.shape",
+      id: configKey("shape"),
       type: "select",
       label: "Shape",
       options: Array.from(DIELINE_SHAPES),
       default: state.shape,
     },
     {
-      id: "dieline.radius",
+      id: configKey("radius"),
       type: "number",
       label: "Corner Radius (mm)",
       min: 0,
@@ -19,19 +24,19 @@ export function createDielineConfigurations(state: any): ConfigurationContributi
       default: state.radius,
     },
     {
-      id: "dieline.shapeStyle",
+      id: configKey("shapeStyle"),
       type: "json",
       label: "Shape Style",
       default: state.shapeStyle,
     },
     {
-      id: "dieline.showBleedLines",
+      id: configKey("showBleedLines"),
       type: "boolean",
       label: "Show Bleed Lines",
       default: state.showBleedLines,
     },
     {
-      id: "dieline.strokeWidth",
+      id: configKey("strokeWidth"),
       type: "number",
       label: "Line Width",
       min: 0.1,
@@ -40,13 +45,13 @@ export function createDielineConfigurations(state: any): ConfigurationContributi
       default: state.mainLine.width,
     },
     {
-      id: "dieline.strokeColor",
+      id: configKey("strokeColor"),
       type: "color",
       label: "Line Color",
       default: state.mainLine.color,
     },
     {
-      id: "dieline.dashLength",
+      id: configKey("dashLength"),
       type: "number",
       label: "Dash Length",
       min: 1,
@@ -54,14 +59,14 @@ export function createDielineConfigurations(state: any): ConfigurationContributi
       default: state.mainLine.dashLength,
     },
     {
-      id: "dieline.style",
+      id: configKey("style"),
       type: "select",
       label: "Line Style",
       options: ["solid", "dashed", "hidden"],
       default: state.mainLine.style,
     },
     {
-      id: "dieline.offsetStrokeWidth",
+      id: configKey("offsetStrokeWidth"),
       type: "number",
       label: "Offset Line Width",
       min: 0.1,
@@ -70,13 +75,13 @@ export function createDielineConfigurations(state: any): ConfigurationContributi
       default: state.offsetLine.width,
     },
     {
-      id: "dieline.offsetStrokeColor",
+      id: configKey("offsetStrokeColor"),
       type: "color",
       label: "Offset Line Color",
       default: state.offsetLine.color,
     },
     {
-      id: "dieline.offsetDashLength",
+      id: configKey("offsetDashLength"),
       type: "number",
       label: "Offset Dash Length",
       min: 1,
@@ -84,20 +89,20 @@ export function createDielineConfigurations(state: any): ConfigurationContributi
       default: state.offsetLine.dashLength,
     },
     {
-      id: "dieline.offsetStyle",
+      id: configKey("offsetStyle"),
       type: "select",
       label: "Offset Line Style",
       options: ["solid", "dashed", "hidden"],
       default: state.offsetLine.style,
     },
     {
-      id: "dieline.insideColor",
+      id: configKey("insideColor"),
       type: "color",
       label: "Inside Color",
       default: state.insideColor,
     },
     {
-      id: "dieline.features",
+      id: configKey("features"),
       type: "json",
       label: "Edge Features",
       default: state.features,

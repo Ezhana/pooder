@@ -53,6 +53,20 @@ export interface DielineState {
   customSourceHeightPx?: number;
 }
 
+export function normalizeDielineConfigNamespace(
+  namespace: string | undefined,
+): string {
+  const normalized = String(namespace || "dieline").trim();
+  return normalized || "dieline";
+}
+
+export function getDielineConfigKey(
+  namespace: string | undefined,
+  path: string,
+): string {
+  return `${normalizeDielineConfigNamespace(namespace)}.${path}`;
+}
+
 export function createDefaultDielineState(): DielineState {
   return {
     shape: DEFAULT_DIELINE_SHAPE,
@@ -83,6 +97,7 @@ export function createDefaultDielineState(): DielineState {
 export function readDielineState(
   configService: ConfigurationService,
   fallback?: Partial<DielineState>,
+  namespace?: string,
 ): DielineState {
   const base = createDefaultDielineState();
   if (fallback) {
@@ -94,29 +109,38 @@ export function readDielineState(
       base.offsetLine = { ...base.offsetLine, ...fallback.offsetLine };
     }
     if (fallback.shapeStyle) {
-      base.shapeStyle = normalizeShapeStyle(fallback.shapeStyle, base.shapeStyle);
+      base.shapeStyle = normalizeShapeStyle(
+        fallback.shapeStyle,
+        base.shapeStyle,
+      );
     }
   }
 
   const sizeState = readSizeState(configService);
-  const sourceWidth = Number(configService.get("dieline.customSourceWidthPx", 0));
+  const configKey = (path: string) => getDielineConfigKey(namespace, path);
+  const sourceWidth = Number(
+    configService.get(configKey("customSourceWidthPx"), 0),
+  );
   const sourceHeight = Number(
-    configService.get("dieline.customSourceHeightPx", 0),
+    configService.get(configKey("customSourceHeightPx"), 0),
   );
 
   return {
     ...base,
     shape: normalizeDielineShape(
-      configService.get("dieline.shape", base.shape),
+      configService.get(configKey("shape"), base.shape),
       base.shape,
     ),
     shapeStyle: normalizeShapeStyle(
-      configService.get("dieline.shapeStyle", base.shapeStyle),
+      configService.get(configKey("shapeStyle"), base.shapeStyle),
       base.shapeStyle,
     ),
     width: sizeState.actualWidthMm,
     height: sizeState.actualHeightMm,
-    radius: parseLengthToMm(configService.get("dieline.radius", base.radius), "mm"),
+    radius: parseLengthToMm(
+      configService.get(configKey("radius"), base.radius),
+      "mm",
+    ),
     padding: sizeState.viewPadding,
     offset:
       sizeState.cutMode === "outset"
@@ -125,36 +149,36 @@ export function readDielineState(
           ? -sizeState.cutMarginMm
           : 0,
     mainLine: {
-      width: configService.get("dieline.strokeWidth", base.mainLine.width),
-      color: configService.get("dieline.strokeColor", base.mainLine.color),
+      width: configService.get(configKey("strokeWidth"), base.mainLine.width),
+      color: configService.get(configKey("strokeColor"), base.mainLine.color),
       dashLength: configService.get(
-        "dieline.dashLength",
+        configKey("dashLength"),
         base.mainLine.dashLength,
       ),
-      style: configService.get("dieline.style", base.mainLine.style),
+      style: configService.get(configKey("style"), base.mainLine.style),
     },
     offsetLine: {
       width: configService.get(
-        "dieline.offsetStrokeWidth",
+        configKey("offsetStrokeWidth"),
         base.offsetLine.width,
       ),
       color: configService.get(
-        "dieline.offsetStrokeColor",
+        configKey("offsetStrokeColor"),
         base.offsetLine.color,
       ),
       dashLength: configService.get(
-        "dieline.offsetDashLength",
+        configKey("offsetDashLength"),
         base.offsetLine.dashLength,
       ),
-      style: configService.get("dieline.offsetStyle", base.offsetLine.style),
+      style: configService.get(configKey("offsetStyle"), base.offsetLine.style),
     },
-    insideColor: configService.get("dieline.insideColor", base.insideColor),
+    insideColor: configService.get(configKey("insideColor"), base.insideColor),
     showBleedLines: configService.get(
-      "dieline.showBleedLines",
+      configKey("showBleedLines"),
       base.showBleedLines,
     ),
-    features: configService.get("dieline.features", base.features),
-    pathData: configService.get("dieline.pathData", base.pathData),
+    features: configService.get(configKey("features"), base.features),
+    pathData: configService.get(configKey("pathData"), base.pathData),
     customSourceWidthPx:
       Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,
     customSourceHeightPx:

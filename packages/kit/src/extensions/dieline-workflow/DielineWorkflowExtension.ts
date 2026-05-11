@@ -1,6 +1,8 @@
 import {
+  CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
+  type CapabilityRegistryService,
   type CommandContribution,
   type CommandService,
   type ConfigurationService,
@@ -8,21 +10,22 @@ import {
   type ExtensionContributions,
   type ExtensionDefinition,
 } from "@pooder/core";
+import {
+  DIELINE_GEOMETRY_CAPABILITY_ID,
+  type DielineGeometryCapabilityApi,
+} from "../dieline/capability";
+import {
+  EDGE_DETECTION_CAPABILITY_ID,
+  type DetectBounds,
+  type DetectEdgeResult,
+  type EdgeDetectionCapabilityApi,
+} from "../edge-detection";
+import {
+  IMAGE_PLACEMENT_CAPABILITY_ID,
+  type ImagePlacementCapabilityApi,
+} from "../image/capability";
 
-export interface DetectBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface DetectEdgeResult {
-  pathData: string;
-  rawBounds?: DetectBounds;
-  baseBounds?: DetectBounds;
-  imageWidth?: number;
-  imageHeight?: number;
-}
+export type { DetectBounds, DetectEdgeResult } from "../edge-detection";
 
 export interface DetectFrameDiagnostics {
   sourceWidth: number;
@@ -277,6 +280,12 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
     ) as ConfigurationService;
   }
 
+  private getCapabilityFacade<TFacade>(id: string): TFacade | undefined {
+    return this.context?.services
+      .get<CapabilityRegistryService>(CAPABILITY_REGISTRY_SERVICE)
+      ?.getFacade<TFacade>(id);
+  }
+
   private async executeCommand<T = unknown>(
     id: string,
     ...args: any[]
@@ -284,10 +293,74 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
     return await this.getCommandService().executeCommand<T>(id, ...args);
   }
 
+  private async exportUserCroppedImage(
+    options: ExportUserCroppedImageOptions,
+  ): Promise<ExportUserCroppedImageResult> {
+    const imagePlacement =
+      this.getCapabilityFacade<ImagePlacementCapabilityApi>(
+        IMAGE_PLACEMENT_CAPABILITY_ID,
+      );
+    if (imagePlacement) {
+      return await imagePlacement.exportUserCroppedImage(options);
+    }
+    return await this.executeCommand<ExportUserCroppedImageResult>(
+      "exportUserCroppedImage",
+      options,
+    );
+  }
+
+  private async detectEdge(
+    imageUrl: string,
+    options: DetectDielineOptions,
+  ): Promise<DetectEdgeResult | null> {
+    const edgeDetection = this.getCapabilityFacade<EdgeDetectionCapabilityApi>(
+      EDGE_DETECTION_CAPABILITY_ID,
+    );
+    if (edgeDetection) {
+      return await edgeDetection.detectEdge(imageUrl, options);
+    }
+    return await this.executeCommand<DetectEdgeResult | null>(
+      "detectEdge",
+      imageUrl,
+      options,
+    );
+  }
+
+  private async upsertImage(url: string): Promise<{
+    id: string;
+    mode: "replace" | "add";
+  }> {
+    const imagePlacement =
+      this.getCapabilityFacade<ImagePlacementCapabilityApi>(
+        IMAGE_PLACEMENT_CAPABILITY_ID,
+      );
+    if (imagePlacement) {
+      return await imagePlacement.upsertImage(url, { mode: "add" });
+    }
+    return await this.executeCommand<{
+      id: string;
+      mode: "replace" | "add";
+    }>("upsertImage", url, {
+      mode: "add",
+    });
+  }
+
   private applyDetectedDielineConfig(
     result: DetectEdgeResult,
     sourceImage?: { width?: number; height?: number },
   ) {
+    const dielineGeometry =
+      this.getCapabilityFacade<DielineGeometryCapabilityApi>(
+        DIELINE_GEOMETRY_CAPABILITY_ID,
+      );
+    if (dielineGeometry) {
+      dielineGeometry.applyDetectedPath(result, {
+        sourceImage,
+        normalizeCutMode: true,
+      });
+      return;
+    }
+
     const configService = this.getConfigService();
     configService.update("dieline.shape", "custom");
     configService.update("dieline.pathData", result.pathData);
@@ -328,14 +401,11 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
       return null;
     }
 
-    const verifySource = await this.executeCommand<ExportUserCroppedImageResult>(
-      "exportUserCroppedImage",
-      {
-        multiplier: options?.multiplier ?? 2,
-        format: options?.format ?? "png",
-        imageIds,
-      },
-    );
+    const verifySource = await this.exportUserCroppedImage({
+      multiplier: options?.multiplier ?? 2,
+      format: options?.format ?? "png",
+      imageIds,
+    });
 
     const verifyUrl = verifySource?.url;
     if (!verifyUrl) {
@@ -343,19 +413,15 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
     }
 
     try {
-      const verifyResult = await this.executeCommand<DetectEdgeResult | null>(
-        "detectEdge",
-        verifyUrl,
-        {
-          expand: options?.detect?.expand ?? 0,
-          smoothing: options?.detect?.smoothing ?? true,
-          simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
-          threshold: options?.detect?.threshold,
-          maxTraceDimension: options?.detect?.maxTraceDimension,
-          maskMode: options?.detect?.maskMode,
-          debug: false,
-        },
-      );
+      const verifyResult = await this.detectEdge(verifyUrl, {
+        expand: options?.detect?.expand ?? 0,
+        smoothing: options?.detect?.smoothing ?? true,
+        simplifyTolerance: options?.detect?.simplifyTolerance ?? 2,
+        threshold: options?.detect?.threshold,
+        maxTraceDimension: options?.detect?.maxTraceDimension,
+        maskMode: options?.detect?.maskMode,
+        debug: false,
+      });
 
       if (!verifyResult) {
         return null;
@@ -379,14 +445,11 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
     const includeDiagnostics = options.inspect?.includeDiagnostics === true;
     const expectedExpand = Math.max(0, Number(options.detect?.expand ?? 0));
 
-    const sourceImage = await this.executeCommand<ExportUserCroppedImageResult>(
-      "exportUserCroppedImage",
-      {
-        multiplier: options.export?.multiplier ?? 2,
-        format: options.export?.format ?? "png",
-        imageIds: options.export?.imageIds,
-      },
-    );
+    const sourceImage = await this.exportUserCroppedImage({
+      multiplier: options.export?.multiplier ?? 2,
+      format: options.export?.format ?? "png",
+      imageIds: options.export?.imageIds,
+    });
 
     const sourceUrl = sourceImage?.url;
     if (!sourceUrl) {
@@ -394,19 +457,15 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
     }
 
     try {
-      const result = await this.executeCommand<DetectEdgeResult | null>(
-        "detectEdge",
-        sourceUrl,
-        {
-          expand: options.detect?.expand ?? 0,
-          smoothing: options.detect?.smoothing ?? true,
-          simplifyTolerance: options.detect?.simplifyTolerance ?? 2,
-          threshold: options.detect?.threshold,
-          maxTraceDimension: options.detect?.maxTraceDimension,
-          maskMode: options.detect?.maskMode,
-          debug,
-        },
-      );
+      const result = await this.detectEdge(sourceUrl, {
+        expand: options.detect?.expand ?? 0,
+        smoothing: options.detect?.smoothing ?? true,
+        simplifyTolerance: options.detect?.simplifyTolerance ?? 2,
+        threshold: options.detect?.threshold,
+        maxTraceDimension: options.detect?.maxTraceDimension,
+        maskMode: options.detect?.maskMode,
+        debug,
+      });
 
       if (!result) {
         return null;
@@ -459,28 +518,19 @@ export class DielineWorkflowExtension implements ExtensionDefinition {
     url: string,
     options?: UploadAndDetectEdgeOptions,
   ): Promise<UploadAndDetectEdgeResult | null> {
-    const imageResult = await this.executeCommand<{
-      id: string;
-      mode: "replace" | "add";
-    }>("upsertImage", url, {
-      mode: "add",
-    });
+    const imageResult = await this.upsertImage(url);
 
     const imageId = String(imageResult?.id || "");
     if (!imageId) {
       return null;
     }
 
-    const result = await this.executeCommand<DetectEdgeResult | null>(
-      "detectEdge",
-      url,
-      {
-        expand: options?.expand ?? 10,
-        smoothing: options?.smoothing ?? true,
-        simplifyTolerance: options?.simplifyTolerance ?? 2,
-        maxTraceDimension: options?.maxTraceDimension,
-      },
-    );
+    const result = await this.detectEdge(url, {
+      expand: options?.expand ?? 10,
+      smoothing: options?.smoothing ?? true,
+      simplifyTolerance: options?.simplifyTolerance ?? 2,
+      maxTraceDimension: options?.maxTraceDimension,
+    });
 
     if (!result) {
       return null;

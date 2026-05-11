@@ -1,9 +1,11 @@
 import {
   CONFIGURATION_SERVICE,
+  SCENE_SERVICE,
   ExtensionContributions,
   ExtensionDefinition,
   ExtensionContext,
   ConfigurationService,
+  SceneService,
 } from "@pooder/core";
 import { Pattern } from "fabric";
 import {
@@ -13,11 +15,7 @@ import {
   RenderObjectSpec,
 } from "@pooder/platform-browser";
 import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
-import {
-  buildSceneGeometry,
-  computeSceneLayout,
-  readSizeState,
-} from "@pooder/platform-browser";
+import { computeSceneLayout, readSizeState } from "@pooder/platform-browser";
 import {
   DIELINE_LAYER_ID,
   IMAGE_OBJECT_LAYER_ID,
@@ -25,15 +23,38 @@ import {
 import { createDielineCommands } from "./commands";
 import { createDielineConfigurations } from "./config";
 import {
+  DIELINE_GEOMETRY_CAPABILITY_ID,
+  createDielineGeometryCapabilityDefinition,
+  normalizeDielineGeometryLayerId,
+  upsertScenePathElement,
+  type ApplyDetectedDielineOptions,
+  type DielineGeometryCapabilityApi,
+  type DielineGeometryCapabilityOptions,
+  type UpsertDielinePathElementOptions,
+} from "./capability";
+import {
   createDefaultDielineState,
   DielineGeometry,
   DielineState,
+  getDielineConfigKey,
+  normalizeDielineConfigNamespace,
   readDielineState,
 } from "./model";
 import { buildDielineRenderBundle } from "./renderBuilder";
+import { detectImageEdge, type DetectEdgeOptions } from "../edge-detection";
+
+export interface DielineToolOptions
+  extends Partial<DielineState>, DielineGeometryCapabilityOptions {
+  id?: string;
+  contributeTool?: boolean;
+  contributeCommands?: boolean;
+  contributeConfigurations?: boolean;
+  toolName?: string;
+  legacyVisibility?: boolean;
+}
 
 export class DielineTool implements ExtensionDefinition {
-  id = "pooder.kit.dieline";
+  id: string;
   public metadata = {
     name: "DielineTool",
   };
@@ -49,38 +70,79 @@ export class DielineTool implements ExtensionDefinition {
   private effects: RenderEffectSpec[] = [];
   private renderSeq = 0;
   private renderProducerDisposable?: { dispose: () => void };
+  private readonly capabilityId: string;
+  private readonly configNamespace: string;
+  private readonly targetLayerId: string;
+  private readonly imageClipLayerIds: string[];
+  private readonly contributeLegacyTool: boolean;
+  private readonly contributeLegacyCommands: boolean;
+  private readonly contributeConfigDefinitions: boolean;
+  private readonly toolName: string;
+  private readonly legacyVisibility: boolean;
   private onCanvasResized = () => {
     this.updateDieline();
   };
 
-  constructor(options?: Partial<DielineState>) {
+  constructor(options: DielineToolOptions = {}) {
+    this.id = normalizeDielineGeometryLayerId(options.id, "pooder.kit.dieline");
+    this.capabilityId = options.capabilityId || DIELINE_GEOMETRY_CAPABILITY_ID;
+    this.configNamespace = normalizeDielineConfigNamespace(
+      options.configNamespace,
+    );
+    this.targetLayerId = normalizeDielineGeometryLayerId(
+      options.layers?.targetLayerId,
+      DIELINE_LAYER_ID,
+    );
+    this.imageClipLayerIds = options.layers?.imageClipLayerIds?.map((id) =>
+      normalizeDielineGeometryLayerId(id, IMAGE_OBJECT_LAYER_ID),
+    ) || [IMAGE_OBJECT_LAYER_ID];
+    this.contributeLegacyTool = options.contributeTool !== false;
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+    this.contributeConfigDefinitions =
+      options.contributeConfigurations !== false;
+    this.toolName = options.toolName || "Dieline";
+    this.legacyVisibility =
+      options.legacyVisibility ?? this.contributeLegacyTool;
+
     if (options) {
+      const stateOptions: Partial<DielineState> = { ...options };
       // Deep merge for styles to avoid overwriting defaults with partial objects
-      if (options.mainLine) {
-        Object.assign(this.state.mainLine, options.mainLine);
-        delete options.mainLine;
+      if (stateOptions.mainLine) {
+        Object.assign(this.state.mainLine, stateOptions.mainLine);
+        delete stateOptions.mainLine;
       }
-      if (options.offsetLine) {
-        Object.assign(this.state.offsetLine, options.offsetLine);
-        delete options.offsetLine;
+      if (stateOptions.offsetLine) {
+        Object.assign(this.state.offsetLine, stateOptions.offsetLine);
+        delete stateOptions.offsetLine;
       }
-      if (options.shapeStyle) {
+      if (stateOptions.shapeStyle) {
         this.state.shapeStyle = normalizeShapeStyle(
-          options.shapeStyle,
+          stateOptions.shapeStyle,
           this.state.shapeStyle,
         );
-        delete options.shapeStyle;
+        delete stateOptions.shapeStyle;
       }
-      Object.assign(this.state, options);
-      this.state.shape = normalizeDielineShape(options.shape, this.state.shape);
+      delete (stateOptions as any).id;
+      delete (stateOptions as any).capabilityId;
+      delete (stateOptions as any).configNamespace;
+      delete (stateOptions as any).layers;
+      delete (stateOptions as any).contributeTool;
+      delete (stateOptions as any).contributeCommands;
+      delete (stateOptions as any).contributeConfigurations;
+      delete (stateOptions as any).toolName;
+      delete (stateOptions as any).legacyVisibility;
+      Object.assign(this.state, stateOptions);
+      this.state.shape = normalizeDielineShape(
+        stateOptions.shape,
+        this.state.shape,
+      );
     }
   }
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -88,16 +150,19 @@ export class DielineTool implements ExtensionDefinition {
         passes: [
           {
             id: DIELINE_LAYER_ID,
+            targetLayerId: this.targetLayerId,
             stack: 700,
             order: 0,
             replace: true,
-            visibility: {
-              op: "not",
-              expr: {
-                op: "activeToolIn",
-                ids: ["pooder.kit.image", "pooder.kit.white-ink"],
-              },
-            },
+            visibility: this.legacyVisibility
+              ? {
+                  op: "not",
+                  expr: {
+                    op: "activeToolIn",
+                    ids: ["pooder.kit.image", "pooder.kit.white-ink"],
+                  },
+                }
+              : undefined,
             effects: this.effects,
             objects: this.specs,
           },
@@ -109,12 +174,21 @@ export class DielineTool implements ExtensionDefinition {
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    Object.assign(this.state, readDielineState(configService, this.state));
+    Object.assign(
+      this.state,
+      readDielineState(configService, this.state, this.configNamespace),
+    );
 
     // Listen for changes
     configService.onAnyChange((e: { key: string; value: any }) => {
-      if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
-        Object.assign(this.state, readDielineState(configService, this.state));
+      if (
+        e.key.startsWith("size.") ||
+        e.key.startsWith(`${this.configNamespace}.`)
+      ) {
+        Object.assign(
+          this.state,
+          readDielineState(configService, this.state, this.configNamespace),
+        );
         this.updateDieline();
       }
     });
@@ -138,21 +212,45 @@ export class DielineTool implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      tools: [
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createDielineGeometryCapabilityDefinition(this.getDielineFacade(), {
+          capabilityId: this.capabilityId,
+          configNamespace: this.configNamespace,
+          layers: {
+            targetLayerId: this.targetLayerId,
+            imageClipLayerIds: this.imageClipLayerIds,
+          },
+        }),
+      ],
+    };
+
+    if (this.contributeLegacyTool) {
+      contributions.tools = [
         {
           id: this.id,
-          name: "Dieline",
+          name: this.toolName,
           interaction: "session",
           session: {
             autoBegin: false,
             leavePolicy: "block",
           },
         },
-      ],
-      configurations: createDielineConfigurations(this.state),
-      commands: createDielineCommands(this, this.state),
-    };
+      ];
+    }
+
+    if (this.contributeConfigDefinitions) {
+      contributions.configurations = createDielineConfigurations(
+        this.state,
+        this.configNamespace,
+      );
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = createDielineCommands(this, this.state);
+    }
+
+    return contributions;
   }
 
   private createHatchPattern(color: string = "rgba(0, 0, 0, 0.3)") {
@@ -181,7 +279,9 @@ export class DielineTool implements ExtensionDefinition {
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>(CONFIGURATION_SERVICE);
+    return this.context?.services.get<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
   }
 
   private getConfigServiceOrThrow(): ConfigurationService {
@@ -195,7 +295,7 @@ export class DielineTool implements ExtensionDefinition {
 
   public updateFeaturePosition(groupId: string, x: number, y: number) {
     const configService = this.getConfigServiceOrThrow();
-    const features = configService.get("dieline.features") || [];
+    const features = configService.get(this.getConfigKey("features")) || [];
 
     let changed = false;
     const nextFeatures = features.map((feature: any) => {
@@ -207,7 +307,7 @@ export class DielineTool implements ExtensionDefinition {
     });
 
     if (changed) {
-      configService.update("dieline.features", nextFeatures);
+      configService.update(this.getConfigKey("features"), nextFeatures);
     }
   }
 
@@ -225,7 +325,8 @@ export class DielineTool implements ExtensionDefinition {
     return buildDielineRenderBundle({
       state: this.state,
       sceneLayout,
-      canvasWidth: sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
+      canvasWidth:
+        sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
       canvasHeight:
         sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600,
       hasImages,
@@ -240,12 +341,13 @@ export class DielineTool implements ExtensionDefinition {
     return buildDielineRenderBundle({
       state: this.state,
       sceneLayout,
-      canvasWidth: sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
+      canvasWidth:
+        sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
       canvasHeight:
         sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600,
       hasImages: this.hasImageItems(),
       includeImageClipEffect: true,
-      clipTargetPassIds: [IMAGE_OBJECT_LAYER_ID],
+      clipTargetPassIds: this.imageClipLayerIds,
       clipVisibility: {
         op: "not",
         expr: { op: "anySessionActive" },
@@ -263,7 +365,10 @@ export class DielineTool implements ExtensionDefinition {
     if (!configService) return;
     const seq = ++this.renderSeq;
 
-    Object.assign(this.state, readDielineState(configService, this.state));
+    Object.assign(
+      this.state,
+      readDielineState(configService, this.state, this.configNamespace),
+    );
     const sceneLayout = computeSceneLayout(
       this.canvasService,
       readSizeState(configService),
@@ -295,13 +400,109 @@ export class DielineTool implements ExtensionDefinition {
       readSizeState(configService),
     );
     if (!sceneLayout) return null;
-    const sceneGeometry = buildSceneGeometry(configService, sceneLayout);
     return {
-      ...sceneGeometry,
+      shape: this.state.shape,
+      shapeStyle: this.state.shapeStyle,
+      unit: "px",
+      x: sceneLayout.trimRect.centerX,
+      y: sceneLayout.trimRect.centerY,
+      width: sceneLayout.trimRect.width,
+      height: sceneLayout.trimRect.height,
+      radius: this.state.radius * sceneLayout.scale,
+      offset: (sceneLayout.cutRect.width - sceneLayout.trimRect.width) / 2,
+      scale: sceneLayout.scale,
       strokeWidth: this.state.mainLine.width,
       pathData: this.state.pathData,
       customSourceWidthPx: this.state.customSourceWidthPx,
       customSourceHeightPx: this.state.customSourceHeightPx,
     } as DielineGeometry;
+  }
+
+  public getState(): DielineState {
+    return {
+      ...this.state,
+      mainLine: { ...this.state.mainLine },
+      offsetLine: { ...this.state.offsetLine },
+      shapeStyle: { ...this.state.shapeStyle },
+      features: this.state.features.map((feature) => ({ ...feature })),
+    };
+  }
+
+  public applyDetectedPath(
+    result: { pathData: string; imageWidth?: number; imageHeight?: number },
+    options: ApplyDetectedDielineOptions = {},
+  ) {
+    const configService = this.getConfigServiceOrThrow();
+    configService.update(this.getConfigKey("shape"), "custom");
+    configService.update(this.getConfigKey("pathData"), result.pathData);
+
+    const sourceWidth = Number(
+      result.imageWidth ?? options.sourceImage?.width ?? 0,
+    );
+    const sourceHeight = Number(
+      result.imageHeight ?? options.sourceImage?.height ?? 0,
+    );
+    configService.update(
+      this.getConfigKey("customSourceWidthPx"),
+      Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,
+    );
+    configService.update(
+      this.getConfigKey("customSourceHeightPx"),
+      Number.isFinite(sourceHeight) && sourceHeight > 0
+        ? sourceHeight
+        : undefined,
+    );
+
+    if (options.normalizeCutMode !== false) {
+      configService.update("size.cutMode", "trim");
+      configService.update("size.cutMarginMm", 0);
+    }
+  }
+
+  public async detectEdge(imageUrl: string, options?: DetectEdgeOptions) {
+    return await detectImageEdge(imageUrl, options);
+  }
+
+  public upsertPathElement(options: UpsertDielinePathElementOptions = {}) {
+    const pathData =
+      options.pathData || this.getGeometry()?.pathData || this.state.pathData;
+    if (!pathData) {
+      return null;
+    }
+    const sceneService =
+      this.context?.services.get<SceneService>(SCENE_SERVICE);
+    if (!sceneService) {
+      throw new Error("[DielineTool] SceneService is required.");
+    }
+
+    return upsertScenePathElement(sceneService, {
+      layerId: options.layerId || this.targetLayerId,
+      elementId: options.elementId || `${this.targetLayerId}.path`,
+      pathData,
+      order: options.order,
+      style: options.style || {
+        fill: "transparent",
+        stroke: this.state.mainLine.color,
+        strokeWidth: this.state.mainLine.width,
+      },
+      metadata: options.metadata,
+    });
+  }
+
+  private getDielineFacade(): DielineGeometryCapabilityApi {
+    return {
+      applyDetectedPath: (result, options) =>
+        this.applyDetectedPath(result, options),
+      getGeometry: () => this.getGeometry(),
+      getState: () => this.getState(),
+      refresh: () => this.updateDieline(),
+      updateFeaturePosition: (groupId, x, y) =>
+        this.updateFeaturePosition(groupId, x, y),
+      upsertPathElement: (options) => this.upsertPathElement(options),
+    };
+  }
+
+  private getConfigKey(path: string): string {
+    return getDielineConfigKey(this.configNamespace, path);
   }
 }

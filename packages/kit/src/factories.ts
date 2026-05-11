@@ -1,7 +1,11 @@
 import { BackgroundTool } from "./extensions/background";
 import { DesignExportExtension } from "./extensions/design-export";
 import { DielineWorkflowExtension } from "./extensions/dieline-workflow";
-import { DielineTool } from "./extensions/dieline";
+import {
+  DielineGeometryCapabilityExtension,
+  DielineTool,
+} from "./extensions/dieline";
+import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureTool } from "./extensions/feature";
 import {
   ImagePlacementCapabilityExtension,
@@ -24,6 +28,14 @@ export const createDielineExtension = (
 
 export const createDielineWorkflowExtension = () =>
   new DielineWorkflowExtension();
+
+export const createEdgeDetectionCapability = (
+  options?: ConstructorParameters<typeof EdgeDetectionCapabilityExtension>[0],
+) => new EdgeDetectionCapabilityExtension(options);
+
+export const createDielineGeometryCapability = (
+  options?: ConstructorParameters<typeof DielineGeometryCapabilityExtension>[0],
+) => new DielineGeometryCapabilityExtension(options);
 
 export const createFeatureExtension = (
   options?: ConstructorParameters<typeof FeatureTool>[0],

@@ -8,12 +8,19 @@
   capability-only image placement extension that accepts caller-provided layer
   ids and config namespaces while keeping `ImageTool` as the compatibility
   wrapper.
+- Added typed `pooder.kit.edge-detection` and
+  `pooder.kit.dieline-geometry` capability facades so callers can detect image
+  edges, apply detected dieline paths, target caller-owned layers, and upsert
+  scene path elements without invoking a kit-owned dieline tool.
 
 ### Changed
 
 - Updated the legacy `exportImage` design export command to delegate browser
   export work to `@pooder/platform-browser` while preserving compatibility
   layer defaults and result shape.
+- Updated legacy dieline commands and workflow orchestration to delegate through
+  typed edge detection, image placement, and dieline geometry facades when
+  available, with command/config fallbacks preserved for compatibility.
 
 ### Planning Notes
 

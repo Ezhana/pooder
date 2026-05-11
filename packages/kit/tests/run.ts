@@ -19,6 +19,17 @@ import {
   createImagePlacementCapabilityDefinition,
   type ImagePlacementCapabilityApi,
 } from "../src/extensions/image/capability";
+import {
+  DIELINE_GEOMETRY_CAPABILITY_ID,
+  createDielineGeometryCapabilityDefinition,
+  upsertScenePathElement,
+  type DielineGeometryCapabilityApi,
+} from "../src/extensions/dieline/capability";
+import {
+  EDGE_DETECTION_CAPABILITY_ID,
+  EdgeDetectionCapabilityExtension,
+  type EdgeDetectionCapabilityApi,
+} from "../src/extensions/edge-detection";
 import { createImageCommands } from "../src/extensions/image/commands";
 import { createImageConfigurations } from "../src/extensions/image/config";
 import { createDesignExportCommands } from "../src/extensions/design-export/commands";
@@ -45,6 +56,7 @@ import {
 } from "@pooder/platform-browser";
 import {
   COMMAND_SERVICE,
+  SCENE_SERVICE,
   type CommandContribution,
   type CommandService,
   type ExtensionDefinition,
@@ -58,7 +70,9 @@ function assert(condition: unknown, message: string) {
 
 function assertEqual<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) {
-    throw new Error(`${message} (expected ${String(expected)}, got ${String(actual)})`);
+    throw new Error(
+      `${message} (expected ${String(expected)}, got ${String(actual)})`,
+    );
   }
 }
 
@@ -135,15 +149,15 @@ class FakeCanvasService {
     };
   }
 
-  toSceneRect<T extends { left: number; top: number; width: number; height: number }>(
-    rect: T,
-  ) {
+  toSceneRect<
+    T extends { left: number; top: number; width: number; height: number },
+  >(rect: T) {
     return { ...rect };
   }
 
-  toScreenRect<T extends { left: number; top: number; width: number; height: number }>(
-    rect: T,
-  ) {
+  toScreenRect<
+    T extends { left: number; top: number; width: number; height: number },
+  >(rect: T) {
     return { ...rect };
   }
 
@@ -162,7 +176,6 @@ class FakeCanvasService {
   toScreenPoint(point: { x: number; y: number }) {
     return { ...point };
   }
-
 }
 
 class FakeBrowserSceneExportService {
@@ -193,7 +206,11 @@ function createCommandExtension(
   options: {
     activation?: ExtensionDefinition["activation"];
     commands?: CommandContribution[];
-    tools?: Array<{ id: string; name: string; interaction: "instant" | "session" | "hybrid" }>;
+    tools?: Array<{
+      id: string;
+      name: string;
+      interaction: "instant" | "session" | "hybrid";
+    }>;
   } = {},
 ): ExtensionDefinition {
   return {
@@ -712,10 +729,7 @@ function testContributionCompatibility() {
     "completeWhiteInks",
     "setWhiteInkImage",
   ];
-  const expectedDielineCommands = [
-    "updateFeaturePosition",
-    "detectEdge",
-  ];
+  const expectedDielineCommands = ["updateFeaturePosition", "detectEdge"];
 
   assert(
     JSON.stringify(imageCommandNames) === JSON.stringify(expectedImageCommands),
@@ -819,10 +833,7 @@ async function testDesignExportExtensionCommand() {
 
   runtime.extensions.register(new DesignExportExtension());
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.services.register(
-    exportService as any,
-    BROWSER_SCENE_EXPORT_SERVICE,
-  );
+  runtime.services.register(exportService as any, BROWSER_SCENE_EXPORT_SERVICE);
   await runtime.extensions.flushActivation();
 
   assert(
@@ -839,7 +850,9 @@ async function testDesignExportExtensionCommand() {
   console.error = () => {};
   try {
     await runtime.commands.execute("exportImage");
-    throw new Error("exportImage should reject when there are no design objects");
+    throw new Error(
+      "exportImage should reject when there are no design objects",
+    );
   } catch (error) {
     assert(
       error instanceof Error &&
@@ -1018,9 +1031,10 @@ async function testImagePlacementCapabilityExtension() {
 
   await runtime.extensions.flushActivation();
 
-  const registeredFacade = runtime.capabilities.get<ImagePlacementCapabilityApi>(
-    IMAGE_PLACEMENT_CAPABILITY_ID,
-  );
+  const registeredFacade =
+    runtime.capabilities.get<ImagePlacementCapabilityApi>(
+      IMAGE_PLACEMENT_CAPABILITY_ID,
+    );
   if (!registeredFacade) {
     throw new Error("image placement capability facade should be registered");
   }
@@ -1040,6 +1054,152 @@ async function testImagePlacementCapabilityExtension() {
   assert(
     runtime.config.getDefinition("storefrontImage.items"),
     "image placement capability should accept caller config namespace",
+  );
+
+  await runtime.dispose();
+}
+
+async function testEdgeDetectionCapabilityExtension() {
+  const runtime = new Pooder();
+
+  runtime.extensions.register(new EdgeDetectionCapabilityExtension());
+  await runtime.extensions.flushActivation();
+
+  const facade = runtime.capabilities.get<EdgeDetectionCapabilityApi>(
+    EDGE_DETECTION_CAPABILITY_ID,
+  );
+  assert(!!facade, "edge detection capability facade should be registered");
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(EDGE_DETECTION_CAPABILITY_ID),
+    "edge detection capability registration should not require a tool",
+  );
+
+  await runtime.dispose();
+}
+
+async function testDielineGeometryCapabilityExtension() {
+  const runtime = new Pooder();
+  const state = {
+    shape: "rect",
+    radius: 0,
+    shapeStyle: {},
+    showBleedLines: true,
+    mainLine: { width: 1, color: "#000", dashLength: 1, style: "solid" },
+    offsetLine: { width: 1, color: "#000", dashLength: 1, style: "solid" },
+    insideColor: "#000",
+    features: [],
+  };
+  const facade: DielineGeometryCapabilityApi = {
+    applyDetectedPath: (result, options = {}) => {
+      runtime.config.update("storefrontDieline.shape", "custom");
+      runtime.config.update("storefrontDieline.pathData", result.pathData);
+      if (options.normalizeCutMode !== false) {
+        runtime.config.update("size.cutMode", "trim");
+      }
+    },
+    getGeometry: () => null,
+    getState: () => state as any,
+    refresh: () => {},
+    updateFeaturePosition: () => {},
+    upsertPathElement: (options = {}) =>
+      upsertScenePathElement(runtime.services.getOrThrow(SCENE_SERVICE), {
+        layerId: options.layerId || "app.dieline",
+        elementId: options.elementId || "app.dieline.path",
+        pathData: options.pathData || "M0 0 L1 1",
+        order: options.order,
+        style: options.style,
+        metadata: options.metadata,
+      }),
+  };
+
+  runtime.extensions.register({
+    id: "test.dieline-geometry",
+    activate() {},
+    contribute() {
+      return {
+        capabilities: [
+          createDielineGeometryCapabilityDefinition(facade, {
+            configNamespace: "storefrontDieline",
+            layers: {
+              targetLayerId: "app.dieline",
+              imageClipLayerIds: ["app.image"],
+            },
+          }),
+        ],
+        configurations: createDielineConfigurations(state, "storefrontDieline"),
+      };
+    },
+  });
+
+  await runtime.extensions.flushActivation();
+
+  const registeredFacade =
+    runtime.capabilities.get<DielineGeometryCapabilityApi>(
+      DIELINE_GEOMETRY_CAPABILITY_ID,
+    );
+  if (!registeredFacade) {
+    throw new Error("dieline geometry capability facade should be registered");
+  }
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(DIELINE_GEOMETRY_CAPABILITY_ID),
+    "dieline geometry capability registration should not require a tool",
+  );
+  assert(
+    runtime.config.getDefinition("storefrontDieline.shape"),
+    "dieline geometry capability should accept caller config namespace",
+  );
+
+  registeredFacade.applyDetectedPath(
+    {
+      pathData: "M0 0 L10 0 L10 10 Z",
+      imageWidth: 10,
+      imageHeight: 10,
+    },
+    { normalizeCutMode: true },
+  );
+
+  assertEqual(
+    runtime.config.get("storefrontDieline.shape"),
+    "custom",
+    "dieline geometry should write detected shape to caller namespace",
+  );
+  assertEqual(
+    runtime.config.get("storefrontDieline.pathData"),
+    "M0 0 L10 0 L10 10 Z",
+    "dieline geometry should write detected path to caller namespace",
+  );
+  assertEqual(
+    runtime.config.get("size.cutMode"),
+    "trim",
+    "dieline geometry should normalize cut mode when requested",
+  );
+
+  const element = registeredFacade.upsertPathElement({
+    elementId: "app.dieline.path",
+    pathData: "M0 0 L1 1",
+  });
+  assertEqual(
+    element?.id,
+    "app.dieline.path",
+    "dieline geometry should upsert a caller-owned path element",
+  );
+  const sceneService = runtime.services.getOrThrow(SCENE_SERVICE);
+  assert(
+    sceneService.getLayer("app.dieline"),
+    "dieline geometry should create the caller-owned target layer",
+  );
+  assertEqual(
+    sceneService.getElement("app.dieline.path")?.type,
+    "path",
+    "dieline geometry should create a scene path element",
   );
 
   await runtime.dispose();
@@ -1267,7 +1427,10 @@ async function testDielineWorkflowExtensionCommands() {
 
   const committed = await runtime.commands.execute<{
     pathData: string;
-    postCommitDiagnostics?: { expectedExpand: number; margin?: { left: number } | null };
+    postCommitDiagnostics?: {
+      expectedExpand: number;
+      margin?: { left: number } | null;
+    };
   }>("detectDielineFromFrame", {
     detect: {
       expand: 6,
@@ -1338,6 +1501,8 @@ async function main() {
   await testDesignExportExtensionCommand();
   await testExtensionDependencyActivation();
   await testImagePlacementCapabilityExtension();
+  await testEdgeDetectionCapabilityExtension();
+  await testDielineGeometryCapabilityExtension();
   await testDielineWorkflowExtensionActivation();
   await testDielineWorkflowExtensionCommands();
   console.log("ok");
