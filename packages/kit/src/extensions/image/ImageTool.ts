@@ -248,6 +248,10 @@ const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
   },
 ];
 
+/**
+ * @deprecated Compatibility wrapper for ImagePlacementCapability. Use
+ * createImagePlacementCapability().
+ */
 export class ImageTool implements ExtensionDefinition {
   id: string;
 

@@ -53,6 +53,10 @@ export interface DielineToolOptions
   legacyVisibility?: boolean;
 }
 
+/**
+ * @deprecated Compatibility wrapper for DielineGeometryCapability. Use
+ * createDielineGeometryCapability().
+ */
 export class DielineTool implements ExtensionDefinition {
   id: string;
   public metadata = {

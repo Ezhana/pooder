@@ -47,6 +47,10 @@ export const createDesignExportCapability = (
   options?: ConstructorParameters<typeof DesignExportCapabilityExtension>[0],
 ) => new DesignExportCapabilityExtension(options);
 
+/**
+ * @deprecated Registers the legacy DielineTool compatibility tool. Use
+ * createDielineGeometryCapability().
+ */
 export const createDielineExtension = (
   options?: ConstructorParameters<typeof DielineTool>[0],
 ) => new DielineTool(options);
@@ -66,6 +70,10 @@ export const createDielineGeometryCapability = (
   options?: ConstructorParameters<typeof DielineGeometryCapabilityExtension>[0],
 ) => new DielineGeometryCapabilityExtension(options);
 
+/**
+ * @deprecated Registers the legacy FeatureTool compatibility tool. Use
+ * createFeatureCapability().
+ */
 export const createFeatureExtension = (
   options?: ConstructorParameters<typeof FeatureTool>[0],
 ) => new FeatureTool(options);
@@ -74,6 +82,10 @@ export const createFeatureCapability = (
   options?: ConstructorParameters<typeof FeatureCapabilityExtension>[0],
 ) => new FeatureCapabilityExtension(options);
 
+/**
+ * @deprecated Registers the legacy ImageTool compatibility tool. Use
+ * createImagePlacementCapability().
+ */
 export const createImageExtension = () => new ImageTool();
 
 export const createImagePlacementCapability = (
@@ -84,6 +96,10 @@ export const createRulerExtension = (
   options?: ConstructorParameters<typeof RulerTool>[0],
 ) => new RulerTool(options);
 
+/**
+ * @deprecated Registers the legacy SizeTool compatibility tool. Use
+ * createSizeCapability().
+ */
 export const createSizeExtension = () => new SizeTool();
 
 export const createSizeCapability = (
@@ -102,6 +118,10 @@ export const createRulerCapability = (
   options?: ConstructorParameters<typeof RulerCapabilityExtension>[0],
 ) => new RulerCapabilityExtension(options);
 
+/**
+ * @deprecated Registers the legacy WhiteInkTool compatibility tool. Use
+ * createWhiteInkCapability().
+ */
 export const createWhiteInkExtension = () => new WhiteInkTool();
 
 export const createWhiteInkCapability = (

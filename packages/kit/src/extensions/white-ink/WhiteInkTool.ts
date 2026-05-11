@@ -138,6 +138,10 @@ export interface WhiteInkToolOptions extends WhiteInkCapabilityOptions {
   requireImageExtension?: boolean;
 }
 
+/**
+ * @deprecated Compatibility wrapper for WhiteInkCapability. Use
+ * createWhiteInkCapability().
+ */
 export class WhiteInkTool implements ExtensionDefinition {
   id: string;
 

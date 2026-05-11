@@ -54,6 +54,28 @@
   compatibility surfaces after moving storefront dieline workflow orchestration
   to app-owned typed capability composition.
 
+### Deprecated
+
+- Deprecated compatibility wrapper: `ImageTool` ->
+  `createImagePlacementCapability()`.
+- Deprecated compatibility wrapper: `createImageExtension` ->
+  `createImagePlacementCapability()`.
+- Deprecated compatibility wrapper: `WhiteInkTool` ->
+  `createWhiteInkCapability()`.
+- Deprecated compatibility wrapper: `createWhiteInkExtension` ->
+  `createWhiteInkCapability()`.
+- Deprecated compatibility wrapper: `DielineTool` ->
+  `createDielineGeometryCapability()`.
+- Deprecated compatibility wrapper: `createDielineExtension` ->
+  `createDielineGeometryCapability()`.
+- Deprecated compatibility wrapper: `FeatureTool` ->
+  `createFeatureCapability()`.
+- Deprecated compatibility wrapper: `createFeatureExtension` ->
+  `createFeatureCapability()`.
+- Deprecated compatibility wrapper: `SizeTool` -> `createSizeCapability()`.
+- Deprecated compatibility wrapper: `createSizeExtension` ->
+  `createSizeCapability()`.
+
 ### Planning Notes
 
 - Track the capability-first architecture migration. Kit is planned to stop

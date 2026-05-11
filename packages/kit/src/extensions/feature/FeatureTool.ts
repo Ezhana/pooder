@@ -94,6 +94,10 @@ export interface FeatureToolOptions extends FeatureCapabilityOptions {
   features?: ConstraintFeature[];
 }
 
+/**
+ * @deprecated Compatibility wrapper for FeatureCapability. Use
+ * createFeatureCapability().
+ */
 export class FeatureTool implements ExtensionDefinition {
   id: string;
 

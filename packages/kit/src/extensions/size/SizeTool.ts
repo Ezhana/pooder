@@ -53,6 +53,10 @@ export interface SizeToolOptions extends SizeCapabilityOptions {
   toolName?: string;
 }
 
+/**
+ * @deprecated Compatibility wrapper for SizeCapability. Use
+ * createSizeCapability().
+ */
 export class SizeTool implements ExtensionDefinition {
   id: string;
   metadata = {

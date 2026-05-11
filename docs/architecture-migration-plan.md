@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M6 next; P5.S1 next.
+Current milestone: M6 in progress; P5.S2 next.
 
 Completed:
 
@@ -84,10 +84,13 @@ Completed:
 - P4.S4 build and type verification has passed. Pooder package builds and
   storefront type/build integration checks now verify the migrated
   capability-first slices without a manual walkthrough.
+- P5.S1 legacy kit tool contribution exports have been deprecated. Legacy
+  `ImageTool`, `WhiteInkTool`, `DielineTool`, `FeatureTool`, `SizeTool`, and
+  their tool-registering factories now point callers to capability factories.
 
 Next recommended slice:
 
-- P5.S1 - Deprecate Kit Tool Contributions.
+- P5.S2 - Remove Kit-Owned Business Tools.
 
 Resume instruction for a new thread:
 
