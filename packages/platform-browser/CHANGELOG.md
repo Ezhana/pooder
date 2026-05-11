@@ -8,6 +8,9 @@
   planned to implement core scene and render contracts behind Fabric/browser
   adapters while keeping tool-free layer and element operations available. See
   `../../docs/architecture-migration-plan.md`.
+- Published naming and contribution policy for upcoming scene adapter, layer,
+  element, and render producer boundaries. See
+  `../../docs/naming-and-contribution-policy.md`.
 
 ## 1.0.2
 

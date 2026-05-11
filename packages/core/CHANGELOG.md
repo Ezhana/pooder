@@ -7,6 +7,9 @@
 - Track the capability-first architecture migration. Core is planned to own the
   runtime, capability registry, headless scene contracts, and workflow-neutral
   session contracts. See `../../docs/architecture-migration-plan.md`.
+- Published naming and contribution policy for upcoming capability, scene,
+  layer, element, and workflow session contracts. See
+  `../../docs/naming-and-contribution-policy.md`.
 
 ## 3.0.0
 

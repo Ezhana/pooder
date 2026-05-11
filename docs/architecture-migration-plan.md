@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M0 in progress.
+Current milestone: M0 complete; M1 next.
 
 Completed:
 
@@ -16,11 +16,13 @@ Completed:
 - Affected package changelogs have `Unreleased` planning notes.
 - P0.S2 current kit tool coupling inventory has been published in
   `docs/kit-tool-coupling-inventory.md`.
+- P0.S3 naming and contribution policy has been published in
+  `docs/naming-and-contribution-policy.md`.
 - No runtime code has been changed for the migration yet.
 
 Next recommended slice:
 
-- P0.S3 - Naming And Contribution Policy.
+- P1.S1 - Capability Registry.
 
 Resume instruction for a new thread:
 
