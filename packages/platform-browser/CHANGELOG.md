@@ -7,6 +7,9 @@
 - Added `FabricSceneAdapter` and browser host registration so core
   `SceneService` layers and elements sync into scoped Fabric render passes
   without replacing existing render producer output.
+- Added layer-targeted render producer passes so capabilities can render into
+  caller-created layers through scoped sources while preserving scene layer
+  stacking and compatibility pass ids.
 
 ### Planning Notes
 

@@ -3,6 +3,7 @@ import { Pooder, SCENE_SERVICE } from "@pooder/core";
 import {
   attachBrowserHost,
   CANVAS_SERVICE,
+  CanvasService,
   FABRIC_SCENE_ADAPTER,
   FabricSceneAdapter,
   resolveViewPaddingPx,
@@ -12,6 +13,7 @@ import {
 import type {
   CanvasPassStackingMeta,
   RenderObjectSpec,
+  RenderPassSpec,
 } from "../src";
 
 declare const process: {
@@ -73,6 +75,119 @@ class FakeCanvasService {
 
 class FakeSceneLayoutService {}
 class FakeFabricSceneAdapter {}
+
+class FakeFabricObject {
+  data: Record<string, any> = {};
+  type: string;
+  visible = true;
+
+  constructor(type: string) {
+    this.type = type;
+  }
+
+  set(values: Record<string, any>) {
+    Object.assign(this, values);
+  }
+
+  setCoords() {}
+}
+
+class FakeRenderableCanvas {
+  height = 100;
+  width = 100;
+  objects: FakeFabricObject[] = [];
+  renderCalls = 0;
+
+  add(obj: FakeFabricObject) {
+    this.objects.push(obj);
+  }
+
+  bringObjectToFront(obj: FakeFabricObject) {
+    this.moveObjectTo(obj, this.objects.length - 1);
+  }
+
+  dispose() {}
+
+  getObjects() {
+    return this.objects;
+  }
+
+  moveObjectTo(obj: FakeFabricObject, index: number) {
+    const current = this.objects.indexOf(obj);
+    if (current < 0) return;
+    this.objects.splice(current, 1);
+    const target = Math.max(0, Math.min(index, this.objects.length));
+    this.objects.splice(target, 0, obj);
+  }
+
+  on() {}
+
+  remove(obj: FakeFabricObject) {
+    const index = this.objects.indexOf(obj);
+    if (index >= 0) {
+      this.objects.splice(index, 1);
+    }
+  }
+
+  requestRenderAll() {
+    this.renderCalls += 1;
+  }
+
+  setDimensions(size: { height: number; width: number }) {
+    this.height = size.height;
+    this.width = size.width;
+  }
+}
+
+function createCanvasServiceForRenderTests() {
+  const canvas = new FakeRenderableCanvas();
+  const service = Object.create(CanvasService.prototype) as CanvasService & any;
+
+  service.canvas = canvas;
+  service.viewport = {
+    offset: { x: 0, y: 0 },
+    scale: 1,
+    updateContainer() {},
+  };
+  service.renderProducers = new Map();
+  service.producerOrder = 0;
+  service.producerFlushRequested = false;
+  service.producerLoopPending = false;
+  service.producerLoopPromise = null;
+  service.producerApplyInProgress = false;
+  service.visibilityRefreshScheduled = false;
+  service.managedProducerPassIds = new Set();
+  service.managedPassMetas = new Map();
+  service.managedPassEffects = [];
+  service.layerStackingMetas = new Map();
+  service.createFabricObject = async (spec: RenderObjectSpec) => {
+    const obj = new FakeFabricObject(spec.type);
+    obj.set({
+      ...(spec.props || {}),
+      data: { ...(spec.data || {}), id: spec.id },
+    });
+    return obj;
+  };
+
+  return { canvas, service };
+}
+
+function rectSpec(
+  id: string,
+  props: Record<string, any> = {},
+  data: Record<string, any> = {},
+): RenderObjectSpec {
+  return {
+    id,
+    type: "rect",
+    data,
+    props: {
+      height: 1,
+      width: 1,
+      ...props,
+    },
+  };
+}
 
 function createRuntime() {
   const registered = new Map<unknown, Service>();
@@ -421,6 +536,128 @@ async function testFabricSceneAdapterSyncsCoreSceneToScopedPasses() {
   await runtime.dispose();
 }
 
+async function testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+  let passes: RenderPassSpec[] = [
+    {
+      id: "capability.render",
+      targetLayerId: "app.artwork",
+      objects: [rectSpec("producer-rect", { fill: "blue" })],
+    },
+  ];
+
+  await service.applyObjectSpecsToPass(
+    "app.artwork",
+    [rectSpec("scene-rect", { fill: "red" })],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  service.registerRenderProducer("pooder.kit.test", () => ({ passes }));
+  await service.flushRenderFromProducers();
+
+  const sceneObject = canvas.objects.find(
+    (obj) => obj.data.id === "scene-rect",
+  );
+  const producerObject = canvas.objects.find(
+    (obj) => obj.data.id === "producer-rect",
+  );
+
+  assert(sceneObject, "scene-scoped object should remain in the target layer");
+  assert(producerObject, "producer object should render into target layer");
+  assertEqual(
+    producerObject.data.passId,
+    "app.artwork",
+    "producer object should use the caller-provided target layer",
+  );
+  assertEqual(
+    producerObject.data.__renderScope,
+    "render-producer:pooder.kit.test:capability.render",
+    "producer object should be source scoped",
+  );
+
+  passes = [];
+  await service.flushRenderFromProducers();
+
+  assert(
+    canvas.objects.some((obj) => obj.data.id === "scene-rect"),
+    "clearing producer output should not remove scene-scoped objects",
+  );
+  assert(
+    !canvas.objects.some((obj) => obj.data.id === "producer-rect"),
+    "producer output should be removed when its source pass disappears",
+  );
+}
+
+async function testRenderProducerVisibilityIsSourceScoped() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+
+  await service.applyObjectSpecsToPass(
+    "app.artwork",
+    [rectSpec("scene-rect", { fill: "red" })],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  service.registerRenderProducer("pooder.kit.test", () => ({
+    passes: [
+      {
+        id: "capability.render",
+        targetLayerId: "app.artwork",
+        visibility: { op: "const", value: false },
+        objects: [rectSpec("producer-rect", { fill: "blue" })],
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  const sceneObject = canvas.objects.find(
+    (obj) => obj.data.id === "scene-rect",
+  );
+  const producerObject = canvas.objects.find(
+    (obj) => obj.data.id === "producer-rect",
+  );
+
+  assert(sceneObject, "scene object should exist");
+  assert(producerObject, "producer object should exist");
+  assertEqual(
+    sceneObject.visible,
+    true,
+    "producer visibility should not hide scene-scoped objects",
+  );
+  assertEqual(
+    producerObject.visible,
+    false,
+    "producer visibility should apply to the producer source scope",
+  );
+}
+
+async function testRenderProducerTargetLayerUsesStoredLayerOrder() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+
+  await service.applyObjectSpecsToPass(
+    "app.artwork",
+    [rectSpec("artwork-scene")],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  service.syncPassStacking([
+    { id: "app.background", order: 1 },
+    { id: "app.artwork", order: 2 },
+  ]);
+  service.registerRenderProducer("pooder.kit.test", () => ({
+    passes: [
+      {
+        id: "background.render",
+        targetLayerId: "app.background",
+        objects: [rectSpec("producer-background")],
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  assertDeepEqual(
+    canvas.objects.map((obj) => obj.data.id),
+    ["producer-background", "artwork-scene"],
+    "producer output should follow caller-owned layer order",
+  );
+}
+
 function testViewPaddingResolvesResponsively() {
   assertEqual(
     resolveViewPaddingPx("10%", 320, 480),
@@ -449,6 +686,9 @@ async function main() {
   testFailedLayoutRegistrationRollsBackCanvasService();
   testFailedSceneAdapterRegistrationRollsBackHostServices();
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
+  await testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope();
+  await testRenderProducerVisibilityIsSourceScoped();
+  await testRenderProducerTargetLayerUsesStoredLayerOrder();
   testViewPaddingResolvesResponsively();
 }
 

@@ -76,6 +76,7 @@ export type RenderEffectSpec = RenderClipPathEffectSpec;
 
 export interface RenderPassSpec {
   id: string;
+  targetLayerId?: string;
   stack?: number;
   order?: number;
   replace?: boolean;

@@ -52,8 +52,12 @@ interface RectLike {
 
 interface ResolvedRenderPassSpec {
   id: string;
+  sourceKey: string;
+  scope: string;
+  targetLayerId: string;
   stack: number;
   order: number;
+  producerOrder: number;
   replace: boolean;
   visibility?: RenderPassSpec["visibility"];
   effects: RenderEffectSpec[];
@@ -70,8 +74,12 @@ interface ResolvedClipPathEffectSpec {
 
 interface ManagedPassMeta {
   id: string;
+  sourceKey: string;
+  scope: string;
+  targetLayerId: string;
   stack: number;
   order: number;
+  producerOrder: number;
   visibility?: RenderPassSpec["visibility"];
 }
 
@@ -100,6 +108,7 @@ export default class CanvasService implements Service {
   private managedProducerPassIds: Set<string> = new Set();
   private managedPassMetas: Map<string, ManagedPassMeta> = new Map();
   private managedPassEffects: ResolvedClipPathEffectSpec[] = [];
+  private layerStackingMetas: Map<string, CanvasPassStackingMeta> = new Map();
 
   private canvasForwardersBound = false;
   private readonly forwardSelectionCreated = (e: any) => {
@@ -204,6 +213,7 @@ export default class CanvasService implements Service {
     this.managedProducerPassIds.clear();
     this.managedPassMetas.clear();
     this.managedPassEffects = [];
+    this.layerStackingMetas.clear();
     this.context = undefined;
     this.workbenchService = undefined;
     this.toolSessionService = undefined;
@@ -303,14 +313,21 @@ export default class CanvasService implements Service {
 
   private normalizePassSpecValue(
     spec: RenderPassSpec,
+    entry: RenderProducerEntry,
   ): ResolvedRenderPassSpec | null {
     const id = String(spec.id || "").trim();
     if (!id) return null;
+    const targetLayerId = String(spec.targetLayerId || "").trim() || id;
+    const sourceKey = this.getProducerPassSourceKey(entry.toolId, id);
 
     return {
       id,
+      sourceKey,
+      scope: sourceKey,
+      targetLayerId,
       stack: Number.isFinite(spec.stack) ? Number(spec.stack) : 0,
       order: Number.isFinite(spec.order) ? Number(spec.order) : 0,
+      producerOrder: entry.order,
       replace: spec.replace !== false,
       visibility: spec.visibility,
       effects: Array.isArray(spec.effects) ? [...spec.effects] : [],
@@ -318,9 +335,13 @@ export default class CanvasService implements Service {
     };
   }
 
+  private getProducerPassSourceKey(producerId: string, passId: string): string {
+    return `render-producer:${producerId}:${passId}`;
+  }
+
   private normalizeClipPathEffectSpec(
     effect: RenderEffectSpec,
-    passId: string,
+    pass: ResolvedRenderPassSpec,
     index: number,
   ): ResolvedClipPathEffectSpec | null {
     if (!effect || effect.type !== "clipPath") return null;
@@ -339,7 +360,7 @@ export default class CanvasService implements Service {
     if (!targetPassIds.length) return null;
 
     const customId = String((effect as any).id || "").trim();
-    const key = customId || `${passId}.effect.clipPath.${index}`;
+    const key = customId || `${pass.sourceKey}.effect.clipPath.${index}`;
 
     return {
       type: "clipPath",
@@ -356,19 +377,20 @@ export default class CanvasService implements Service {
   private mergePassSpec(
     map: Map<string, ResolvedRenderPassSpec>,
     rawSpec: RenderPassSpec,
-    producerId: string,
+    entry: RenderProducerEntry,
   ) {
-    const normalized = this.normalizePassSpecValue(rawSpec);
+    const normalized = this.normalizePassSpecValue(rawSpec, entry);
     if (!normalized) return;
 
-    const existing = map.get(normalized.id);
+    const existing = map.get(normalized.sourceKey);
     if (!existing) {
-      map.set(normalized.id, normalized);
+      map.set(normalized.sourceKey, normalized);
       return;
     }
 
     existing.objects.push(...normalized.objects);
     existing.replace = existing.replace || normalized.replace;
+    existing.targetLayerId = normalized.targetLayerId;
     existing.stack = normalized.stack;
     existing.order = normalized.order;
     if (normalized.visibility !== undefined) {
@@ -378,12 +400,15 @@ export default class CanvasService implements Service {
 
     if (normalized.objects.length === 0 && normalized.effects.length === 0) {
       console.debug(
-        `[CanvasService] pass "${normalized.id}" from producer "${producerId}" updated ordering/visibility only.`,
+        `[CanvasService] pass "${normalized.id}" from producer "${entry.toolId}" updated ordering/visibility only.`,
       );
     }
   }
 
-  private comparePassMeta(a: ManagedPassMeta, b: ManagedPassMeta): number {
+  private comparePassMeta(
+    a: { id: string; stack: number; order: number },
+    b: { id: string; stack: number; order: number },
+  ): number {
     if (a.stack !== b.stack) return a.stack - b.stack;
     if (a.order !== b.order) return a.order - b.order;
     return a.id.localeCompare(b.id);
@@ -415,20 +440,39 @@ export default class CanvasService implements Service {
   }
 
   private isManagedPassObject(obj: FabricObject): boolean {
-    const passId = (obj as any)?.data?.passId;
-    return typeof passId === "string" && this.managedPassMetas.has(passId);
+    const scope = (obj as any)?.data?.__renderScope;
+    return typeof scope === "string" && this.managedPassMetas.has(scope);
   }
 
   syncPassStacking(passes: CanvasPassStackingMeta[]) {
+    const orderedPasses = [...passes]
+      .map((pass) => ({
+        id: String(pass.id || "").trim(),
+        stack: Number.isFinite(pass.stack) ? Number(pass.stack) : 0,
+        order: Number.isFinite(pass.order) ? Number(pass.order) : 0,
+      }))
+      .filter((pass) => pass.id.length > 0);
+
+    this.layerStackingMetas.clear();
+    orderedPasses.forEach((pass) => {
+      this.layerStackingMetas.set(pass.id, { ...pass });
+    });
+
+    this.syncLayerStacking(orderedPasses);
+  }
+
+  private syncLayerStacking(
+    passes: Array<{ id: string; stack: number; order: number }>,
+  ) {
     const orderedPasses = [...passes].sort((a, b) =>
       this.comparePassMeta({
         id: a.id,
-        stack: Number.isFinite(a.stack) ? Number(a.stack) : 0,
-        order: Number.isFinite(a.order) ? Number(a.order) : 0,
+        stack: a.stack,
+        order: a.order,
       }, {
         id: b.id,
-        stack: Number.isFinite(b.stack) ? Number(b.stack) : 0,
-        order: Number.isFinite(b.order) ? Number(b.order) : 0,
+        stack: b.stack,
+        order: b.order,
       }),
     );
     if (!orderedPasses.length) return;
@@ -460,7 +504,29 @@ export default class CanvasService implements Service {
   }
 
   private syncManagedPassStacking(passes: ManagedPassMeta[]) {
-    this.syncPassStacking(passes);
+    const targetLayers = new Map<
+      string,
+      { id: string; stack: number; order: number }
+    >();
+
+    this.layerStackingMetas.forEach((meta, id) => {
+      targetLayers.set(id, {
+        id,
+        stack: Number.isFinite(meta.stack) ? Number(meta.stack) : 0,
+        order: Number.isFinite(meta.order) ? Number(meta.order) : 0,
+      });
+    });
+
+    passes.forEach((pass) => {
+      if (targetLayers.has(pass.targetLayerId)) return;
+      targetLayers.set(pass.targetLayerId, {
+        id: pass.targetLayerId,
+        stack: pass.stack,
+        order: pass.order,
+      });
+    });
+
+    this.syncLayerStacking(Array.from(targetLayers.values()));
   }
 
   private getPassRuntimeState(): Map<string, VisibilityLayerState> {
@@ -487,7 +553,7 @@ export default class CanvasService implements Service {
     });
 
     this.managedPassMetas.forEach((meta) => {
-      const item = ensure(meta.id);
+      const item = ensure(meta.targetLayerId);
       item.exists = true;
     });
 
@@ -525,7 +591,10 @@ export default class CanvasService implements Service {
 
     this.managedPassMetas.forEach((meta) => {
       const visible = evaluateVisibilityExpr(meta.visibility, context);
-      changed = this.setPassVisibility(meta.id, visible) || changed;
+      changed =
+        this.setPassVisibility(meta.targetLayerId, visible, {
+          scope: meta.scope,
+        }) || changed;
     });
 
     if (changed && options.render !== false) {
@@ -543,6 +612,37 @@ export default class CanvasService implements Service {
     });
   }
 
+  private getProducerPassOrderOffsets(
+    passes: ResolvedRenderPassSpec[],
+  ): Map<string, number> {
+    const result = new Map<string, number>();
+    const grouped = new Map<string, ResolvedRenderPassSpec[]>();
+    const stride = 10000;
+
+    passes.forEach((pass) => {
+      const group = grouped.get(pass.targetLayerId) || [];
+      group.push(pass);
+      grouped.set(pass.targetLayerId, group);
+    });
+
+    grouped.forEach((group) => {
+      [...group]
+        .sort((a, b) => {
+          if (a.stack !== b.stack) return a.stack - b.stack;
+          if (a.order !== b.order) return a.order - b.order;
+          if (a.producerOrder !== b.producerOrder) {
+            return a.producerOrder - b.producerOrder;
+          }
+          return a.id.localeCompare(b.id);
+        })
+        .forEach((pass, index) => {
+          result.set(pass.sourceKey, (index + 1) * stride);
+        });
+    });
+
+    return result;
+  }
+
   private async collectAndApplyProducerSpecs(): Promise<void> {
     const passes = new Map<string, ResolvedRenderPassSpec>();
     const entries = this.sortedRenderProducerEntries();
@@ -554,9 +654,7 @@ export default class CanvasService implements Service {
           const result = await entry.producer();
           if (!result) continue;
           const specs = Array.isArray(result.passes) ? result.passes : [];
-          specs.forEach((spec) =>
-            this.mergePassSpec(passes, spec, entry.toolId),
-          );
+          specs.forEach((spec) => this.mergePassSpec(passes, spec, entry));
         } catch (error) {
           console.error(
             `[CanvasService] render producer "${entry.toolId}" failed.`,
@@ -568,25 +666,43 @@ export default class CanvasService implements Service {
       const nextPassIds = new Set<string>();
       const nextManagedPassMetas = new Map<string, ManagedPassMeta>();
       const nextEffects: ResolvedClipPathEffectSpec[] = [];
+      const orderOffsets = this.getProducerPassOrderOffsets(
+        Array.from(passes.values()),
+      );
 
       for (const pass of passes.values()) {
-        nextPassIds.add(pass.id);
-        nextManagedPassMetas.set(pass.id, {
+        nextPassIds.add(pass.sourceKey);
+        nextManagedPassMetas.set(pass.sourceKey, {
           id: pass.id,
+          sourceKey: pass.sourceKey,
+          scope: pass.scope,
+          targetLayerId: pass.targetLayerId,
           stack: pass.stack,
           order: pass.order,
+          producerOrder: pass.producerOrder,
           visibility: pass.visibility,
         });
 
-        await this.applyObjectSpecsToPass(pass.id, pass.objects, {
+        const previous = this.managedPassMetas.get(pass.sourceKey);
+        if (previous && previous.targetLayerId !== pass.targetLayerId) {
+          await this.applyObjectSpecsToPass(previous.targetLayerId, [], {
+            render: false,
+            replace: true,
+            scope: previous.scope,
+          });
+        }
+
+        await this.applyObjectSpecsToPass(pass.targetLayerId, pass.objects, {
           render: false,
           replace: pass.replace,
+          scope: pass.scope,
+          orderOffset: orderOffsets.get(pass.sourceKey) ?? 0,
         });
 
         pass.effects.forEach((effect, index) => {
           const normalized = this.normalizeClipPathEffectSpec(
             effect,
-            pass.id,
+            pass,
             index,
           );
           if (!normalized) return;
@@ -594,11 +710,14 @@ export default class CanvasService implements Service {
         });
       }
 
-      for (const passId of this.managedProducerPassIds) {
-        if (nextPassIds.has(passId)) continue;
-        await this.applyObjectSpecsToPass(passId, [], {
+      for (const sourceKey of this.managedProducerPassIds) {
+        if (nextPassIds.has(sourceKey)) continue;
+        const previous = this.managedPassMetas.get(sourceKey);
+        if (!previous) continue;
+        await this.applyObjectSpecsToPass(previous.targetLayerId, [], {
           render: false,
           replace: true,
+          scope: previous.scope,
         });
       }
 
@@ -937,8 +1056,15 @@ export default class CanvasService implements Service {
     return next;
   }
 
-  setPassVisibility(passId: string, visible: boolean): boolean {
-    const objects = this.getPassCanvasObjects(passId) as any[];
+  setPassVisibility(
+    passId: string,
+    visible: boolean,
+    options: { scope?: string } = {},
+  ): boolean {
+    const scope = String(options.scope || "").trim() || undefined;
+    const objects = (this.getPassCanvasObjects(passId) as any[]).filter(
+      (obj) => !scope || obj?.data?.__renderScope === scope,
+    );
     let changed = false;
 
     objects.forEach((obj) => {
@@ -968,7 +1094,7 @@ export default class CanvasService implements Service {
     spec: RenderPassSpec,
     options: { render?: boolean } = {},
   ): Promise<void> {
-    await this.applyObjectSpecsToPass(spec.id, spec.objects, {
+    await this.applyObjectSpecsToPass(spec.targetLayerId || spec.id, spec.objects, {
       render: options.render,
       replace: spec.replace !== false,
     });
@@ -1101,6 +1227,7 @@ export default class CanvasService implements Service {
       render?: boolean;
       replace?: boolean;
       scope?: string;
+      orderOffset?: number;
     } = {},
   ): Promise<void> {
     const normalizedPassId = String(passId || "").trim();
@@ -1108,6 +1235,9 @@ export default class CanvasService implements Service {
 
     const replace = options.replace !== false;
     const scope = String(options.scope || "").trim() || undefined;
+    const orderOffset = Number.isFinite(options.orderOffset)
+      ? Number(options.orderOffset)
+      : 0;
     const normalizedSpecs = this.normalizeObjectSpecs(specs);
     const desiredIds = new Set(normalizedSpecs.map((s) => s.id));
     const matchesScope = (obj: any) =>
@@ -1159,7 +1289,7 @@ export default class CanvasService implements Service {
         this.patchFabricObject(created as any, spec, {
           passId: normalizedPassId,
           layerId: normalizedPassId,
-          passOrder: index,
+          passOrder: orderOffset + index,
           ...(scope ? { __renderScope: scope } : {}),
         });
         this.canvas.add(created as any);
@@ -1170,7 +1300,7 @@ export default class CanvasService implements Service {
       this.patchFabricObject(current, spec, {
         passId: normalizedPassId,
         layerId: normalizedPassId,
-        passOrder: index,
+        passOrder: orderOffset + index,
         ...(scope ? { __renderScope: scope } : {}),
       });
     }

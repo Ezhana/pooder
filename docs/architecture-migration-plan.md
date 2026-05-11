@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M2 in progress; P2.S2 next.
+Current milestone: M2 in progress; P2.S3 next.
 
 Completed:
 
@@ -32,10 +32,13 @@ Completed:
 - P2.S1 browser scene adapter has been added. The browser platform now syncs
   core scene layers and elements into scoped Fabric render passes without
   replacing existing render producer output.
+- P2.S2 layer-based render pipeline has been added. Browser render producers
+  can now target caller-provided layer ids through scoped sources while
+  preserving scene-owned layer order and compatibility pass ids.
 
 Next recommended slice:
 
-- P2.S2 - Layer-Based Render Pipeline.
+- P2.S3 - Tool-Free Visibility Predicates.
 
 Resume instruction for a new thread:
 
