@@ -7,6 +7,7 @@ import {
   ConfigurationService,
   SceneService,
   type RenderPatternSpec,
+  type VisibilityExpr,
 } from "@pooder/core";
 import {
   CANVAS_SERVICE,
@@ -46,6 +47,10 @@ import {
 } from "./model";
 import { buildDielineRenderBundle } from "./renderBuilder";
 import { detectImageEdge, type DetectEdgeOptions } from "../edge-detection";
+
+const IMAGE_SESSION_TOOL_ID = "pooder.kit.image-placement";
+const LEGACY_IMAGE_TOOL_ID = "pooder.kit.image";
+const WHITE_INK_SESSION_TOOL_ID = "pooder.kit.white-ink";
 
 export interface DielineToolOptions
   extends Partial<DielineState>, DielineGeometryCapabilityOptions {
@@ -157,15 +162,7 @@ export class DielineTool implements ExtensionDefinition {
             stack: 700,
             order: 0,
             replace: true,
-            visibility: this.legacyVisibility
-              ? {
-                  op: "not",
-                  expr: {
-                    op: "activeToolIn",
-                    ids: ["pooder.kit.image", "pooder.kit.white-ink"],
-                  },
-                }
-              : undefined,
+            visibility: this.resolveDielinePassVisibility(),
             effects: this.effects,
             objects: this.specs,
           },
@@ -258,6 +255,37 @@ export class DielineTool implements ExtensionDefinition {
     return this.context?.services.get<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
+  }
+
+  private resolveDielinePassVisibility(): VisibilityExpr {
+    const sessionVisibility: VisibilityExpr = {
+      op: "not",
+      expr: {
+        op: "any",
+        exprs: [
+          { op: "sessionActive", toolId: IMAGE_SESSION_TOOL_ID },
+          { op: "sessionActive", toolId: WHITE_INK_SESSION_TOOL_ID },
+        ],
+      },
+    };
+
+    if (!this.legacyVisibility) {
+      return sessionVisibility;
+    }
+
+    return {
+      op: "all",
+      exprs: [
+        sessionVisibility,
+        {
+          op: "not",
+          expr: {
+            op: "activeToolIn",
+            ids: [LEGACY_IMAGE_TOOL_ID, WHITE_INK_SESSION_TOOL_ID],
+          },
+        },
+      ],
+    };
   }
 
   private getConfigServiceOrThrow(): ConfigurationService {

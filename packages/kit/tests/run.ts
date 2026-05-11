@@ -118,6 +118,7 @@ import {
 import {
   COMMAND_SERVICE,
   SCENE_SERVICE,
+  TOOL_SESSION_SERVICE,
   type CapabilityDefinition,
   type CommandContribution,
   type CommandService,
@@ -154,6 +155,7 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
 class FakeCanvasService {
   private activeObject: any = null;
   private readonly eventHandlers = new Map<string, Set<(event?: any) => void>>();
+  private readonly renderProducers = new Map<string, () => unknown>();
 
   canvas = {
     width: 800,
@@ -190,10 +192,22 @@ class FakeCanvasService {
     },
   };
 
-  registerRenderProducer() {
+  registerRenderProducer(id?: string, producer?: () => unknown) {
+    if (id && producer) {
+      this.renderProducers.set(id, producer);
+    }
+
     return {
-      dispose: () => {},
+      dispose: () => {
+        if (id) {
+          this.renderProducers.delete(id);
+        }
+      },
     };
+  }
+
+  async getRenderProducerResult(id: string) {
+    return await this.renderProducers.get(id)?.();
   }
 
   async flushRenderFromProducers() {}
@@ -1666,6 +1680,83 @@ async function testEdgeDetectionCapabilityExtension() {
   await runtime.dispose();
 }
 
+async function testDielineOverlayVisibilityFollowsEditingSessions() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.extensions.register(createDielineGeometryCapability());
+  await runtime.extensions.flushActivation();
+  await Promise.resolve();
+
+  const producerResult = (await canvasService.getRenderProducerResult(
+    DIELINE_GEOMETRY_CAPABILITY_ID,
+  )) as any;
+  const pass = producerResult?.passes?.find(
+    (item: any) => item.id === "dieline-overlay",
+  );
+  assert(pass, "dieline render producer should expose the dieline overlay pass");
+
+  const sessions = runtime.services.getOrThrow(TOOL_SESSION_SERVICE);
+  const context = {
+    activeToolId: null,
+    hasAnyActiveSession: () => sessions.hasAnyActiveSession(),
+    isSessionActive: (toolId: string) => sessions.hasActiveSession(toolId),
+  };
+
+  assertEqual(
+    evaluateVisibilityExpr(pass.visibility, context),
+    true,
+    "dieline overlay should be visible when no edit session is active",
+  );
+
+  await sessions.begin(IMAGE_PLACEMENT_CAPABILITY_ID);
+  assertEqual(
+    evaluateVisibilityExpr(pass.visibility, context),
+    false,
+    "dieline overlay should be hidden during image placement sessions",
+  );
+  sessions.deactivateSession(IMAGE_PLACEMENT_CAPABILITY_ID);
+
+  await sessions.begin(WHITE_INK_CAPABILITY_ID);
+  assertEqual(
+    evaluateVisibilityExpr(pass.visibility, context),
+    false,
+    "dieline overlay should be hidden during white ink sessions",
+  );
+  sessions.deactivateSession(WHITE_INK_CAPABILITY_ID);
+
+  await sessions.begin(DIELINE_GEOMETRY_CAPABILITY_ID);
+  assertEqual(
+    evaluateVisibilityExpr(pass.visibility, context),
+    true,
+    "dieline overlay should remain visible during dieline sessions",
+  );
+
+  const clipEffect = pass.effects?.find(
+    (effect: any) => effect.type === "clipPath",
+  );
+  assert(clipEffect?.visibility, "dieline clip effect should expose visibility");
+  assertEqual(
+    evaluateVisibilityExpr(clipEffect.visibility, context),
+    false,
+    "dieline clip should be disabled while a session is active",
+  );
+  sessions.deactivateSession(DIELINE_GEOMETRY_CAPABILITY_ID);
+
+  assertEqual(
+    evaluateVisibilityExpr(pass.visibility, context),
+    true,
+    "dieline overlay should be restored after edit sessions end",
+  );
+  assertEqual(
+    evaluateVisibilityExpr(clipEffect.visibility, context),
+    true,
+    "dieline clip should be restored after edit sessions end",
+  );
+
+  await runtime.dispose();
+}
+
 async function testDielineGeometryCapabilityExtension() {
   const runtime = new Pooder();
   const state = {
@@ -2261,6 +2352,7 @@ async function main() {
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testEdgeDetectionCapabilityExtension();
+  await testDielineOverlayVisibilityFollowsEditingSessions();
   await testDielineGeometryCapabilityExtension();
   await testWhiteInkCapabilityExtension();
   await testBackgroundCapabilityExtension();
