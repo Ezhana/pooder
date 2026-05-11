@@ -21,6 +21,7 @@ import {
   normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,
 } from "../src/extensions/image/capability";
+import { buildImageSessionOverlaySpecs } from "../src/extensions/image/sessionOverlay";
 import {
   DIELINE_GEOMETRY_CAPABILITY_ID,
   createDielineGeometryCapabilityDefinition,
@@ -28,6 +29,7 @@ import {
   upsertScenePathElement,
   type DielineGeometryCapabilityApi,
 } from "../src/extensions/dieline/capability";
+import { buildDielineRenderBundle } from "../src/extensions/dieline/renderBuilder";
 import {
   EDGE_DETECTION_CAPABILITY_ID,
   EdgeDetectionCapabilityExtension,
@@ -115,6 +117,10 @@ import {
   CANVAS_SERVICE,
   evaluateVisibilityExpr,
 } from "@pooder/core";
+import type {
+  SceneLayoutSnapshot,
+  SceneRect,
+} from "../src/shared/scene/scene-layout-model";
 import {
   COMMAND_SERVICE,
   SCENE_SERVICE,
@@ -1757,6 +1763,103 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   await runtime.dispose();
 }
 
+function testImageSessionShapeOverlayUsesDielineGeometry() {
+  const rectByCenter = (
+    centerX: number,
+    centerY: number,
+    width: number,
+    height: number,
+  ): SceneRect => ({
+    centerX,
+    centerY,
+    height,
+    left: centerX - width / 2,
+    top: centerY - height / 2,
+    width,
+  });
+  const layout: SceneLayoutSnapshot = {
+    bleedRect: rectByCenter(400, 300, 360, 360),
+    canvasHeight: 600,
+    canvasWidth: 800,
+    cutHeightMm: 120,
+    cutMarginMm: 10,
+    cutMode: "outset",
+    cutRect: rectByCenter(400, 300, 360, 360),
+    cutWidthMm: 120,
+    scale: 3,
+    trimHeightMm: 100,
+    trimRect: rectByCenter(400, 300, 300, 300),
+    trimWidthMm: 100,
+  };
+  const shapeStyle = { fitMode: "stretch" as const };
+  const geometry = {
+    height: layout.trimRect.height,
+    offset: (layout.cutRect.width - layout.trimRect.width) / 2,
+    radius: 0,
+    scale: layout.scale,
+    shape: "circle" as const,
+    shapeStyle,
+    unit: "px" as const,
+    width: layout.trimRect.width,
+    x: layout.trimRect.centerX,
+    y: layout.trimRect.centerY,
+  };
+
+  const imageOverlaySpecs = buildImageSessionOverlaySpecs({
+    geometry,
+    layout,
+    viewport: { left: 0, top: 0, width: 800, height: 600 },
+    visual: {
+      dashLength: 8,
+      innerBackground: "rgba(0,0,0,0)",
+      outerBackground: "#f5f5f5",
+      strokeColor: "#808080",
+      strokeStyle: "dashed",
+      strokeWidth: 2,
+    },
+  });
+  const outline = imageOverlaySpecs.find(
+    (spec) => spec.id === "image.cropShapeOutline",
+  );
+  const hatch = imageOverlaySpecs.find(
+    (spec) => spec.id === "image.cropShapeHatch",
+  );
+  const dieline = buildDielineRenderBundle({
+    canvasHeight: layout.canvasHeight,
+    canvasWidth: layout.canvasWidth,
+    hasImages: true,
+    includeImageClipEffect: false,
+    sceneLayout: layout,
+    state: {
+      features: [],
+      height: 100,
+      insideColor: "transparent",
+      mainLine: { color: "#f00", dashLength: 1, style: "solid", width: 1 },
+      offset: 10,
+      offsetLine: { color: "#f00", dashLength: 1, style: "solid", width: 1 },
+      padding: 0,
+      radius: 0,
+      shape: "circle",
+      shapeStyle,
+      showBleedLines: true,
+      width: 100,
+    },
+  }).specs.find((spec) => spec.id === "dieline.border");
+
+  assert(outline, "image session should render a shape outline");
+  assert(hatch, "image session should render a shape hatch overlay");
+  assert(dieline, "dieline bundle should render the main border");
+  assertEqual(
+    (outline!.props as any).pathData,
+    (dieline!.props as any).pathData,
+    "image session shape outline should use the same geometry as the dieline border",
+  );
+  assert(
+    String((hatch!.props as any).pathData).startsWith("M 220 120 L 580 120"),
+    "image session hatch should still cover the cut frame before subtracting the dieline",
+  );
+}
+
 async function testDielineGeometryCapabilityExtension() {
   const runtime = new Pooder();
   const state = {
@@ -2353,6 +2456,7 @@ async function main() {
   await testImagePlacementCapabilityExtension();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayVisibilityFollowsEditingSessions();
+  testImageSessionShapeOverlayUsesDielineGeometry();
   await testDielineGeometryCapabilityExtension();
   await testWhiteInkCapabilityExtension();
   await testBackgroundCapabilityExtension();

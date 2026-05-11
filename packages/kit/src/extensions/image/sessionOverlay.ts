@@ -35,6 +35,12 @@ function buildRectPath(width: number, height: number): string {
   return `M 0 0 L ${width} 0 L ${width} ${height} L 0 ${height} Z`;
 }
 
+function buildAbsoluteRectPath(rect: SceneRect): string {
+  return `M ${rect.left} ${rect.top} L ${rect.left + rect.width} ${rect.top} L ${
+    rect.left + rect.width
+  } ${rect.top + rect.height} L ${rect.left} ${rect.top + rect.height} Z`;
+}
+
 function buildViewportMaskPath(
   viewport: ImageSessionOverlayViewport,
   cutRect: SceneRect,
@@ -49,29 +55,23 @@ function buildViewportMaskPath(
   ].join(" ");
 }
 
-function resolveCutShapeRadiusPx(
-  geometry: SceneGeometrySnapshot,
-  cutRect: SceneRect,
-): number {
+function resolveDielineShapeRadiusPx(geometry: SceneGeometrySnapshot): number {
   const visualRadius = Number.isFinite(geometry.radius)
     ? Math.max(0, geometry.radius)
     : 0;
-  const visualOffset = Number.isFinite(geometry.offset) ? geometry.offset : 0;
-  const rawCutRadius =
-    visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
-  const maxRadius = Math.max(0, Math.min(cutRect.width, cutRect.height) / 2);
-  return Math.max(0, Math.min(maxRadius, rawCutRadius));
+  const maxRadius = Math.max(0, Math.min(geometry.width, geometry.height) / 2);
+  return Math.max(0, Math.min(maxRadius, visualRadius));
 }
 
 function buildBuiltinShapeOverlayPaths(
-  cutRect: SceneRect,
+  layout: SceneLayoutSnapshot,
   geometry: SceneGeometrySnapshot | null,
 ): BuiltinShapeOverlayPaths | null {
   if (!geometry || geometry.shape === "custom") {
     return null;
   }
 
-  const radius = resolveCutShapeRadiusPx(geometry, cutRect);
+  const radius = resolveDielineShapeRadiusPx(geometry);
   if (geometry.shape === "rect" && radius <= EPSILON) {
     return null;
   }
@@ -79,14 +79,14 @@ function buildBuiltinShapeOverlayPaths(
   const shapePathData = generateDielinePath({
     shape: geometry.shape,
     shapeStyle: geometry.shapeStyle,
-    width: Math.max(1, cutRect.width),
-    height: Math.max(1, cutRect.height),
+    width: Math.max(1, geometry.width),
+    height: Math.max(1, geometry.height),
     radius,
-    x: cutRect.width / 2,
-    y: cutRect.height / 2,
+    x: geometry.x,
+    y: geometry.y,
     features: [],
-    canvasWidth: Math.max(1, cutRect.width),
-    canvasHeight: Math.max(1, cutRect.height),
+    canvasWidth: layout.canvasWidth,
+    canvasHeight: layout.canvasHeight,
   });
   if (!shapePathData) {
     return null;
@@ -94,7 +94,7 @@ function buildBuiltinShapeOverlayPaths(
 
   return {
     shapePathData,
-    hatchPathData: `${buildRectPath(cutRect.width, cutRect.height)} ${shapePathData}`,
+    hatchPathData: `${buildAbsoluteRectPath(layout.cutRect)} ${shapePathData}`,
   };
 }
 
@@ -130,7 +130,7 @@ export function buildImageSessionOverlaySpecs(args: {
     },
   });
 
-  const shapeOverlay = buildBuiltinShapeOverlayPaths(cutRect, geometry);
+  const shapeOverlay = buildBuiltinShapeOverlayPaths(layout, geometry);
   if (shapeOverlay) {
     specs.push({
       id: "image.cropShapeHatch",
@@ -139,8 +139,6 @@ export function buildImageSessionOverlaySpecs(args: {
       data: { id: "image.cropShapeHatch", zIndex: 5 },
       props: {
         pathData: shapeOverlay.hatchPathData,
-        left: cutRect.left,
-        top: cutRect.top,
         originX: "left",
         originY: "top",
         fill: hatchPattern || DEFAULT_HATCH_FILL,
@@ -160,8 +158,6 @@ export function buildImageSessionOverlaySpecs(args: {
       data: { id: "image.cropShapeOutline", zIndex: 6 },
       props: {
         pathData: shapeOverlay.shapePathData,
-        left: cutRect.left,
-        top: cutRect.top,
         originX: "left",
         originY: "top",
         fill: "transparent",
