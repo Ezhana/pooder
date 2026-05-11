@@ -5,8 +5,9 @@ import {
   ConfigurationService,
   ExtensionContext,
 } from "@pooder/core";
-import { CANVAS_SERVICE, CanvasService } from "@pooder/platform-browser";
+import { CANVAS_SERVICE, CanvasService } from "@pooder/core";
 import {
+  computeSceneLayout,
   fromMm,
   normalizeConstraintMode,
   normalizeCutMode,
@@ -15,8 +16,7 @@ import {
   sanitizeMmValue,
   toMm,
   type SizeConstraintMode,
-  computeSceneLayout,
-} from "@pooder/platform-browser";
+} from "../../shared/scene/scene-layout-model";
 import type { Unit } from "../../coordinate";
 import { IMAGE_OBJECT_LAYER_ID } from "../../shared/constants/layers";
 import {
@@ -422,17 +422,15 @@ export class SizeTool implements ExtensionDefinition {
     const layout = computeSceneLayout(this.canvasService, sizeState);
     if (!layout || layout.scale <= 0) return null;
 
-    const all = this.canvasService.canvas.getObjects() as any[];
-    const active = this.canvasService.canvas.getActiveObject() as any;
+    const all = this.canvasService.getObjects({
+      layerId: IMAGE_OBJECT_LAYER_ID,
+    }) as any[];
+    const active = this.canvasService.getActiveObject() as any;
     const activeId =
       active?.data?.layerId === IMAGE_OBJECT_LAYER_ID ? active?.data?.id : null;
     const targetId = id || activeId;
     const target =
-      all.find(
-        (obj) =>
-          obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID &&
-          obj?.data?.id === targetId,
-      ) || all.find((obj) => obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID);
+      all.find((obj) => obj?.data?.id === targetId) || all[0];
     if (!target) return null;
 
     const objectWidthPx = Math.abs((target.width || 0) * (target.scaleX || 1));

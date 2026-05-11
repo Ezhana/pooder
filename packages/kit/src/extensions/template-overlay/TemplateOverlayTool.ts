@@ -11,8 +11,7 @@ import {
   type RenderEffectSpec,
   type RenderObjectSpec,
   type RenderPassSpec,
-} from "@pooder/platform-browser";
-import { Image as FabricImage } from "fabric";
+} from "@pooder/core";
 import {
   type FrameRect,
   resolveSurfaceFrameRect,
@@ -511,22 +510,6 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   }
 
   private async loadImageSize(src: string): Promise<SourceSize | null> {
-    try {
-      const image = await FabricImage.fromURL(src, {
-        crossOrigin: "anonymous",
-      });
-      const width = Number(image?.width || 0);
-      const height = Number(image?.height || 0);
-      if (width > 0 && height > 0) {
-        return { width, height };
-      }
-    } catch (error) {
-      console.error("[TemplateOverlayTool] Overlay image failed to load.", {
-        src,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    return null;
+    return this.canvasService?.loadImageSize(src) ?? null;
   }
 }

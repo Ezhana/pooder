@@ -1,34 +1,17 @@
-import {
-  BackgroundCapabilityExtension,
-  BackgroundTool,
-} from "./extensions/background";
-import {
-  DesignExportCapabilityExtension,
-  DesignExportExtension,
-} from "./extensions/design-export";
+import { BackgroundCapabilityExtension } from "./extensions/background";
+import { DesignExportCapabilityExtension } from "./extensions/design-export";
 import { DielineGeometryCapabilityExtension } from "./extensions/dieline";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImagePlacementCapabilityExtension } from "./extensions/image";
-import { RulerCapabilityExtension, RulerTool } from "./extensions/ruler";
+import { RulerCapabilityExtension } from "./extensions/ruler";
 import { SizeCapabilityExtension } from "./extensions/size";
-import {
-  TemplateOverlayCapabilityExtension,
-  TemplateOverlayTool,
-} from "./extensions/template-overlay";
+import { TemplateOverlayCapabilityExtension } from "./extensions/template-overlay";
 import { WhiteInkCapabilityExtension } from "./extensions/white-ink";
-
-export const createBackgroundExtension = (
-  options?: ConstructorParameters<typeof BackgroundTool>[0],
-) => new BackgroundTool(options);
 
 export const createBackgroundCapability = (
   options?: ConstructorParameters<typeof BackgroundCapabilityExtension>[0],
 ) => new BackgroundCapabilityExtension(options);
-
-export const createDesignExportExtension = (
-  options?: ConstructorParameters<typeof DesignExportExtension>[0],
-) => new DesignExportExtension(options);
 
 export const createDesignExportCapability = (
   options?: ConstructorParameters<typeof DesignExportCapabilityExtension>[0],
@@ -50,17 +33,9 @@ export const createImagePlacementCapability = (
   options?: ConstructorParameters<typeof ImagePlacementCapabilityExtension>[0],
 ) => new ImagePlacementCapabilityExtension(options);
 
-export const createRulerExtension = (
-  options?: ConstructorParameters<typeof RulerTool>[0],
-) => new RulerTool(options);
-
 export const createSizeCapability = (
   options?: ConstructorParameters<typeof SizeCapabilityExtension>[0],
 ) => new SizeCapabilityExtension(options);
-
-export const createTemplateOverlayExtension = (
-  options?: ConstructorParameters<typeof TemplateOverlayTool>[0],
-) => new TemplateOverlayTool(options);
 
 export const createTemplateOverlayCapability = (
   options?: ConstructorParameters<typeof TemplateOverlayCapabilityExtension>[0],

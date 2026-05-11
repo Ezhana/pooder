@@ -39,7 +39,6 @@ import { createDesignExportCommands } from "../src/extensions/design-export/comm
 import {
   DESIGN_EXPORT_CAPABILITY_ID,
   DesignExportCapabilityExtension,
-  DesignExportExtension,
   createDesignExportCapabilityDefinition,
   normalizeDesignExportLayerIds,
   type DesignExportCapabilityApi,
@@ -108,10 +107,10 @@ import {
   createWhiteInkCapability,
 } from "../src/factories";
 import {
-  BROWSER_SCENE_EXPORT_SERVICE,
+  SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
   evaluateVisibilityExpr,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
 import {
   COMMAND_SERVICE,
   SCENE_SERVICE,
@@ -147,6 +146,9 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
 }
 
 class FakeCanvasService {
+  private activeObject: any = null;
+  private readonly eventHandlers = new Map<string, Set<(event?: any) => void>>();
+
   canvas = {
     width: 800,
     height: 600,
@@ -194,6 +196,71 @@ class FakeCanvasService {
 
   requestRenderAll() {}
 
+  getObjects(options: any = {}) {
+    const objects = this.canvas.getObjects();
+    return objects.filter((object: any) => {
+      if (options.layerId && object.layerId !== options.layerId) return false;
+      if (options.type && object.type !== options.type) return false;
+      if (options.predicate && !options.predicate(object)) return false;
+      return true;
+    });
+  }
+
+  getActiveObject() {
+    return this.activeObject;
+  }
+
+  setActiveObject(object: any) {
+    this.activeObject = object;
+  }
+
+  discardActiveObject() {
+    this.activeObject = null;
+  }
+
+  setViewportMirror() {}
+
+  onCanvasEvent(eventName: string, handler: (event?: any) => void) {
+    let handlers = this.eventHandlers.get(eventName);
+    if (!handlers) {
+      handlers = new Set();
+      this.eventHandlers.set(eventName, handlers);
+    }
+    handlers.add(handler);
+  }
+
+  offCanvasEvent(eventName: string, handler: (event?: any) => void) {
+    this.eventHandlers.get(eventName)?.delete(handler);
+  }
+
+  getTopContext() {
+    return this.canvas.contextTop;
+  }
+
+  clearTopContext(_context: unknown) {
+    this.canvas.clearContext();
+  }
+
+  getViewportSize() {
+    return { width: this.canvas.width, height: this.canvas.height };
+  }
+
+  updateViewportLayout(options: {
+    width?: number;
+    height?: number;
+    padding?: unknown;
+    frame?: unknown;
+  }) {
+    if (typeof options.width === "number") this.canvas.width = options.width;
+    if (typeof options.height === "number") this.canvas.height = options.height;
+    this.viewport.updateContainer(this.canvas.width, this.canvas.height);
+    return this.viewport.layout;
+  }
+
+  async loadImageSize() {
+    return null;
+  }
+
   getPassObjects() {
     return [];
   }
@@ -240,7 +307,7 @@ class FakeCanvasService {
   }
 }
 
-class FakeBrowserSceneExportService {
+class FakeSceneExportService {
   calls: any[] = [];
   error: Error | null = new Error("browser-scene-export-empty");
   response: any = {
@@ -1027,114 +1094,11 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
   }
 }
 
-async function testDesignExportExtensionCommand() {
-  const runtime = new Pooder();
-  const commandService =
-    runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
-  const exportService = new FakeBrowserSceneExportService();
-
-  runtime.extensions.register(new DesignExportExtension());
-  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.services.register(exportService as any, BROWSER_SCENE_EXPORT_SERVICE);
-  await runtime.extensions.flushActivation();
-
-  assert(
-    !!commandService.getCommand("exportImage"),
-    "design export extension should register exportImage",
-  );
-  assertEqual(
-    commandService.getCommand("exportCutImage"),
-    undefined,
-    "design export extension should not expose exportCutImage",
-  );
-  assert(
-    !!runtime.capabilities.get<DesignExportCapabilityApi>(
-      DESIGN_EXPORT_CAPABILITY_ID,
-    ),
-    "design export extension should register a capability facade",
-  );
-
-  const originalConsoleError = console.error;
-  console.error = () => {};
-  try {
-    await runtime.commands.execute("exportImage");
-    throw new Error(
-      "exportImage should reject when there are no design objects",
-    );
-  } catch (error) {
-    assert(
-      error instanceof Error &&
-        error.message.includes("no-design-objects-to-export"),
-      `unexpected exportImage empty-state error: ${String(error)}`,
-    );
-  } finally {
-    console.error = originalConsoleError;
-  }
-
-  exportService.error = null;
-  exportService.response = {
-    crop: { left: 0, top: 0, width: 24, height: 12 },
-    format: "jpeg",
-    height: 24,
-    multiplier: 2,
-    sourceElementIds: [],
-    sourceLayerIds: ["image.custom"],
-    url: "data:image/jpeg;base64,test",
-    width: 48,
-  };
-
-  const result = await runtime.commands.execute<any>("exportImage", {
-    format: "jpeg",
-    layerIds: [" image.custom "],
-    multiplier: 2,
-  });
-  const lastCall = exportService.calls[exportService.calls.length - 1];
-  assertDeepEqual(
-    lastCall.sourceLayerIds,
-    ["image.custom"],
-    "legacy exportImage should delegate normalized layer ids",
-  );
-  assertDeepEqual(
-    lastCall.crop,
-    { type: "frame", frame: "cut" },
-    "legacy exportImage should default to cut frame crop",
-  );
-  assertEqual(
-    lastCall.includeHidden,
-    true,
-    "legacy exportImage should preserve hidden-object inclusion",
-  );
-  assertEqual(
-    result.url,
-    "data:image/jpeg;base64,test",
-    "legacy exportImage should map platform export url",
-  );
-  assertEqual(result.width, 48, "legacy exportImage should map export width");
-  assertEqual(result.height, 24, "legacy exportImage should map export height");
-  assertEqual(
-    result.format,
-    "jpeg",
-    "legacy exportImage should map export format",
-  );
-  assertEqual(
-    result.multiplier,
-    2,
-    "legacy exportImage should map export multiplier",
-  );
-  assertDeepEqual(
-    result.layerIds,
-    ["image.custom"],
-    "legacy exportImage should map platform source layers",
-  );
-
-  await runtime.dispose();
-}
-
 async function testDesignExportCapabilityExtension() {
   const runtime = new Pooder();
   const commandService =
     runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
-  const exportService = new FakeBrowserSceneExportService();
+  const exportService = new FakeSceneExportService();
 
   exportService.error = null;
   exportService.response = {
@@ -1155,7 +1119,7 @@ async function testDesignExportCapabilityExtension() {
       },
     }),
   );
-  runtime.services.register(exportService as any, BROWSER_SCENE_EXPORT_SERVICE);
+  runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
   await runtime.extensions.flushActivation();
 
   assertEqual(
@@ -1975,7 +1939,6 @@ async function main() {
   testImageViewStateHelper();
   testContributionCompatibility();
   testKitCapabilityContractDefinitionsAndNormalization();
-  await testDesignExportExtensionCommand();
   await testDesignExportCapabilityExtension();
   await testKitCapabilityFactoriesDoNotRegisterTools();
   await testImagePlacementCapabilityExtension();

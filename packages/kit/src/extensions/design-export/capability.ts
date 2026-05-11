@@ -1,9 +1,9 @@
 import type { CapabilityDefinition } from "@pooder/core";
 import type {
-  BrowserSceneExportCrop,
-  BrowserSceneExportOptions,
-  BrowserSceneExportRect,
-} from "@pooder/platform-browser";
+  CanvasRect,
+  SceneExportCrop,
+  SceneExportOptions,
+} from "@pooder/core";
 
 export const DESIGN_EXPORT_CAPABILITY_ID = "pooder.kit.design-export";
 
@@ -19,12 +19,12 @@ export interface DesignExportCapabilityOptions {
 }
 
 export interface ExportImageOptions
-  extends Omit<BrowserSceneExportOptions, "crop" | "sourceLayerIds"> {
+  extends Omit<SceneExportOptions, "crop" | "sourceLayerIds"> {
   format?: ExportImageFormat;
   multiplier?: number;
   layerIds?: readonly string[];
   sourceLayerIds?: readonly string[];
-  crop?: BrowserSceneExportCrop;
+  crop?: SceneExportCrop;
 }
 
 export interface ExportImageResult {
@@ -35,7 +35,7 @@ export interface ExportImageResult {
   multiplier: number;
   layerIds: string[];
   sourceElementIds: string[];
-  crop: BrowserSceneExportRect;
+  crop: CanvasRect;
 }
 
 export interface DesignExportCapabilityApi {

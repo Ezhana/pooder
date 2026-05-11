@@ -1,10 +1,10 @@
-import type { Pattern } from "fabric";
 import type {
   RenderEffectSpec,
   RenderObjectSpec,
+  RenderPatternSpec,
   VisibilityExpr,
-} from "@pooder/platform-browser";
-import type { SceneLayoutSnapshot } from "@pooder/platform-browser";
+} from "@pooder/core";
+import type { SceneLayoutSnapshot } from "../../shared/scene/scene-layout-model";
 import { generateBleedZonePath, generateDielinePath } from "../geometry";
 import {
   projectPlacedFeatures,
@@ -34,7 +34,7 @@ export interface DielineRenderOptions {
   canvasHeight: number;
   hasImages: boolean;
   ids?: Partial<DielineRenderIds>;
-  createHatchPattern?: (color: string) => Pattern | undefined;
+  createHatchPattern?: (color: string) => RenderPatternSpec | undefined;
   includeImageClipEffect?: boolean;
   clipTargetPassIds?: string[];
   clipVisibility?: VisibilityExpr;

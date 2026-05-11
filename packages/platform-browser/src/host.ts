@@ -4,9 +4,9 @@ import CanvasService from "./canvas-service";
 import { FabricSceneAdapter } from "./scene/fabric-scene-adapter";
 import { SceneLayoutService } from "./scene-layout-service";
 import {
-  BROWSER_SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
   FABRIC_SCENE_ADAPTER,
+  SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
 } from "./tokens";
 
@@ -117,7 +117,7 @@ export function attachBrowserHost(
 
   const registeredExport = runtime.services.register(
     browserSceneExportService,
-    BROWSER_SCENE_EXPORT_SERVICE,
+    SCENE_EXPORT_SERVICE,
   );
   if (!registeredExport) {
     runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
@@ -134,7 +134,7 @@ export function attachBrowserHost(
   if (!registeredSceneAdapter) {
     runtime.services.unregister(
       browserSceneExportService,
-      BROWSER_SCENE_EXPORT_SERVICE,
+      SCENE_EXPORT_SERVICE,
     );
     runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
     runtime.services.unregister(canvasService, CANVAS_SERVICE);
@@ -163,7 +163,7 @@ export function attachBrowserHost(
       runtime.services.unregister(fabricSceneAdapter, FABRIC_SCENE_ADAPTER);
       runtime.services.unregister(
         browserSceneExportService,
-        BROWSER_SCENE_EXPORT_SERVICE,
+        SCENE_EXPORT_SERVICE,
       );
       runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
       runtime.services.unregister(canvasService, CANVAS_SERVICE);

@@ -5,7 +5,10 @@ import type {
   ServiceContext,
 } from "@pooder/core";
 import { SCENE_SERVICE } from "@pooder/core";
-import CanvasService, { type CanvasPassStackingMeta } from "../canvas-service";
+import type {
+  CanvasPassStackingMeta,
+  CanvasService,
+} from "@pooder/core";
 import type { RenderObjectSpec } from "../render-spec";
 import { CANVAS_SERVICE } from "../tokens";
 

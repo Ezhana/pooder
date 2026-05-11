@@ -13,7 +13,7 @@ import {
   CanvasService,
   RenderLayoutRect,
   RenderObjectSpec,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
 import {
   type FrameRect,
   resolveSurfaceFrameRect,
@@ -763,8 +763,8 @@ export class WhiteInkTool implements ExtensionDefinition {
 
   private getImageObjects(): any[] {
     if (!this.canvasService) return [];
-    return this.canvasService.canvas.getObjects().filter((obj: any) => {
-      return this.sourceLayerIds.includes(obj?.data?.layerId);
+    return this.canvasService.getObjects({
+      predicate: (obj: any) => this.sourceLayerIds.includes(obj?.data?.layerId),
     }) as any[];
   }
 

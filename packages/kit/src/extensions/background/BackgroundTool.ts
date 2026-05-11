@@ -5,17 +5,16 @@ import {
   ExtensionContext,
   ConfigurationService,
 } from "@pooder/core";
-import { FabricImage } from "fabric";
 import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
 import {
   computeSceneLayout,
   readSizeState,
   type SceneLayoutSnapshot,
-} from "@pooder/platform-browser";
+} from "../../shared/scene/scene-layout-model";
 import { BACKGROUND_LAYER_ID } from "../../shared/constants/layers";
 import {
   createSourceSizeCache,
@@ -704,8 +703,9 @@ export class BackgroundTool implements ExtensionDefinition {
   }
 
   private getViewportRect(): Rect {
-    const width = Number(this.canvasService?.canvas.width || 0);
-    const height = Number(this.canvasService?.canvas.height || 0);
+    const size = this.canvasService?.getViewportSize();
+    const width = Number(size?.width || 0);
+    const height = Number(size?.height || 0);
 
     return {
       left: 0,
@@ -1017,20 +1017,7 @@ export class BackgroundTool implements ExtensionDefinition {
   }
 
   private async loadImageSize(src: string): Promise<SourceSize | null> {
-    try {
-      const image = await FabricImage.fromURL(src, {
-        crossOrigin: "anonymous",
-      });
-      const width = Number(image?.width || 0);
-      const height = Number(image?.height || 0);
-      if (width > 0 && height > 0) {
-        return { width, height };
-      }
-    } catch (error) {
-      console.error("[BackgroundTool] Failed to load image", src, error);
-    }
-
-    return null;
+    return this.canvasService?.loadImageSize(src) ?? null;
   }
 
   private updateBackground() {

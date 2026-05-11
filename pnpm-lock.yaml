@@ -35,12 +35,6 @@ importers:
       '@pooder/core':
         specifier: workspace:*
         version: link:../core
-      '@pooder/platform-browser':
-        specifier: workspace:*
-        version: link:../platform-browser
-      fabric:
-        specifier: ^7.0.0
-        version: 7.0.0
       paper:
         specifier: ^0.12.18
         version: 0.12.18

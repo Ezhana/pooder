@@ -5,7 +5,7 @@ import {
   ExtensionDefinition,
   ExtensionContext,
 } from "@pooder/core";
-import { CANVAS_SERVICE, CanvasService } from "@pooder/platform-browser";
+import { CANVAS_SERVICE, CanvasService } from "@pooder/core";
 
 export class MirrorTool implements ExtensionDefinition {
   id = "pooder.kit.mirror";
@@ -92,36 +92,7 @@ export class MirrorTool implements ExtensionDefinition {
 
   private applyMirror(enabled: boolean) {
     if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
-    if (!canvas) return;
-
-    const width = canvas.width || 800;
-
-    // Fabric.js v6+ uses viewportTransform property
-    let vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-    // Create a copy to avoid mutating the reference directly before setting
-    vpt = [...vpt];
-
-    // If we are enabling and currently not flipped (scaleX > 0)
-    // Or disabling and currently flipped (scaleX < 0)
-    const isFlipped = vpt[0] < 0;
-
-    if (enabled && !isFlipped) {
-      // Flip scale X
-      vpt[0] = -vpt[0]; // Flip scale
-      vpt[4] = width - vpt[4]; // Adjust pan X
-
-      canvas.setViewportTransform(vpt as any);
-      canvas.requestRenderAll();
-      this.enabled = true;
-    } else if (!enabled && isFlipped) {
-      // Restore
-      vpt[0] = -vpt[0]; // Unflip scale
-      vpt[4] = width - vpt[4]; // Restore pan X
-
-      canvas.setViewportTransform(vpt as any);
-      canvas.requestRenderAll();
-      this.enabled = false;
-    }
+    this.canvasService.setViewportMirror(enabled);
+    this.enabled = enabled;
   }
 }

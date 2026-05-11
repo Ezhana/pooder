@@ -1,5 +1,5 @@
 import type { CapabilityDefinition } from "@pooder/core";
-import type { VisibilityExpr } from "@pooder/platform-browser";
+import type { VisibilityExpr } from "@pooder/core";
 
 export const RULER_CAPABILITY_ID = "pooder.kit.ruler";
 

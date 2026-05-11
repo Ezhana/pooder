@@ -9,13 +9,13 @@ import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   fromMm,
   readSizeState,
-} from "@pooder/platform-browser";
+} from "../../shared/scene/scene-layout-model";
 import type { Unit } from "../../coordinate";
 import { RULER_LAYER_ID } from "../../shared/constants/layers";
 import {

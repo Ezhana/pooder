@@ -5,8 +5,9 @@ import {
   ConfigurationService,
   Service,
   ServiceContext,
+  type CanvasService as CanvasServiceContract,
+  type SceneLayoutService as SceneLayoutServiceContract,
 } from "@pooder/core";
-import CanvasService from "./canvas-service";
 import { CANVAS_SERVICE } from "./tokens";
 import {
   buildSceneGeometry,
@@ -27,9 +28,9 @@ const CONFIG_WATCH_PREFIXES = ["size.", "dieline."] as const;
 const GET_SCENE_LAYOUT_COMMAND = "getSceneLayout";
 const GET_SCENE_GEOMETRY_COMMAND = "getSceneGeometry";
 
-export class SceneLayoutService implements Service {
+export class SceneLayoutService implements Service, SceneLayoutServiceContract {
   private context?: ServiceContext;
-  private canvasService?: CanvasService;
+  private canvasService?: CanvasServiceContract;
   private configService?: ConfigurationService;
   private lastLayout: SceneLayoutSnapshot | null = null;
   private lastGeometry: SceneGeometrySnapshot | null = null;
@@ -41,7 +42,7 @@ export class SceneLayoutService implements Service {
       this.dispose(this.context);
     }
 
-    const canvasService = context.get<CanvasService>(CANVAS_SERVICE);
+    const canvasService = context.get<CanvasServiceContract>(CANVAS_SERVICE);
     const configService = context.get<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );

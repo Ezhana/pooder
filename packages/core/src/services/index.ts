@@ -11,6 +11,9 @@ import {
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
   CORE_SERVICE_TOKENS,
+  CANVAS_SERVICE,
+  SCENE_EXPORT_SERVICE,
+  SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
@@ -30,13 +33,22 @@ export {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
+  CANVAS_SERVICE,
   SCENE_SERVICE,
+  SCENE_EXPORT_SERVICE,
+  SCENE_LAYOUT_SERVICE,
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
   WORKBENCH_SERVICE,
   WORKFLOW_SESSION_SERVICE,
   CORE_SERVICE_TOKENS,
 };
+
+export type {
+  CanvasService,
+  SceneExportService,
+  SceneLayoutService,
+} from "../render";
 
 export type { CapabilityRegistryChangeEvent } from "./CapabilityRegistryService";
 export type { SceneChangeEvent } from "./SceneService";

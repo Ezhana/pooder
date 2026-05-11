@@ -1,10 +1,18 @@
-import type { Service, ServiceContext } from "@pooder/core";
+import type {
+  SceneExportCrop,
+  SceneExportFormat,
+  SceneExportOptions,
+  SceneExportResult,
+  SceneExportService,
+  CanvasService,
+  SceneLayoutService,
+  Service,
+  ServiceContext,
+} from "@pooder/core";
 import { Canvas as FabricCanvas, type FabricObject, Point } from "fabric";
-import CanvasService from "./canvas-service";
-import { SceneLayoutService } from "./scene-layout-service";
-import { CANVAS_SERVICE, SCENE_LAYOUT_SERVICE } from "./tokens";
+import { CANVAS_SERVICE, SCENE_EXPORT_SERVICE, SCENE_LAYOUT_SERVICE } from "./tokens";
 
-export type BrowserSceneExportFormat = "png" | "jpeg";
+export type BrowserSceneExportFormat = SceneExportFormat;
 export type BrowserSceneExportFrame = "cut" | "trim" | "bleed";
 
 export interface BrowserSceneExportRect {
@@ -14,30 +22,9 @@ export interface BrowserSceneExportRect {
   height: number;
 }
 
-export type BrowserSceneExportCrop =
-  | { type: "sceneRect"; rect: BrowserSceneExportRect }
-  | { type: "elementBounds"; elementIds?: readonly string[] }
-  | { type: "frame"; frame: BrowserSceneExportFrame };
-
-export interface BrowserSceneExportOptions {
-  format?: BrowserSceneExportFormat;
-  multiplier?: number;
-  sourceLayerIds?: readonly string[];
-  sourceElementIds?: readonly string[];
-  crop?: BrowserSceneExportCrop;
-  includeHidden?: boolean;
-}
-
-export interface BrowserSceneExportResult {
-  url: string;
-  width: number;
-  height: number;
-  format: BrowserSceneExportFormat;
-  multiplier: number;
-  sourceLayerIds: string[];
-  sourceElementIds: string[];
-  crop: BrowserSceneExportRect;
-}
+export type BrowserSceneExportCrop = SceneExportCrop;
+export type BrowserSceneExportOptions = SceneExportOptions;
+export type BrowserSceneExportResult = SceneExportResult;
 
 interface ExportCanvasLike {
   add(object: FabricObject): void;
@@ -95,7 +82,9 @@ function cloneRect(rect: BrowserSceneExportRect): BrowserSceneExportRect {
   };
 }
 
-export class BrowserSceneExportService implements Service {
+export class BrowserSceneExportService implements Service, SceneExportService {
+  static readonly token = SCENE_EXPORT_SERVICE;
+
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
 
@@ -208,13 +197,12 @@ export class BrowserSceneExportService implements Service {
     sourceLayerIds: string[];
     sourceElementIds: string[];
   }): FabricObject[] {
-    const canvas = this.requireCanvasService().canvas;
     const layerIdSet = new Set(options.sourceLayerIds);
     const elementIdSet = new Set(options.sourceElementIds);
     const hasLayerFilter = layerIdSet.size > 0;
     const hasElementFilter = elementIdSet.size > 0;
 
-    return (canvas.getObjects() as FabricObject[]).filter((object: any) => {
+    return this.getCanvasObjects(options.includeHidden === true).filter((object: any) => {
       if (object?.excludeFromExport === true) return false;
       if (!options.includeHidden && object?.visible === false) return false;
       if (hasLayerFilter && !layerIdSet.has(readLayerId(object))) {
@@ -225,6 +213,16 @@ export class BrowserSceneExportService implements Service {
       }
       return true;
     });
+  }
+
+  private getCanvasObjects(includeHidden: boolean): FabricObject[] {
+    const canvasService = this.requireCanvasService() as any;
+    if (typeof canvasService.getObjects === "function") {
+      return canvasService.getObjects({ includeHidden }) as FabricObject[];
+    }
+    return (canvasService.canvas?.getObjects?.() || []).filter((object: any) => {
+      return includeHidden || object?.visible !== false;
+    }) as FabricObject[];
   }
 
   private resolveCrop(

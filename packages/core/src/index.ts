@@ -32,6 +32,7 @@ export * from "./context";
 export * from "./capability";
 export * from "./contribution";
 export * from "./scene";
+export * from "./render";
 export * from "./service";
 export * from "./workflow-session";
 export * from "./services";

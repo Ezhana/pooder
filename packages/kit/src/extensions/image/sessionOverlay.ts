@@ -1,10 +1,9 @@
-import type { Pattern } from "fabric";
-import type { RenderObjectSpec } from "@pooder/platform-browser";
+import type { RenderObjectSpec, RenderPatternSpec } from "@pooder/core";
 import type {
   SceneGeometrySnapshot,
   SceneLayoutSnapshot,
   SceneRect,
-} from "@pooder/platform-browser";
+} from "../../shared/scene/scene-layout-model";
 import { generateDielinePath } from "../geometry";
 
 export interface ImageSessionOverlayVisualConfig {
@@ -104,7 +103,7 @@ export function buildImageSessionOverlaySpecs(args: {
   layout: SceneLayoutSnapshot;
   geometry: SceneGeometrySnapshot | null;
   visual: ImageSessionOverlayVisualConfig;
-  hatchPattern?: Pattern;
+  hatchPattern?: RenderPatternSpec;
 }): RenderObjectSpec[] {
   const { viewport, layout, geometry, visual, hatchPattern } = args;
   const cutRect = layout.cutRect;

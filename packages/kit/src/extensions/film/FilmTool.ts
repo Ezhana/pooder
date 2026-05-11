@@ -5,12 +5,11 @@ import {
   ExtensionContext,
   ConfigurationService,
 } from "@pooder/core";
-import { FabricImage } from "fabric";
 import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
 import { FILM_LAYER_ID } from "../../shared/constants/layers";
 import {
   createSourceSizeCache,
@@ -160,8 +159,9 @@ export class FilmTool implements ExtensionDefinition {
   }
 
   private getViewportSize(): { width: number; height: number } {
-    const width = Number(this.canvasService?.canvas.width || 0);
-    const height = Number(this.canvasService?.canvas.height || 0);
+    const size = this.canvasService?.getViewportSize();
+    const width = Number(size?.width || 0);
+    const height = Number(size?.height || 0);
     return {
       width: width > 0 ? width : DEFAULT_WIDTH,
       height: height > 0 ? height : DEFAULT_HEIGHT,
@@ -215,19 +215,7 @@ export class FilmTool implements ExtensionDefinition {
   }
 
   private async loadImageSize(src: string): Promise<SourceSize | null> {
-    try {
-      const image = await FabricImage.fromURL(src, {
-        crossOrigin: "anonymous",
-      });
-      const width = Number(image?.width || 0);
-      const height = Number(image?.height || 0);
-      if (width > 0 && height > 0) {
-        return { width, height };
-      }
-    } catch (error) {
-      console.error("[FilmTool] Failed to load film image", src, error);
-    }
-    return null;
+    return this.canvasService?.loadImageSize(src) ?? null;
   }
 
   private updateFilm() {

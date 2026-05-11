@@ -4,9 +4,9 @@ import {
   ExtensionDefinition,
 } from "@pooder/core";
 import {
-  BROWSER_SCENE_EXPORT_SERVICE,
-  BrowserSceneExportService,
-} from "@pooder/platform-browser";
+  SCENE_EXPORT_SERVICE,
+  SceneExportService,
+} from "@pooder/core";
 import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import {
   createDesignExportCapabilityDefinition,
@@ -42,10 +42,10 @@ export class DesignExportExtension implements ExtensionDefinition {
     name: "DesignExportExtension",
   };
   activation = {
-    requiresServices: [BROWSER_SCENE_EXPORT_SERVICE],
+    requiresServices: [SCENE_EXPORT_SERVICE],
   };
 
-  private exportService?: BrowserSceneExportService;
+  private exportService?: SceneExportService;
   private readonly capabilityId: string;
   private readonly defaultLayerIds: readonly string[];
   private readonly contributeLegacyCommands: boolean;
@@ -60,8 +60,8 @@ export class DesignExportExtension implements ExtensionDefinition {
   }
 
   activate(context: ExtensionContext) {
-    this.exportService = context.services.getOrThrow<BrowserSceneExportService>(
-      BROWSER_SCENE_EXPORT_SERVICE,
+    this.exportService = context.services.getOrThrow<SceneExportService>(
+      SCENE_EXPORT_SERVICE,
     );
   }
 

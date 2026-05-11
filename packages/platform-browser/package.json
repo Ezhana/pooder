@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
-    "test": "tsc -p tsconfig.test.json && node .test-dist/tests/run.js"
+    "test": "tsc -p tsconfig.test.json && node .test-dist/platform-browser/tests/run.js"
   },
   "keywords": [],
   "author": "",

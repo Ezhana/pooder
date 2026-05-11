@@ -1,5 +1,4 @@
-import type { ConfigurationService } from "@pooder/core";
-import type CanvasService from "../canvas-service";
+import type { CanvasService, ConfigurationService } from "@pooder/core";
 import { Coordinate, Unit } from "../coordinate";
 import { parseLengthToMm } from "../units";
 import {
@@ -305,8 +304,9 @@ export function computeSceneLayout(
   canvasService: CanvasService,
   size: SizeState,
 ): SceneLayoutSnapshot | null {
-  const canvasWidth = canvasService.canvas.width || 0;
-  const canvasHeight = canvasService.canvas.height || 0;
+  const viewportSize = canvasService.getViewportSize();
+  const canvasWidth = viewportSize.width || 0;
+  const canvasHeight = viewportSize.height || 0;
   if (canvasWidth <= 0 || canvasHeight <= 0) return null;
 
   const { widthMm: cutWidthMm, heightMm: cutHeightMm } = getCutSizeMm(size);
@@ -326,11 +326,19 @@ export function computeSceneLayout(
     canvasWidth,
     canvasHeight,
   );
-  canvasService.viewport.updateContainer(canvasWidth, canvasHeight);
-  canvasService.viewport.setPadding(viewPaddingPx);
-  canvasService.viewport.updatePhysical(viewWidthMm, viewHeightMm);
-
-  const layout = canvasService.viewport.layout;
+  const layout =
+    canvasService.updateViewportLayout({
+      containerWidth: canvasWidth,
+      containerHeight: canvasHeight,
+      padding: viewPaddingPx,
+      widthMm: viewWidthMm,
+      heightMm: viewHeightMm,
+    }) ??
+    Coordinate.calculateLayout(
+      { width: canvasWidth, height: canvasHeight },
+      { width: viewWidthMm, height: viewHeightMm },
+      viewPaddingPx,
+    );
   if (
     !Number.isFinite(layout.scale) ||
     !Number.isFinite(layout.offsetX) ||

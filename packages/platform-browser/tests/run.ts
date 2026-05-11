@@ -2,7 +2,7 @@ import type { Service } from "@pooder/core";
 import { Pooder, SCENE_SERVICE } from "@pooder/core";
 import {
   attachBrowserHost,
-  BROWSER_SCENE_EXPORT_SERVICE,
+  SCENE_EXPORT_SERVICE,
   BrowserSceneExportService,
   CANVAS_SERVICE,
   CanvasService,
@@ -402,7 +402,7 @@ function testAttachAndDetach() {
     "scene layout service should register",
   );
   assert(
-    registered.get(BROWSER_SCENE_EXPORT_SERVICE) ===
+    registered.get(SCENE_EXPORT_SERVICE) ===
       (browserSceneExportService as any),
     "browser scene export service should register",
   );
@@ -450,7 +450,7 @@ function testAttachAndDetach() {
     "dispose should unregister the scene layout service",
   );
   assert(
-    !registered.has(BROWSER_SCENE_EXPORT_SERVICE),
+    !registered.has(SCENE_EXPORT_SERVICE),
     "dispose should unregister the browser scene export service",
   );
   assert(
@@ -566,7 +566,7 @@ function testFailedSceneAdapterRegistrationRollsBackHostServices() {
     "failed scene adapter attach should roll back scene layout service",
   );
   assert(
-    !registered.has(BROWSER_SCENE_EXPORT_SERVICE),
+    !registered.has(SCENE_EXPORT_SERVICE),
     "failed scene adapter attach should roll back browser scene export service",
   );
 }

@@ -7,15 +7,15 @@ import {
   ExtensionDefinition,
   ConfigurationService,
   type ExtensionActivationSpec,
+  type RenderPatternSpec,
 } from "@pooder/core";
-import { Pattern } from "fabric";
 import {
   CANVAS_SERVICE,
   CanvasService,
   RenderEffectSpec,
   RenderObjectSpec,
   RenderPassSpec,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
 import {
@@ -26,7 +26,7 @@ import {
   computeSceneLayout,
   readSizeState,
   type SceneGeometrySnapshot as DielineGeometry,
-} from "@pooder/platform-browser";
+} from "../../shared/scene/scene-layout-model";
 import {
   DIELINE_LAYER_ID,
   FEATURE_DIELINE_LAYER_ID,
@@ -711,7 +711,6 @@ export class FeatureTool implements ExtensionDefinition {
 
   private setup() {
     if (!this.canvasService || !this.context) return;
-    const canvas = this.canvasService.canvas;
 
     if (!this.handleSceneGeometryChange) {
       this.handleSceneGeometryChange = (geometry: DielineGeometry) => {
@@ -763,7 +762,7 @@ export class FeatureTool implements ExtensionDefinition {
 
         this.syncMarkerVisualsByTarget(target, snapped);
       };
-      canvas.on("object:moving", this.handleMoving);
+      this.canvasService.onCanvasEvent("object:moving", this.handleMoving);
     }
 
     if (!this.handleModified) {
@@ -777,20 +776,19 @@ export class FeatureTool implements ExtensionDefinition {
           this.syncFeatureFromCanvas(target);
         }
       };
-      canvas.on("object:modified", this.handleModified);
+      this.canvasService.onCanvasEvent("object:modified", this.handleModified);
     }
   }
 
   private teardown() {
     if (!this.canvasService) return;
-    const canvas = this.canvasService.canvas;
 
     if (this.handleMoving) {
-      canvas.off("object:moving", this.handleMoving);
+      this.canvasService.offCanvasEvent("object:moving", this.handleMoving);
       this.handleMoving = null;
     }
     if (this.handleModified) {
-      canvas.off("object:modified", this.handleModified);
+      this.canvasService.offCanvasEvent("object:modified", this.handleModified);
       this.handleModified = null;
     }
     if (this.handleSceneGeometryChange && this.context) {
@@ -810,27 +808,16 @@ export class FeatureTool implements ExtensionDefinition {
     void this.canvasService.flushRenderFromProducers();
   }
 
-  private createHatchPattern(color: string = "rgba(0, 0, 0, 0.3)") {
-    if (typeof document === "undefined") {
-      return undefined;
-    }
-    const size = 20;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.clearRect(0, 0, size, size);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, size);
-      ctx.lineTo(size, 0);
-      ctx.stroke();
-    }
-    return new Pattern({
-      source: canvas,
-    } as any);
+  private createHatchPattern(
+    color: string = "rgba(0, 0, 0, 0.3)",
+  ): RenderPatternSpec {
+    return {
+      type: "pattern",
+      kind: "diagonalHatch",
+      color,
+      size: 20,
+      repetition: "repeat",
+    };
   }
 
   private getDraggableMarkerTarget(target: any): any | null {
@@ -1022,9 +1009,9 @@ export class FeatureTool implements ExtensionDefinition {
     return buildDielineRenderBundle({
       state,
       sceneLayout,
-      canvasWidth: sceneLayout.canvasWidth || this.canvasService.canvas.width || 800,
+      canvasWidth: sceneLayout.canvasWidth || this.canvasService.getViewportSize().width || 800,
       canvasHeight:
-        sceneLayout.canvasHeight || this.canvasService.canvas.height || 600,
+        sceneLayout.canvasHeight || this.canvasService.getViewportSize().height || 600,
       hasImages: this.hasImageItems(),
       createHatchPattern: (color) => this.createHatchPattern(color),
       clipTargetPassIds: this.imageClipLayerIds,
@@ -1360,13 +1347,10 @@ export class FeatureTool implements ExtensionDefinition {
 
   private syncMarkerVisualObjectsToCenter(index: number, center: MarkerPoint) {
     if (!this.canvasService) return;
-    const markers = this.canvasService.canvas
-      .getObjects()
-      .filter(
-        (obj: any) =>
-          obj?.data?.type === "feature-marker" &&
-          this.toFeatureIndex(obj?.data?.index) === index,
-      );
+    const markers = this.canvasService.getObjects({
+      type: "feature-marker",
+      predicate: (obj: any) => this.toFeatureIndex(obj?.data?.index) === index,
+    });
 
     markers.forEach((marker: any) => {
       const offsetX = Number(marker?.data?.markerOffsetX || 0);
@@ -1382,13 +1366,10 @@ export class FeatureTool implements ExtensionDefinition {
   private enforceConstraints() {
     if (!this.canvasService || !this.currentGeometry) return;
 
-    const handles = this.canvasService.canvas
-      .getObjects()
-      .filter(
-        (obj: any) =>
-          obj?.data?.type === "feature-marker" &&
-          obj?.data?.markerRole === "handle",
-      );
+    const handles = this.canvasService.getObjects({
+      type: "feature-marker",
+      predicate: (obj: any) => obj?.data?.markerRole === "handle",
+    });
 
     handles.forEach((marker: any) => {
       const feature = this.getFeatureForMarker(marker);
@@ -1407,6 +1388,6 @@ export class FeatureTool implements ExtensionDefinition {
       this.syncMarkerVisualsByTarget(marker, snapped);
     });
 
-    this.canvasService.canvas.requestRenderAll();
+    this.canvasService.requestRenderAll();
   }
 }

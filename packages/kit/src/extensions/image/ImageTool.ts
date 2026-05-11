@@ -10,25 +10,20 @@ import {
   WorkbenchService,
 } from "@pooder/core";
 import {
-  Canvas as FabricCanvas,
-  Control,
-  Image as FabricImage,
-  Pattern,
-  Point,
-  controlsUtils,
-} from "fabric";
-import {
   CANVAS_SERVICE,
   CanvasService,
   RenderObjectSpec,
-} from "@pooder/platform-browser";
+  RenderPatternSpec,
+  SCENE_EXPORT_SERVICE,
+  SceneExportService,
+} from "@pooder/core";
 import {
   buildSceneGeometry,
   computeSceneLayout,
   readSizeState,
   type SceneGeometrySnapshot,
   type SceneLayoutSnapshot,
-} from "@pooder/platform-browser";
+} from "../../shared/scene/scene-layout-model";
 import { type FrameRect, resolveSurfaceFrameRect } from "../../shared/scene/frame";
 import {
   createSourceSizeCache,
@@ -176,7 +171,6 @@ type ImageControlCapability = "rotate" | "scale" | "flipX" | "flipY";
 interface ImageControlDescriptor {
   key: string;
   capability: ImageControlCapability;
-  create: () => Control;
 }
 
 type SnapAxis = "x" | "y";
@@ -226,26 +220,10 @@ const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
   {
     key: "tl",
     capability: "rotate",
-    create: () =>
-      new Control({
-        x: -0.5,
-        y: -0.5,
-        actionName: "rotate",
-        actionHandler: controlsUtils.rotationWithSnapping,
-        cursorStyleHandler: controlsUtils.rotationStyleHandler,
-      }),
   },
   {
     key: "br",
     capability: "scale",
-    create: () =>
-      new Control({
-        x: 0.5,
-        y: 0.5,
-        actionName: "scale",
-        actionHandler: controlsUtils.scalingEqually,
-        cursorStyleHandler: controlsUtils.scaleCursorStyleHandler,
-      }),
   },
 ];
 
@@ -271,6 +249,7 @@ export class ImageTool implements ExtensionDefinition {
     this.loadImageSize(src),
   );
   private canvasService?: CanvasService;
+  private exportService?: SceneExportService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isToolActive = false;
@@ -278,7 +257,7 @@ export class ImageTool implements ExtensionDefinition {
   private focusedImageId: string | null = null;
   private renderSeq = 0;
   private dirtyTrackerDisposable?: { dispose(): void };
-  private cropShapeHatchPattern?: Pattern;
+  private cropShapeHatchPattern?: RenderPatternSpec;
   private cropShapeHatchPatternColor?: string;
   private cropShapeHatchPatternKey?: string;
   private imageSpecs: RenderObjectSpec[] = [];
@@ -300,7 +279,7 @@ export class ImageTool implements ExtensionDefinition {
   private readonly overlayLayerId: string;
   private readonly contributeLegacyCommands: boolean;
   private readonly contributeConfigDefinitions: boolean;
-  private imageControlsByCapabilityKey: Map<string, Record<string, Control>> =
+  private imageControlsByCapabilityKey: Map<string, Record<string, unknown>> =
     new Map();
 
   constructor(options: ImageToolOptions = {}) {
@@ -327,6 +306,9 @@ export class ImageTool implements ExtensionDefinition {
     this.context = context;
     this.canvasService = context.services.getOrThrow<CanvasService>(
       CANVAS_SERVICE,
+    );
+    this.exportService = context.services.get<SceneExportService>(
+      SCENE_EXPORT_SERVICE,
     );
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
@@ -435,9 +417,6 @@ export class ImageTool implements ExtensionDefinition {
           if (e.key === this.getConfigKey("session.placementPolicy")) {
             this.clearSessionNotice();
           }
-          if (e.key.startsWith(this.getConfigKey("control."))) {
-            this.imageControlsByCapabilityKey.clear();
-          }
           this.updateImages();
         }
       },
@@ -456,7 +435,7 @@ export class ImageTool implements ExtensionDefinition {
     this.sourceSizeCache.clear();
     this.imageSpecs = [];
     this.overlaySpecs = [];
-    this.imageControlsByCapabilityKey.clear();
+    this.exportService = undefined;
     this.endMoveSnapInteraction();
     this.unbindCanvasInteractionHandlers();
 
@@ -569,37 +548,37 @@ export class ImageTool implements ExtensionDefinition {
     this.canvasAfterRenderHandler = () => {
       this.handleCanvasAfterRender();
     };
-    this.canvasService.canvas.on("mouse:up", this.canvasMouseUpHandler);
-    this.canvasService.canvas.on(
+    this.canvasService.onCanvasEvent("mouse:up", this.canvasMouseUpHandler);
+    this.canvasService.onCanvasEvent(
       "object:moving",
       this.canvasObjectMovingHandler,
     );
-    this.canvasService.canvas.on(
+    this.canvasService.onCanvasEvent(
       "before:render",
       this.canvasBeforeRenderHandler,
     );
-    this.canvasService.canvas.on("after:render", this.canvasAfterRenderHandler);
+    this.canvasService.onCanvasEvent("after:render", this.canvasAfterRenderHandler);
   }
 
   private unbindCanvasInteractionHandlers() {
     if (!this.canvasService) return;
     if (this.canvasMouseUpHandler) {
-      this.canvasService.canvas.off("mouse:up", this.canvasMouseUpHandler);
+      this.canvasService.offCanvasEvent("mouse:up", this.canvasMouseUpHandler);
     }
     if (this.canvasObjectMovingHandler) {
-      this.canvasService.canvas.off(
+      this.canvasService.offCanvasEvent(
         "object:moving",
         this.canvasObjectMovingHandler,
       );
     }
     if (this.canvasBeforeRenderHandler) {
-      this.canvasService.canvas.off(
+      this.canvasService.offCanvasEvent(
         "before:render",
         this.canvasBeforeRenderHandler,
       );
     }
     if (this.canvasAfterRenderHandler) {
-      this.canvasService.canvas.off(
+      this.canvasService.offCanvasEvent(
         "after:render",
         this.canvasAfterRenderHandler,
       );
@@ -746,9 +725,7 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private clearSnapGuideContext() {
-    const topContext = this.canvasService?.canvas.contextTop;
-    if (!this.canvasService || !topContext) return;
-    this.canvasService.canvas.clearContext(topContext);
+    this.canvasService?.clearTopContext();
   }
 
   private clearSnapPreview() {
@@ -802,9 +779,7 @@ export class ImageTool implements ExtensionDefinition {
     if (!this.hasRenderedSnapGuides && !this.activeSnapX && !this.activeSnapY) {
       return;
     }
-    this.canvasService.canvas.clearContext(
-      this.canvasService.canvas.contextTop,
-    );
+    this.canvasService.clearTopContext();
     this.hasRenderedSnapGuides = false;
   }
 
@@ -813,7 +788,7 @@ export class ImageTool implements ExtensionDefinition {
     to: { x: number; y: number },
   ) {
     if (!this.canvasService) return;
-    const ctx = this.canvasService.canvas.contextTop;
+    const ctx = this.canvasService.getTopContext();
     if (!ctx) return;
     const color =
       this.getConfig<string>(this.getConfigKey("control.borderColor"), "#1677ff") ||
@@ -911,7 +886,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private getImageControls(
     capabilities: ImageControlCapability[],
-  ): Record<string, Control> {
+  ): Record<string, unknown> {
     const normalized = [...new Set(capabilities)].sort();
     const cacheKey = normalized.join("|");
     const cached = this.imageControlsByCapabilityKey.get(cacheKey);
@@ -920,10 +895,10 @@ export class ImageTool implements ExtensionDefinition {
     }
 
     const enabled = new Set(normalized);
-    const controls: Record<string, Control> = {};
+    const controls: Record<string, unknown> = {};
     IMAGE_CONTROL_DESCRIPTORS.forEach((descriptor) => {
       if (!enabled.has(descriptor.capability)) return;
-      controls[descriptor.key] = descriptor.create();
+      controls[descriptor.key] = { actionName: descriptor.capability };
     });
 
     this.imageControlsByCapabilityKey.set(cacheKey, controls);
@@ -1013,9 +988,6 @@ export class ImageTool implements ExtensionDefinition {
       borderScaleFactor: visual.borderScaleFactor,
       padding: visual.padding,
     });
-    obj.controls = this.getImageControls(
-      this.getEnabledImageControlCapabilities(),
-    );
     obj.setCoords?.();
   }
 
@@ -1226,14 +1198,13 @@ export class ImageTool implements ExtensionDefinition {
     this.isImageSelectionActive = !!id;
 
     if (syncCanvasSelection && this.canvasService) {
-      const canvas = this.canvasService.canvas;
       if (!id) {
-        canvas.discardActiveObject();
+        this.canvasService.discardActiveObject();
       } else {
         const obj = this.getImageObject(id);
         if (obj) {
           this.applyImageObjectInteractionState(obj);
-          canvas.setActiveObject(obj);
+          this.canvasService.setActiveObject(obj);
         }
       }
       this.canvasService.requestRenderAll();
@@ -1408,9 +1379,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private getImageObjects(): any[] {
     if (!this.canvasService) return [];
-    return this.canvasService.canvas.getObjects().filter((obj: any) => {
-      return obj?.data?.layerId === this.imageLayerId;
-    }) as any[];
+    return this.canvasService.getObjects({ layerId: this.imageLayerId }) as any[];
   }
 
   private getOverlayObjects(): any[] {
@@ -1465,23 +1434,7 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private async loadImageSize(src: string): Promise<SourceSize | null> {
-    try {
-      const image = await FabricImage.fromURL(src, {
-        crossOrigin: "anonymous",
-      });
-      const width = Number(image?.width || 0);
-      const height = Number(image?.height || 0);
-      if (width > 0 && height > 0) {
-        return { width, height };
-      }
-    } catch (error) {
-      this.debug("image:size:load-failed", {
-        src,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    return null;
+    return this.canvasService?.loadImageSize(src) ?? null;
   }
 
   private getCoverScale(frame: FrameRect, size: SourceSize): number {
@@ -1638,8 +1591,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private getCropShapeHatchPattern(
     color = "rgba(255, 0, 0, 0.6)",
-  ): Pattern | undefined {
-    if (typeof document === "undefined") return undefined;
+  ): RenderPatternSpec | undefined {
     const cacheKey = color;
     if (
       this.cropShapeHatchPattern &&
@@ -1650,33 +1602,13 @@ export class ImageTool implements ExtensionDefinition {
     }
 
     const size = 16;
-    const patternCanvas = document.createElement("canvas");
-    patternCanvas.width = size;
-    patternCanvas.height = size;
-    const ctx = patternCanvas.getContext("2d");
-    if (!ctx) return undefined;
-
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = "rgba(255, 0, 0, 0.08)";
-    ctx.fillRect(0, 0, size, size);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(-size, size);
-    ctx.lineTo(size, -size);
-    ctx.moveTo(-size / 2, size + size / 2);
-    ctx.lineTo(size + size / 2, -size / 2);
-    ctx.moveTo(0, size);
-    ctx.lineTo(size, 0);
-    ctx.moveTo(size / 2, size + size / 2);
-    ctx.lineTo(size + size + size / 2, -size / 2);
-    ctx.stroke();
-
-    const pattern = new Pattern({
-      source: patternCanvas,
-      // @ts-ignore: Fabric Pattern accepts canvas source here.
+    const pattern: RenderPatternSpec = {
+      type: "pattern",
+      kind: "diagonalHatch",
+      color,
+      size,
       repetition: "repeat",
-    });
+    };
     this.cropShapeHatchPattern = pattern;
     this.cropShapeHatchPatternColor = color;
     this.cropShapeHatchPatternKey = cacheKey;
@@ -1936,7 +1868,7 @@ export class ImageTool implements ExtensionDefinition {
 
     const center = target.getCenterPoint
       ? target.getCenterPoint()
-      : new Point(target.left ?? 0, target.top ?? 0);
+      : { x: Number(target.left ?? 0), y: Number(target.top ?? 0) };
     const centerScene = this.canvasService
       ? this.canvasService.toScenePoint({ x: center.x, y: center.y })
       : { x: center.x, y: center.y };
@@ -2176,8 +2108,8 @@ export class ImageTool implements ExtensionDefinition {
     imageIds: string[],
     options: ExportCroppedImageOptions,
   ): Promise<ImageExportUserCroppedImageResult> {
-    if (!this.canvasService) {
-      throw new Error("CanvasService not initialized");
+    if (!this.exportService) {
+      throw new Error("SceneExportService not initialized");
     }
 
     const normalizedIds = [...new Set(imageIds)].filter(
@@ -2190,83 +2122,25 @@ export class ImageTool implements ExtensionDefinition {
     const frame = this.getSurfaceFrameRect();
     const multiplier = Math.max(1, options.multiplier ?? 2);
     const format: "png" | "jpeg" = options.format === "jpeg" ? "jpeg" : "png";
-    const sceneScale = this.canvasService.getSceneScale();
-    const scaleBase = sceneScale > 0 ? sceneScale : 1;
+    const result = await this.exportService.exportImage({
+      crop: { type: "sceneRect", rect: frame },
+      format,
+      includeHidden: true,
+      multiplier,
+      sourceElementIds: normalizedIds,
+      sourceLayerIds: [this.imageLayerId],
+    });
 
-    const width = Math.max(1, Math.round(frame.width * multiplier));
-    const height = Math.max(1, Math.round(frame.height * multiplier));
-
-    const el = document.createElement("canvas");
-    const tempCanvas = new FabricCanvas(el, {
-      renderOnAddRemove: false,
-      selection: false,
-      enableRetinaScaling: false,
-      preserveObjectStacking: true,
-    } as any);
-    tempCanvas.setDimensions({ width, height });
-
-    try {
-      const idSet = new Set(normalizedIds);
-      const sourceObjects = this.canvasService.canvas
-        .getObjects()
-        .filter((obj: any) => {
-          return (
-            obj?.data?.layerId === this.imageLayerId &&
-            typeof obj?.data?.id === "string" &&
-            idSet.has(obj.data.id)
-          );
-        });
-
-      if (!sourceObjects.length) {
-        throw new Error("image-objects-not-found");
-      }
-
-      for (const source of sourceObjects as any[]) {
-        const clone = await source.clone();
-        const center = source.getCenterPoint
-          ? source.getCenterPoint()
-          : new Point(source.left ?? 0, source.top ?? 0);
-        const sceneCenter = this.canvasService.toScenePoint({
-          x: center.x,
-          y: center.y,
-        });
-
-        clone.set({ clipPath: undefined });
-        delete clone.__pooderEffectClipKey;
-        clone.set({
-          originX: "center",
-          originY: "center",
-          left: (sceneCenter.x - frame.left) * multiplier,
-          top: (sceneCenter.y - frame.top) * multiplier,
-          scaleX: ((source.scaleX || 1) / scaleBase) * multiplier,
-          scaleY: ((source.scaleY || 1) / scaleBase) * multiplier,
-          angle: source.angle || 0,
-          selectable: false,
-          evented: false,
-        });
-        clone.setCoords();
-        tempCanvas.add(clone);
-      }
-
-      tempCanvas.renderAll();
-      const dataUrl = tempCanvas.toDataURL({ format, multiplier: 1 });
-      if (!dataUrl) {
-        throw new Error("image-export-failed");
-      }
-
-      return {
-        url: dataUrl,
-        width,
-        height,
-        multiplier,
-        format,
-        imageIds: (sourceObjects as any[])
-          .map((obj: any) => obj?.data?.id)
-          .filter((id: any): id is string => typeof id === "string"),
-      };
-    } finally {
-      tempCanvas.dispose();
-    }
+    return {
+      url: result.url,
+      width: result.width,
+      height: result.height,
+      multiplier: result.multiplier,
+      format: result.format,
+      imageIds: result.sourceElementIds.length
+        ? result.sourceElementIds
+        : normalizedIds,
+    };
   }
 
   private async exportUserCroppedImage(

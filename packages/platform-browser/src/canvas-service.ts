@@ -1,4 +1,4 @@
-import { Canvas, FabricObject, Rect, Path, Image, Text } from "fabric";
+import { Canvas, FabricObject, Rect, Path, Image, Text, Pattern } from "fabric";
 import {
   Service,
   EventBus,
@@ -9,21 +9,22 @@ import {
   WorkbenchService,
   WORKFLOW_SESSION_SERVICE,
   WorkflowSessionService,
+  evaluateVisibilityExpr,
+  type CanvasObjectLike,
+  type CanvasService as CanvasServiceContract,
+  type CanvasSize,
+  type CanvasViewportLayout,
+  type RenderCoordinateSpace,
+  type RenderEffectSpec,
+  type RenderLayoutInsets,
+  type RenderLayoutLength,
+  type RenderObjectLayoutSpec,
+  type RenderObjectSpec,
+  type RenderPassSpec,
+  type RenderPatternSpec,
+  type VisibilityLayerState,
 } from "@pooder/core";
 import { ViewportSystem } from "./viewport-system";
-import type {
-  RenderCoordinateSpace,
-  RenderEffectSpec,
-  RenderLayoutInsets,
-  RenderLayoutLength,
-  RenderObjectLayoutSpec,
-  RenderObjectSpec,
-  RenderPassSpec,
-} from "./render-spec";
-import {
-  evaluateVisibilityExpr,
-  type VisibilityLayerState,
-} from "./visibility";
 
 export interface RenderProducerResult {
   passes?: RenderPassSpec[];
@@ -91,7 +92,7 @@ export interface CanvasPassStackingMeta {
   order?: number;
 }
 
-export default class CanvasService implements Service {
+export default class CanvasService implements Service, CanvasServiceContract {
   public canvas: Canvas;
   public viewport: ViewportSystem;
   private context?: ServiceContext;
@@ -446,6 +447,32 @@ export default class CanvasService implements Service {
     return this.getPassCanvasObjects(layerId);
   }
 
+  getObjects(query: {
+    layerId?: string;
+    passId?: string;
+    id?: string;
+    type?: string;
+    includeHidden?: boolean;
+    predicate?: (object: CanvasObjectLike) => boolean;
+  } = {}): CanvasObjectLike[] {
+    return (this.canvas.getObjects() as CanvasObjectLike[]).filter((obj: any) => {
+      if (!query.includeHidden && obj?.visible === false) return false;
+      if (query.layerId !== undefined && obj?.data?.layerId !== query.layerId) {
+        return false;
+      }
+      if (query.passId !== undefined && obj?.data?.passId !== query.passId) {
+        return false;
+      }
+      if (query.id !== undefined && obj?.data?.id !== query.id) {
+        return false;
+      }
+      if (query.type !== undefined && obj?.data?.type !== query.type) {
+        return false;
+      }
+      return query.predicate ? query.predicate(obj) : true;
+    });
+  }
+
   private isManagedPassObject(obj: FabricObject): boolean {
     const scope = (obj as any)?.data?.__renderScope;
     return typeof scope === "string" && this.managedPassMetas.has(scope);
@@ -541,10 +568,10 @@ export default class CanvasService implements Service {
 
     const ensure = (passId: string): VisibilityLayerState => {
       const id = String(passId || "").trim();
-      if (!id) return { exists: false, objectCount: 0 };
+      if (!id) return { exists: false, objectCount: 0, visibleObjectCount: 0 };
       let item = state.get(id);
       if (!item) {
-        item = { exists: false, objectCount: 0 };
+        item = { exists: false, objectCount: 0, visibleObjectCount: 0 };
         state.set(id, item);
       }
       return item;
@@ -556,6 +583,9 @@ export default class CanvasService implements Service {
         const item = ensure(passId);
         item.exists = true;
         item.objectCount += 1;
+        if (obj?.visible !== false) {
+          item.visibleObjectCount = (item.visibleObjectCount ?? 0) + 1;
+        }
       }
     });
 
@@ -634,14 +664,15 @@ export default class CanvasService implements Service {
   ) {
     return {
       activeToolId: this.workbenchService?.activeToolId ?? null,
-      contextValues: this.visibilityContextValues,
+      getContextValue: (key: string) =>
+        this.visibilityContextValues.get(String(key || "").trim()),
+      getLayerState: (layerId: string) => layers.get(layerId),
       isWorkflowSessionActive: (workflowId: string) =>
         this.isWorkflowSessionActive(workflowId),
       hasAnyActiveWorkflowSession: () =>
         this.hasAnyActiveWorkflowSession(),
       isSessionActive: (toolId: string) => this.isSessionActive(toolId),
       hasAnyActiveSession: () => this.hasAnyActiveSession(),
-      layers,
     };
   }
 
@@ -869,6 +900,58 @@ export default class CanvasService implements Service {
     }) as FabricObject | undefined;
   }
 
+  getActiveObject(): CanvasObjectLike | undefined {
+    return this.canvas.getActiveObject() as CanvasObjectLike | undefined;
+  }
+
+  setActiveObject(object: CanvasObjectLike): boolean {
+    if (!object) return false;
+    this.canvas.setActiveObject(object as any);
+    return true;
+  }
+
+  discardActiveObject(): boolean {
+    this.canvas.discardActiveObject();
+    return true;
+  }
+
+  setViewportMirror(enabled: boolean): void {
+    const width = this.canvas.width || 800;
+    let vpt = this.canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+    vpt = [...vpt];
+    const isFlipped = vpt[0] < 0;
+
+    if (enabled && !isFlipped) {
+      vpt[0] = -vpt[0];
+      vpt[4] = width - vpt[4];
+    } else if (!enabled && isFlipped) {
+      vpt[0] = -vpt[0];
+      vpt[4] = width - vpt[4];
+    }
+
+    this.canvas.setViewportTransform(vpt as any);
+    this.requestRenderAll();
+  }
+
+  onCanvasEvent(event: string, handler: (...args: any[]) => void): void {
+    this.canvas.on(event as any, handler as any);
+  }
+
+  offCanvasEvent(event: string, handler: (...args: any[]) => void): void {
+    this.canvas.off(event as any, handler as any);
+  }
+
+  getTopContext(): CanvasRenderingContext2D | undefined {
+    return (this.canvas as any).contextTop;
+  }
+
+  clearTopContext(): void {
+    const context = this.getTopContext();
+    if (context) {
+      this.canvas.clearContext(context);
+    }
+  }
+
   requestRenderAll() {
     this.canvas.requestRenderAll();
   }
@@ -878,6 +961,39 @@ export default class CanvasService implements Service {
     this.viewport.updateContainer(width, height);
     this.eventBus?.emit("canvas:resized", { width, height });
     this.requestRenderAll();
+  }
+
+  getViewportSize(): CanvasSize {
+    return {
+      width: Number(this.canvas.width || 0),
+      height: Number(this.canvas.height || 0),
+    };
+  }
+
+  updateViewportLayout(options: {
+    containerWidth: number;
+    containerHeight: number;
+    padding: number;
+    widthMm: number;
+    heightMm: number;
+  }): CanvasViewportLayout | null {
+    this.viewport.updateContainer(options.containerWidth, options.containerHeight);
+    this.viewport.setPadding(options.padding);
+    this.viewport.updatePhysical(options.widthMm, options.heightMm);
+    return this.viewport.layout;
+  }
+
+  async loadImageSize(src: string): Promise<CanvasSize | null> {
+    try {
+      const image = await Image.fromURL(src, {
+        crossOrigin: "anonymous",
+      });
+      const width = Number(image?.width || 0);
+      const height = Number(image?.height || 0);
+      return width > 0 && height > 0 ? { width, height } : null;
+    } catch {
+      return null;
+    }
   }
 
   getSceneScale(): number {
@@ -1448,7 +1564,9 @@ export default class CanvasService implements Service {
     props: Record<string, any>,
   ): Record<string, any> {
     const space: RenderCoordinateSpace = spec.space || "scene";
-    const next = this.resolveLayoutProps(spec, props);
+    const next = this.resolveRenderPatternProps(
+      this.resolveLayoutProps(spec, props),
+    );
     if (space === "screen") {
       return next;
     }
@@ -1470,6 +1588,48 @@ export default class CanvasService implements Service {
     next.scaleX = rawScaleX * sceneScale;
     next.scaleY = rawScaleY * sceneScale;
     return next;
+  }
+
+  private resolveRenderPatternProps(
+    props: Record<string, any>,
+  ): Record<string, any> {
+    if (!this.isRenderPatternSpec(props.fill)) return props;
+    return {
+      ...props,
+      fill: this.createFabricPattern(props.fill),
+    };
+  }
+
+  private isRenderPatternSpec(value: unknown): value is RenderPatternSpec {
+    return (
+      Boolean(value) &&
+      typeof value === "object" &&
+      (value as { type?: unknown }).type === "pattern" &&
+      (value as { kind?: unknown }).kind === "diagonalHatch"
+    );
+  }
+
+  private createFabricPattern(spec: RenderPatternSpec): Pattern | undefined {
+    if (typeof document === "undefined") return undefined;
+    const size = Math.max(1, Number(spec.size || 20));
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.strokeStyle = spec.color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, size);
+    ctx.lineTo(size, 0);
+    ctx.stroke();
+
+    return new Pattern({
+      source: canvas,
+      repetition: spec.repetition || "repeat",
+    } as any);
   }
 
   private moveObjectInCanvas(obj: any, index: number) {

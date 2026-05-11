@@ -11,7 +11,7 @@
     "outDir": ".test-dist",
     "rootDir": "..",
     "paths": {
-      "@pooder/platform-browser": ["../platform-browser/src/index.ts"]
+      "@pooder/core": ["../core/src/index.ts"]
     }
   },
   "include": ["tests/**/*.ts", "src/**/*.ts"]

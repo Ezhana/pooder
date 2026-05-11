@@ -6,16 +6,19 @@ import {
   ExtensionContext,
   ConfigurationService,
   SceneService,
+  type RenderPatternSpec,
 } from "@pooder/core";
-import { Pattern } from "fabric";
 import {
   CANVAS_SERVICE,
   CanvasService,
   RenderEffectSpec,
   RenderObjectSpec,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
 import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
-import { computeSceneLayout, readSizeState } from "@pooder/platform-browser";
+import {
+  computeSceneLayout,
+  readSizeState,
+} from "../../shared/scene/scene-layout-model";
 import {
   DIELINE_LAYER_ID,
   IMAGE_OBJECT_LAYER_ID,
@@ -239,29 +242,16 @@ export class DielineTool implements ExtensionDefinition {
     return contributions;
   }
 
-  private createHatchPattern(color: string = "rgba(0, 0, 0, 0.3)") {
-    if (typeof document === "undefined") {
-      return undefined;
-    }
-    const size = 20;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      // Transparent background
-      ctx.clearRect(0, 0, size, size);
-
-      // Draw diagonal /
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, size);
-      ctx.lineTo(size, 0);
-      ctx.stroke();
-    }
-    // @ts-ignore
-    return new Pattern({ source: canvas, repetition: "repeat" });
+  private createHatchPattern(
+    color: string = "rgba(0, 0, 0, 0.3)",
+  ): RenderPatternSpec {
+    return {
+      type: "pattern",
+      kind: "diagonalHatch",
+      color,
+      size: 20,
+      repetition: "repeat",
+    };
   }
 
   private getConfigService(): ConfigurationService | undefined {
@@ -312,9 +302,9 @@ export class DielineTool implements ExtensionDefinition {
       state: this.state,
       sceneLayout,
       canvasWidth:
-        sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
+        sceneLayout.canvasWidth || this.canvasService?.getViewportSize().width || 800,
       canvasHeight:
-        sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600,
+        sceneLayout.canvasHeight || this.canvasService?.getViewportSize().height || 600,
       hasImages,
       createHatchPattern: (color) => this.createHatchPattern(color),
       includeImageClipEffect: false,
@@ -328,9 +318,9 @@ export class DielineTool implements ExtensionDefinition {
       state: this.state,
       sceneLayout,
       canvasWidth:
-        sceneLayout.canvasWidth || this.canvasService?.canvas.width || 800,
+        sceneLayout.canvasWidth || this.canvasService?.getViewportSize().width || 800,
       canvasHeight:
-        sceneLayout.canvasHeight || this.canvasService?.canvas.height || 600,
+        sceneLayout.canvasHeight || this.canvasService?.getViewportSize().height || 600,
       hasImages: this.hasImageItems(),
       includeImageClipEffect: true,
       clipTargetPassIds: this.imageClipLayerIds,

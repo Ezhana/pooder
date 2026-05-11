@@ -1,5 +1,5 @@
 import type { CapabilityDefinition } from "@pooder/core";
-import type { RenderObjectSpec } from "@pooder/platform-browser";
+import type { RenderObjectSpec } from "@pooder/core";
 import type { ConstraintFeature } from "../constraints";
 import type {
   FeaturePlacement,

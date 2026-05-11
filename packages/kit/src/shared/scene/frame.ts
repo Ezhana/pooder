@@ -1,10 +1,9 @@
 import type { ConfigurationService } from "@pooder/core";
 import {
-  computeSceneLayout,
-  readSizeState,
   type CanvasService,
   type RenderLayoutRect,
-} from "@pooder/platform-browser";
+} from "@pooder/core";
+import { computeSceneLayout, readSizeState } from "./scene-layout-model";
 
 export interface FrameRect {
   left: number;
