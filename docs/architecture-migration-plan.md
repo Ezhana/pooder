@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M5 in progress; P4.S1 next.
+Current milestone: M5 in progress; P4.S2 next.
 
 Completed:
 
@@ -69,10 +69,14 @@ Completed:
   `pooder.kit.feature` facade for feature geometry, constraints, placement,
   projection, and session render support while `FeatureTool` remains as the
   legacy tool wrapper.
+- P4.S1 storefront tool catalog has been added. Storefront customization now
+  owns tool ids, labels, icons, visibility, session policies, workflow handler
+  keys, and legacy kit id aliases while activity bar rendering reads app tool
+  metadata only.
 
 Next recommended slice:
 
-- P4.S1 - Storefront Tool Catalog.
+- P4.S2 - Editor Controller Capability Wiring.
 
 Resume instruction for a new thread:
 

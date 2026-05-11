@@ -8,6 +8,8 @@
   runtime and canvas shell while application packages own tool catalogs,
   activity bars, labels, and workflow composition. See
   `../../docs/architecture-migration-plan.md`.
+- Storefront customization now owns the activity-bar tool catalog metadata
+  while Vue continues to provide only the runtime and canvas shell.
 
 ## 5.0.2
 
