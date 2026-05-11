@@ -17,6 +17,7 @@ import {
   CapabilityRegistryService,
   CommandService,
   ConfigurationService,
+  SceneService,
   ToolRegistryService,
   ToolSessionService,
   WorkbenchService,
@@ -27,6 +28,7 @@ export * from "./extension";
 export * from "./context";
 export * from "./capability";
 export * from "./contribution";
+export * from "./scene";
 export * from "./service";
 export * from "./services";
 export { default as EventBus } from "./event";
@@ -107,6 +109,7 @@ export class Pooder {
   private readonly commandService = new CommandService();
   private readonly capabilityRegistryService = new CapabilityRegistryService();
   private readonly configurationService = new ConfigurationService();
+  private readonly sceneService = new SceneService();
   private readonly toolRegistryService = new ToolRegistryService();
   private readonly toolSessionService = new ToolSessionService({
     commandService: this.commandService,
@@ -135,6 +138,7 @@ export class Pooder {
       this.configurationService,
       CORE_SERVICE_TOKENS.CONFIGURATION,
     );
+    this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
     this.registerService(
       this.toolRegistryService,
       CORE_SERVICE_TOKENS.TOOL_REGISTRY,

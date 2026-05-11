@@ -7,6 +7,9 @@
 - Added `CapabilityRegistryService`, public capability definition types, and
   `ExtensionContributions.capabilities` so extensions can expose discoverable
   capabilities without registering toolbar tools.
+- Added `SceneService` and public headless scene types for dynamic layers,
+  image/path/rect/text elements, scoped element queries, visibility metadata,
+  and batched scene transactions.
 
 ### Planning Notes
 

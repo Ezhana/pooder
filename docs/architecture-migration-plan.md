@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M1 in progress; P1.S2 next.
+Current milestone: M1 in progress; P1.S3 next.
 
 Completed:
 
@@ -20,10 +20,13 @@ Completed:
   `docs/naming-and-contribution-policy.md`.
 - P1.S1 core capability registry has been added. Extensions can now contribute
   typed capability definitions separately from toolbar tools.
+- P1.S2 core headless scene contract has been added. Applications can create
+  layers, manage image/path/rect/text elements, query by scope, and batch
+  scene mutations in transactions without Fabric types.
 
 Next recommended slice:
 
-- P1.S2 - Headless Scene Contract.
+- P1.S3 - Workflow-Neutral Sessions.
 
 Resume instruction for a new thread:
 

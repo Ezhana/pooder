@@ -2,9 +2,12 @@ import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   Pooder,
+  SCENE_SERVICE,
   TOOL_REGISTRY_SERVICE,
   createServiceToken,
   type ExtensionDefinition,
+  type SceneChangeEvent,
+  type SceneService,
   type Service,
   type ToolContribution,
 } from "../src";
@@ -502,6 +505,142 @@ async function testDuplicateCapabilityIdsFailWithoutLeakingContributions() {
   });
 }
 
+async function testSceneLayersAndElements() {
+  await withRuntime(async (runtime) => {
+    const scene = runtime.services.getOrThrow(SCENE_SERVICE);
+
+    scene.addLayer({
+      id: "artwork",
+      order: 2,
+      metadata: { owner: "app" },
+    });
+    scene.addLayer({ id: "background", order: 1, visible: false });
+    scene.updateLayer("background", { visible: true });
+
+    assertDeepEqual(
+      scene.listLayers().map((layer) => layer.id),
+      ["background", "artwork"],
+    );
+    assertEqual(scene.getLayer("background")?.visible, true);
+
+    scene.addElement({
+      id: "image-1",
+      layerId: "artwork",
+      type: "image",
+      src: "image.png",
+      width: 120,
+      height: 80,
+      transform: { left: 10, top: 12 },
+    });
+    scene.addElement({
+      id: "path-1",
+      layerId: "artwork",
+      type: "path",
+      path: "M 0 0 L 10 10",
+      visible: false,
+    });
+    scene.addElement({
+      id: "rect-1",
+      layerId: "background",
+      type: "rect",
+      width: 400,
+      height: 300,
+    });
+    scene.addElement({
+      id: "text-1",
+      layerId: "artwork",
+      type: "text",
+      text: "Label",
+      order: 3,
+    });
+
+    scene.updateElement("image-1", {
+      width: 140,
+      metadata: { selected: true },
+    });
+
+    assertEqual(scene.getElement("image-1")?.type, "image");
+    assertEqual(scene.getElement("image-1")?.metadata?.selected, true);
+    assertDeepEqual(
+      scene.listElements({ layerId: "artwork" }).map((element) => element.id),
+      ["image-1", "path-1", "text-1"],
+    );
+    assertDeepEqual(
+      scene.listElements({ type: "path", visible: false }).map(
+        (element) => element.id,
+      ),
+      ["path-1"],
+    );
+    assertEqual(scene.removeElement("path-1"), true);
+    assertEqual(scene.getElement("path-1"), undefined);
+  });
+}
+
+async function testSceneTransactionsBatchAndRollback() {
+  await withRuntime(async (runtime) => {
+    const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    const changes: SceneChangeEvent[] = [];
+    scene.onDidChange((event) => {
+      changes.push(event);
+    });
+
+    scene.transaction(() => {
+      scene.addLayer({ id: "content" });
+      scene.addElement({
+        id: "rect-1",
+        layerId: "content",
+        type: "rect",
+        width: 10,
+        height: 20,
+      });
+      scene.updateElement("rect-1", { width: 12 });
+    });
+
+    assertEqual(changes.length, 1);
+    assertDeepEqual(changes[0].layers.added, ["content"]);
+    assertDeepEqual(changes[0].elements.added, ["rect-1"]);
+    assertDeepEqual(changes[0].elements.updated, ["rect-1"]);
+    assertEqual(scene.getElement("rect-1")?.type, "rect");
+
+    try {
+      scene.transaction(() => {
+        scene.addLayer({ id: "rollback" });
+        scene.addElement({
+          id: "text-1",
+          layerId: "rollback",
+          type: "text",
+          text: "Rollback",
+        });
+        throw new Error("rollback");
+      });
+    } catch {
+      // Expected rollback path.
+    }
+
+    assertEqual(scene.getLayer("rollback"), undefined);
+    assertEqual(scene.getElement("text-1"), undefined);
+    assertEqual(changes.length, 1);
+  });
+}
+
+async function testRemovingSceneLayerRemovesScopedElements() {
+  await withRuntime(async (runtime) => {
+    const scene = runtime.services.getOrThrow(SCENE_SERVICE);
+
+    scene.addLayer({ id: "temporary" });
+    scene.addElement({
+      id: "temporary-text",
+      layerId: "temporary",
+      type: "text",
+      text: "Temporary",
+    });
+
+    assertEqual(scene.removeLayer("temporary"), true);
+    assertEqual(scene.getLayer("temporary"), undefined);
+    assertEqual(scene.getElement("temporary-text"), undefined);
+  });
+}
+
 async function main() {
   const tests: Array<[string, () => Promise<void>]> = [
     ["activates extensions in derived order", testOutOfOrderActivation],
@@ -529,6 +668,15 @@ async function main() {
     [
       "fails duplicate capability ids without leaking dynamic contributions",
       testDuplicateCapabilityIdsFailWithoutLeakingContributions,
+    ],
+    ["manages headless scene layers and elements", testSceneLayersAndElements],
+    [
+      "batches and rolls back scene transactions",
+      testSceneTransactionsBatchAndRollback,
+    ],
+    [
+      "removing a scene layer removes scoped elements",
+      testRemovingSceneLayerRemovesScopedElements,
     ],
   ];
 
