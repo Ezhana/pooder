@@ -1,6 +1,6 @@
 {
   "name": "@pooder/core",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Core logic for Pooder editor",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
