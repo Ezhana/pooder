@@ -27,6 +27,8 @@
   `../../docs/naming-and-contribution-policy.md`.
 - Documented event naming and payload ownership rules for typed runtime and
   capability-first APIs. See `../../docs/naming-and-contribution-policy.md`.
+- Verified migration slice P4.S4 with Pooder package builds plus storefront
+  type and production build integration checks.
 
 ## 3.0.0
 

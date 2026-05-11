@@ -10,6 +10,8 @@
   `../../docs/architecture-migration-plan.md`.
 - Storefront customization now owns the activity-bar tool catalog metadata
   while Vue continues to provide only the runtime and canvas shell.
+- Verified migration slice P4.S4 with Pooder package builds plus storefront
+  type and production build integration checks.
 
 ## 5.0.2
 

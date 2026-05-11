@@ -25,6 +25,8 @@
 - Published naming and contribution policy for upcoming scene adapter, layer,
   element, and render producer boundaries. See
   `../../docs/naming-and-contribution-policy.md`.
+- Verified migration slice P4.S4 with Pooder package builds plus storefront
+  type and production build integration checks.
 
 ## 1.0.2
 

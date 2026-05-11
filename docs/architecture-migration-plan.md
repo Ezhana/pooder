@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M5 in progress; P4.S4 next.
+Current milestone: M6 next; P5.S1 next.
 
 Completed:
 
@@ -81,10 +81,13 @@ Completed:
   owns the export-crop, edge-detection, and dieline-apply sequence through typed
   kit capability facades, while `DielineWorkflowExtension` remains as a
   compatibility wrapper for legacy command callers.
+- P4.S4 build and type verification has passed. Pooder package builds and
+  storefront type/build integration checks now verify the migrated
+  capability-first slices without a manual walkthrough.
 
 Next recommended slice:
 
-- P4.S4 - Build And Type Verification.
+- P5.S1 - Deprecate Kit Tool Contributions.
 
 Resume instruction for a new thread:
 

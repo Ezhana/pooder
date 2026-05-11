@@ -66,6 +66,8 @@
 - Published naming and contribution policy for capability-first kit APIs and
   legacy `*Tool` compatibility wrappers. See
   `../../docs/naming-and-contribution-policy.md`.
+- Verified migration slice P4.S4 with Pooder package builds plus storefront
+  type and production build integration checks.
 
 ## 8.0.0
 
