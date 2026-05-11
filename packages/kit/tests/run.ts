@@ -107,6 +107,10 @@ import {
   createWhiteInkCapability,
 } from "../src/factories";
 import {
+  applyKitEditorDocument,
+  createKitCapabilitiesForDocument,
+} from "../src/document";
+import {
   SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
   evaluateVisibilityExpr,
@@ -114,10 +118,12 @@ import {
 import {
   COMMAND_SERVICE,
   SCENE_SERVICE,
+  type CapabilityDefinition,
   type CommandContribution,
   type CommandService,
   type ExtensionDefinition,
   Pooder,
+  type SceneService,
   ToolRegistryService,
 } from "@pooder/core";
 
@@ -334,6 +340,7 @@ function createCommandExtension(
   id: string,
   options: {
     activation?: ExtensionDefinition["activation"];
+    capabilities?: CapabilityDefinition[];
     commands?: CommandContribution[];
     tools?: Array<{
       id: string;
@@ -347,6 +354,7 @@ function createCommandExtension(
     activation: options.activation,
     contribute() {
       return {
+        capabilities: options.capabilities ?? [],
         commands: options.commands ?? [],
         tools: options.tools ?? [],
       };
@@ -1248,6 +1256,269 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   await runtime.dispose();
 }
 
+function testCreateKitCapabilitiesForDocument() {
+  const capabilities = createKitCapabilitiesForDocument({
+    version: 1,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            effects: [
+              { type: "dieline" },
+              { type: "template-overlay", require: "warn" },
+              { type: "dieline" },
+            ],
+            objects: [
+              {
+                id: "slot",
+                type: "slot",
+                accepts: ["image"],
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                effects: [{ type: "image-placement" }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assertDeepEqual(
+    capabilities.map((item) => item.id).sort(),
+    [
+      DIELINE_GEOMETRY_CAPABILITY_ID,
+      IMAGE_PLACEMENT_CAPABILITY_ID,
+      TEMPLATE_OVERLAY_CAPABILITY_ID,
+    ].sort(),
+    "document helper should create each referenced kit capability once",
+  );
+}
+
+function createFakeCapabilityExtension(
+  facades: Record<string, unknown>,
+): ExtensionDefinition {
+  return createCommandExtension("fake.document.capabilities", {
+    capabilities: Object.entries(facades).map(([id, facade]) => ({
+      id,
+      facade,
+    })),
+  });
+}
+
+async function testApplyKitEditorDocument() {
+  const runtime = new Pooder();
+  const templateCalls: any[] = [];
+  const imageCalls: any[] = [];
+  const dielineCalls: any[] = [];
+  runtime.extensions.register(
+    createFakeCapabilityExtension({
+      [TEMPLATE_OVERLAY_CAPABILITY_ID]: {
+        getConfig: () => ({ version: 1, slots: {} }),
+        patchConfig: async (patch: any) => {
+          templateCalls.push(patch);
+          return { version: 1, slots: patch.slots ?? {} };
+        },
+        replaceConfig: async (config: any) => config,
+        clearConfig: async () => ({ version: 1, slots: {} }),
+        refresh: () => {},
+      } satisfies TemplateOverlayCapabilityApi,
+      [IMAGE_PLACEMENT_CAPABILITY_ID]: {
+        getViewState: () => ({}) as any,
+        addImage: async () => "image-1",
+        upsertImage: async (url: string, options: any) => {
+          imageCalls.push({ url, options });
+          return { id: options?.id ?? "image-1", mode: "add" as const };
+        },
+        setImageTransform: async () => {},
+        applyImageOperation: async () => {},
+        focusImage: () => ({ ok: true }),
+        resetSession: () => {},
+        validateSession: async () => ({ ok: true }),
+        completeSession: async () => ({ ok: true }),
+        exportUserCroppedImage: async () => ({}) as any,
+      } satisfies ImagePlacementCapabilityApi,
+      [DIELINE_GEOMETRY_CAPABILITY_ID]: {
+        getState: () => ({}) as any,
+        getGeometry: () => null,
+        updateFeaturePosition: () => {},
+        applyDetectedPath: () => {},
+        refresh: () => {
+          dielineCalls.push({ type: "refresh" });
+        },
+        upsertPathElement: (options: any) => {
+          dielineCalls.push(options);
+          return null;
+        },
+      } satisfies DielineGeometryCapabilityApi,
+    }),
+  );
+  await runtime.extensions.flushActivation();
+
+  const result = await applyKitEditorDocument(runtime, {
+    version: 1,
+    assets: [
+      { id: "template", type: "image", src: "/template.png" },
+      { id: "photo", type: "image", src: "/photo.png" },
+    ],
+    surfaces: [
+      {
+        id: "front",
+        title: "Front",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [
+          {
+            id: "front-template",
+            role: "background",
+            objects: [
+              {
+                id: "front-template-image",
+                type: "template",
+                assetId: "template",
+                effects: [{ type: "template-overlay" }],
+              },
+            ],
+          },
+          {
+            id: "front-artwork",
+            role: "content",
+            effects: [{ type: "dieline", payload: { shape: "circle" } }],
+            objects: [
+              {
+                id: "front-slot",
+                type: "slot",
+                accepts: ["image"],
+                frame: { x: 10, y: 20, width: 30, height: 40 },
+              },
+              {
+                id: "front-photo",
+                type: "image",
+                assetId: "photo",
+                effects: [{ type: "image-placement" }],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: "back",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [{ id: "back-artwork" }],
+      },
+    ],
+  });
+
+  assert(result.ok, "document apply should succeed");
+  assertDeepEqual(
+    result.appliedSurfaceIds,
+    ["front", "back"],
+    "apply result should report surfaces",
+  );
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  assert(!!scene.getLayer("front-artwork"), "front layer should be added");
+  assertEqual(
+    scene.getElement("front-slot")?.type,
+    "rect",
+    "slot should be projected as scene rect",
+  );
+  assertEqual(
+    scene.getElement("front-template-image")?.type,
+    "image",
+    "template should be projected as scene image",
+  );
+  assertEqual(
+    runtime.config.get("dieline.shape"),
+    "circle",
+    "dieline payload should update config",
+  );
+  assert(templateCalls.length > 0, "template effect should call facade");
+  assertEqual(
+    imageCalls[0]?.url,
+    "/photo.png",
+    "image placement effect should use image asset source",
+  );
+  assert(dielineCalls.length > 0, "dieline effect should refresh facade");
+
+  await runtime.dispose();
+}
+
+async function testApplyKitEditorDocumentMissingCapabilities() {
+  const strictRuntime = new Pooder();
+  const strictResult = await applyKitEditorDocument(strictRuntime, {
+    version: 1,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        layers: [
+          {
+            id: "front-artwork",
+            effects: [{ type: "dieline", require: "strict" }],
+          },
+        ],
+      },
+    ],
+  });
+  assert(!strictResult.ok, "strict missing capability should fail");
+  assert(
+    strictResult.diagnostics.some(
+      (item) => item.code === "capability-required",
+    ),
+    "strict missing capability should return error diagnostic",
+  );
+  assert(
+    !strictRuntime.services
+      .getOrThrow<SceneService>(SCENE_SERVICE)
+      .getLayer("front-artwork"),
+    "strict missing capability should not write scene",
+  );
+  await strictRuntime.dispose();
+
+  const optionalRuntime = new Pooder();
+  const optionalResult = await applyKitEditorDocument(optionalRuntime, {
+    version: 1,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        layers: [
+          {
+            id: "front-artwork",
+            effects: [
+              { type: "template-overlay", require: "warn" },
+              { type: "white-ink", require: "ignore" },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assert(optionalResult.ok, "optional missing capabilities should apply scene");
+  assert(
+    optionalResult.diagnostics.some(
+      (item) =>
+        item.code === "capability-optional-missing" &&
+        item.capabilityId === TEMPLATE_OVERLAY_CAPABILITY_ID,
+    ),
+    "warn missing capability should return warning diagnostic",
+  );
+  assert(
+    !optionalResult.diagnostics.some(
+      (item) => item.capabilityId === WHITE_INK_CAPABILITY_ID,
+    ),
+    "ignore missing capability should not diagnose",
+  );
+  assert(
+    !!optionalRuntime.services
+      .getOrThrow<SceneService>(SCENE_SERVICE)
+      .getLayer("front-artwork"),
+    "optional missing capabilities should still write scene",
+  );
+  await optionalRuntime.dispose();
+}
+
 async function testImagePlacementCapabilityExtension() {
   const runtime = new Pooder();
   const facade: ImagePlacementCapabilityApi = {
@@ -1941,6 +2212,9 @@ async function main() {
   testKitCapabilityContractDefinitionsAndNormalization();
   await testDesignExportCapabilityExtension();
   await testKitCapabilityFactoriesDoNotRegisterTools();
+  testCreateKitCapabilitiesForDocument();
+  await testApplyKitEditorDocument();
+  await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testEdgeDetectionCapabilityExtension();
   await testDielineGeometryCapabilityExtension();

@@ -2,8 +2,10 @@ import type { InjectionKey } from "vue";
 import { inject } from "vue";
 import { Pooder } from "@pooder/core";
 import type {
+  CapabilityRegistryChangeEvent,
   ExtensionDefinition,
   ExtensionStateSnapshot,
+  RegisteredCapabilityDefinition,
   RegisterServiceOptions,
   Service,
   ServiceIdentifier,
@@ -59,6 +61,18 @@ export interface PooderRuntimeLike {
   };
   readonly commands: {
     execute<T = unknown>(id: string, ...args: any[]): Promise<T>;
+  };
+  readonly capabilities: {
+    get<T = unknown>(id: string): T | undefined;
+    getOrThrow<T = unknown>(id: string, errorMessage?: string): T;
+    getDefinition<T = unknown>(
+      id: string,
+    ): RegisteredCapabilityDefinition<T> | undefined;
+    list(): RegisteredCapabilityDefinition[];
+    has(id: string): boolean;
+    onDidChange(
+      callback: (event: CapabilityRegistryChangeEvent) => void,
+    ): { dispose(): void };
   };
   readonly config: {
     export(): Record<string, any>;
