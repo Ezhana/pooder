@@ -142,7 +142,7 @@ Use these labels when P5.S1 starts marking old exports:
 - Class-level JSDoc for legacy tool classes:
   `@deprecated Compatibility wrapper for <CapabilityName>. Use <replacement>.`
 - Factory-level JSDoc for legacy factory exports:
-  `@deprecated Registers the legacy <ToolName> compatibility tool. Use <replacement>.`
+  `@deprecated Compatibility factory for <ToolName>. Use <replacement>.`
 - Command bridge documentation:
   `Legacy command bridge for <oldCommand>. Prefer <typedFacade>.<method>().`
 - Changelog label:
@@ -158,7 +158,7 @@ Examples:
 export class ImageTool {}
 
 /**
- * @deprecated Registers the legacy ImageTool compatibility tool. Use
+ * @deprecated Compatibility factory for ImageTool. Use
  * createImagePlacementCapability().
  */
 export const createImageExtension = () => new ImageTool();

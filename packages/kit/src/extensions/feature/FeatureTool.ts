@@ -6,8 +6,6 @@ import {
   ExtensionContributions,
   ExtensionDefinition,
   ConfigurationService,
-  TOOL_SESSION_SERVICE,
-  ToolSessionService,
   type ExtensionActivationSpec,
 } from "@pooder/core";
 import { Pattern } from "fabric";
@@ -128,9 +126,7 @@ export class FeatureTool implements ExtensionDefinition {
   private readonly baseDielineLayerId: string;
   private readonly sessionDielineLayerId: string;
   private readonly imageClipLayerIds: string[];
-  private readonly contributeLegacyTool: boolean;
   private readonly contributeLegacyCommands: boolean;
-  private readonly toolName: string;
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
@@ -165,23 +161,13 @@ export class FeatureTool implements ExtensionDefinition {
     this.imageClipLayerIds = options.layers?.imageClipLayerIds?.map((id) =>
       normalizeFeatureLayerId(id, IMAGE_OBJECT_LAYER_ID),
     ) || [IMAGE_OBJECT_LAYER_ID];
-    this.contributeLegacyTool = options.contributeTool !== false;
     this.contributeLegacyCommands = options.contributeCommands !== false;
-    this.toolName = options.toolName || "Feature";
     this.workingFeatures = this.cloneFeatures(options.features || []);
 
-    const requireDielineExtension =
-      options.requireDielineExtension ?? this.contributeLegacyTool;
+    const requireDielineExtension = options.requireDielineExtension ?? false;
     this.activation = {
       requiresExtensions: requireDielineExtension ? ["pooder.kit.dieline"] : [],
-      requiresServices: this.contributeLegacyTool
-        ? [
-            CANVAS_SERVICE,
-            CONFIGURATION_SERVICE,
-            TOOL_SESSION_SERVICE,
-            COMMAND_SERVICE,
-          ]
-        : [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+      requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
     };
   }
 
@@ -271,16 +257,6 @@ export class FeatureTool implements ExtensionDefinition {
       },
     );
 
-    if (this.contributeLegacyTool) {
-      const toolSessionService = context.services.getOrThrow<ToolSessionService>(
-        TOOL_SESSION_SERVICE,
-      );
-      this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
-        this.id,
-        () => this.hasWorkingChanges,
-      );
-    }
-
     this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
 
     this.setup();
@@ -310,10 +286,7 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private isSessionVisible(): boolean {
-    const workflowVisible = this.contributeLegacyTool
-      ? this.isToolActive
-      : true;
-    return workflowVisible && this.isFeatureSessionActive;
+    return this.isFeatureSessionActive;
   }
 
   contribute(): ExtensionContributions {
@@ -331,25 +304,6 @@ export class FeatureTool implements ExtensionDefinition {
         }),
       ],
     };
-
-    if (this.contributeLegacyTool) {
-      contributions.tools = [
-        {
-          id: this.id,
-          name: this.toolName,
-          interaction: "session",
-          commands: {
-            begin: "beginFeatureSession",
-            commit: "completeFeatures",
-            rollback: "rollbackFeatureSession",
-          },
-          session: {
-            autoBegin: false,
-            leavePolicy: "block",
-          },
-        },
-      ];
-    }
 
     if (this.contributeLegacyCommands) {
       contributions.commands = [

@@ -69,20 +69,16 @@ export class SizeTool implements ExtensionDefinition {
   private context?: ExtensionContext;
   private canvasService?: CanvasService;
   private readonly capabilityId: string;
-  private readonly contributeLegacyTool: boolean;
   private readonly contributeLegacyCommands: boolean;
   private readonly contributeConfigDefinitions: boolean;
-  private readonly toolName: string;
 
   constructor(options: SizeToolOptions = {}) {
     this.id =
       String(options.id || "pooder.kit.size").trim() || "pooder.kit.size";
     this.capabilityId = options.capabilityId || SIZE_CAPABILITY_ID;
-    this.contributeLegacyTool = options.contributeTool !== false;
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =
       options.contributeConfigurations !== false;
-    this.toolName = options.toolName || "Size";
   }
 
   activate(context: ExtensionContext) {
@@ -109,16 +105,6 @@ export class SizeTool implements ExtensionDefinition {
         }),
       ],
     };
-
-    if (this.contributeLegacyTool) {
-      contributions.tools = [
-        {
-          id: this.id,
-          name: this.toolName,
-          interaction: "instant",
-        },
-      ];
-    }
 
     if (this.contributeConfigDefinitions) {
       contributions.configurations = [

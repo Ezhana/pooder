@@ -259,12 +259,7 @@ export class ImageTool implements ExtensionDefinition {
     name: "ImageTool",
   };
   activation = {
-    requiresServices: [
-      CANVAS_SERVICE,
-      CONFIGURATION_SERVICE,
-      TOOL_SESSION_SERVICE,
-      WORKBENCH_SERVICE,
-    ],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
   };
 
   private items: ImageItem[] = [];
@@ -302,10 +297,8 @@ export class ImageTool implements ExtensionDefinition {
   private readonly configNamespace: string;
   private readonly imageLayerId: string;
   private readonly overlayLayerId: string;
-  private readonly contributeLegacyTool: boolean;
   private readonly contributeLegacyCommands: boolean;
   private readonly contributeConfigDefinitions: boolean;
-  private readonly toolName: string;
   private imageControlsByCapabilityKey: Map<string, Record<string, Control>> =
     new Map();
 
@@ -323,11 +316,9 @@ export class ImageTool implements ExtensionDefinition {
       options.layers?.overlayLayerId,
       IMAGE_OVERLAY_LAYER_ID,
     );
-    this.contributeLegacyTool = options.contributeTool !== false;
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =
       options.contributeConfigurations !== false;
-    this.toolName = options.toolName || "Image";
   }
 
   activate(context: ExtensionContext) {
@@ -449,14 +440,6 @@ export class ImageTool implements ExtensionDefinition {
           this.updateImages();
         }
       },
-    );
-
-    const toolSessionService = context.services.getOrThrow<ToolSessionService>(
-      TOOL_SESSION_SERVICE,
-    );
-    this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
-      this.id,
-      () => this.hasWorkingChanges,
     );
 
     this.updateImages();
@@ -1070,26 +1053,6 @@ export class ImageTool implements ExtensionDefinition {
         ),
       ],
     };
-
-    if (this.contributeLegacyTool) {
-      contributions.tools = [
-        {
-          id: this.id,
-          name: this.toolName,
-          interaction: "session",
-          commands: {
-            begin: "imageSessionReset",
-            validate: "validateImageSession",
-            commit: "completeImages",
-            rollback: "imageSessionReset",
-          },
-          session: {
-            autoBegin: true,
-            leavePolicy: "block",
-          },
-        },
-      ];
-    }
 
     if (this.contributeConfigDefinitions) {
       contributions.configurations = createImageConfigurations(

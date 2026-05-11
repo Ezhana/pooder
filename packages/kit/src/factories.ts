@@ -48,7 +48,7 @@ export const createDesignExportCapability = (
 ) => new DesignExportCapabilityExtension(options);
 
 /**
- * @deprecated Registers the legacy DielineTool compatibility tool. Use
+ * @deprecated Compatibility factory for DielineTool. Use
  * createDielineGeometryCapability().
  */
 export const createDielineExtension = (
@@ -71,7 +71,7 @@ export const createDielineGeometryCapability = (
 ) => new DielineGeometryCapabilityExtension(options);
 
 /**
- * @deprecated Registers the legacy FeatureTool compatibility tool. Use
+ * @deprecated Compatibility factory for FeatureTool. Use
  * createFeatureCapability().
  */
 export const createFeatureExtension = (
@@ -83,7 +83,7 @@ export const createFeatureCapability = (
 ) => new FeatureCapabilityExtension(options);
 
 /**
- * @deprecated Registers the legacy ImageTool compatibility tool. Use
+ * @deprecated Compatibility factory for ImageTool. Use
  * createImagePlacementCapability().
  */
 export const createImageExtension = () => new ImageTool();
@@ -97,8 +97,7 @@ export const createRulerExtension = (
 ) => new RulerTool(options);
 
 /**
- * @deprecated Registers the legacy SizeTool compatibility tool. Use
- * createSizeCapability().
+ * @deprecated Compatibility factory for SizeTool. Use createSizeCapability().
  */
 export const createSizeExtension = () => new SizeTool();
 
@@ -119,7 +118,7 @@ export const createRulerCapability = (
 ) => new RulerCapabilityExtension(options);
 
 /**
- * @deprecated Registers the legacy WhiteInkTool compatibility tool. Use
+ * @deprecated Compatibility factory for WhiteInkTool. Use
  * createWhiteInkCapability().
  */
 export const createWhiteInkExtension = () => new WhiteInkTool();

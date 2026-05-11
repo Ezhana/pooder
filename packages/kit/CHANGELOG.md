@@ -53,6 +53,9 @@
 - Marked `DielineWorkflowExtension` and `createDielineWorkflowExtension` as
   compatibility surfaces after moving storefront dieline workflow orchestration
   to app-owned typed capability composition.
+- Removed kit-owned product tool contributions from legacy image, white ink,
+  dieline, feature, and size compatibility wrappers while keeping capability,
+  command bridge, config, and render producer contributions.
 
 ### Deprecated
 
@@ -75,6 +78,12 @@
 - Deprecated compatibility wrapper: `SizeTool` -> `createSizeCapability()`.
 - Deprecated compatibility wrapper: `createSizeExtension` ->
   `createSizeCapability()`.
+
+### Removed
+
+- Removed legacy `tools` contributions for `pooder.kit.image`,
+  `pooder.kit.white-ink`, `pooder.kit.dieline`, `pooder.kit.feature`, and
+  `pooder.kit.size` so installing kit no longer adds product tools.
 
 ### Planning Notes
 

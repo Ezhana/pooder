@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M6 in progress; P5.S2 next.
+Current milestone: M7 next; P5.S3 next.
 
 Completed:
 
@@ -87,10 +87,13 @@ Completed:
 - P5.S1 legacy kit tool contribution exports have been deprecated. Legacy
   `ImageTool`, `WhiteInkTool`, `DielineTool`, `FeatureTool`, `SizeTool`, and
   their tool-registering factories now point callers to capability factories.
+- P5.S2 kit-owned business tool contributions have been removed. Legacy kit
+  wrappers now contribute capabilities, command bridges, configuration
+  definitions, and render producers without registering product tools.
 
 Next recommended slice:
 
-- P5.S2 - Remove Kit-Owned Business Tools.
+- P5.S3 - Major Release Cleanup.
 
 Resume instruction for a new thread:
 

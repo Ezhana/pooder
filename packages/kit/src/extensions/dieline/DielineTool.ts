@@ -78,10 +78,8 @@ export class DielineTool implements ExtensionDefinition {
   private readonly configNamespace: string;
   private readonly targetLayerId: string;
   private readonly imageClipLayerIds: string[];
-  private readonly contributeLegacyTool: boolean;
   private readonly contributeLegacyCommands: boolean;
   private readonly contributeConfigDefinitions: boolean;
-  private readonly toolName: string;
   private readonly legacyVisibility: boolean;
   private onCanvasResized = () => {
     this.updateDieline();
@@ -100,13 +98,10 @@ export class DielineTool implements ExtensionDefinition {
     this.imageClipLayerIds = options.layers?.imageClipLayerIds?.map((id) =>
       normalizeDielineGeometryLayerId(id, IMAGE_OBJECT_LAYER_ID),
     ) || [IMAGE_OBJECT_LAYER_ID];
-    this.contributeLegacyTool = options.contributeTool !== false;
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =
       options.contributeConfigurations !== false;
-    this.toolName = options.toolName || "Dieline";
-    this.legacyVisibility =
-      options.legacyVisibility ?? this.contributeLegacyTool;
+    this.legacyVisibility = options.legacyVisibility ?? false;
 
     if (options) {
       const stateOptions: Partial<DielineState> = { ...options };
@@ -228,20 +223,6 @@ export class DielineTool implements ExtensionDefinition {
         }),
       ],
     };
-
-    if (this.contributeLegacyTool) {
-      contributions.tools = [
-        {
-          id: this.id,
-          name: this.toolName,
-          interaction: "session",
-          session: {
-            autoBegin: false,
-            leavePolicy: "block",
-          },
-        },
-      ];
-    }
 
     if (this.contributeConfigDefinitions) {
       contributions.configurations = createDielineConfigurations(

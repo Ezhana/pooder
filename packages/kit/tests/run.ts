@@ -82,8 +82,14 @@ import {
   type FeatureCapabilityApi,
 } from "../src/extensions/feature/capability";
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
-import { WhiteInkTool } from "../src/extensions/white-ink/WhiteInkTool";
 import { DielineWorkflowExtension } from "../src/extensions/dieline-workflow";
+import {
+  createDielineExtension,
+  createFeatureExtension,
+  createImageExtension,
+  createSizeExtension,
+  createWhiteInkExtension,
+} from "../src/factories";
 import {
   BROWSER_SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
@@ -1053,62 +1059,54 @@ async function testDesignExportCapabilityExtension() {
   await runtime.dispose();
 }
 
-async function testExtensionDependencyActivation() {
+async function testLegacyKitWrappersDoNotRegisterTools() {
   const runtime = new Pooder();
-  runtime.extensions.register(new WhiteInkTool());
-  runtime.extensions.register({
-    id: "pooder.kit.image",
-    activation: {
-      requiresServices: [CANVAS_SERVICE],
-    },
-    contribute() {
-      return {
-        tools: [
-          {
-            id: "pooder.kit.image",
-            name: "Image",
-            interaction: "session",
-          },
-        ],
-      };
-    },
-    activate() {},
-  });
-
-  await runtime.extensions.flushActivation();
-
-  assert(
-    runtime.extensions.getState("pooder.kit.image")?.state === "pending",
-    "image dependency should stay pending without CanvasService",
-  );
-  assert(
-    runtime.extensions.getState("pooder.kit.white-ink")?.state === "pending",
-    "white-ink tool should stay pending until its hard dependency is active",
-  );
-
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.extensions.register(createImageExtension());
+  runtime.extensions.register(createWhiteInkExtension());
+  runtime.extensions.register(createDielineExtension());
+  runtime.extensions.register(createFeatureExtension());
+  runtime.extensions.register(createSizeExtension());
   await runtime.extensions.flushActivation();
 
   assert(
     runtime.extensions.getState("pooder.kit.image")?.state === "active",
-    "image dependency should activate after CanvasService registration",
+    "legacy image wrapper should activate as a capability wrapper",
   );
   assert(
     runtime.extensions.getState("pooder.kit.white-ink")?.state === "active",
-    "white-ink tool should activate after image and CanvasService are ready",
+    "legacy white ink wrapper should activate without requiring the image tool",
+  );
+  assert(
+    runtime.extensions.getState("pooder.kit.dieline")?.state === "active",
+    "legacy dieline wrapper should activate as a capability wrapper",
+  );
+  assert(
+    runtime.extensions.getState(FEATURE_CAPABILITY_ID)?.state === "active",
+    "legacy feature wrapper should activate without requiring the dieline tool",
+  );
+  assert(
+    runtime.extensions.getState(SIZE_CAPABILITY_ID)?.state === "active",
+    "legacy size wrapper should activate as a capability wrapper",
   );
 
   const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
     "ToolRegistryService",
   );
-  assert(
-    toolRegistry.hasTool("pooder.kit.image"),
-    "image dependency should register in the tool registry",
-  );
-  assert(
-    toolRegistry.hasTool("pooder.kit.white-ink"),
-    "white-ink tool should register in the tool registry",
-  );
+  for (const toolId of [
+    "pooder.kit.image",
+    "pooder.kit.white-ink",
+    "pooder.kit.dieline",
+    FEATURE_CAPABILITY_ID,
+    SIZE_CAPABILITY_ID,
+  ]) {
+    assert(
+      !toolRegistry.hasTool(toolId),
+      `${toolId} should not register a kit-owned product tool`,
+    );
+  }
+
+  await runtime.dispose();
 }
 
 async function testImagePlacementCapabilityExtension() {
@@ -2060,7 +2058,7 @@ async function main() {
   testContributionCompatibility();
   await testDesignExportExtensionCommand();
   await testDesignExportCapabilityExtension();
-  await testExtensionDependencyActivation();
+  await testLegacyKitWrappersDoNotRegisterTools();
   await testImagePlacementCapabilityExtension();
   await testEdgeDetectionCapabilityExtension();
   await testDielineGeometryCapabilityExtension();

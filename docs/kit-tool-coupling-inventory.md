@@ -3,9 +3,13 @@
 Status: P0.S2 inventory
 Date: 2026-05-11
 
-This inventory records current `@pooder/kit` extension coupling before the
-capability-first migration. It is intentionally descriptive: no runtime
-ownership has moved yet.
+This inventory was first published before the capability-first migration. It is
+primarily descriptive historical context, with the summary table updated as
+tool contributions are removed.
+
+P5.S2 update: legacy kit wrappers no longer contribute product tools. The
+detailed sections still describe the original coupling unless they explicitly
+note a later migration slice.
 
 ## Ownership Labels
 
@@ -24,11 +28,11 @@ ownership has moved yet.
 
 | Extension | Contributes `tools` | Primary target |
 | --- | --- | --- |
-| `ImageTool` | Yes, `pooder.kit.image` | Image placement kit capability plus compatibility wrapper |
-| `WhiteInkTool` | Yes, `pooder.kit.white-ink` | White ink kit capability plus compatibility wrapper |
-| `DielineTool` | Yes, `pooder.kit.dieline` | Dieline geometry/render kit capability plus compatibility wrapper |
-| `FeatureTool` | Yes, `pooder.kit.feature` | Feature geometry kit capability; feature placement workflow moves to app |
-| `SizeTool` | Yes, `pooder.kit.size` | Size/session-independent scene config capability plus compatibility wrapper |
+| `ImageTool` | No; formerly `pooder.kit.image` | Image placement kit capability plus compatibility wrapper |
+| `WhiteInkTool` | No; formerly `pooder.kit.white-ink` | White ink kit capability plus compatibility wrapper |
+| `DielineTool` | No; formerly `pooder.kit.dieline` | Dieline geometry/render kit capability plus compatibility wrapper |
+| `FeatureTool` | No; formerly `pooder.kit.feature` | Feature geometry kit capability; feature placement workflow moves to app |
+| `SizeTool` | No; formerly `pooder.kit.size` | Size/session-independent scene config capability plus compatibility wrapper |
 | `TemplateOverlayTool` | No | Template overlay kit capability |
 | `BackgroundTool` | No | Background layer kit capability |
 | `RulerTool` | No | Ruler overlay kit capability |

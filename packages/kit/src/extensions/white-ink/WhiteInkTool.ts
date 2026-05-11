@@ -4,8 +4,6 @@ import {
   ExtensionContributions,
   ExtensionDefinition,
   ConfigurationService,
-  TOOL_SESSION_SERVICE,
-  ToolSessionService,
   WORKBENCH_SERVICE,
   WorkbenchService,
   type ExtensionActivationSpec,
@@ -180,10 +178,8 @@ export class WhiteInkTool implements ExtensionDefinition {
   private readonly whiteLayerId: string;
   private readonly coverLayerId: string;
   private readonly overlayLayerId: string;
-  private readonly contributeLegacyTool: boolean;
   private readonly contributeLegacyCommands: boolean;
   private readonly contributeConfigDefinitions: boolean;
-  private readonly toolName: string;
 
   constructor(options: WhiteInkToolOptions = {}) {
     this.id = normalizeWhiteInkLayerId(options.id, "pooder.kit.white-ink");
@@ -206,21 +202,13 @@ export class WhiteInkTool implements ExtensionDefinition {
       options.layers?.overlayLayerId,
       WHITE_INK_OVERLAY_LAYER_ID,
     );
-    this.contributeLegacyTool = options.contributeTool !== false;
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =
       options.contributeConfigurations !== false;
-    this.toolName = options.toolName || "White Ink";
-    const requireImageExtension =
-      options.requireImageExtension ?? this.contributeLegacyTool;
+    const requireImageExtension = options.requireImageExtension ?? false;
     this.activation = {
       requiresExtensions: requireImageExtension ? ["pooder.kit.image"] : [],
-      requiresServices: [
-        CANVAS_SERVICE,
-        CONFIGURATION_SERVICE,
-        TOOL_SESSION_SERVICE,
-        WORKBENCH_SERVICE,
-      ],
+      requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
     };
   }
 
@@ -342,13 +330,6 @@ export class WhiteInkTool implements ExtensionDefinition {
       },
     );
 
-    const toolSessionService =
-      context.services.getOrThrow<ToolSessionService>(TOOL_SESSION_SERVICE);
-    this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
-      this.id,
-      () => this.hasWorkingChanges,
-    );
-
     this.updateWhiteInks();
   }
 
@@ -384,25 +365,6 @@ export class WhiteInkTool implements ExtensionDefinition {
         }),
       ],
     };
-
-    if (this.contributeLegacyTool) {
-      contributions.tools = [
-        {
-          id: this.id,
-          name: this.toolName,
-          interaction: "session",
-          commands: {
-            begin: "resetWorkingWhiteInks",
-            commit: "completeWhiteInks",
-            rollback: "resetWorkingWhiteInks",
-          },
-          session: {
-            autoBegin: true,
-            leavePolicy: "block",
-          },
-        },
-      ];
-    }
 
     if (this.contributeConfigDefinitions) {
       contributions.configurations = createWhiteInkConfigurations(
