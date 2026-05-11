@@ -14,7 +14,10 @@ import {
 import { RulerTool } from "./extensions/ruler";
 import { SizeTool } from "./extensions/size";
 import { TemplateOverlayTool } from "./extensions/template-overlay";
-import { WhiteInkTool } from "./extensions/white-ink";
+import {
+  WhiteInkCapabilityExtension,
+  WhiteInkTool,
+} from "./extensions/white-ink";
 
 export const createBackgroundExtension = (
   options?: ConstructorParameters<typeof BackgroundTool>[0],
@@ -56,3 +59,7 @@ export const createSizeExtension = () => new SizeTool();
 export const createTemplateOverlayExtension = () => new TemplateOverlayTool();
 
 export const createWhiteInkExtension = () => new WhiteInkTool();
+
+export const createWhiteInkCapability = (
+  options?: ConstructorParameters<typeof WhiteInkCapabilityExtension>[0],
+) => new WhiteInkCapabilityExtension(options);

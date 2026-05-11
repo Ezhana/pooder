@@ -12,6 +12,10 @@
   `pooder.kit.dieline-geometry` capability facades so callers can detect image
   edges, apply detected dieline paths, target caller-owned layers, and upsert
   scene path elements without invoking a kit-owned dieline tool.
+- Added a typed `pooder.kit.white-ink` capability facade and capability-only
+  white ink extension that accepts caller-provided source layer ids, render
+  layer ids, and config namespaces while keeping `WhiteInkTool` as the
+  compatibility wrapper.
 
 ### Changed
 
@@ -21,6 +25,9 @@
 - Updated legacy dieline commands and workflow orchestration to delegate through
   typed edge detection, image placement, and dieline geometry facades when
   available, with command/config fallbacks preserved for compatibility.
+- Updated legacy white ink commands to delegate through the white ink
+  capability wrapper and made white ink settings namespace-aware for
+  capability-only use.
 
 ### Planning Notes
 

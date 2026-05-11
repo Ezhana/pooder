@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M4 in progress; P3.S3 next.
+Current milestone: M4 in progress; P3.S4 next.
 
 Completed:
 
@@ -51,10 +51,14 @@ Completed:
   `pooder.kit.dieline-geometry` facades to detect image edges, apply detected
   paths, target caller-owned layers, and upsert scene path elements while
   legacy dieline commands and workflow wrappers remain available.
+- P3.S3 white ink capability has been added. Applications can resolve a typed
+  `pooder.kit.white-ink` facade for white ink mask generation, print settings,
+  preview refresh, session state, and caller-owned source/target layers while
+  `WhiteInkTool` remains as the legacy tool wrapper.
 
 Next recommended slice:
 
-- P3.S3 - White Ink Capability.
+- P3.S4 - Template, Background, Size, Ruler Capabilities.
 
 Resume instruction for a new thread:
 

@@ -36,6 +36,11 @@ import { createDesignExportCommands } from "../src/extensions/design-export/comm
 import { DesignExportExtension } from "../src/extensions/design-export";
 import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
 import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config";
+import {
+  WHITE_INK_CAPABILITY_ID,
+  WhiteInkCapabilityExtension,
+  type WhiteInkCapabilityApi,
+} from "../src/extensions/white-ink";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
 import {
@@ -1205,6 +1210,64 @@ async function testDielineGeometryCapabilityExtension() {
   await runtime.dispose();
 }
 
+async function testWhiteInkCapabilityExtension() {
+  const runtime = new Pooder();
+
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.extensions.register(
+    new WhiteInkCapabilityExtension({
+      configNamespace: "storefrontWhiteInk",
+      layers: {
+        sourceLayerIds: ["app.image"],
+        whiteLayerId: "app.white-ink",
+        coverLayerId: "app.white-ink.cover",
+        overlayLayerId: "app.white-ink.overlay",
+      },
+    }),
+  );
+
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState(WHITE_INK_CAPABILITY_ID)?.state,
+    "active",
+    "white ink capability should activate without the legacy image extension",
+  );
+
+  const facade = runtime.capabilities.get<WhiteInkCapabilityApi>(
+    WHITE_INK_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("white ink capability facade should be registered");
+  }
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(WHITE_INK_CAPABILITY_ID),
+    "white ink capability registration should not require a tool",
+  );
+  assert(
+    runtime.config.getDefinition("storefrontWhiteInk.items"),
+    "white ink capability should accept caller config namespace",
+  );
+
+  facade.setPrintEnabled(false);
+  assertEqual(
+    runtime.config.get("storefrontWhiteInk.printWithWhiteInk"),
+    false,
+    "white ink capability should write print settings to caller namespace",
+  );
+  assertDeepEqual(
+    facade.getItems(),
+    [],
+    "white ink capability should expose white ink items",
+  );
+
+  await runtime.dispose();
+}
+
 async function testDielineWorkflowExtensionActivation() {
   const runtime = new Pooder();
   const commandService =
@@ -1503,6 +1566,7 @@ async function main() {
   await testImagePlacementCapabilityExtension();
   await testEdgeDetectionCapabilityExtension();
   await testDielineGeometryCapabilityExtension();
+  await testWhiteInkCapabilityExtension();
   await testDielineWorkflowExtensionActivation();
   await testDielineWorkflowExtensionCommands();
   console.log("ok");

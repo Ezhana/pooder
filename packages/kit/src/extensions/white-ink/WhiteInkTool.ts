@@ -8,6 +8,7 @@ import {
   ToolSessionService,
   WORKBENCH_SERVICE,
   WorkbenchService,
+  type ExtensionActivationSpec,
 } from "@pooder/core";
 import {
   CANVAS_SERVICE,
@@ -38,6 +39,16 @@ import {
 } from "../../shared/constants/layers";
 import { createWhiteInkCommands } from "./commands";
 import { createWhiteInkConfigurations } from "./config";
+import {
+  WHITE_INK_CAPABILITY_ID,
+  createWhiteInkCapabilityDefinition,
+  getWhiteInkConfigKey,
+  normalizeWhiteInkConfigNamespace,
+  normalizeWhiteInkLayerId,
+  type WhiteInkCapabilityApi,
+  type WhiteInkCapabilityOptions,
+  type WhiteInkMaskOptions,
+} from "./capability";
 
 export interface WhiteInkItem {
   id: string;
@@ -89,19 +100,26 @@ interface RenderSources {
   whiteScaleAdjustY: number;
 }
 
-interface UpsertWhiteInkOptions {
+export interface WhiteInkSettings {
+  id: string | null;
+  url: string;
+  sourceUrl: string;
+  opacity: number;
+  printWithWhiteInk: boolean;
+  previewImageVisible: boolean;
+}
+
+export interface UpsertWhiteInkOptions {
   id?: string;
   mode?: "auto" | "replace" | "add";
   createIfMissing?: boolean;
   addOptions?: Partial<WhiteInkItem>;
 }
 
-interface UpdateWhiteInkOptions {
+export interface UpdateWhiteInkOptions {
   target?: "auto" | "config" | "working";
 }
 
-const WHITE_INK_DEBUG_KEY = "whiteInk.debug";
-const WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY = "whiteInk.previewImageVisible";
 const WHITE_INK_DEFAULT_OPACITY = 0.85;
 const WHITE_INK_AUTO_ITEM_ID = "white-ink-auto";
 
@@ -111,21 +129,22 @@ const WHITE_INK_COVER_OPACITY_MAX = 0.65;
 const WHITE_MASK_TINT: MaskTint = { r: 255, g: 255, b: 255, key: "white" };
 const COVER_MASK_TINT: MaskTint = { r: 52, g: 136, b: 255, key: "blue" };
 
+export interface WhiteInkToolOptions extends WhiteInkCapabilityOptions {
+  id?: string;
+  contributeTool?: boolean;
+  contributeCommands?: boolean;
+  contributeConfigurations?: boolean;
+  toolName?: string;
+  requireImageExtension?: boolean;
+}
+
 export class WhiteInkTool implements ExtensionDefinition {
-  id = "pooder.kit.white-ink";
+  id: string;
 
   metadata = {
     name: "WhiteInkTool",
   };
-  activation = {
-    requiresExtensions: ["pooder.kit.image"],
-    requiresServices: [
-      CANVAS_SERVICE,
-      CONFIGURATION_SERVICE,
-      TOOL_SESSION_SERVICE,
-      WORKBENCH_SERVICE,
-    ],
-  };
+  activation: ExtensionActivationSpec;
 
   private items: WhiteInkItem[] = [];
   private workingItems: WhiteInkItem[] = [];
@@ -151,13 +170,61 @@ export class WhiteInkTool implements ExtensionDefinition {
   private overlaySpecs: RenderObjectSpec[] = [];
   private renderProducerDisposable?: { dispose: () => void };
   private readonly subscriptions = new SubscriptionBag();
+  private readonly capabilityId: string;
+  private readonly configNamespace: string;
+  private readonly sourceLayerIds: string[];
+  private readonly whiteLayerId: string;
+  private readonly coverLayerId: string;
+  private readonly overlayLayerId: string;
+  private readonly contributeLegacyTool: boolean;
+  private readonly contributeLegacyCommands: boolean;
+  private readonly contributeConfigDefinitions: boolean;
+  private readonly toolName: string;
+
+  constructor(options: WhiteInkToolOptions = {}) {
+    this.id = normalizeWhiteInkLayerId(options.id, "pooder.kit.white-ink");
+    this.capabilityId = options.capabilityId || WHITE_INK_CAPABILITY_ID;
+    this.configNamespace = normalizeWhiteInkConfigNamespace(
+      options.configNamespace,
+    );
+    this.sourceLayerIds = options.layers?.sourceLayerIds?.map((id) =>
+      normalizeWhiteInkLayerId(id, IMAGE_OBJECT_LAYER_ID),
+    ) || [IMAGE_OBJECT_LAYER_ID];
+    this.whiteLayerId = normalizeWhiteInkLayerId(
+      options.layers?.whiteLayerId,
+      WHITE_INK_OBJECT_LAYER_ID,
+    );
+    this.coverLayerId = normalizeWhiteInkLayerId(
+      options.layers?.coverLayerId,
+      WHITE_INK_COVER_LAYER_ID,
+    );
+    this.overlayLayerId = normalizeWhiteInkLayerId(
+      options.layers?.overlayLayerId,
+      WHITE_INK_OVERLAY_LAYER_ID,
+    );
+    this.contributeLegacyTool = options.contributeTool !== false;
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+    this.contributeConfigDefinitions =
+      options.contributeConfigurations !== false;
+    this.toolName = options.toolName || "White Ink";
+    const requireImageExtension =
+      options.requireImageExtension ?? this.contributeLegacyTool;
+    this.activation = {
+      requiresExtensions: requireImageExtension ? ["pooder.kit.image"] : [],
+      requiresServices: [
+        CANVAS_SERVICE,
+        CONFIGURATION_SERVICE,
+        TOOL_SESSION_SERVICE,
+        WORKBENCH_SERVICE,
+      ],
+    };
+  }
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -165,18 +232,21 @@ export class WhiteInkTool implements ExtensionDefinition {
         passes: [
           {
             id: WHITE_INK_COVER_LAYER_ID,
+            targetLayerId: this.coverLayerId,
             stack: 220,
             order: 0,
             objects: this.coverSpecs,
           },
           {
             id: WHITE_INK_OBJECT_LAYER_ID,
+            targetLayerId: this.whiteLayerId,
             stack: 221,
             order: 0,
             objects: this.whiteSpecs,
           },
           {
             id: WHITE_INK_OVERLAY_LAYER_ID,
+            targetLayerId: this.overlayLayerId,
             stack: 790,
             order: 0,
             objects: this.overlaySpecs,
@@ -186,7 +256,11 @@ export class WhiteInkTool implements ExtensionDefinition {
       { priority: 260 },
     );
 
-    this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
+    this.subscriptions.on(
+      context.eventBus,
+      "tool:activated",
+      this.onToolActivated,
+    );
     this.subscriptions.on(
       context.eventBus,
       "scene:layout:change",
@@ -212,13 +286,15 @@ export class WhiteInkTool implements ExtensionDefinition {
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    this.applyCommittedItems(configService.get("whiteInk.items", []) || []);
+    this.applyCommittedItems(
+      configService.get(this.getConfigKey("items"), []) || [],
+    );
     this.printWithWhiteInk = !!configService.get(
-      "whiteInk.printWithWhiteInk",
+      this.getConfigKey("printWithWhiteInk"),
       true,
     );
     this.previewImageVisible = !!configService.get(
-      WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
+      this.getConfigKey("previewImageVisible"),
       true,
     );
 
@@ -229,19 +305,19 @@ export class WhiteInkTool implements ExtensionDefinition {
       (e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
 
-        if (e.key === "whiteInk.items") {
+        if (e.key === this.getConfigKey("items")) {
           this.applyCommittedItems(e.value || []);
           this.updateWhiteInks();
           return;
         }
 
-        if (e.key === "whiteInk.printWithWhiteInk") {
+        if (e.key === this.getConfigKey("printWithWhiteInk")) {
           this.printWithWhiteInk = !!e.value;
           this.updateWhiteInks();
           return;
         }
 
-        if (e.key === WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY) {
+        if (e.key === this.getConfigKey("previewImageVisible")) {
           this.previewImageVisible = !!e.value;
           this.updateWhiteInks();
           return;
@@ -252,7 +328,7 @@ export class WhiteInkTool implements ExtensionDefinition {
           return;
         }
 
-        if (e.key === WHITE_INK_DEBUG_KEY) {
+        if (e.key === this.getConfigKey("debug")) {
           return;
         }
 
@@ -262,9 +338,8 @@ export class WhiteInkTool implements ExtensionDefinition {
       },
     );
 
-    const toolSessionService = context.services.getOrThrow<ToolSessionService>(
-      TOOL_SESSION_SERVICE,
-    );
+    const toolSessionService =
+      context.services.getOrThrow<ToolSessionService>(TOOL_SESSION_SERVICE);
     this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
       this.id,
       () => this.hasWorkingChanges,
@@ -291,11 +366,26 @@ export class WhiteInkTool implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      tools: [
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createWhiteInkCapabilityDefinition(this.getWhiteInkFacade(), {
+          capabilityId: this.capabilityId,
+          configNamespace: this.configNamespace,
+          layers: {
+            sourceLayerIds: this.sourceLayerIds,
+            whiteLayerId: this.whiteLayerId,
+            coverLayerId: this.coverLayerId,
+            overlayLayerId: this.overlayLayerId,
+          },
+        }),
+      ],
+    };
+
+    if (this.contributeLegacyTool) {
+      contributions.tools = [
         {
           id: this.id,
-          name: "White Ink",
+          name: this.toolName,
           interaction: "session",
           commands: {
             begin: "resetWorkingWhiteInks",
@@ -307,10 +397,20 @@ export class WhiteInkTool implements ExtensionDefinition {
             leavePolicy: "block",
           },
         },
-      ],
-      configurations: createWhiteInkConfigurations(),
-      commands: createWhiteInkCommands(this),
-    };
+      ];
+    }
+
+    if (this.contributeConfigDefinitions) {
+      contributions.configurations = createWhiteInkConfigurations(
+        this.configNamespace,
+      );
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = createWhiteInkCommands(this);
+    }
+
+    return contributions;
   }
 
   private onToolActivated = (event: {
@@ -334,19 +434,19 @@ export class WhiteInkTool implements ExtensionDefinition {
 
   private onObjectAdded = (e: any) => {
     const layerId = e?.target?.data?.layerId;
-    if (layerId !== IMAGE_OBJECT_LAYER_ID) return;
+    if (!this.sourceLayerIds.includes(layerId)) return;
     this.updateWhiteInks();
   };
 
   private onObjectModified = (e: any) => {
     const layerId = e?.target?.data?.layerId;
-    if (layerId !== IMAGE_OBJECT_LAYER_ID) return;
+    if (!this.sourceLayerIds.includes(layerId)) return;
     this.updateWhiteInks();
   };
 
   private onObjectRemoved = (e: any) => {
     const layerId = e?.target?.data?.layerId;
-    if (layerId !== IMAGE_OBJECT_LAYER_ID) return;
+    if (!this.sourceLayerIds.includes(layerId)) return;
     this.updateWhiteInks();
   };
 
@@ -356,7 +456,7 @@ export class WhiteInkTool implements ExtensionDefinition {
 
   private migrateLegacyConfigIfNeeded(configService: ConfigurationService) {
     if (this.items.length > 0) return;
-    const legacyMask = configService.get("whiteInk.customMask", "");
+    const legacyMask = configService.get(this.getConfigKey("customMask"), "");
     if (typeof legacyMask !== "string" || legacyMask.length === 0) return;
 
     const item = this.normalizeItem({
@@ -367,7 +467,7 @@ export class WhiteInkTool implements ExtensionDefinition {
 
     this.applyCommittedItems([item]);
     runDeferredConfigUpdate(this, () => {
-      configService.update("whiteInk.items", this.items);
+      configService.update(this.getConfigKey("items"), this.items);
     });
   }
 
@@ -386,7 +486,7 @@ export class WhiteInkTool implements ExtensionDefinition {
   }
 
   private isDebugEnabled(): boolean {
-    return !!this.getConfig<boolean>(WHITE_INK_DEBUG_KEY, false);
+    return !!this.getConfig<boolean>(this.getConfigKey("debug"), false);
   }
 
   private debug(message: string, payload?: any) {
@@ -398,7 +498,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     console.log(`[WhiteInkTool] ${message}`, payload);
   }
 
-  private resolveSourceUrl(item?: Partial<WhiteInkItem> | null): string {
+  public resolveSourceUrl(item?: Partial<WhiteInkItem> | null): string {
     if (!item) return "";
     if (typeof item.sourceUrl === "string" && item.sourceUrl.length > 0) {
       return item.sourceUrl;
@@ -425,11 +525,11 @@ export class WhiteInkTool implements ExtensionDefinition {
       .filter((item) => !!item.id);
   }
 
-  private cloneItems(items: WhiteInkItem[]): WhiteInkItem[] {
+  public cloneItems(items: WhiteInkItem[]): WhiteInkItem[] {
     return this.normalizeItems((items || []).map((item) => ({ ...item })));
   }
 
-  private getEffectiveWhiteInkItem(items: WhiteInkItem[]): WhiteInkItem | null {
+  public getEffectiveWhiteInkItem(items: WhiteInkItem[]): WhiteInkItem | null {
     const normalized = this.cloneItems(items || []);
     if (normalized.length > 0) {
       return normalized[0];
@@ -470,7 +570,7 @@ export class WhiteInkTool implements ExtensionDefinition {
   public setWhiteInkPrintEnabled(enabled: boolean) {
     this.printWithWhiteInk = !!enabled;
     this.getConfigServiceOrThrow().update(
-      "whiteInk.printWithWhiteInk",
+      this.getConfigKey("printWithWhiteInk"),
       this.printWithWhiteInk,
     );
     this.updateWhiteInks();
@@ -480,14 +580,29 @@ export class WhiteInkTool implements ExtensionDefinition {
   public setWhiteInkPreviewImageVisible(visible: boolean) {
     this.previewImageVisible = !!visible;
     this.getConfigServiceOrThrow().update(
-      WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY,
+      this.getConfigKey("previewImageVisible"),
       this.previewImageVisible,
     );
     this.updateWhiteInks();
     return { ok: true };
   }
 
-  private resolveReplaceTargetId(explicitId?: string | null): string | null {
+  public getWhiteInkSettings(): WhiteInkSettings {
+    const first = this.getEffectiveWhiteInkItem(this.items);
+    const primarySource = this.getPrimaryImageSource();
+    const sourceUrl = this.resolveSourceUrl(first) || primarySource;
+
+    return {
+      id: first?.id || null,
+      url: sourceUrl,
+      sourceUrl,
+      opacity: WHITE_INK_DEFAULT_OPACITY,
+      printWithWhiteInk: this.printWithWhiteInk,
+      previewImageVisible: this.previewImageVisible,
+    };
+  }
+
+  public resolveReplaceTargetId(explicitId?: string | null): string | null {
     const has = (id: string | null | undefined) =>
       !!id && this.items.some((item) => item.id === id);
     if (has(explicitId)) return explicitId as string;
@@ -522,7 +637,7 @@ export class WhiteInkTool implements ExtensionDefinition {
         const configService = this.context?.services.get<ConfigurationService>(
           CONFIGURATION_SERVICE,
         );
-        configService?.update("whiteInk.items", this.items);
+        configService?.update(this.getConfigKey("items"), this.items);
 
         if (!skipCanvasUpdate) {
           this.updateWhiteInks();
@@ -532,7 +647,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     );
   }
 
-  private async addWhiteInkEntry(
+  public async addWhiteInkEntry(
     url: string,
     options?: Partial<WhiteInkItem>,
   ): Promise<string> {
@@ -550,7 +665,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     return id;
   }
 
-  private async upsertWhiteInkEntry(
+  public async upsertWhiteInkEntry(
     url: string,
     options: UpsertWhiteInkOptions = {},
   ): Promise<{ id: string; mode: "replace" | "add" }> {
@@ -588,7 +703,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     this.updateWhiteInks();
   }
 
-  private async updateWhiteInkItem(
+  public async updateWhiteInkItem(
     id: string,
     updates: Partial<WhiteInkItem>,
     options: UpdateWhiteInkOptions = {},
@@ -603,7 +718,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     this.updateWhiteInkInConfig(id, updates);
   }
 
-  private updateWhiteInkInWorking(id: string, updates: Partial<WhiteInkItem>) {
+  public updateWhiteInkInWorking(id: string, updates: Partial<WhiteInkItem>) {
     let changed = false;
     const next = this.workingItems.map((item) => {
       if (item.id !== id) return item;
@@ -639,7 +754,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     this.updateConfig(next);
   }
 
-  private removeWhiteInk(id: string) {
+  public removeWhiteInk(id: string) {
     const removed = this.items.find((item) => item.id === id);
     const next = this.items.filter((item) => item.id !== id);
     if (next.length === this.items.length) return;
@@ -648,14 +763,14 @@ export class WhiteInkTool implements ExtensionDefinition {
     this.updateConfig(next);
   }
 
-  private clearWhiteInks() {
+  public clearWhiteInks() {
     this.sourceSizeCache.clear();
     this.previewMaskBySource.clear();
     this.pendingPreviewMaskBySource.clear();
     this.updateConfig([]);
   }
 
-  private async completeWhiteInks() {
+  public async completeWhiteInks() {
     this.updateConfig(this.cloneItems(this.workingItems));
     this.hasWorkingChanges = false;
     return { ok: true };
@@ -675,7 +790,7 @@ export class WhiteInkTool implements ExtensionDefinition {
   private getImageObjects(): any[] {
     if (!this.canvasService) return [];
     return this.canvasService.canvas.getObjects().filter((obj: any) => {
-      return obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID;
+      return this.sourceLayerIds.includes(obj?.data?.layerId);
     }) as any[];
   }
 
@@ -683,7 +798,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     return this.getImageObjects()[0];
   }
 
-  private getPrimaryImageSource(): string {
+  public getPrimaryImageSource(): string {
     return this.getCurrentSrc(this.getPrimaryImageObject()) || "";
   }
 
@@ -1006,7 +1121,7 @@ export class WhiteInkTool implements ExtensionDefinition {
         type: "rect",
         data: {
           id: "white-ink.cropMask.top",
-          layerId: WHITE_INK_OVERLAY_LAYER_ID,
+          layerId: this.overlayLayerId,
           type: "white-ink-mask",
         },
         layout: {
@@ -1031,7 +1146,7 @@ export class WhiteInkTool implements ExtensionDefinition {
         type: "rect",
         data: {
           id: "white-ink.cropMask.bottom",
-          layerId: WHITE_INK_OVERLAY_LAYER_ID,
+          layerId: this.overlayLayerId,
           type: "white-ink-mask",
         },
         layout: {
@@ -1056,7 +1171,7 @@ export class WhiteInkTool implements ExtensionDefinition {
         type: "rect",
         data: {
           id: "white-ink.cropMask.left",
-          layerId: WHITE_INK_OVERLAY_LAYER_ID,
+          layerId: this.overlayLayerId,
           type: "white-ink-mask",
         },
         layout: {
@@ -1081,7 +1196,7 @@ export class WhiteInkTool implements ExtensionDefinition {
         type: "rect",
         data: {
           id: "white-ink.cropMask.right",
-          layerId: WHITE_INK_OVERLAY_LAYER_ID,
+          layerId: this.overlayLayerId,
           type: "white-ink-mask",
         },
         layout: {
@@ -1110,7 +1225,7 @@ export class WhiteInkTool implements ExtensionDefinition {
         type: "rect",
         data: {
           id: "white-ink.cropFrame",
-          layerId: WHITE_INK_OVERLAY_LAYER_ID,
+          layerId: this.overlayLayerId,
           type: "white-ink-frame",
         },
         layout: {
@@ -1192,8 +1307,22 @@ export class WhiteInkTool implements ExtensionDefinition {
     });
   }
 
-  private updateWhiteInks() {
+  public updateWhiteInks() {
     void this.updateWhiteInksAsync();
+  }
+
+  public resetWhiteInkSession() {
+    this.workingItems = this.cloneItems(this.items);
+    this.hasWorkingChanges = false;
+    this.updateWhiteInks();
+  }
+
+  public async generateMask(
+    sourceUrl: string,
+    options: WhiteInkMaskOptions = {},
+  ): Promise<string> {
+    const tint = options.tint === "cover" ? COVER_MASK_TINT : WHITE_MASK_TINT;
+    return await this.getPreviewMaskSource(sourceUrl, tint);
   }
 
   private async updateWhiteInksAsync() {
@@ -1227,7 +1356,7 @@ export class WhiteInkTool implements ExtensionDefinition {
               snapshot,
               sources.whiteSrc,
               WHITE_INK_DEFAULT_OPACITY,
-              WHITE_INK_OBJECT_LAYER_ID,
+              this.whiteLayerId,
               "white-ink",
               sources.whiteScaleAdjustX,
               sources.whiteScaleAdjustY,
@@ -1242,7 +1371,7 @@ export class WhiteInkTool implements ExtensionDefinition {
               snapshot,
               sources.coverSrc,
               this.computeCoverOpacity(),
-              WHITE_INK_COVER_LAYER_ID,
+              this.coverLayerId,
               "white-ink-cover",
             ),
           ];
@@ -1259,6 +1388,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     this.overlaySpecs = frameSpecs;
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
+    if (!this.canvasService) return;
     this.canvasService.requestRenderAll();
   }
 
@@ -1363,5 +1493,31 @@ export class WhiteInkTool implements ExtensionDefinition {
       image.onerror = () => reject(new Error("white-ink-image-load-failed"));
       image.src = sourceUrl;
     });
+  }
+
+  private getWhiteInkFacade(): WhiteInkCapabilityApi {
+    return {
+      addWhiteInk: (url, options) => this.addWhiteInkEntry(url, options),
+      clearWhiteInks: () => this.clearWhiteInks(),
+      completeSession: () => this.completeWhiteInks(),
+      generateMask: (sourceUrl, options) =>
+        this.generateMask(sourceUrl, options),
+      getItems: () => this.cloneItems(this.items),
+      getSettings: () => this.getWhiteInkSettings(),
+      getWorkingItems: () => this.cloneItems(this.workingItems),
+      refresh: () => this.updateWhiteInks(),
+      removeWhiteInk: (id) => this.removeWhiteInk(id),
+      resetSession: () => this.resetWhiteInkSession(),
+      setPreviewImageVisible: (visible) =>
+        this.setWhiteInkPreviewImageVisible(visible),
+      setPrintEnabled: (enabled) => this.setWhiteInkPrintEnabled(enabled),
+      updateWhiteInk: (id, updates, options) =>
+        this.updateWhiteInkItem(id, updates, options),
+      upsertWhiteInk: (url, options) => this.upsertWhiteInkEntry(url, options),
+    };
+  }
+
+  private getConfigKey(path: string): string {
+    return getWhiteInkConfigKey(this.configNamespace, path);
   }
 }

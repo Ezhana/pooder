@@ -1,8 +1,5 @@
 import type { CommandContribution } from "@pooder/core";
 
-const WHITE_INK_PREVIEW_IMAGE_VISIBLE_KEY = "whiteInk.previewImageVisible";
-const WHITE_INK_DEFAULT_OPACITY = 0.85;
-
 export function createWhiteInkCommands(tool: any): CommandContribution[] {
   return [
     {
@@ -31,20 +28,7 @@ export function createWhiteInkCommands(tool: any): CommandContribution[] {
       command: "getWhiteInkSettings",
       id: "getWhiteInkSettings",
       title: "Get White Ink Settings",
-      handler: () => {
-        const first = tool.getEffectiveWhiteInkItem(tool.items);
-        const primarySource = tool.getPrimaryImageSource();
-        const sourceUrl = tool.resolveSourceUrl(first) || primarySource;
-
-        return {
-          id: first?.id || null,
-          url: sourceUrl,
-          sourceUrl,
-          opacity: WHITE_INK_DEFAULT_OPACITY,
-          printWithWhiteInk: tool.printWithWhiteInk,
-          previewImageVisible: tool.previewImageVisible,
-        };
-      },
+      handler: () => tool.getWhiteInkSettings(),
     },
     {
       command: "setWhiteInkPrintEnabled",
@@ -109,9 +93,7 @@ export function createWhiteInkCommands(tool: any): CommandContribution[] {
       id: "resetWorkingWhiteInks",
       title: "Reset Working White Inks",
       handler: () => {
-        tool.workingItems = tool.cloneItems(tool.items);
-        tool.hasWorkingChanges = false;
-        tool.updateWhiteInks();
+        tool.resetWhiteInkSession();
       },
     },
     {

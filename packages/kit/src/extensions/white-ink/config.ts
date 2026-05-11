@@ -1,27 +1,31 @@
 import type { ConfigurationContribution } from "@pooder/core";
+import { getWhiteInkConfigKey } from "./capability";
 
-export function createWhiteInkConfigurations(): ConfigurationContribution[] {
+export function createWhiteInkConfigurations(
+  namespace?: string,
+): ConfigurationContribution[] {
+  const configKey = (path: string) => getWhiteInkConfigKey(namespace, path);
   return [
     {
-      id: "whiteInk.items",
+      id: configKey("items"),
       type: "array",
       label: "White Ink Images",
       default: [],
     },
     {
-      id: "whiteInk.printWithWhiteInk",
+      id: configKey("printWithWhiteInk"),
       type: "boolean",
       label: "Preview White Ink",
       default: true,
     },
     {
-      id: "whiteInk.previewImageVisible",
+      id: configKey("previewImageVisible"),
       type: "boolean",
       label: "Show Cover During White Ink Preview",
       default: true,
     },
     {
-      id: "whiteInk.debug",
+      id: configKey("debug"),
       type: "boolean",
       label: "White Ink Debug Log",
       default: false,
