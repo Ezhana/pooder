@@ -76,6 +76,11 @@ import {
   normalizePointInGeometry,
   resolveFeaturePosition,
 } from "../src/extensions/featureCoordinates";
+import {
+  FEATURE_CAPABILITY_ID,
+  createFeatureCapabilityDefinition,
+  type FeatureCapabilityApi,
+} from "../src/extensions/feature/capability";
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
 import { WhiteInkTool } from "../src/extensions/white-ink/WhiteInkTool";
 import { DielineWorkflowExtension } from "../src/extensions/dieline-workflow";
@@ -1593,6 +1598,173 @@ async function testRulerCapabilityExtension() {
   await runtime.dispose();
 }
 
+async function testFeatureCapabilityDefinition() {
+  const runtime = new Pooder();
+  let committedFeatures: any[] = [];
+  let workingFeatures: any[] = [];
+  const fakeFacade: FeatureCapabilityApi = {
+    addDoubleLayerHole: () => true,
+    addFeature: (type = "subtract") => {
+      workingFeatures.push({
+        id: `feature-${workingFeatures.length + 1}`,
+        operation: type,
+        shape: "rect",
+        x: 0.5,
+        y: 0,
+      });
+      return true;
+    },
+    beginSession: async () => ({ ok: true }),
+    clearFeatures: () => {
+      workingFeatures = [];
+      return true;
+    },
+    completeSession: () => ({ ok: true }),
+    getFeatures: () => committedFeatures,
+    getMarkerRenderSpecs: () => [],
+    getWorkingFeatures: () => workingFeatures,
+    projectPlacements: (placements, _geometry, scale) =>
+      placements.map((placement) => ({
+        ...placement.feature,
+        x: placement.normalizedX,
+        y: placement.normalizedY,
+        width:
+          placement.feature.width !== undefined
+            ? placement.feature.width * scale
+            : undefined,
+        height:
+          placement.feature.height !== undefined
+            ? placement.feature.height * scale
+            : undefined,
+      })),
+    refresh: () => {},
+    replaceFeatures: (features, options = {}) => {
+      if (options.target === "committed" || options.target === "both") {
+        committedFeatures = features;
+      }
+      if (
+        !options.target ||
+        options.target === "working" ||
+        options.target === "both"
+      ) {
+        workingFeatures = features;
+      }
+      return { ok: true };
+    },
+    resetSession: async () => ({ ok: true }),
+    resolvePlacements: (features, geometry) =>
+      features.map((feature) => ({
+        feature,
+        normalizedX: feature.x,
+        normalizedY: feature.y,
+        centerX: geometry.x - geometry.width / 2 + feature.x * geometry.width,
+        centerY: geometry.y - geometry.height / 2 + feature.y * geometry.height,
+      })),
+    rollbackSession: async () => ({ ok: true }),
+    updateWorkingGroupPosition: () => ({ ok: true }),
+  };
+
+  runtime.extensions.register({
+    id: "test.feature-capability",
+    activate() {},
+    contribute() {
+      return {
+        capabilities: [
+          createFeatureCapabilityDefinition(fakeFacade, {
+            configNamespace: "storefrontFeature",
+            layers: {
+              imageClipLayerIds: ["app.image"],
+              markerLayerId: "app.feature.markers",
+              sessionDielineLayerId: "app.feature.dieline",
+            },
+          }),
+        ],
+      };
+    },
+  });
+
+  await runtime.extensions.flushActivation();
+
+  const facade =
+    runtime.capabilities.get<FeatureCapabilityApi>(FEATURE_CAPABILITY_ID);
+  if (!facade) {
+    throw new Error("feature capability facade should be registered");
+  }
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(FEATURE_CAPABILITY_ID),
+    "feature capability registration should not require a tool",
+  );
+
+  const feature = {
+    id: "feature-1",
+    operation: "subtract" as const,
+    shape: "rect" as const,
+    x: 0.25,
+    y: 0.5,
+    width: 10,
+    height: 12,
+    renderBehavior: "edge" as const,
+  };
+  facade.replaceFeatures([feature], { target: "both" });
+  assertEqual(
+    facade.getFeatures()[0]?.id,
+    "feature-1",
+    "feature capability should expose committed features",
+  );
+
+  await facade.beginSession();
+  assert(
+    facade.addFeature("add"),
+    "feature capability should expose feature creation",
+  );
+  assertEqual(
+    facade.getWorkingFeatures().length,
+    2,
+    "feature capability should maintain working feature state",
+  );
+  assert(
+    facade.clearFeatures(),
+    "feature capability should expose working feature clearing",
+  );
+  assertEqual(
+    facade.getWorkingFeatures().length,
+    0,
+    "feature capability should clear working feature state",
+  );
+
+  const placements = facade.resolvePlacements([feature], {
+    shape: "rect",
+    shapeStyle: { fitMode: "stretch" },
+    x: 50,
+    y: 40,
+    width: 100,
+    height: 80,
+    radius: 0,
+    scale: 1,
+  });
+  assertEqual(
+    Math.round(placements[0]?.centerX || 0),
+    25,
+    "feature capability should resolve feature placement geometry",
+  );
+  const projected = facade.projectPlacements(
+    placements,
+    { x: 50, y: 40, width: 100, height: 80 },
+    2,
+  );
+  assertEqual(
+    projected[0]?.width,
+    20,
+    "feature capability should project placed feature dimensions",
+  );
+
+  await runtime.dispose();
+}
+
 async function testDielineWorkflowExtensionActivation() {
   const runtime = new Pooder();
   const commandService =
@@ -1897,6 +2069,7 @@ async function main() {
   await testTemplateOverlayCapabilityExtension();
   await testSizeCapabilityExtension();
   await testRulerCapabilityExtension();
+  await testFeatureCapabilityDefinition();
   await testDielineWorkflowExtensionActivation();
   await testDielineWorkflowExtensionCommands();
   console.log("ok");

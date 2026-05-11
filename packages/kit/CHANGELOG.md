@@ -23,6 +23,10 @@
 - Added a typed `pooder.kit.design-export` capability facade and
   capability-only design export extension for layer, element, scene-rect, and
   frame exports while keeping the legacy `exportImage` command bridge.
+- Added a typed `pooder.kit.feature` capability facade and capability-only
+  feature extension for feature geometry, constraints, placement, projection,
+  and session render support while keeping `FeatureTool` as the compatibility
+  wrapper.
 
 ### Changed
 
@@ -41,6 +45,8 @@
   namespaces or layer ids where supported.
 - Updated the legacy design export wrapper to register the typed export facade
   while preserving the existing `exportImage` command behavior.
+- Updated the legacy feature wrapper to register the typed feature facade while
+  preserving existing feature tool and command behavior.
 
 ### Planning Notes
 

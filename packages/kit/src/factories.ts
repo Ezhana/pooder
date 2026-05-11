@@ -12,7 +12,10 @@ import {
   DielineTool,
 } from "./extensions/dieline";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
-import { FeatureTool } from "./extensions/feature";
+import {
+  FeatureCapabilityExtension,
+  FeatureTool,
+} from "./extensions/feature";
 import {
   ImagePlacementCapabilityExtension,
   ImageTool,
@@ -62,6 +65,10 @@ export const createDielineGeometryCapability = (
 export const createFeatureExtension = (
   options?: ConstructorParameters<typeof FeatureTool>[0],
 ) => new FeatureTool(options);
+
+export const createFeatureCapability = (
+  options?: ConstructorParameters<typeof FeatureCapabilityExtension>[0],
+) => new FeatureCapabilityExtension(options);
 
 export const createImageExtension = () => new ImageTool();
 

@@ -8,6 +8,7 @@ import {
   ConfigurationService,
   TOOL_SESSION_SERVICE,
   ToolSessionService,
+  type ExtensionActivationSpec,
 } from "@pooder/core";
 import { Pattern } from "fabric";
 import {
@@ -19,7 +20,10 @@ import {
 } from "@pooder/platform-browser";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
-import { resolveFeaturePlacements } from "../featurePlacement";
+import {
+  projectPlacedFeatures,
+  resolveFeaturePlacements,
+} from "../featurePlacement";
 import {
   computeSceneLayout,
   readSizeState,
@@ -35,6 +39,18 @@ import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import { cloneWithJson } from "../../shared/runtime/sessionState";
 import { buildDielineRenderBundle } from "../dieline/renderBuilder";
 import { readDielineState } from "../dieline/model";
+import {
+  createFeatureCapabilityDefinition,
+  FEATURE_CAPABILITY_ID,
+  getFeatureConfigKey,
+  normalizeFeatureConfigNamespace,
+  normalizeFeatureLayerId,
+  type FeatureCapabilityApi,
+  type FeatureCapabilityOptions,
+  type FeatureCompletionResult,
+  type FeatureOperation,
+  type ReplaceFeaturesOptions,
+} from "./capability";
 const FEATURE_STROKE_WIDTH = 2;
 const DEFAULT_RECT_SIZE = 10;
 const DEFAULT_CIRCLE_RADIUS = 5;
@@ -69,21 +85,22 @@ interface MarkerData {
   memberOffsets?: GroupMemberOffset[];
 }
 
+export interface FeatureToolOptions extends FeatureCapabilityOptions {
+  id?: string;
+  contributeTool?: boolean;
+  contributeCommands?: boolean;
+  toolName?: string;
+  requireDielineExtension?: boolean;
+  features?: ConstraintFeature[];
+}
+
 export class FeatureTool implements ExtensionDefinition {
-  id = "pooder.kit.feature";
+  id: string;
 
   public metadata = {
     name: "FeatureTool",
   };
-  activation = {
-    requiresExtensions: ["pooder.kit.dieline"],
-    requiresServices: [
-      CANVAS_SERVICE,
-      CONFIGURATION_SERVICE,
-      TOOL_SESSION_SERVICE,
-      COMMAND_SERVICE,
-    ],
-  };
+  activation: ExtensionActivationSpec;
 
   private workingFeatures: ConstraintFeature[] = [];
   private canvasService?: CanvasService;
@@ -100,6 +117,16 @@ export class FeatureTool implements ExtensionDefinition {
   private sessionDielineEffects: RenderEffectSpec[] = [];
   private renderSeq = 0;
   private readonly subscriptions = new SubscriptionBag();
+  private readonly capabilityId: string;
+  private readonly configNamespace: string;
+  private readonly featuresConfigKey: string;
+  private readonly markerLayerId: string;
+  private readonly baseDielineLayerId: string;
+  private readonly sessionDielineLayerId: string;
+  private readonly imageClipLayerIds: string[];
+  private readonly contributeLegacyTool: boolean;
+  private readonly contributeLegacyCommands: boolean;
+  private readonly toolName: string;
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
@@ -109,14 +136,49 @@ export class FeatureTool implements ExtensionDefinition {
 
   private currentGeometry: DielineGeometry | null = null;
 
-  constructor(
-    options?: Partial<{
-      features: ConstraintFeature[];
-    }>,
-  ) {
-    if (options) {
-      Object.assign(this, options);
-    }
+  constructor(options: FeatureToolOptions = {}) {
+    this.id = normalizeFeatureLayerId(options.id, FEATURE_CAPABILITY_ID);
+    this.capabilityId = options.capabilityId || FEATURE_CAPABILITY_ID;
+    this.configNamespace = normalizeFeatureConfigNamespace(
+      options.configNamespace,
+    );
+    this.featuresConfigKey = getFeatureConfigKey(
+      this.configNamespace,
+      "features",
+    );
+    this.markerLayerId = normalizeFeatureLayerId(
+      options.layers?.markerLayerId,
+      FEATURE_OVERLAY_LAYER_ID,
+    );
+    this.baseDielineLayerId = normalizeFeatureLayerId(
+      options.layers?.baseDielineLayerId,
+      DIELINE_LAYER_ID,
+    );
+    this.sessionDielineLayerId = normalizeFeatureLayerId(
+      options.layers?.sessionDielineLayerId,
+      FEATURE_DIELINE_LAYER_ID,
+    );
+    this.imageClipLayerIds = options.layers?.imageClipLayerIds?.map((id) =>
+      normalizeFeatureLayerId(id, IMAGE_OBJECT_LAYER_ID),
+    ) || [IMAGE_OBJECT_LAYER_ID];
+    this.contributeLegacyTool = options.contributeTool !== false;
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+    this.toolName = options.toolName || "Feature";
+    this.workingFeatures = this.cloneFeatures(options.features || []);
+
+    const requireDielineExtension =
+      options.requireDielineExtension ?? this.contributeLegacyTool;
+    this.activation = {
+      requiresExtensions: requireDielineExtension ? ["pooder.kit.dieline"] : [],
+      requiresServices: this.contributeLegacyTool
+        ? [
+            CANVAS_SERVICE,
+            CONFIGURATION_SERVICE,
+            TOOL_SESSION_SERVICE,
+            COMMAND_SERVICE,
+          ]
+        : [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+    };
   }
 
   activate(context: ExtensionContext) {
@@ -133,6 +195,7 @@ export class FeatureTool implements ExtensionDefinition {
         const passes: RenderPassSpec[] = [
           {
             id: FEATURE_OVERLAY_LAYER_ID,
+            targetLayerId: this.markerLayerId,
             stack: 880,
             order: 0,
             replace: true,
@@ -143,6 +206,7 @@ export class FeatureTool implements ExtensionDefinition {
           passes.push(
             {
               id: DIELINE_LAYER_ID,
+              targetLayerId: this.baseDielineLayerId,
               stack: 700,
               order: 0,
               replace: false,
@@ -151,6 +215,7 @@ export class FeatureTool implements ExtensionDefinition {
             },
             {
               id: FEATURE_DIELINE_LAYER_ID,
+              targetLayerId: this.sessionDielineLayerId,
               stack: 705,
               order: 0,
               replace: true,
@@ -167,7 +232,7 @@ export class FeatureTool implements ExtensionDefinition {
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    const features = (configService.get("dieline.features", []) ||
+    const features = (configService.get(this.featuresConfigKey, []) ||
       []) as ConstraintFeature[];
     this.workingFeatures = this.cloneFeatures(features);
     this.hasWorkingChanges = false;
@@ -177,7 +242,7 @@ export class FeatureTool implements ExtensionDefinition {
       (e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
 
-        if (e.key === "dieline.features") {
+        if (e.key === this.featuresConfigKey) {
           if (this.isFeatureSessionActive && this.hasFeatureSessionDraft()) {
             return;
           }
@@ -192,20 +257,25 @@ export class FeatureTool implements ExtensionDefinition {
           return;
         }
 
-        if (e.key.startsWith("size.") || e.key.startsWith("dieline.")) {
+        if (
+          e.key.startsWith("size.") ||
+          e.key.startsWith(`${this.configNamespace}.`)
+        ) {
           void this.refreshGeometry();
           this.redraw({ enforceConstraints: true });
         }
       },
     );
 
-    const toolSessionService = context.services.getOrThrow<ToolSessionService>(
-      TOOL_SESSION_SERVICE,
-    );
-    this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
-      this.id,
-      () => this.hasWorkingChanges,
-    );
+    if (this.contributeLegacyTool) {
+      const toolSessionService = context.services.getOrThrow<ToolSessionService>(
+        TOOL_SESSION_SERVICE,
+      );
+      this.dirtyTrackerDisposable = toolSessionService.registerDirtyTracker(
+        this.id,
+        () => this.hasWorkingChanges,
+      );
+    }
 
     this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
 
@@ -236,15 +306,33 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private isSessionVisible(): boolean {
-    return this.isToolActive && this.isFeatureSessionActive;
+    const workflowVisible = this.contributeLegacyTool
+      ? this.isToolActive
+      : true;
+    return workflowVisible && this.isFeatureSessionActive;
   }
 
   contribute(): ExtensionContributions {
-    return {
-      tools: [
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createFeatureCapabilityDefinition(this.getFeatureFacade(), {
+          capabilityId: this.capabilityId,
+          configNamespace: this.configNamespace,
+          layers: {
+            baseDielineLayerId: this.baseDielineLayerId,
+            imageClipLayerIds: this.imageClipLayerIds,
+            markerLayerId: this.markerLayerId,
+            sessionDielineLayerId: this.sessionDielineLayerId,
+          },
+        }),
+      ],
+    };
+
+    if (this.contributeLegacyTool) {
+      contributions.tools = [
         {
           id: this.id,
-          name: "Feature",
+          name: this.toolName,
           interaction: "session",
           commands: {
             begin: "beginFeatureSession",
@@ -256,34 +344,22 @@ export class FeatureTool implements ExtensionDefinition {
             leavePolicy: "block",
           },
         },
-      ],
-      commands: [
+      ];
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = [
         {
           id: "beginFeatureSession",
           command: "beginFeatureSession",
           title: "Begin Feature Session",
-          handler: async () => {
-            if (this.isFeatureSessionActive) {
-              return { ok: true };
-            }
-            if (!this.hasFeatureSessionDraft()) {
-              const original = this.getCommittedFeatures();
-              this.sessionOriginalFeatures = this.cloneFeatures(original);
-              this.setWorkingFeatures(this.cloneFeatures(original));
-              this.hasWorkingChanges = false;
-            }
-            this.isFeatureSessionActive = true;
-            await this.refreshGeometry();
-            this.redraw();
-            this.emitWorkingChange();
-            return { ok: true };
-          },
+          handler: async () => this.beginFeatureSession(),
         },
         {
           id: "addFeature",
           command: "addFeature",
           title: "Add Edge Feature",
-          handler: (type: "add" | "subtract" = "subtract") => {
+          handler: (type: FeatureOperation = "subtract") => {
             return this.addFeature(type);
           },
         },
@@ -307,31 +383,13 @@ export class FeatureTool implements ExtensionDefinition {
           id: "clearFeatures",
           command: "clearFeatures",
           title: "Clear Features",
-          handler: () => {
-            this.setWorkingFeatures([]);
-            this.hasWorkingChanges = true;
-            this.redraw();
-            this.emitWorkingChange();
-            return true;
-          },
+          handler: () => this.clearFeatures(),
         },
         {
           id: "rollbackFeatureSession",
           command: "rollbackFeatureSession",
           title: "Rollback Feature Session",
-          handler: async () => {
-            const original = this.cloneFeatures(
-              this.sessionOriginalFeatures || this.getCommittedFeatures(),
-            );
-            await this.refreshGeometry();
-            this.setWorkingFeatures(original);
-            this.hasWorkingChanges = false;
-            this.clearFeatureSessionState();
-            this.redraw();
-            this.emitWorkingChange();
-            this.updateCommittedFeatures(original);
-            return { ok: true };
-          },
+          handler: async () => this.rollbackFeatureSession(),
         },
         {
           id: "resetWorkingFeatures",
@@ -358,8 +416,10 @@ export class FeatureTool implements ExtensionDefinition {
             return this.completeFeatures();
           },
         },
-      ],
-    };
+      ];
+    }
+
+    return contributions;
   }
 
   private cloneFeatures(features: ConstraintFeature[]): ConstraintFeature[] {
@@ -372,7 +432,7 @@ export class FeatureTool implements ExtensionDefinition {
 
   private getCommittedFeatures(): ConstraintFeature[] {
     const configService = this.getConfigService();
-    const committed = (configService?.get("dieline.features", []) ||
+    const committed = (configService?.get(this.featuresConfigKey, []) ||
       []) as ConstraintFeature[];
     return this.cloneFeatures(committed);
   }
@@ -382,10 +442,103 @@ export class FeatureTool implements ExtensionDefinition {
     if (!configService) return;
     this.isUpdatingConfig = true;
     try {
-      configService.update("dieline.features", next);
+      configService.update(this.featuresConfigKey, next);
     } finally {
       this.isUpdatingConfig = false;
     }
+  }
+
+  private getFeatureFacade(): FeatureCapabilityApi {
+    return {
+      addDoubleLayerHole: () => this.addDoubleLayerHole(),
+      addFeature: (type = "subtract") => this.addFeature(type),
+      beginSession: () => this.beginFeatureSession(),
+      clearFeatures: () => this.clearFeatures(),
+      completeSession: () => this.completeFeatures(),
+      getFeatures: () => this.getCommittedFeatures(),
+      getMarkerRenderSpecs: () => this.markerSpecs.map((spec) => ({ ...spec })),
+      getWorkingFeatures: () => this.cloneFeatures(this.workingFeatures),
+      projectPlacements: (placements, geometry, scale) =>
+        projectPlacedFeatures(placements, geometry, scale),
+      refresh: () => {
+        void this.refreshGeometry();
+        this.redraw({ enforceConstraints: true });
+      },
+      replaceFeatures: (features, options) =>
+        this.replaceFeatures(features, options),
+      resetSession: () => this.resetWorkingFeaturesFromSource().then(() => ({
+        ok: true,
+      })),
+      resolvePlacements: (features, geometry) =>
+        resolveFeaturePlacements(features, geometry),
+      rollbackSession: () => this.rollbackFeatureSession(),
+      updateWorkingGroupPosition: (groupId, x, y) =>
+        this.updateWorkingGroupPosition(groupId, x, y),
+    };
+  }
+
+  private async beginFeatureSession(): Promise<{ ok: boolean }> {
+    if (this.isFeatureSessionActive) {
+      return { ok: true };
+    }
+    if (!this.hasFeatureSessionDraft()) {
+      const original = this.getCommittedFeatures();
+      this.sessionOriginalFeatures = this.cloneFeatures(original);
+      this.setWorkingFeatures(this.cloneFeatures(original));
+      this.hasWorkingChanges = false;
+    }
+    this.isFeatureSessionActive = true;
+    await this.refreshGeometry();
+    this.redraw();
+    this.emitWorkingChange();
+    return { ok: true };
+  }
+
+  private async rollbackFeatureSession(): Promise<{ ok: boolean }> {
+    const original = this.cloneFeatures(
+      this.sessionOriginalFeatures || this.getCommittedFeatures(),
+    );
+    await this.refreshGeometry();
+    this.setWorkingFeatures(original);
+    this.hasWorkingChanges = false;
+    this.clearFeatureSessionState();
+    this.redraw();
+    this.emitWorkingChange();
+    this.updateCommittedFeatures(original);
+    return { ok: true };
+  }
+
+  private replaceFeatures(
+    features: ConstraintFeature[],
+    options: ReplaceFeaturesOptions = {},
+  ): { ok: boolean } {
+    const next = this.cloneFeatures(features);
+    const target = options.target || "working";
+
+    if (target === "working" || target === "both") {
+      this.setWorkingFeatures(this.cloneFeatures(next));
+      this.hasWorkingChanges = options.markDirty ?? target === "working";
+    }
+
+    if (target === "committed" || target === "both") {
+      this.updateCommittedFeatures(this.cloneFeatures(next));
+      if (target === "committed") {
+        this.setWorkingFeatures(this.cloneFeatures(next));
+        this.hasWorkingChanges = false;
+      }
+    }
+
+    this.redraw({ enforceConstraints: true });
+    this.emitWorkingChange();
+    return { ok: true };
+  }
+
+  private clearFeatures(): boolean {
+    this.setWorkingFeatures([]);
+    this.hasWorkingChanges = true;
+    this.redraw();
+    this.emitWorkingChange();
+    return true;
   }
 
   private hasFeatureSessionDraft(): boolean {
@@ -488,14 +641,7 @@ export class FeatureTool implements ExtensionDefinition {
     return { ok: true };
   }
 
-  private completeFeatures(): {
-    ok: boolean;
-    issues?: Array<{
-      featureId: string;
-      groupId?: string;
-      reason: string;
-    }>;
-  } {
+  private completeFeatures(): FeatureCompletionResult {
     const configService = this.context?.services.get<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
@@ -535,7 +681,7 @@ export class FeatureTool implements ExtensionDefinition {
     return { ok: true };
   }
 
-  private addFeature(type: "add" | "subtract") {
+  private addFeature(type: FeatureOperation) {
     if (!this.canvasService) return false;
 
     const newFeature: ConstraintFeature = {
@@ -729,7 +875,7 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private getDraggableMarkerTarget(target: any): any | null {
-    if (!this.isFeatureSessionActive || !this.isToolActive) return null;
+    if (!this.isSessionVisible()) return null;
     if (!target || target.data?.type !== "feature-marker") return null;
     if (target.data?.markerRole !== "handle") return null;
     return target;
@@ -911,7 +1057,7 @@ export class FeatureTool implements ExtensionDefinition {
       return { specs: [], effects: [] };
     }
 
-    const state = readDielineState(configService);
+    const state = readDielineState(configService, undefined, this.configNamespace);
     state.features = this.cloneFeatures(this.workingFeatures);
 
     return buildDielineRenderBundle({
@@ -922,7 +1068,7 @@ export class FeatureTool implements ExtensionDefinition {
         sceneLayout.canvasHeight || this.canvasService.canvas.height || 600,
       hasImages: this.hasImageItems(),
       createHatchPattern: (color) => this.createHatchPattern(color),
-      clipTargetPassIds: [IMAGE_OBJECT_LAYER_ID],
+      clipTargetPassIds: this.imageClipLayerIds,
       clipVisibility: { op: "const", value: true },
       ids: {
         inside: "feature.session.dieline.inside",
@@ -1072,7 +1218,7 @@ export class FeatureTool implements ExtensionDefinition {
       (feature.operation === "subtract" ? [4, 4] : undefined);
 
     const interactive = options.markerRole === "handle";
-    const sessionVisible = this.isToolActive && this.isFeatureSessionActive;
+    const sessionVisible = this.isSessionVisible();
     const baseData = this.buildMarkerData(marker, options);
     const commonProps = {
       visible: sessionVisible,

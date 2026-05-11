@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M4 in progress; P3.S6 next.
+Current milestone: M5 in progress; P4.S1 next.
 
 Completed:
 
@@ -65,10 +65,14 @@ Completed:
   `pooder.kit.design-export` facade for layer, element, scene-rect, and frame
   exports while the legacy `exportImage` command remains available as a
   compatibility bridge.
+- P3.S6 feature capability has been added. Applications can resolve a typed
+  `pooder.kit.feature` facade for feature geometry, constraints, placement,
+  projection, and session render support while `FeatureTool` remains as the
+  legacy tool wrapper.
 
 Next recommended slice:
 
-- P3.S6 - Feature Capability.
+- P4.S1 - Storefront Tool Catalog.
 
 Resume instruction for a new thread:
 
