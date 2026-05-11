@@ -3,6 +3,7 @@ import Disposable from "./disposable";
 import { ExtensionContributions } from "./contribution";
 import EventBus from "./event";
 import { Service, ServiceIdentifier, isServiceToken } from "./service";
+import CapabilityRegistryService from "./services/CapabilityRegistryService";
 import CommandService from "./services/CommandService";
 import ConfigurationService from "./services/ConfigurationService";
 import ToolRegistryService from "./services/ToolRegistryService";
@@ -47,6 +48,7 @@ interface BlockingResult extends ExtensionStateDetails {
 }
 
 interface NormalizedExtensionContributions {
+  capabilities: NonNullable<ExtensionContributions["capabilities"]>;
   configurations: NonNullable<ExtensionContributions["configurations"]>;
   commands: NonNullable<ExtensionContributions["commands"]>;
   tools: NonNullable<ExtensionContributions["tools"]>;
@@ -64,6 +66,7 @@ interface ExtensionRecord {
 
 interface ExtensionManagerDependencies {
   eventBus: EventBus;
+  capabilityRegistry: CapabilityRegistryService;
   configurationService: ConfigurationService;
   commandService: CommandService;
   toolRegistry: ToolRegistryService;
@@ -72,6 +75,7 @@ interface ExtensionManagerDependencies {
 class ExtensionManager {
   private readonly context: ExtensionContext;
   private readonly eventBus: EventBus;
+  private readonly capabilityRegistry: CapabilityRegistryService;
   private readonly configurationService: ConfigurationService;
   private readonly commandService: CommandService;
   private readonly toolRegistry: ToolRegistryService;
@@ -84,6 +88,7 @@ class ExtensionManager {
   ) {
     this.context = context;
     this.eventBus = dependencies.eventBus;
+    this.capabilityRegistry = dependencies.capabilityRegistry;
     this.configurationService = dependencies.configurationService;
     this.commandService = dependencies.commandService;
     this.toolRegistry = dependencies.toolRegistry;
@@ -102,6 +107,7 @@ class ExtensionManager {
       contributions = this.normalizeContributions(extension.contribute?.());
     } catch (error) {
       const record = this.createRecord(extension, {
+        capabilities: [],
         configurations: [],
         commands: [],
         tools: [],
@@ -229,6 +235,7 @@ class ExtensionManager {
     contributions?: ExtensionContributions,
   ): NormalizedExtensionContributions {
     return {
+      capabilities: [...(contributions?.capabilities ?? [])],
       configurations: [...(contributions?.configurations ?? [])],
       commands: [...(contributions?.commands ?? [])],
       tools: [...(contributions?.tools ?? [])],
@@ -294,6 +301,15 @@ class ExtensionManager {
     const disposables: Disposable[] = [];
 
     try {
+      record.contributions.capabilities.forEach((capability) => {
+        disposables.push(
+          this.capabilityRegistry.registerCapability(
+            record.definition.id,
+            capability,
+          ),
+        );
+      });
+
       record.contributions.commands.forEach((command) => {
         if (!command.handler) {
           return;

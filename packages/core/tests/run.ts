@@ -1,4 +1,5 @@
 import {
+  CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   Pooder,
   TOOL_REGISTRY_SERVICE,
@@ -193,6 +194,8 @@ async function testCycleDetection() {
 async function testActivationFailureDoesNotLeakDynamicContributions() {
   await withRuntime(async (runtime) => {
     const activationOrder: string[] = [];
+    let capabilityRegistrations = 0;
+    let capabilityUnregistrations = 0;
     const good = createCommandExtension("good", "good.command", "good", {
       onActivate: () => activationOrder.push("good"),
     });
@@ -201,6 +204,17 @@ async function testActivationFailureDoesNotLeakDynamicContributions() {
       id: "bad",
       contribute() {
         return {
+          capabilities: [
+            {
+              id: "bad.capability",
+              onRegister: () => {
+                capabilityRegistrations += 1;
+              },
+              onUnregister: () => {
+                capabilityUnregistrations += 1;
+              },
+            },
+          ],
           commands: [
             {
               id: "bad.command",
@@ -229,11 +243,117 @@ async function testActivationFailureDoesNotLeakDynamicContributions() {
     assertDeepEqual(activationOrder, ["bad", "good"]);
     assertEqual(runtime.extensions.getState("bad")?.state, "failed");
     assertEqual(runtime.extensions.getState("good")?.state, "active");
+    assertEqual(capabilityRegistrations, 1);
+    assertEqual(capabilityUnregistrations, 1);
+    assertEqual(
+      runtime.services
+        .getOrThrow(CAPABILITY_REGISTRY_SERVICE)
+        .hasCapability("bad.capability"),
+      false,
+    );
     assertEqual(
       runtime.services.getOrThrow(COMMAND_SERVICE).getCommand("bad.command"),
       undefined,
     );
     assertEqual(await runtime.commands.execute("good.command"), "good");
+  });
+}
+
+async function testCapabilityContributionWithoutTool() {
+  await withRuntime(async (runtime) => {
+    const facade = {
+      describe: () => "capability-ready",
+    };
+
+    runtime.extensions.register({
+      id: "capability-only",
+      contribute() {
+        return {
+          capabilities: [
+            {
+              id: "pooder.test.capability-only",
+              metadata: {
+                name: "Capability Only",
+                tags: ["test"],
+              },
+              commands: [
+                "capabilityOnly.execute",
+                {
+                  id: "capabilityOnly.inspect",
+                  title: "Inspect Capability",
+                },
+              ],
+              facade,
+            },
+          ],
+        };
+      },
+      activate() {},
+    });
+
+    await runtime.extensions.flushActivation();
+
+    const capabilityRegistry = runtime.services.getOrThrow(
+      CAPABILITY_REGISTRY_SERVICE,
+    );
+    const capability = capabilityRegistry.getCapability<{
+      describe(): string;
+    }>("pooder.test.capability-only");
+
+    assertEqual(
+      runtime.extensions.getState("capability-only")?.state,
+      "active",
+    );
+    assertEqual(capability?.extensionId, "capability-only");
+    assertEqual(capability?.metadata?.tags?.[0], "test");
+    assertEqual(
+      capabilityRegistry
+        .getFacade<typeof facade>("pooder.test.capability-only")
+        ?.describe(),
+      "capability-ready",
+    );
+    assertEqual(
+      runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).listTools().length,
+      0,
+    );
+  });
+}
+
+async function testCapabilityCanCoexistWithLegacyTool() {
+  await withRuntime(async (runtime) => {
+    runtime.extensions.register({
+      id: "capability-with-tool",
+      contribute() {
+        return {
+          capabilities: [
+            {
+              id: "pooder.test.capability-with-tool",
+            },
+          ],
+          tools: [
+            {
+              id: "legacy.tool",
+              name: "Legacy Tool",
+              interaction: "instant",
+            },
+          ],
+        };
+      },
+      activate() {},
+    });
+
+    await runtime.extensions.flushActivation();
+
+    assertEqual(
+      runtime.services
+        .getOrThrow(CAPABILITY_REGISTRY_SERVICE)
+        .hasCapability("pooder.test.capability-with-tool"),
+      true,
+    );
+    assertEqual(
+      runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).hasTool("legacy.tool"),
+      true,
+    );
   });
 }
 
@@ -243,6 +363,11 @@ async function testUnregisterCleansDefinitionsCommandsAndTools() {
       id: "cleanup",
       contribute() {
         return {
+          capabilities: [
+            {
+              id: "cleanup.capability",
+            },
+          ],
           configurations: [
             {
               id: "cleanup.value",
@@ -283,6 +408,12 @@ async function testUnregisterCleansDefinitionsCommandsAndTools() {
       runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).hasTool("cleanup.tool"),
       true,
     );
+    assertEqual(
+      runtime.services
+        .getOrThrow(CAPABILITY_REGISTRY_SERVICE)
+        .hasCapability("cleanup.capability"),
+      true,
+    );
 
     const removed = await runtime.extensions.unregister("cleanup");
     assertEqual(removed, true);
@@ -295,6 +426,78 @@ async function testUnregisterCleansDefinitionsCommandsAndTools() {
     assertEqual(
       runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).hasTool("cleanup.tool"),
       false,
+    );
+    assertEqual(
+      runtime.services
+        .getOrThrow(CAPABILITY_REGISTRY_SERVICE)
+        .hasCapability("cleanup.capability"),
+      false,
+    );
+  });
+}
+
+async function testDuplicateCapabilityIdsFailWithoutLeakingContributions() {
+  await withRuntime(async (runtime) => {
+    runtime.extensions.register(
+      createCommandExtension("first-capability", "first.command", "first", {
+        contribute: () => ({
+          capabilities: [
+            {
+              id: "pooder.test.duplicate",
+            },
+          ],
+          commands: [
+            {
+              id: "first.command",
+              command: "first.command",
+              title: "first.command",
+              handler: () => "first",
+            },
+          ],
+        }),
+      }),
+    );
+    runtime.extensions.register(
+      createCommandExtension("second-capability", "second.command", "second", {
+        contribute: () => ({
+          capabilities: [
+            {
+              id: "pooder.test.duplicate",
+            },
+          ],
+          commands: [
+            {
+              id: "second.command",
+              command: "second.command",
+              title: "second.command",
+              handler: () => "second",
+            },
+          ],
+        }),
+      }),
+    );
+
+    await runtime.extensions.flushActivation();
+
+    const capabilityRegistry = runtime.services.getOrThrow(
+      CAPABILITY_REGISTRY_SERVICE,
+    );
+    assertEqual(
+      runtime.extensions.getState("first-capability")?.state,
+      "active",
+    );
+    assertEqual(
+      runtime.extensions.getState("second-capability")?.state,
+      "failed",
+    );
+    assertEqual(
+      capabilityRegistry.getCapability("pooder.test.duplicate")?.extensionId,
+      "first-capability",
+    );
+    assertEqual(await runtime.commands.execute("first.command"), "first");
+    assertEqual(
+      runtime.services.getOrThrow(COMMAND_SERVICE).getCommand("second.command"),
+      undefined,
     );
   });
 }
@@ -312,8 +515,20 @@ async function main() {
       testActivationFailureDoesNotLeakDynamicContributions,
     ],
     [
-      "unregister cleans up config definitions, commands, and tools",
+      "registers capabilities without toolbar tools",
+      testCapabilityContributionWithoutTool,
+    ],
+    [
+      "allows capabilities to coexist with legacy tools",
+      testCapabilityCanCoexistWithLegacyTool,
+    ],
+    [
+      "unregister cleans up config definitions, capabilities, commands, and tools",
       testUnregisterCleansDefinitionsCommandsAndTools,
+    ],
+    [
+      "fails duplicate capability ids without leaking dynamic contributions",
+      testDuplicateCapabilityIdsFailWithoutLeakingContributions,
     ],
   ];
 

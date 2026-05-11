@@ -14,6 +14,7 @@ import {
 } from "./extension";
 import {
   CORE_SERVICE_TOKENS,
+  CapabilityRegistryService,
   CommandService,
   ConfigurationService,
   ToolRegistryService,
@@ -24,6 +25,7 @@ import { ExtensionContext } from "./context";
 
 export * from "./extension";
 export * from "./context";
+export * from "./capability";
 export * from "./contribution";
 export * from "./service";
 export * from "./services";
@@ -103,6 +105,7 @@ export class Pooder {
       this.serviceRegistry.has(identifier),
   };
   private readonly commandService = new CommandService();
+  private readonly capabilityRegistryService = new CapabilityRegistryService();
   private readonly configurationService = new ConfigurationService();
   private readonly toolRegistryService = new ToolRegistryService();
   private readonly toolSessionService = new ToolSessionService({
@@ -123,6 +126,10 @@ export class Pooder {
   readonly workbench: RuntimeWorkbenchApi;
 
   constructor() {
+    this.registerService(
+      this.capabilityRegistryService,
+      CORE_SERVICE_TOKENS.CAPABILITY_REGISTRY,
+    );
     this.registerService(this.commandService, CORE_SERVICE_TOKENS.COMMAND);
     this.registerService(
       this.configurationService,
@@ -154,6 +161,7 @@ export class Pooder {
 
     this.extensionManager = new ExtensionManager(context, {
       eventBus: this.eventBus,
+      capabilityRegistry: this.capabilityRegistryService,
       configurationService: this.configurationService,
       commandService: this.commandService,
       toolRegistry: this.toolRegistryService,

@@ -1,10 +1,13 @@
 import { createServiceToken } from "../service";
+import type CapabilityRegistryService from "./CapabilityRegistryService";
 import type CommandService from "./CommandService";
 import type ConfigurationService from "./ConfigurationService";
 import type ToolRegistryService from "./ToolRegistryService";
 import type ToolSessionService from "./ToolSessionService";
 import type WorkbenchService from "./WorkbenchService";
 
+export const CAPABILITY_REGISTRY_SERVICE =
+  createServiceToken<CapabilityRegistryService>("CapabilityRegistryService");
 export const COMMAND_SERVICE = createServiceToken<CommandService>(
   "CommandService",
 );
@@ -19,6 +22,7 @@ export const WORKBENCH_SERVICE =
   createServiceToken<WorkbenchService>("WorkbenchService");
 
 export const CORE_SERVICE_TOKENS = {
+  CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
   COMMAND: COMMAND_SERVICE,
   CONFIGURATION: CONFIGURATION_SERVICE,
   TOOL_REGISTRY: TOOL_REGISTRY_SERVICE,

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Added `CapabilityRegistryService`, public capability definition types, and
+  `ExtensionContributions.capabilities` so extensions can expose discoverable
+  capabilities without registering toolbar tools.
+
 ### Planning Notes
 
 - Track the capability-first architecture migration. Core is planned to own the

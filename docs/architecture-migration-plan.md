@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M0 complete; M1 next.
+Current milestone: M1 in progress; P1.S2 next.
 
 Completed:
 
@@ -18,11 +18,12 @@ Completed:
   `docs/kit-tool-coupling-inventory.md`.
 - P0.S3 naming and contribution policy has been published in
   `docs/naming-and-contribution-policy.md`.
-- No runtime code has been changed for the migration yet.
+- P1.S1 core capability registry has been added. Extensions can now contribute
+  typed capability definitions separately from toolbar tools.
 
 Next recommended slice:
 
-- P1.S1 - Capability Registry.
+- P1.S2 - Headless Scene Contract.
 
 Resume instruction for a new thread:
 

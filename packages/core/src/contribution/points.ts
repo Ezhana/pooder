@@ -1,3 +1,5 @@
+import type { CapabilityDefinition } from "../capability";
+
 export interface CommandContribution {
   id: string;
   command: string;
@@ -52,6 +54,7 @@ export interface ConfigurationContribution {
 }
 
 export interface ExtensionContributions {
+  capabilities?: CapabilityDefinition[];
   configurations?: ConfigurationContribution[];
   commands?: CommandContribution[];
   tools?: ToolContribution[];
