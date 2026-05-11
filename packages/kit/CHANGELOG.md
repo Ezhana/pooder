@@ -47,6 +47,9 @@
   while preserving the existing `exportImage` command behavior.
 - Updated the legacy feature wrapper to register the typed feature facade while
   preserving existing feature tool and command behavior.
+- Updated capability-only image and white ink sessions to honor app-owned
+  activation events so storefront workflows can call typed capability facades
+  without requiring kit-contributed workbench tools.
 
 ### Planning Notes
 

@@ -897,8 +897,15 @@ export class ImageTool implements ExtensionDefinition {
   private syncToolActiveFromWorkbench(fallbackId?: string | null) {
     const wb = this.context?.services.get<WorkbenchService>(WORKBENCH_SERVICE);
     const activeId = wb?.activeToolId;
-    if (typeof activeId === "string" || activeId === null) {
+    if (typeof activeId === "string") {
       this.isToolActive = activeId === this.id;
+      return;
+    }
+    if (fallbackId !== undefined) {
+      this.isToolActive = fallbackId === this.id;
+      return;
+    }
+    if (activeId === null) {
       return;
     }
     this.isToolActive = fallbackId === this.id;

@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M5 in progress; P4.S2 next.
+Current milestone: M5 in progress; P4.S3 next.
 
 Completed:
 
@@ -73,10 +73,14 @@ Completed:
   owns tool ids, labels, icons, visibility, session policies, workflow handler
   keys, and legacy kit id aliases while activity bar rendering reads app tool
   metadata only.
+- P4.S2 editor controller capability wiring has been added. Storefront editor
+  workflows now call typed kit capability facades directly and emit
+  app-owned activation events for capability-only sessions without requiring
+  kit-contributed workbench tools.
 
 Next recommended slice:
 
-- P4.S2 - Editor Controller Capability Wiring.
+- P4.S3 - Dieline Workflow Move.
 
 Resume instruction for a new thread:
 
