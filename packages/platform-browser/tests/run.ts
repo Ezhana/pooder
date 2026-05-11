@@ -4,6 +4,7 @@ import {
   attachBrowserHost,
   CANVAS_SERVICE,
   CanvasService,
+  evaluateVisibilityExpr,
   FABRIC_SCENE_ADAPTER,
   FabricSceneAdapter,
   resolveViewPaddingPx,
@@ -160,6 +161,7 @@ function createCanvasServiceForRenderTests() {
   service.managedPassMetas = new Map();
   service.managedPassEffects = [];
   service.layerStackingMetas = new Map();
+  service.visibilityContextValues = new Map();
   service.createFabricObject = async (spec: RenderObjectSpec) => {
     const obj = new FakeFabricObject(spec.type);
     obj.set({
@@ -628,6 +630,135 @@ async function testRenderProducerVisibilityIsSourceScoped() {
   );
 }
 
+function testVisibilityDslSupportsWorkflowAndContextPredicates() {
+  const context = {
+    contextValues: new Map<string, unknown>([
+      ["workflow.mode", "image-edit"],
+      ["toolbar.visible", true],
+    ]),
+    hasAnyActiveWorkflowSession: () => true,
+    isWorkflowSessionActive: (workflowId: string) =>
+      workflowId === "app.image-edit",
+    layers: new Map<string, { exists: boolean; objectCount: number }>(),
+  };
+
+  assert(
+    evaluateVisibilityExpr(
+      { op: "contextEquals", key: "workflow.mode", value: "image-edit" },
+      context,
+    ) === true,
+    "contextEquals true failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "contextTruthy", key: "toolbar.visible" },
+      context,
+    ) === true,
+    "contextTruthy true failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "workflowSessionActive", workflowId: "app.image-edit" },
+      context,
+    ) === true,
+    "workflowSessionActive true failed",
+  );
+  assert(
+    evaluateVisibilityExpr({ op: "anyWorkflowSessionActive" }, context) ===
+      true,
+    "anyWorkflowSessionActive true failed",
+  );
+  assert(
+    evaluateVisibilityExpr(
+      { op: "workflowSessionActive", workflowId: "pooder.kit.image" },
+      context,
+    ) === false,
+    "workflowSessionActive false failed",
+  );
+}
+
+async function testRenderProducerVisibilityUsesContextValues() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+
+  service.registerRenderProducer("pooder.kit.test", () => ({
+    passes: [
+      {
+        id: "context.render",
+        visibility: {
+          op: "contextEquals",
+          key: "workflow.mode",
+          value: "image-edit",
+        },
+        objects: [rectSpec("context-rect")],
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  const object = canvas.objects.find((obj) => obj.data.id === "context-rect");
+  assert(object, "context-gated object should render");
+  assertEqual(
+    object.visible,
+    false,
+    "missing visibility context value should hide producer output",
+  );
+
+  service.setVisibilityContextValue("workflow.mode", "image-edit", {
+    render: false,
+  });
+  assertEqual(
+    object.visible,
+    true,
+    "matching visibility context value should show producer output",
+  );
+
+  service.deleteVisibilityContextValue("workflow.mode", { render: false });
+  assertEqual(
+    object.visible,
+    false,
+    "deleted visibility context value should hide producer output",
+  );
+}
+
+async function testRenderProducerVisibilityUsesWorkflowSessions() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+  let activeWorkflowId: string | null = null;
+  (service as any).workflowSessionService = {
+    hasActiveSession: (workflowId: string) => workflowId === activeWorkflowId,
+    hasAnyActiveSession: () => activeWorkflowId !== null,
+  };
+
+  service.registerRenderProducer("pooder.kit.test", () => ({
+    passes: [
+      {
+        id: "workflow.render",
+        visibility: {
+          op: "workflowSessionActive",
+          workflowId: "app.image-edit",
+        },
+        objects: [rectSpec("workflow-rect")],
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  const object = canvas.objects.find((obj) => obj.data.id === "workflow-rect");
+  assert(object, "workflow-gated object should render");
+  assertEqual(
+    object.visible,
+    false,
+    "inactive workflow session should hide producer output",
+  );
+
+  activeWorkflowId = "app.image-edit";
+  await service.flushRenderFromProducers();
+  assertEqual(
+    object.visible,
+    true,
+    "active workflow session should show producer output",
+  );
+}
+
 async function testRenderProducerTargetLayerUsesStoredLayerOrder() {
   const { canvas, service } = createCanvasServiceForRenderTests();
 
@@ -688,6 +819,9 @@ async function main() {
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
   await testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope();
   await testRenderProducerVisibilityIsSourceScoped();
+  testVisibilityDslSupportsWorkflowAndContextPredicates();
+  await testRenderProducerVisibilityUsesContextValues();
+  await testRenderProducerVisibilityUsesWorkflowSessions();
   await testRenderProducerTargetLayerUsesStoredLayerOrder();
   testViewPaddingResolvesResponsively();
 }

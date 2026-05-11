@@ -7,6 +7,9 @@ export interface VisibilityLayerState {
 
 export interface VisibilityEvalContext {
   activeToolId?: string | null;
+  contextValues?: Map<string, unknown> | Record<string, unknown>;
+  isWorkflowSessionActive?: (workflowId: string) => boolean;
+  hasAnyActiveWorkflowSession?: () => boolean;
   isSessionActive?: (toolId: string) => boolean;
   hasAnyActiveSession?: () => boolean;
   layers: Map<string, VisibilityLayerState>;
@@ -31,6 +34,23 @@ function layerState(
   return context.layers.get(layerId) || { exists: false, objectCount: 0 };
 }
 
+function readContextValue(
+  context: VisibilityEvalContext,
+  key: string,
+): unknown {
+  const normalizedKey = String(key || "").trim();
+  if (!normalizedKey || !context.contextValues) return undefined;
+  if (context.contextValues instanceof Map) {
+    return context.contextValues.get(normalizedKey);
+  }
+  return Object.prototype.hasOwnProperty.call(
+    context.contextValues,
+    normalizedKey,
+  )
+    ? context.contextValues[normalizedKey]
+    : undefined;
+}
+
 export function evaluateVisibilityExpr(
   expr: VisibilityExpr | undefined,
   context: VisibilityEvalContext,
@@ -39,6 +59,28 @@ export function evaluateVisibilityExpr(
 
   if (expr.op === "const") {
     return Boolean(expr.value);
+  }
+
+  if (expr.op === "contextTruthy") {
+    return Boolean(readContextValue(context, expr.key));
+  }
+
+  if (expr.op === "contextEquals") {
+    return Object.is(readContextValue(context, expr.key), expr.value);
+  }
+
+  if (expr.op === "workflowSessionActive") {
+    const workflowId = String(expr.workflowId || "").trim();
+    if (!workflowId) return false;
+    return context.isWorkflowSessionActive
+      ? context.isWorkflowSessionActive(workflowId)
+      : false;
+  }
+
+  if (expr.op === "anyWorkflowSessionActive") {
+    return context.hasAnyActiveWorkflowSession
+      ? context.hasAnyActiveWorkflowSession()
+      : false;
   }
 
   if (expr.op === "activeToolIn") {

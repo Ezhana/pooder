@@ -50,6 +50,10 @@ export type LayerObjectCountComparator = ">" | ">=" | "==" | "<" | "<=";
 
 export type VisibilityExpr =
   | { op: "const"; value: boolean }
+  | { op: "contextTruthy"; key: string }
+  | { op: "contextEquals"; key: string; value: unknown }
+  | { op: "workflowSessionActive"; workflowId: string }
+  | { op: "anyWorkflowSessionActive" }
   | { op: "activeToolIn"; ids: string[] }
   | { op: "sessionActive"; toolId: string }
   | { op: "anySessionActive" }

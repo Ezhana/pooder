@@ -10,6 +10,8 @@
 - Added layer-targeted render producer passes so capabilities can render into
   caller-created layers through scoped sources while preserving scene layer
   stacking and compatibility pass ids.
+- Added tool-free render visibility predicates for caller-owned context values
+  and workflow sessions while preserving legacy tool predicates.
 
 ### Planning Notes
 

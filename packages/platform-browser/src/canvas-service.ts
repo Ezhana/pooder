@@ -7,6 +7,8 @@ import {
   ToolSessionService,
   WORKBENCH_SERVICE,
   WorkbenchService,
+  WORKFLOW_SESSION_SERVICE,
+  WorkflowSessionService,
 } from "@pooder/core";
 import { ViewportSystem } from "./viewport-system";
 import type {
@@ -96,6 +98,7 @@ export default class CanvasService implements Service {
   private eventBus?: EventBus;
   private workbenchService?: WorkbenchService;
   private toolSessionService?: ToolSessionService;
+  private workflowSessionService?: WorkflowSessionService;
 
   private renderProducers: Map<string, RenderProducerEntry> = new Map();
   private producerOrder = 0;
@@ -109,6 +112,7 @@ export default class CanvasService implements Service {
   private managedPassMetas: Map<string, ManagedPassMeta> = new Map();
   private managedPassEffects: ResolvedClipPathEffectSpec[] = [];
   private layerStackingMetas: Map<string, CanvasPassStackingMeta> = new Map();
+  private visibilityContextValues: Map<string, unknown> = new Map();
 
   private canvasForwardersBound = false;
   private readonly forwardSelectionCreated = (e: any) => {
@@ -131,12 +135,10 @@ export default class CanvasService implements Service {
   };
 
   private readonly onToolActivated = () => {
-    this.applyManagedPassVisibility();
-    void this.applyManagedPassEffects(undefined, { render: true });
+    this.refreshManagedVisibility();
   };
   private readonly onToolSessionChanged = () => {
-    this.applyManagedPassVisibility();
-    void this.applyManagedPassEffects(undefined, { render: true });
+    this.refreshManagedVisibility();
   };
   private readonly onCanvasObjectChanged = () => {
     if (this.producerApplyInProgress) return;
@@ -171,6 +173,7 @@ export default class CanvasService implements Service {
     this.context = context;
     this.workbenchService = context.get(WORKBENCH_SERVICE);
     this.toolSessionService = context.get(TOOL_SESSION_SERVICE);
+    this.workflowSessionService = context.get(WORKFLOW_SESSION_SERVICE);
     this.setEventBus(context.eventBus);
     this.attachContextEvents(context.eventBus);
   }
@@ -178,6 +181,7 @@ export default class CanvasService implements Service {
   private attachContextEvents(eventBus: EventBus) {
     eventBus.on("tool:activated", this.onToolActivated);
     eventBus.on("tool:session:change", this.onToolSessionChanged);
+    eventBus.on("workflow:session:change", this.onToolSessionChanged);
     eventBus.on("object:added", this.onCanvasObjectChanged);
     eventBus.on("object:removed", this.onCanvasObjectChanged);
   }
@@ -185,6 +189,7 @@ export default class CanvasService implements Service {
   private detachContextEvents(eventBus: EventBus) {
     eventBus.off("tool:activated", this.onToolActivated);
     eventBus.off("tool:session:change", this.onToolSessionChanged);
+    eventBus.off("workflow:session:change", this.onToolSessionChanged);
     eventBus.off("object:added", this.onCanvasObjectChanged);
     eventBus.off("object:removed", this.onCanvasObjectChanged);
   }
@@ -217,7 +222,9 @@ export default class CanvasService implements Service {
     this.context = undefined;
     this.workbenchService = undefined;
     this.toolSessionService = undefined;
+    this.workflowSessionService = undefined;
     this.producerFlushRequested = false;
+    this.visibilityContextValues.clear();
     this.canvas.dispose();
   }
 
@@ -569,11 +576,69 @@ export default class CanvasService implements Service {
     return this.toolSessionService?.hasAnyActiveSession() ?? false;
   }
 
+  private isWorkflowSessionActive(workflowId: string): boolean {
+    if (!this.workflowSessionService) return false;
+    return this.workflowSessionService.hasActiveSession(workflowId);
+  }
+
+  private hasAnyActiveWorkflowSession(): boolean {
+    return this.workflowSessionService?.hasAnyActiveSession() ?? false;
+  }
+
+  private refreshManagedVisibility(
+    options: { render?: boolean } = {},
+  ): boolean {
+    const changed = this.applyManagedPassVisibility(options);
+    void this.applyManagedPassEffects(undefined, { render: options.render });
+    return changed;
+  }
+
+  setVisibilityContextValue(
+    key: string,
+    value: unknown,
+    options: { render?: boolean } = {},
+  ): boolean {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      throw new Error("[CanvasService] visibility context key is required.");
+    }
+    const previous = this.visibilityContextValues.get(normalizedKey);
+    if (Object.is(previous, value)) return false;
+    this.visibilityContextValues.set(normalizedKey, value);
+    this.refreshManagedVisibility({ render: options.render });
+    return true;
+  }
+
+  deleteVisibilityContextValue(
+    key: string,
+    options: { render?: boolean } = {},
+  ): boolean {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) return false;
+    const removed = this.visibilityContextValues.delete(normalizedKey);
+    if (removed) {
+      this.refreshManagedVisibility({ render: options.render });
+    }
+    return removed;
+  }
+
+  clearVisibilityContextValues(options: { render?: boolean } = {}): boolean {
+    if (!this.visibilityContextValues.size) return false;
+    this.visibilityContextValues.clear();
+    this.refreshManagedVisibility({ render: options.render });
+    return true;
+  }
+
   private buildVisibilityEvalContext(
     layers: Map<string, VisibilityLayerState>,
   ) {
     return {
       activeToolId: this.workbenchService?.activeToolId ?? null,
+      contextValues: this.visibilityContextValues,
+      isWorkflowSessionActive: (workflowId: string) =>
+        this.isWorkflowSessionActive(workflowId),
+      hasAnyActiveWorkflowSession: () =>
+        this.hasAnyActiveWorkflowSession(),
       isSessionActive: (toolId: string) => this.isSessionActive(toolId),
       hasAnyActiveSession: () => this.hasAnyActiveSession(),
       layers,

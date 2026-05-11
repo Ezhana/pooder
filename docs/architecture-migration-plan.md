@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M2 in progress; P2.S3 next.
+Current milestone: M2 in progress; P2.S4 next.
 
 Completed:
 
@@ -35,10 +35,13 @@ Completed:
 - P2.S2 layer-based render pipeline has been added. Browser render producers
   can now target caller-provided layer ids through scoped sources while
   preserving scene-owned layer order and compatibility pass ids.
+- P2.S3 tool-free visibility predicates have been added. New render specs can
+  depend on caller-owned context values and workflow session ids while legacy
+  tool and tool-session predicates remain available for compatibility.
 
 Next recommended slice:
 
-- P2.S3 - Tool-Free Visibility Predicates.
+- P2.S4 - Export Adapter.
 
 Resume instruction for a new thread:
 
