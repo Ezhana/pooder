@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M1 in progress; P1.S3 next.
+Current milestone: M1 in progress; P1.S4 next.
 
 Completed:
 
@@ -23,10 +23,13 @@ Completed:
 - P1.S2 core headless scene contract has been added. Applications can create
   layers, manage image/path/rect/text elements, query by scope, and batch
   scene mutations in transactions without Fabric types.
+- P1.S3 workflow-neutral sessions have been added. Applications can manage
+  caller-defined workflow sessions without tool registration, while legacy
+  `ToolSessionService` remains available as an adapter.
 
 Next recommended slice:
 
-- P1.S3 - Workflow-Neutral Sessions.
+- P1.S4 - Typed Runtime Facades.
 
 Resume instruction for a new thread:
 

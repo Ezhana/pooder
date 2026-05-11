@@ -21,6 +21,7 @@ import {
   ToolRegistryService,
   ToolSessionService,
   WorkbenchService,
+  WorkflowSessionService,
 } from "./services";
 import { ExtensionContext } from "./context";
 
@@ -30,6 +31,7 @@ export * from "./capability";
 export * from "./contribution";
 export * from "./scene";
 export * from "./service";
+export * from "./workflow-session";
 export * from "./services";
 export { default as EventBus } from "./event";
 
@@ -111,9 +113,11 @@ export class Pooder {
   private readonly configurationService = new ConfigurationService();
   private readonly sceneService = new SceneService();
   private readonly toolRegistryService = new ToolRegistryService();
+  private readonly workflowSessionService = new WorkflowSessionService();
   private readonly toolSessionService = new ToolSessionService({
     commandService: this.commandService,
     toolRegistry: this.toolRegistryService,
+    workflowSessionService: this.workflowSessionService,
   });
   private readonly workbenchService = new WorkbenchService({
     eventBus: this.eventBus,
@@ -139,6 +143,10 @@ export class Pooder {
       CORE_SERVICE_TOKENS.CONFIGURATION,
     );
     this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
+    this.registerService(
+      this.workflowSessionService,
+      CORE_SERVICE_TOKENS.WORKFLOW_SESSION,
+    );
     this.registerService(
       this.toolRegistryService,
       CORE_SERVICE_TOKENS.TOOL_REGISTRY,

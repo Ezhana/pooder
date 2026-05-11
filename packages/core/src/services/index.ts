@@ -5,6 +5,7 @@ import SceneService from "./SceneService";
 import ToolRegistryService from "./ToolRegistryService";
 import ToolSessionService from "./ToolSessionService";
 import WorkbenchService from "./WorkbenchService";
+import WorkflowSessionService from "./WorkflowSessionService";
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -14,6 +15,7 @@ import {
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
   WORKBENCH_SERVICE,
+  WORKFLOW_SESSION_SERVICE,
 } from "./tokens";
 
 export {
@@ -24,6 +26,7 @@ export {
   ToolRegistryService,
   ToolSessionService,
   WorkbenchService,
+  WorkflowSessionService,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
@@ -31,6 +34,7 @@ export {
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
   WORKBENCH_SERVICE,
+  WORKFLOW_SESSION_SERVICE,
   CORE_SERVICE_TOKENS,
 };
 

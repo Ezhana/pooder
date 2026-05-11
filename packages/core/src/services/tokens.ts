@@ -6,6 +6,7 @@ import type SceneService from "./SceneService";
 import type ToolRegistryService from "./ToolRegistryService";
 import type ToolSessionService from "./ToolSessionService";
 import type WorkbenchService from "./WorkbenchService";
+import type WorkflowSessionService from "./WorkflowSessionService";
 
 export const CAPABILITY_REGISTRY_SERVICE =
   createServiceToken<CapabilityRegistryService>("CapabilityRegistryService");
@@ -22,6 +23,8 @@ export const TOOL_SESSION_SERVICE =
   createServiceToken<ToolSessionService>("ToolSessionService");
 export const WORKBENCH_SERVICE =
   createServiceToken<WorkbenchService>("WorkbenchService");
+export const WORKFLOW_SESSION_SERVICE =
+  createServiceToken<WorkflowSessionService>("WorkflowSessionService");
 
 export const CORE_SERVICE_TOKENS = {
   CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
@@ -31,4 +34,5 @@ export const CORE_SERVICE_TOKENS = {
   TOOL_REGISTRY: TOOL_REGISTRY_SERVICE,
   TOOL_SESSION: TOOL_SESSION_SERVICE,
   WORKBENCH: WORKBENCH_SERVICE,
+  WORKFLOW_SESSION: WORKFLOW_SESSION_SERVICE,
 } as const;

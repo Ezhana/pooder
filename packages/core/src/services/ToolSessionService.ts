@@ -2,11 +2,21 @@ import { ToolContribution } from "../contribution";
 import Disposable from "../disposable";
 import { Service, ServiceContext } from "../service";
 import EventBus from "../event";
+import type {
+  WorkflowSessionLeaveResult,
+  WorkflowSessionState,
+  WorkflowSessionStatus,
+} from "../workflow-session";
 import CommandService from "./CommandService";
 import ToolRegistryService from "./ToolRegistryService";
-import { COMMAND_SERVICE, TOOL_REGISTRY_SERVICE } from "./tokens";
+import WorkflowSessionService from "./WorkflowSessionService";
+import {
+  COMMAND_SERVICE,
+  TOOL_REGISTRY_SERVICE,
+  WORKFLOW_SESSION_SERVICE,
+} from "./tokens";
 
-export type ToolSessionStatus = "idle" | "active";
+export type ToolSessionStatus = WorkflowSessionStatus;
 
 export interface ToolSessionState {
   toolId: string;
@@ -16,33 +26,32 @@ export interface ToolSessionState {
   lastUpdatedAt?: number;
 }
 
-export type LeaveDecision = "allow" | "blocked";
+export type LeaveDecision = WorkflowSessionLeaveResult["decision"];
 
-export interface LeaveResult {
-  decision: LeaveDecision;
-  reason?: string;
-  detail?: any;
-}
+export interface LeaveResult extends WorkflowSessionLeaveResult {}
 
 interface ToolSessionServiceDependencies {
   commandService?: CommandService;
   toolRegistry?: ToolRegistryService;
+  workflowSessionService?: WorkflowSessionService;
 }
 
 export default class ToolSessionService implements Service {
-  private readonly sessions = new Map<string, ToolSessionState>();
   private commandService?: CommandService;
   private toolRegistry?: ToolRegistryService;
+  private workflowSessionService?: WorkflowSessionService;
   private eventBus?: EventBus;
 
   constructor(dependencies: ToolSessionServiceDependencies = {}) {
     this.commandService = dependencies.commandService;
     this.toolRegistry = dependencies.toolRegistry;
+    this.workflowSessionService = dependencies.workflowSessionService;
   }
 
   init(context: ServiceContext) {
     this.commandService ??= context.get(COMMAND_SERVICE);
     this.toolRegistry ??= context.get(TOOL_REGISTRY_SERVICE);
+    this.workflowSessionService ??= context.get(WORKFLOW_SESSION_SERVICE);
     this.eventBus ??= context.eventBus;
 
     if (!this.commandService) {
@@ -50,6 +59,9 @@ export default class ToolSessionService implements Service {
     }
     if (!this.toolRegistry) {
       throw new Error("ToolSessionService requires ToolRegistryService.");
+    }
+    if (!this.workflowSessionService) {
+      throw new Error("ToolSessionService requires WorkflowSessionService.");
     }
   }
 
@@ -61,52 +73,29 @@ export default class ToolSessionService implements Service {
     this.toolRegistry = toolRegistry;
   }
 
-  registerDirtyTracker(toolId: string, callback: () => boolean): Disposable {
-    const wrapped = () => {
-      try {
-        return callback();
-      } catch {
-        return false;
-      }
-    };
-    this.dirtyTrackers.set(toolId, wrapped);
-    return {
-      dispose: () => {
-        if (this.dirtyTrackers.get(toolId) === wrapped) {
-          this.dirtyTrackers.delete(toolId);
-        }
-      },
-    };
+  setWorkflowSessionService(workflowSessionService: WorkflowSessionService) {
+    this.workflowSessionService = workflowSessionService;
   }
 
-  private readonly dirtyTrackers = new Map<string, () => boolean>();
-
-  private ensureSession(toolId: string): ToolSessionState {
-    const existing = this.sessions.get(toolId);
-    if (existing) return existing;
-
-    const created: ToolSessionState = {
+  registerDirtyTracker(toolId: string, callback: () => boolean): Disposable {
+    return this.getWorkflowSessionService().registerDirtyTracker(
       toolId,
-      status: "idle",
-      dirty: false,
-    };
-    this.sessions.set(toolId, created);
-    return created;
+      callback,
+    );
   }
 
   getState(toolId: string): ToolSessionState {
-    return { ...this.ensureSession(toolId) };
+    return this.toToolSessionState(
+      this.getWorkflowSessionService().getState(toolId),
+    );
   }
 
   hasActiveSession(toolId: string): boolean {
-    return this.ensureSession(toolId).status === "active";
+    return this.getWorkflowSessionService().hasActiveSession(toolId);
   }
 
   hasAnyActiveSession(): boolean {
-    for (const session of this.sessions.values()) {
-      if (session.status === "active") return true;
-    }
-    return false;
+    return this.getWorkflowSessionService().hasAnyActiveSession();
   }
 
   private emitSessionChange(toolId: string, reason: string, detail?: any) {
@@ -120,15 +109,11 @@ export default class ToolSessionService implements Service {
   }
 
   isDirty(toolId: string): boolean {
-    const tracker = this.dirtyTrackers.get(toolId);
-    if (tracker) return tracker();
-    return this.ensureSession(toolId).dirty;
+    return this.getWorkflowSessionService().isDirty(toolId);
   }
 
   markDirty(toolId: string, dirty = true) {
-    const session = this.ensureSession(toolId);
-    session.dirty = dirty;
-    session.lastUpdatedAt = Date.now();
+    this.getWorkflowSessionService().markDirty(toolId, dirty);
     this.emitSessionChange(toolId, "dirty");
   }
 
@@ -157,13 +142,11 @@ export default class ToolSessionService implements Service {
 
   async begin(toolId: string): Promise<void> {
     const tool = this.resolveTool(toolId);
-    const session = this.ensureSession(toolId);
+    const session = this.getWorkflowSessionService().getState(toolId);
     if (session.status === "active") return;
 
     await this.runCommand(tool?.commands?.begin);
-    session.status = "active";
-    session.startedAt = Date.now();
-    session.lastUpdatedAt = session.startedAt;
+    await this.getWorkflowSessionService().begin(toolId);
     this.emitSessionChange(toolId, "begin");
   }
 
@@ -193,10 +176,7 @@ export default class ToolSessionService implements Service {
     if (!validateResult.ok) return validateResult;
 
     const result = await this.runCommand(tool?.commands?.commit);
-    const session = this.ensureSession(toolId);
-    session.dirty = false;
-    session.status = "idle";
-    session.lastUpdatedAt = Date.now();
+    await this.getWorkflowSessionService().commit(toolId);
     this.emitSessionChange(toolId, "commit");
     return { ok: true, result };
   }
@@ -204,17 +184,12 @@ export default class ToolSessionService implements Service {
   async rollback(toolId: string): Promise<void> {
     const tool = this.resolveTool(toolId);
     await this.runCommand(tool?.commands?.rollback || tool?.commands?.reset);
-    const session = this.ensureSession(toolId);
-    session.dirty = false;
-    session.status = "idle";
-    session.lastUpdatedAt = Date.now();
+    await this.getWorkflowSessionService().rollback(toolId);
     this.emitSessionChange(toolId, "rollback");
   }
 
   deactivateSession(toolId: string) {
-    const session = this.ensureSession(toolId);
-    session.status = "idle";
-    session.lastUpdatedAt = Date.now();
+    this.getWorkflowSessionService().deactivateSession(toolId);
     this.emitSessionChange(toolId, "deactivate");
   }
 
@@ -229,7 +204,7 @@ export default class ToolSessionService implements Service {
       toolId,
       dirty,
       leavePolicy,
-      status: this.ensureSession(toolId).status,
+      status: this.getState(toolId).status,
     });
     if (!dirty) return { decision: "allow" };
 
@@ -265,8 +240,23 @@ export default class ToolSessionService implements Service {
   }
 
   dispose() {
-    this.sessions.clear();
-    this.dirtyTrackers.clear();
     this.eventBus = undefined;
+  }
+
+  private getWorkflowSessionService(): WorkflowSessionService {
+    if (!this.workflowSessionService) {
+      throw new Error("ToolSessionService is not initialized.");
+    }
+    return this.workflowSessionService;
+  }
+
+  private toToolSessionState(state: WorkflowSessionState): ToolSessionState {
+    return {
+      toolId: state.workflowId,
+      status: state.status,
+      dirty: state.dirty,
+      startedAt: state.startedAt,
+      lastUpdatedAt: state.lastUpdatedAt,
+    };
   }
 }

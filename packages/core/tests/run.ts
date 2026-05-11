@@ -4,12 +4,16 @@ import {
   Pooder,
   SCENE_SERVICE,
   TOOL_REGISTRY_SERVICE,
+  TOOL_SESSION_SERVICE,
+  WORKFLOW_SESSION_SERVICE,
   createServiceToken,
   type ExtensionDefinition,
   type SceneChangeEvent,
   type SceneService,
   type Service,
   type ToolContribution,
+  type WorkflowSessionChangeEvent,
+  type WorkflowSessionService,
 } from "../src";
 
 declare const process: {
@@ -641,6 +645,156 @@ async function testRemovingSceneLayerRemovesScopedElements() {
   });
 }
 
+async function testWorkflowSessionsWithoutTools() {
+  await withRuntime(async (runtime) => {
+    const workflowSessions = runtime.services.getOrThrow<WorkflowSessionService>(
+      WORKFLOW_SESSION_SERVICE,
+    );
+    const changes: WorkflowSessionChangeEvent[] = [];
+    let beginCount = 0;
+    let validateCount = 0;
+    let commitCount = 0;
+
+    workflowSessions.onDidChange((event) => changes.push(event));
+    workflowSessions.registerSession({
+      id: "storefront.image-placement",
+      leavePolicy: "commit",
+      lifecycle: {
+        begin: () => {
+          beginCount += 1;
+        },
+        validate: () => {
+          validateCount += 1;
+          return { ok: true, result: "validated" };
+        },
+        commit: () => {
+          commitCount += 1;
+          return "committed";
+        },
+      },
+    });
+
+    await workflowSessions.begin("storefront.image-placement");
+    workflowSessions.markDirty("storefront.image-placement");
+
+    const leaveResult = await workflowSessions.handleBeforeLeave(
+      "storefront.image-placement",
+    );
+
+    assertDeepEqual(leaveResult, { decision: "allow" });
+    assertEqual(beginCount, 1);
+    assertEqual(validateCount, 1);
+    assertEqual(commitCount, 1);
+    assertEqual(
+      workflowSessions.getState("storefront.image-placement").status,
+      "idle",
+    );
+    assertEqual(
+      workflowSessions.getState("storefront.image-placement").dirty,
+      false,
+    );
+    assertDeepEqual(
+      changes.map((event) => event.reason),
+      ["begin", "dirty", "commit"],
+    );
+  });
+}
+
+async function testWorkflowDirtyTrackerCanBlockLeave() {
+  await withRuntime(async (runtime) => {
+    const workflowSessions = runtime.services.getOrThrow(
+      WORKFLOW_SESSION_SERVICE,
+    );
+    const tracker = workflowSessions.registerDirtyTracker(
+      "storefront.feature",
+      () => true,
+    );
+
+    await workflowSessions.begin("storefront.feature");
+    const leaveResult =
+      await workflowSessions.handleBeforeLeave("storefront.feature");
+
+    assertDeepEqual(leaveResult, {
+      decision: "blocked",
+      reason: "session-dirty",
+    });
+    assertEqual(workflowSessions.hasActiveSession("storefront.feature"), true);
+
+    tracker.dispose();
+    workflowSessions.markDirty("storefront.feature", false);
+    assertDeepEqual(
+      await workflowSessions.handleBeforeLeave("storefront.feature"),
+      { decision: "allow" },
+    );
+  });
+}
+
+async function testLegacyToolSessionUsesWorkflowSessionState() {
+  await withRuntime(async (runtime) => {
+    const calls: string[] = [];
+    runtime.extensions.register({
+      id: "legacy-tool-session",
+      contribute() {
+        return {
+          commands: [
+            {
+              id: "legacy.begin",
+              command: "legacy.begin",
+              title: "legacy.begin",
+              handler: () => calls.push("begin"),
+            },
+            {
+              id: "legacy.rollback",
+              command: "legacy.rollback",
+              title: "legacy.rollback",
+              handler: () => calls.push("rollback"),
+            },
+          ],
+          tools: [
+            {
+              id: "legacy.session-tool",
+              name: "Legacy Session Tool",
+              interaction: "session",
+              commands: {
+                begin: "legacy.begin",
+                rollback: "legacy.rollback",
+              },
+              session: {
+                autoBegin: true,
+                leavePolicy: "rollback",
+              },
+            },
+          ],
+        };
+      },
+      activate() {},
+    });
+
+    await runtime.extensions.flushActivation();
+    const toolSessions = runtime.services.getOrThrow(TOOL_SESSION_SERVICE);
+    const workflowSessions = runtime.services.getOrThrow(
+      WORKFLOW_SESSION_SERVICE,
+    );
+
+    await runtime.workbench.activate("legacy.session-tool");
+    toolSessions.markDirty("legacy.session-tool");
+
+    assertEqual(toolSessions.getState("legacy.session-tool").status, "active");
+    assertEqual(
+      workflowSessions.getState("legacy.session-tool").status,
+      "active",
+    );
+    assertEqual(workflowSessions.isDirty("legacy.session-tool"), true);
+
+    const result = await runtime.workbench.deactivate();
+
+    assertEqual(result.ok, true);
+    assertDeepEqual(calls, ["begin", "rollback"]);
+    assertEqual(toolSessions.getState("legacy.session-tool").status, "idle");
+    assertEqual(workflowSessions.isDirty("legacy.session-tool"), false);
+  });
+}
+
 async function main() {
   const tests: Array<[string, () => Promise<void>]> = [
     ["activates extensions in derived order", testOutOfOrderActivation],
@@ -677,6 +831,18 @@ async function main() {
     [
       "removing a scene layer removes scoped elements",
       testRemovingSceneLayerRemovesScopedElements,
+    ],
+    [
+      "manages workflow sessions without registered tools",
+      testWorkflowSessionsWithoutTools,
+    ],
+    [
+      "workflow dirty trackers can block leave",
+      testWorkflowDirtyTrackerCanBlockLeave,
+    ],
+    [
+      "legacy tool sessions use workflow session state",
+      testLegacyToolSessionUsesWorkflowSessionState,
     ],
   ];
 

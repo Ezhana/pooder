@@ -10,6 +10,9 @@
 - Added `SceneService` and public headless scene types for dynamic layers,
   image/path/rect/text elements, scoped element queries, visibility metadata,
   and batched scene transactions.
+- Added `WorkflowSessionService` and public workflow session types so apps can
+  manage caller-defined workflow sessions, leave policies, and dirty tracking
+  without registering toolbar tools.
 
 ### Planning Notes
 
