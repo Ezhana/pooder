@@ -14,11 +14,13 @@ Completed:
 
 - P0.S1 migration plan has been published.
 - Affected package changelogs have `Unreleased` planning notes.
+- P0.S2 current kit tool coupling inventory has been published in
+  `docs/kit-tool-coupling-inventory.md`.
 - No runtime code has been changed for the migration yet.
 
 Next recommended slice:
 
-- P0.S2 - Inventory Current Tool Coupling.
+- P0.S3 - Naming And Contribution Policy.
 
 Resume instruction for a new thread:
 

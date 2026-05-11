@@ -9,6 +9,8 @@
   image placement, edge detection, dieline geometry, white ink extraction,
   template overlays, rulers, and export helpers. See
   `../../docs/architecture-migration-plan.md`.
+- Published the current kit tool coupling inventory for migration slice P0.S2.
+  See `../../docs/kit-tool-coupling-inventory.md`.
 
 ## 8.0.0
 
