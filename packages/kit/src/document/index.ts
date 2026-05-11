@@ -22,6 +22,7 @@ import {
 import {
   createBackgroundCapability,
   createDielineGeometryCapability,
+  createFeatureCapability,
   createImagePlacementCapability,
   createTemplateOverlayCapability,
   createWhiteInkCapability,
@@ -30,6 +31,8 @@ import { BACKGROUND_CAPABILITY_ID } from "../extensions/background";
 import type { BackgroundCapabilityApi } from "../extensions/background";
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import type { DielineGeometryCapabilityApi } from "../extensions/dieline";
+import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
+import type { FeatureCapabilityApi } from "../extensions/feature";
 import { IMAGE_PLACEMENT_CAPABILITY_ID } from "../extensions/image";
 import type { ImagePlacementCapabilityApi } from "../extensions/image";
 import { TEMPLATE_OVERLAY_CAPABILITY_ID } from "../extensions/template-overlay";
@@ -70,6 +73,7 @@ interface EffectContext {
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [BACKGROUND_CAPABILITY_ID]: () => createBackgroundCapability(),
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
+  [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),
   [IMAGE_PLACEMENT_CAPABILITY_ID]: () => createImagePlacementCapability(),
   [TEMPLATE_OVERLAY_CAPABILITY_ID]: () => createTemplateOverlayCapability(),
   [WHITE_INK_CAPABILITY_ID]: () => createWhiteInkCapability(),
@@ -117,6 +121,7 @@ export async function applyKitEditorDocument(
     "SceneService is required to apply an EditorDocument.",
   );
   const assetsById = new Map((document.assets ?? []).map((asset) => [asset.id, asset]));
+  applySurfaceSizeConfig(runtime, document);
 
   sceneService.transaction(() => {
     document.surfaces.forEach((surface) => {
@@ -335,6 +340,9 @@ async function applyKitEffect(
     case DIELINE_GEOMETRY_CAPABILITY_ID:
       applyDielineEffect(runtime, effect, context);
       return;
+    case FEATURE_CAPABILITY_ID:
+      applyFeatureEffect(runtime, effect);
+      return;
     case IMAGE_PLACEMENT_CAPABILITY_ID:
       await applyImagePlacementEffect(runtime, effect, context, assetsById);
       return;
@@ -438,6 +446,24 @@ function applyDielineEffect(
   facade.refresh();
 }
 
+function applyFeatureEffect(runtime: KitEditorDocumentRuntime, effect: EditorEffect) {
+  const facade = runtime.capabilities.get<FeatureCapabilityApi>(
+    FEATURE_CAPABILITY_ID,
+  );
+  if (!facade) return;
+  const payload = getPayload(effect);
+  if (!Array.isArray(payload.features)) return;
+  facade.replaceFeatures(payload.features as any[], {
+    markDirty: typeof payload.markDirty === "boolean" ? payload.markDirty : false,
+    target:
+      payload.target === "working" ||
+      payload.target === "committed" ||
+      payload.target === "both"
+        ? payload.target
+        : "both",
+  });
+}
+
 async function applyImagePlacementEffect(
   runtime: KitEditorDocumentRuntime,
   effect: EditorEffect,
@@ -459,9 +485,15 @@ async function applyImagePlacementEffect(
     (object?.type === "image" ? object.src : undefined) ||
     asset?.src;
   if (!src) return;
+  const options = isRecord(payload.options) ? payload.options : {};
   await facade.upsertImage(src, {
-    id: object?.id,
-    ...(isRecord(payload.options) ? payload.options : {}),
+    ...options,
+    addOptions: {
+      ...(isRecord(options.addOptions) ? options.addOptions : {}),
+      ...(object?.id ? { id: object.id } : {}),
+    },
+    id: typeof options.id === "string" ? options.id : undefined,
+    mode: options.mode === "replace" ? "replace" : "add",
   } as any);
 }
 
@@ -498,4 +530,43 @@ async function applyWhiteInkEffect(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function applySurfaceSizeConfig(
+  runtime: KitEditorDocumentRuntime,
+  document: EditorDocument,
+) {
+  if (!runtime.config) return;
+  const surface = resolveActiveSurface(document);
+  if (!surface) return;
+  const widthMm = toMm(surface.size.width, surface.size.unit);
+  const heightMm = toMm(surface.size.height, surface.size.unit);
+  const sizeMetadata = isRecord(surface.metadata?.size)
+    ? surface.metadata.size
+    : {};
+
+  runtime.config.update("size.actualWidthMm", widthMm);
+  runtime.config.update("size.actualHeightMm", heightMm);
+  runtime.config.update("size.aspectRatio", widthMm / Math.max(0.001, heightMm));
+  runtime.config.update("size.unit", surface.size.unit);
+  runtime.config.update("size.cutMode", sizeMetadata.cutMode ?? "trim");
+  runtime.config.update("size.cutMarginMm", sizeMetadata.cutMarginMm ?? 0);
+  runtime.config.update("size.maxMm", sizeMetadata.maxMm ?? Math.max(widthMm, heightMm, 2000));
+  runtime.config.update("size.minMm", sizeMetadata.minMm ?? 0.1);
+  runtime.config.update("size.stepMm", sizeMetadata.stepMm ?? 0.001);
+  runtime.config.update("size.viewPadding", sizeMetadata.viewPadding ?? "10%");
+}
+
+function resolveActiveSurface(document: EditorDocument): EditorSurface | undefined {
+  const firstSurfaceId = document.views?.[0]?.surfaceIds?.[0];
+  return firstSurfaceId
+    ? document.surfaces.find((surface) => surface.id === firstSurfaceId) ??
+        document.surfaces[0]
+    : document.surfaces[0];
+}
+
+function toMm(value: number, unit: string): number {
+  if (unit === "cm") return value * 10;
+  if (unit === "in") return value * 25.4;
+  return value;
 }

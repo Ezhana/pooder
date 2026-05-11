@@ -156,6 +156,11 @@ function testKitEffectCapabilityResolution() {
     "pooder.kit.dieline-geometry",
     "dieline should resolve to kit capability",
   );
+  assertEqual(
+    resolveKitEditorDocumentEffectCapabilityId({ type: "feature" }),
+    "pooder.kit.feature",
+    "feature should resolve to kit capability",
+  );
 
   const diagnostics = validateKitEditorDocument({
     version: 1,
@@ -163,7 +168,7 @@ function testKitEffectCapabilityResolution() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
-        layers: [{ id: "layer", effects: [{ type: "dieline" }] }],
+        layers: [{ id: "layer", effects: [{ type: "dieline" }, { type: "feature" }] }],
       },
     ],
   });

@@ -1268,6 +1268,7 @@ function testCreateKitCapabilitiesForDocument() {
             id: "artwork",
             effects: [
               { type: "dieline" },
+              { type: "feature" },
               { type: "template-overlay", require: "warn" },
               { type: "dieline" },
             ],
@@ -1290,6 +1291,7 @@ function testCreateKitCapabilitiesForDocument() {
     capabilities.map((item) => item.id).sort(),
     [
       DIELINE_GEOMETRY_CAPABILITY_ID,
+      FEATURE_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
       TEMPLATE_OVERLAY_CAPABILITY_ID,
     ].sort(),
@@ -1313,6 +1315,7 @@ async function testApplyKitEditorDocument() {
   const templateCalls: any[] = [];
   const imageCalls: any[] = [];
   const dielineCalls: any[] = [];
+  const featureCalls: any[] = [];
   runtime.extensions.register(
     createFakeCapabilityExtension({
       [TEMPLATE_OVERLAY_CAPABILITY_ID]: {
@@ -1353,6 +1356,26 @@ async function testApplyKitEditorDocument() {
           return null;
         },
       } satisfies DielineGeometryCapabilityApi,
+      [FEATURE_CAPABILITY_ID]: {
+        addDoubleLayerHole: () => false,
+        addFeature: () => false,
+        beginSession: async () => ({ ok: true }),
+        clearFeatures: () => true,
+        completeSession: () => ({ ok: true }),
+        getFeatures: () => [],
+        getMarkerRenderSpecs: () => [],
+        getWorkingFeatures: () => [],
+        projectPlacements: () => [],
+        refresh: () => {},
+        replaceFeatures: (features: any[], options: any) => {
+          featureCalls.push({ features, options });
+          return { ok: true };
+        },
+        resetSession: async () => ({ ok: true }),
+        resolvePlacements: () => [],
+        rollbackSession: async () => ({ ok: true }),
+        updateWorkingGroupPosition: () => ({ ok: true }),
+      } satisfies FeatureCapabilityApi,
     }),
   );
   await runtime.extensions.flushActivation();
@@ -1384,7 +1407,13 @@ async function testApplyKitEditorDocument() {
           {
             id: "front-artwork",
             role: "content",
-            effects: [{ type: "dieline", payload: { shape: "circle" } }],
+            effects: [
+              { type: "dieline", payload: { shape: "circle" } },
+              {
+                type: "feature",
+                payload: { features: [{ id: "hole", x: 0.5, y: 0.1 }] },
+              },
+            ],
             objects: [
               {
                 id: "front-slot",
@@ -1439,7 +1468,22 @@ async function testApplyKitEditorDocument() {
     "/photo.png",
     "image placement effect should use image asset source",
   );
+  assertEqual(
+    imageCalls[0]?.options?.mode,
+    "add",
+    "document image placement should add new image objects",
+  );
   assert(dielineCalls.length > 0, "dieline effect should refresh facade");
+  assertEqual(
+    featureCalls[0]?.features?.[0]?.id,
+    "hole",
+    "feature effect should replace features",
+  );
+  assertEqual(
+    runtime.config.get("size.actualWidthMm"),
+    100,
+    "document surface should seed size width config",
+  );
 
   await runtime.dispose();
 }
