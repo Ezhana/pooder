@@ -1,4 +1,6 @@
 import type { Service } from "./service";
+import type { Unit } from "./coordinate";
+import type { DielineShape, DielineShapeStyle } from "./dieline-shape";
 
 export type RenderObjectType = "rect" | "image" | "path" | "text";
 
@@ -370,7 +372,7 @@ export type SizeConstraintMode = "free" | "lockAspect" | "equal";
 export type CutMode = "trim" | "outset" | "inset";
 
 export interface SizeState {
-  unit: "px" | "mm" | "cm" | "in";
+  unit: Unit;
   actualWidthMm: number;
   actualHeightMm: number;
   constraintMode: SizeConstraintMode;
@@ -408,8 +410,8 @@ export interface SceneLayoutSnapshot {
 }
 
 export interface SceneGeometrySnapshot {
-  shape: string;
-  shapeStyle: Record<string, unknown>;
+  shape: DielineShape;
+  shapeStyle: DielineShapeStyle;
   unit: "px";
   x: number;
   y: number;

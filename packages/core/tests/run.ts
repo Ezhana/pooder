@@ -6,7 +6,12 @@ import {
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
   WORKFLOW_SESSION_SERVICE,
+  buildSceneGeometry,
+  computeSceneLayout,
+  readSizeState,
+  resolveViewPaddingPx,
   createServiceToken,
+  type CanvasService,
   type ExtensionDefinition,
   type SceneChangeEvent,
   type SceneService,
@@ -25,6 +30,133 @@ class DeferredDependencyService implements Service {}
 const REQUIRED_SERVICE = createServiceToken<DeferredDependencyService>(
   "DeferredDependencyService",
 );
+
+class FakeLayoutCanvasService implements CanvasService {
+  private readonly width: number;
+  private readonly height: number;
+
+  constructor(width = 800, height = 600) {
+    this.width = width;
+    this.height = height;
+  }
+
+  registerRenderProducer() {
+    return { dispose: () => {} };
+  }
+  unregisterRenderProducer() {
+    return false;
+  }
+  requestRenderFromProducers() {}
+  async flushRenderFromProducers() {}
+  requestRenderAll() {}
+  resize() {}
+  getViewportSize() {
+    return { width: this.width, height: this.height };
+  }
+  updateViewportLayout(options: {
+    containerWidth: number;
+    containerHeight: number;
+    padding: number;
+    widthMm: number;
+    heightMm: number;
+  }) {
+    const availableWidth = Math.max(0, options.containerWidth - options.padding * 2);
+    const availableHeight = Math.max(0, options.containerHeight - options.padding * 2);
+    const scale = Math.min(
+      availableWidth / options.widthMm,
+      availableHeight / options.heightMm,
+    );
+    const width = options.widthMm * scale;
+    const height = options.heightMm * scale;
+    return {
+      scale,
+      offsetX: (options.containerWidth - width) / 2,
+      offsetY: (options.containerHeight - height) / 2,
+      width,
+      height,
+    };
+  }
+  getObjects() {
+    return [];
+  }
+  getPassObjects() {
+    return [];
+  }
+  getRootLayerObjects() {
+    return [];
+  }
+  getObject() {
+    return undefined;
+  }
+  getActiveObject() {
+    return undefined;
+  }
+  setActiveObject() {
+    return false;
+  }
+  discardActiveObject() {
+    return false;
+  }
+  setViewportMirror() {}
+  onCanvasEvent() {}
+  offCanvasEvent() {}
+  getTopContext() {
+    return undefined;
+  }
+  clearTopContext() {}
+  getSceneScale() {
+    return 1;
+  }
+  getSceneOffset() {
+    return { x: 0, y: 0 };
+  }
+  toScreenPoint(point: { x: number; y: number }) {
+    return point;
+  }
+  toScenePoint(point: { x: number; y: number }) {
+    return point;
+  }
+  toScreenLength(value: number) {
+    return value;
+  }
+  toSceneLength(value: number) {
+    return value;
+  }
+  toScreenRect(rect: { left: number; top: number; width: number; height: number }) {
+    return rect;
+  }
+  toSceneRect(rect: { left: number; top: number; width: number; height: number }) {
+    return rect;
+  }
+  getSceneViewportRect() {
+    return { left: 0, top: 0, width: this.width, height: this.height };
+  }
+  getScreenViewportRect() {
+    return { left: 0, top: 0, width: this.width, height: this.height };
+  }
+  setLayerVisibility() {
+    return false;
+  }
+  setPassVisibility() {
+    return false;
+  }
+  bringLayerToFront() {}
+  bringPassToFront() {}
+  async applyPassSpec() {}
+  async applyObjectSpecsToRootLayer() {}
+  async applyObjectSpecsToPass() {}
+  setVisibilityContextValue() {}
+  deleteVisibilityContextValue() {
+    return false;
+  }
+  clearVisibilityContextValues() {
+    return false;
+  }
+  syncPassStacking() {}
+  async loadImageSize() {
+    return null;
+  }
+}
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -47,6 +179,19 @@ function assertDeepEqual(actual: unknown, expected: unknown, message?: string) {
     throw new Error(
       message ??
         `Expected ${expectedJson ?? String(expected)}, got ${actualJson ?? String(actual)}`,
+    );
+  }
+}
+
+function assertClose(
+  actual: number,
+  expected: number,
+  message?: string,
+  epsilon = 0.000001,
+) {
+  if (Math.abs(actual - expected) > epsilon) {
+    throw new Error(
+      message ?? `Expected ${String(expected)}, got ${String(actual)}`,
     );
   }
 }
@@ -1075,6 +1220,120 @@ async function testLegacyToolSessionUsesWorkflowSessionState() {
   });
 }
 
+async function testSceneLayoutModelDefaultsAndPadding() {
+  const config = {
+    get: <T>(_key: string, defaultValue?: T) => defaultValue,
+  };
+
+  const state = readSizeState(config as any);
+  assertEqual(state.viewPadding, "12%");
+  assertEqual(
+    resolveViewPaddingPx("10%", 320, 480),
+    32,
+    "percentage padding should use the short side",
+  );
+  assertEqual(
+    resolveViewPaddingPx(140, 320, 480),
+    38.4,
+    "fixed padding should shrink on compact canvases",
+  );
+  assertEqual(
+    resolveViewPaddingPx("90%", 320, 480),
+    80,
+    "padding should preserve a minimum content area",
+  );
+  assertEqual(
+    resolveViewPaddingPx("", 320, 480),
+    0,
+    "empty padding should be ignored",
+  );
+}
+
+async function testSceneLayoutModelComputesCutModes() {
+  const canvas = new FakeLayoutCanvasService(800, 600);
+  const layout = computeSceneLayout(canvas, {
+    actualHeightMm: 100,
+    actualWidthMm: 100,
+    aspectRatio: 1,
+    constraintMode: "free",
+    cutMarginMm: 10,
+    cutMode: "outset",
+    maxMm: 2000,
+    minMm: 10,
+    stepMm: 0.1,
+    unit: "mm",
+    viewPadding: "12%",
+  });
+
+  assert(layout, "outset layout should resolve");
+  assertClose(layout.scale, 3.8);
+  assertClose(layout.cutRect.left, 172);
+  assertClose(layout.cutRect.width, 456);
+  assertClose(layout.trimRect.left, 210);
+  assertClose(layout.trimRect.width, 380);
+
+  const insetLayout = computeSceneLayout(canvas, {
+    actualHeightMm: 100,
+    actualWidthMm: 100,
+    aspectRatio: 1,
+    constraintMode: "free",
+    cutMarginMm: 10,
+    cutMode: "inset",
+    maxMm: 2000,
+    minMm: 10,
+    stepMm: 0.1,
+    unit: "mm",
+    viewPadding: "12%",
+  });
+
+  assert(insetLayout, "inset layout should resolve");
+  assertClose(insetLayout.trimRect.width, 456);
+  assertClose(insetLayout.cutRect.width, 364.8);
+}
+
+async function testSceneLayoutModelBuildsDielineGeometry() {
+  const canvas = new FakeLayoutCanvasService(800, 600);
+  const layout = computeSceneLayout(canvas, {
+    actualHeightMm: 100,
+    actualWidthMm: 100,
+    aspectRatio: 1,
+    constraintMode: "free",
+    cutMarginMm: 10,
+    cutMode: "outset",
+    maxMm: 2000,
+    minMm: 10,
+    stepMm: 0.1,
+    unit: "mm",
+    viewPadding: "12%",
+  });
+  assert(layout, "layout should resolve before geometry");
+
+  const config = {
+    get: (key: string, defaultValue?: unknown) => {
+      const values: Record<string, unknown> = {
+        "dieline.customSourceHeightPx": 240,
+        "dieline.customSourceWidthPx": 320,
+        "dieline.radius": "5mm",
+        "dieline.shape": "circle",
+        "dieline.shapeStyle": { fitMode: "contain", lobeSpread: 2 },
+      };
+      return Object.prototype.hasOwnProperty.call(values, key)
+        ? values[key]
+        : defaultValue;
+    },
+  };
+  const geometry = buildSceneGeometry(config as any, layout);
+
+  assertEqual(geometry.shape, "circle");
+  assertEqual(geometry.shapeStyle.fitMode, "contain");
+  assertEqual(geometry.shapeStyle.lobeSpread, 1);
+  assertEqual(geometry.width, layout.trimRect.width);
+  assertClose(geometry.radius, 19);
+  assertClose(geometry.offset, 38);
+  assertEqual(geometry.customSourceWidthPx, 320);
+  assertEqual(geometry.customSourceHeightPx, 240);
+}
+
 async function main() {
   const tests: Array<[string, () => Promise<void>]> = [
     ["activates extensions in derived order", testOutOfOrderActivation],
@@ -1139,6 +1398,15 @@ async function main() {
     [
       "legacy tool sessions use workflow session state",
       testLegacyToolSessionUsesWorkflowSessionState,
+    ],
+    [
+      "resolves scene layout defaults and responsive padding",
+      testSceneLayoutModelDefaultsAndPadding,
+    ],
+    ["computes scene cut mode layouts", testSceneLayoutModelComputesCutModes],
+    [
+      "builds scene dieline geometry from config",
+      testSceneLayoutModelBuildsDielineGeometry,
     ],
   ];
 

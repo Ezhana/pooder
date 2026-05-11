@@ -1,0 +1,374 @@
+import type { ConfigurationService } from "./services";
+import { Coordinate, type Unit } from "./coordinate";
+import {
+  DEFAULT_DIELINE_SHAPE,
+  DEFAULT_DIELINE_SHAPE_STYLE,
+  normalizeDielineShape,
+  normalizeShapeStyle,
+} from "./dieline-shape";
+import type {
+  CanvasService,
+  SceneGeometrySnapshot,
+  SceneLayoutSnapshot,
+  SceneRect,
+  SizeConstraintMode,
+  SizeState,
+  CutMode,
+} from "./render";
+import { parseLengthToMm } from "./units";
+
+export const DEFAULT_SIZE_STATE: SizeState = {
+  unit: "mm",
+  actualWidthMm: 500,
+  actualHeightMm: 500,
+  constraintMode: "free",
+  aspectRatio: 1,
+  cutMode: "trim",
+  cutMarginMm: 0,
+  viewPadding: "12%",
+  minMm: 10,
+  maxMm: 2000,
+  stepMm: 0.1,
+};
+
+const FIXED_VIEW_PADDING_LIMIT_RATIO = 0.12;
+const MIN_VIEW_CONTENT_SIDE_PX = 160;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function roundToStep(value: number, step: number): number {
+  if (!Number.isFinite(step) || step <= 0) return value;
+  return Math.round(value / step) * step;
+}
+
+export function sanitizeMmValue(
+  valueMm: number,
+  limits: { minMm: number; maxMm: number; stepMm: number },
+): number {
+  if (!Number.isFinite(valueMm)) return limits.minMm;
+  const rounded = roundToStep(valueMm, limits.stepMm);
+  return clamp(rounded, limits.minMm, limits.maxMm);
+}
+
+export function normalizeUnit(value: unknown): Unit {
+  if (value === "cm" || value === "in") return value;
+  return "mm";
+}
+
+export function normalizeConstraintMode(value: unknown): SizeConstraintMode {
+  if (value === "lockAspect" || value === "equal") return value;
+  return "free";
+}
+
+export function normalizeCutMode(value: unknown): CutMode {
+  if (value === "outset" || value === "inset") return value;
+  return "trim";
+}
+
+export function toMm(value: number, fromUnit: Unit): number {
+  return Coordinate.convertUnit(value, fromUnit, "mm");
+}
+
+export function fromMm(valueMm: number, toUnit: Unit): number {
+  return Coordinate.convertUnit(valueMm, "mm", toUnit);
+}
+
+function getContainerShortSide(
+  containerWidth: number,
+  containerHeight: number,
+): number {
+  return Math.min(Math.max(0, containerWidth), Math.max(0, containerHeight));
+}
+
+function limitViewPaddingPx(
+  paddingPx: number,
+  containerWidth: number,
+  containerHeight: number,
+  options: { capFixedPadding?: boolean } = {},
+): number {
+  const shortSide = getContainerShortSide(containerWidth, containerHeight);
+  if (!Number.isFinite(paddingPx) || paddingPx <= 0 || shortSide <= 0) {
+    return 0;
+  }
+
+  const minContentSide = Math.min(MIN_VIEW_CONTENT_SIDE_PX, shortSide);
+  const contentLimit = Math.max(0, (shortSide - minContentSide) / 2);
+  const fixedLimit = options.capFixedPadding
+    ? shortSide * FIXED_VIEW_PADDING_LIMIT_RATIO
+    : Number.POSITIVE_INFINITY;
+
+  return Math.min(paddingPx, contentLimit, fixedLimit);
+}
+
+export function resolveViewPaddingPx(
+  raw: number | string,
+  containerWidth: number,
+  containerHeight: number,
+): number {
+  if (typeof raw === "number") {
+    return limitViewPaddingPx(raw, containerWidth, containerHeight, {
+      capFixedPadding: true,
+    });
+  }
+  if (typeof raw === "string") {
+    const value = raw.trim();
+    if (!value) return 0;
+
+    if (value.endsWith("%")) {
+      const percent = parseFloat(value) / 100;
+      if (!Number.isFinite(percent)) return 0;
+      return limitViewPaddingPx(
+        getContainerShortSide(containerWidth, containerHeight) * percent,
+        containerWidth,
+        containerHeight,
+      );
+    }
+    const fixed = parseFloat(value);
+    return Number.isFinite(fixed)
+      ? limitViewPaddingPx(fixed, containerWidth, containerHeight, {
+          capFixedPadding: true,
+        })
+      : 0;
+  }
+  return 0;
+}
+
+export const resolvePaddingPx = resolveViewPaddingPx;
+
+export function readSizeState(configService: ConfigurationService): SizeState {
+  const unit = normalizeUnit(
+    configService.get("size.unit", DEFAULT_SIZE_STATE.unit),
+  );
+
+  const minMm = Math.max(
+    0.1,
+    Number(configService.get("size.minMm", DEFAULT_SIZE_STATE.minMm)),
+  );
+  const maxMm = Math.max(
+    minMm,
+    Number(configService.get("size.maxMm", DEFAULT_SIZE_STATE.maxMm)),
+  );
+  const stepMm = Math.max(
+    0.001,
+    Number(configService.get("size.stepMm", DEFAULT_SIZE_STATE.stepMm)),
+  );
+
+  const actualWidthMm = sanitizeMmValue(
+    parseLengthToMm(
+      configService.get("size.actualWidthMm", DEFAULT_SIZE_STATE.actualWidthMm),
+      "mm",
+    ),
+    { minMm, maxMm, stepMm },
+  );
+  const actualHeightMm = sanitizeMmValue(
+    parseLengthToMm(
+      configService.get(
+        "size.actualHeightMm",
+        DEFAULT_SIZE_STATE.actualHeightMm,
+      ),
+      "mm",
+    ),
+    { minMm, maxMm, stepMm },
+  );
+
+  const aspectRaw = Number(
+    configService.get("size.aspectRatio", DEFAULT_SIZE_STATE.aspectRatio),
+  );
+  const aspectRatio =
+    Number.isFinite(aspectRaw) && aspectRaw > 0
+      ? aspectRaw
+      : actualWidthMm / Math.max(0.001, actualHeightMm);
+
+  const cutMarginMm = Math.max(
+    0,
+    parseLengthToMm(
+      configService.get("size.cutMarginMm", DEFAULT_SIZE_STATE.cutMarginMm),
+      "mm",
+    ),
+  );
+
+  const viewPadding = configService.get(
+    "size.viewPadding",
+    DEFAULT_SIZE_STATE.viewPadding,
+  );
+
+  return {
+    unit,
+    actualWidthMm,
+    actualHeightMm,
+    constraintMode: normalizeConstraintMode(
+      configService.get(
+        "size.constraintMode",
+        DEFAULT_SIZE_STATE.constraintMode,
+      ),
+    ),
+    aspectRatio,
+    cutMode: normalizeCutMode(
+      configService.get("size.cutMode", DEFAULT_SIZE_STATE.cutMode),
+    ),
+    cutMarginMm,
+    viewPadding,
+    minMm,
+    maxMm,
+    stepMm,
+  };
+}
+
+function rectByCenter(
+  centerX: number,
+  centerY: number,
+  width: number,
+  height: number,
+): SceneRect {
+  return {
+    left: centerX - width / 2,
+    top: centerY - height / 2,
+    width,
+    height,
+    centerX,
+    centerY,
+  };
+}
+
+function getCutSizeMm(size: SizeState): { widthMm: number; heightMm: number } {
+  if (size.cutMode === "trim") {
+    return { widthMm: size.actualWidthMm, heightMm: size.actualHeightMm };
+  }
+
+  const delta = size.cutMarginMm * 2;
+  if (size.cutMode === "outset") {
+    return {
+      widthMm: size.actualWidthMm + delta,
+      heightMm: size.actualHeightMm + delta,
+    };
+  }
+
+  return {
+    widthMm: Math.max(size.minMm, size.actualWidthMm - delta),
+    heightMm: Math.max(size.minMm, size.actualHeightMm - delta),
+  };
+}
+
+export function computeSceneLayout(
+  canvasService: CanvasService,
+  size: SizeState,
+): SceneLayoutSnapshot | null {
+  const viewportSize = canvasService.getViewportSize();
+  const canvasWidth = viewportSize.width || 0;
+  const canvasHeight = viewportSize.height || 0;
+  if (canvasWidth <= 0 || canvasHeight <= 0) return null;
+
+  const { widthMm: cutWidthMm, heightMm: cutHeightMm } = getCutSizeMm(size);
+  const viewWidthMm = Math.max(size.actualWidthMm, cutWidthMm);
+  const viewHeightMm = Math.max(size.actualHeightMm, cutHeightMm);
+  if (
+    !Number.isFinite(viewWidthMm) ||
+    !Number.isFinite(viewHeightMm) ||
+    viewWidthMm <= 0 ||
+    viewHeightMm <= 0
+  ) {
+    return null;
+  }
+
+  const viewPaddingPx = resolveViewPaddingPx(
+    size.viewPadding,
+    canvasWidth,
+    canvasHeight,
+  );
+  const layout =
+    canvasService.updateViewportLayout({
+      containerWidth: canvasWidth,
+      containerHeight: canvasHeight,
+      padding: viewPaddingPx,
+      widthMm: viewWidthMm,
+      heightMm: viewHeightMm,
+    }) ??
+    Coordinate.calculateLayout(
+      { width: canvasWidth, height: canvasHeight },
+      { width: viewWidthMm, height: viewHeightMm },
+      viewPaddingPx,
+    );
+  if (
+    !Number.isFinite(layout.scale) ||
+    !Number.isFinite(layout.offsetX) ||
+    !Number.isFinite(layout.offsetY) ||
+    layout.scale <= 0
+  ) {
+    return null;
+  }
+
+  const centerX = layout.offsetX + layout.width / 2;
+  const centerY = layout.offsetY + layout.height / 2;
+  const trimWidthPx = size.actualWidthMm * layout.scale;
+  const trimHeightPx = size.actualHeightMm * layout.scale;
+  const cutWidthPx = cutWidthMm * layout.scale;
+  const cutHeightPx = cutHeightMm * layout.scale;
+
+  const trimRect = rectByCenter(centerX, centerY, trimWidthPx, trimHeightPx);
+  const cutRect = rectByCenter(centerX, centerY, cutWidthPx, cutHeightPx);
+  const bleedRect = rectByCenter(
+    centerX,
+    centerY,
+    Math.max(trimWidthPx, cutWidthPx),
+    Math.max(trimHeightPx, cutHeightPx),
+  );
+
+  return {
+    scale: layout.scale,
+    canvasWidth,
+    canvasHeight,
+    trimRect,
+    cutRect,
+    bleedRect,
+    trimWidthMm: size.actualWidthMm,
+    trimHeightMm: size.actualHeightMm,
+    cutWidthMm,
+    cutHeightMm,
+    cutMode: size.cutMode,
+    cutMarginMm: size.cutMarginMm,
+  };
+}
+
+export function buildSceneGeometry(
+  configService: ConfigurationService,
+  layout: SceneLayoutSnapshot,
+): SceneGeometrySnapshot {
+  const radiusMm = parseLengthToMm(
+    configService.get("dieline.radius", 0),
+    "mm",
+  );
+  const offset = (layout.cutRect.width - layout.trimRect.width) / 2;
+  const sourceWidth = Number(
+    configService.get("dieline.customSourceWidthPx", 0),
+  );
+  const sourceHeight = Number(
+    configService.get("dieline.customSourceHeightPx", 0),
+  );
+  const shapeStyle = normalizeShapeStyle(
+    configService.get("dieline.shapeStyle", DEFAULT_DIELINE_SHAPE_STYLE),
+  );
+
+  return {
+    shape: normalizeDielineShape(
+      configService.get("dieline.shape", DEFAULT_DIELINE_SHAPE),
+    ),
+    shapeStyle,
+    unit: "px",
+    x: layout.trimRect.centerX,
+    y: layout.trimRect.centerY,
+    width: layout.trimRect.width,
+    height: layout.trimRect.height,
+    radius: radiusMm * layout.scale,
+    offset,
+    scale: layout.scale,
+    pathData: configService.get("dieline.pathData"),
+    customSourceWidthPx:
+      Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,
+    customSourceHeightPx:
+      Number.isFinite(sourceHeight) && sourceHeight > 0
+        ? sourceHeight
+        : undefined,
+  };
+}
