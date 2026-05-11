@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Added a typed `pooder.kit.image-placement` capability facade and a
+  capability-only image placement extension that accepts caller-provided layer
+  ids and config namespaces while keeping `ImageTool` as the compatibility
+  wrapper.
+
 ### Changed
 
 - Updated the legacy `exportImage` design export command to delegate browser

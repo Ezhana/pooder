@@ -3,7 +3,10 @@ import { DesignExportExtension } from "./extensions/design-export";
 import { DielineWorkflowExtension } from "./extensions/dieline-workflow";
 import { DielineTool } from "./extensions/dieline";
 import { FeatureTool } from "./extensions/feature";
-import { ImageTool } from "./extensions/image";
+import {
+  ImagePlacementCapabilityExtension,
+  ImageTool,
+} from "./extensions/image";
 import { RulerTool } from "./extensions/ruler";
 import { SizeTool } from "./extensions/size";
 import { TemplateOverlayTool } from "./extensions/template-overlay";
@@ -27,6 +30,10 @@ export const createFeatureExtension = (
 ) => new FeatureTool(options);
 
 export const createImageExtension = () => new ImageTool();
+
+export const createImagePlacementCapability = (
+  options?: ConstructorParameters<typeof ImagePlacementCapabilityExtension>[0],
+) => new ImagePlacementCapabilityExtension(options);
 
 export const createRulerExtension = (
   options?: ConstructorParameters<typeof RulerTool>[0],

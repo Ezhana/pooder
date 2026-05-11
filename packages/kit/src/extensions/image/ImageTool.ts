@@ -45,6 +45,14 @@ import {
   IMAGE_OVERLAY_LAYER_ID,
 } from "../../shared/constants/layers";
 import { createImageCommands } from "./commands";
+import {
+  IMAGE_PLACEMENT_CAPABILITY_ID,
+  createImagePlacementCapabilityDefinition,
+  normalizeImagePlacementConfigNamespace,
+  normalizeImagePlacementLayerId,
+  type ImagePlacementCapabilityApi,
+  type ImagePlacementCapabilityOptions,
+} from "./capability";
 import { createImageConfigurations } from "./config";
 import {
   computeImageOperationUpdates,
@@ -132,27 +140,28 @@ interface ImageSessionOverlayState {
   geometry: SceneGeometrySnapshot;
 }
 
-interface UpsertImageOptions {
+export interface UpsertImageOptions {
   id?: string;
   mode?: "replace" | "add";
   addOptions?: Partial<ImageItem>;
   operation?: ImageOperation;
 }
 
-interface UpdateImageOptions {
+export interface UpdateImageOptions {
   target?: "auto" | "config" | "working";
 }
 
-interface ExportCroppedImageOptions {
+export interface ExportCroppedImageOptions {
   multiplier?: number;
   format?: "png" | "jpeg";
 }
 
-interface ExportUserCroppedImageOptions extends ExportCroppedImageOptions {
+export interface ImageExportUserCroppedImageOptions
+  extends ExportCroppedImageOptions {
   imageIds?: string[];
 }
 
-interface ExportUserCroppedImageResult {
+export interface ImageExportUserCroppedImageResult {
   url: string;
   width: number;
   height: number;
@@ -178,6 +187,14 @@ type SnapLineId =
   | "frame-top"
   | "frame-center-y"
   | "frame-bottom";
+
+export interface ImageToolOptions extends ImagePlacementCapabilityOptions {
+  id?: string;
+  contributeTool?: boolean;
+  contributeCommands?: boolean;
+  contributeConfigurations?: boolean;
+  toolName?: string;
+}
 
 interface SnapMatch {
   axis: SnapAxis;
@@ -232,7 +249,7 @@ const IMAGE_CONTROL_DESCRIPTORS: ImageControlDescriptor[] = [
 ];
 
 export class ImageTool implements ExtensionDefinition {
-  id = "pooder.kit.image";
+  id: string;
 
   metadata = {
     name: "ImageTool",
@@ -277,8 +294,37 @@ export class ImageTool implements ExtensionDefinition {
   private canvasAfterRenderHandler?: () => void;
   private renderProducerDisposable?: { dispose: () => void };
   private readonly subscriptions = new SubscriptionBag();
+  private readonly capabilityId: string;
+  private readonly configNamespace: string;
+  private readonly imageLayerId: string;
+  private readonly overlayLayerId: string;
+  private readonly contributeLegacyTool: boolean;
+  private readonly contributeLegacyCommands: boolean;
+  private readonly contributeConfigDefinitions: boolean;
+  private readonly toolName: string;
   private imageControlsByCapabilityKey: Map<string, Record<string, Control>> =
     new Map();
+
+  constructor(options: ImageToolOptions = {}) {
+    this.id = normalizeImagePlacementLayerId(options.id, "pooder.kit.image");
+    this.capabilityId = options.capabilityId || IMAGE_PLACEMENT_CAPABILITY_ID;
+    this.configNamespace = normalizeImagePlacementConfigNamespace(
+      options.configNamespace,
+    );
+    this.imageLayerId = normalizeImagePlacementLayerId(
+      options.layers?.imageLayerId,
+      IMAGE_OBJECT_LAYER_ID,
+    );
+    this.overlayLayerId = normalizeImagePlacementLayerId(
+      options.layers?.overlayLayerId,
+      IMAGE_OVERLAY_LAYER_ID,
+    );
+    this.contributeLegacyTool = options.contributeTool !== false;
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+    this.contributeConfigDefinitions =
+      options.contributeConfigurations !== false;
+    this.toolName = options.toolName || "Image";
+  }
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
@@ -292,7 +338,7 @@ export class ImageTool implements ExtensionDefinition {
       () => ({
         passes: [
           {
-            id: IMAGE_OBJECT_LAYER_ID,
+            id: this.imageLayerId,
             stack: this.isToolActive
               ? IMAGE_OBJECT_ACTIVE_STACK
               : IMAGE_OBJECT_STACK,
@@ -307,7 +353,7 @@ export class ImageTool implements ExtensionDefinition {
             objects: this.imageSpecs,
           },
           {
-            id: IMAGE_OVERLAY_LAYER_ID,
+            id: this.overlayLayerId,
             stack: IMAGE_OVERLAY_STACK,
             order: 0,
             visibility: {
@@ -369,14 +415,16 @@ export class ImageTool implements ExtensionDefinition {
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    this.applyCommittedItems(configService.get("image.items", []) || []);
+    this.applyCommittedItems(
+      configService.get(this.getConfigKey("items"), []) || [],
+    );
 
     this.subscriptions.onConfigChange(
       configService,
       (e: { key: string; value: any }) => {
         if (this.isUpdatingConfig) return;
 
-        if (e.key === "image.items") {
+        if (e.key === this.getConfigKey("items")) {
           this.applyCommittedItems(e.value || []);
           this.updateImages();
           return;
@@ -384,14 +432,14 @@ export class ImageTool implements ExtensionDefinition {
 
         if (
           e.key.startsWith("size.") ||
-          e.key.startsWith("image.frame.") ||
-          e.key.startsWith("image.session.") ||
-          e.key.startsWith("image.control.")
+          e.key.startsWith(this.getConfigKey("frame.")) ||
+          e.key.startsWith(this.getConfigKey("session.")) ||
+          e.key.startsWith(this.getConfigKey("control."))
         ) {
-          if (e.key === "image.session.placementPolicy") {
+          if (e.key === this.getConfigKey("session.placementPolicy")) {
             this.clearSessionNotice();
           }
-          if (e.key.startsWith("image.control.")) {
+          if (e.key.startsWith(this.getConfigKey("control."))) {
             this.imageControlsByCapabilityKey.clear();
           }
           this.updateImages();
@@ -476,7 +524,7 @@ export class ImageTool implements ExtensionDefinition {
     }
 
     const selectedImage = list.find(
-      (obj: any) => obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID,
+      (obj: any) => obj?.data?.layerId === this.imageLayerId,
     );
     this.isImageSelectionActive = !!selectedImage;
     if (selectedImage?.data?.id) {
@@ -577,7 +625,7 @@ export class ImageTool implements ExtensionDefinition {
   private getActiveImageTarget(target: any): any | null {
     if (!this.isToolActive) return null;
     if (!target) return null;
-    if (target?.data?.layerId !== IMAGE_OBJECT_LAYER_ID) return null;
+    if (target?.data?.layerId !== this.imageLayerId) return null;
     if (typeof target?.data?.id !== "string") return null;
     return target;
   }
@@ -780,7 +828,7 @@ export class ImageTool implements ExtensionDefinition {
     const ctx = this.canvasService.canvas.contextTop;
     if (!ctx) return;
     const color =
-      this.getConfig<string>("image.control.borderColor", "#1677ff") ||
+      this.getConfig<string>(this.getConfigKey("control.borderColor"), "#1677ff") ||
       "#1677ff";
     ctx.save();
     ctx.strokeStyle = color;
@@ -889,19 +937,26 @@ export class ImageTool implements ExtensionDefinition {
 
   private getImageControlVisualConfig(): ImageControlVisualConfig {
     const cornerSizeRaw = Number(
-      this.getConfig<number>("image.control.cornerSize", 14) ?? 14,
+      this.getConfig<number>(this.getConfigKey("control.cornerSize"), 14) ??
+        14,
     );
     const touchCornerSizeRaw = Number(
-      this.getConfig<number>("image.control.touchCornerSize", 24) ?? 24,
+      this.getConfig<number>(
+        this.getConfigKey("control.touchCornerSize"),
+        24,
+      ) ?? 24,
     );
     const borderScaleFactorRaw = Number(
-      this.getConfig<number>("image.control.borderScaleFactor", 1.5) ?? 1.5,
+      this.getConfig<number>(
+        this.getConfigKey("control.borderScaleFactor"),
+        1.5,
+      ) ?? 1.5,
     );
     const paddingRaw = Number(
-      this.getConfig<number>("image.control.padding", 0) ?? 0,
+      this.getConfig<number>(this.getConfigKey("control.padding"), 0) ?? 0,
     );
     const cornerStyleRaw = (this.getConfig<string>(
-      "image.control.cornerStyle",
+      this.getConfigKey("control.cornerStyle"),
       "circle",
     ) || "circle") as string;
     const cornerStyle: "rect" | "circle" =
@@ -916,18 +971,24 @@ export class ImageTool implements ExtensionDefinition {
         : 24,
       cornerStyle,
       cornerColor:
-        this.getConfig<string>("image.control.cornerColor", "#ffffff") ||
-        "#ffffff",
+        this.getConfig<string>(
+          this.getConfigKey("control.cornerColor"),
+          "#ffffff",
+        ) || "#ffffff",
       cornerStrokeColor:
-        this.getConfig<string>("image.control.cornerStrokeColor", "#1677ff") ||
-        "#1677ff",
+        this.getConfig<string>(
+          this.getConfigKey("control.cornerStrokeColor"),
+          "#1677ff",
+        ) || "#1677ff",
       transparentCorners: !!this.getConfig<boolean>(
-        "image.control.transparentCorners",
+        this.getConfigKey("control.transparentCorners"),
         false,
       ),
       borderColor:
-        this.getConfig<string>("image.control.borderColor", "#1677ff") ||
-        "#1677ff",
+        this.getConfig<string>(
+          this.getConfigKey("control.borderColor"),
+          "#1677ff",
+        ) || "#1677ff",
       borderScaleFactor: Number.isFinite(borderScaleFactorRaw)
         ? Math.max(0.5, Math.min(8, borderScaleFactorRaw))
         : 1.5,
@@ -970,7 +1031,7 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private isDebugEnabled(): boolean {
-    return !!this.getConfig<boolean>("image.debug", false);
+    return !!this.getConfig<boolean>(this.getConfigKey("debug"), false);
   }
 
   private debug(message: string, payload?: any) {
@@ -983,11 +1044,27 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      tools: [
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createImagePlacementCapabilityDefinition(
+          this.getImagePlacementFacade(),
+          {
+            capabilityId: this.capabilityId,
+            configNamespace: this.configNamespace,
+            layers: {
+              imageLayerId: this.imageLayerId,
+              overlayLayerId: this.overlayLayerId,
+            },
+          },
+        ),
+      ],
+    };
+
+    if (this.contributeLegacyTool) {
+      contributions.tools = [
         {
           id: this.id,
-          name: "Image",
+          name: this.toolName,
           interaction: "session",
           commands: {
             begin: "imageSessionReset",
@@ -1000,10 +1077,43 @@ export class ImageTool implements ExtensionDefinition {
             leavePolicy: "block",
           },
         },
-      ],
-      configurations: createImageConfigurations(),
-      commands: createImageCommands(this),
+      ];
+    }
+
+    if (this.contributeConfigDefinitions) {
+      contributions.configurations = createImageConfigurations(
+        this.configNamespace,
+      );
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = createImageCommands(this);
+    }
+
+    return contributions;
+  }
+
+  private getImagePlacementFacade(): ImagePlacementCapabilityApi {
+    return {
+      addImage: (url, options, operation) =>
+        this.addImageEntry(url, options, operation),
+      applyImageOperation: (id, operation, options) =>
+        this.applyImageOperation(id, operation, options),
+      completeSession: () => this.completeImageSession(),
+      exportUserCroppedImage: (options) =>
+        this.exportUserCroppedImage(options),
+      focusImage: (id, options) => this.setImageFocus(id, options),
+      getViewState: () => this.getImageViewState(),
+      resetSession: () => this.resetImageSession(),
+      setImageTransform: (id, updates, options) =>
+        this.setImageTransform(id, updates, options),
+      upsertImage: (url, options) => this.upsertImageEntry(url, options),
+      validateSession: () => this.validateImageSession(),
     };
+  }
+
+  private getConfigKey(path: string): string {
+    return `${this.configNamespace}.${path}`;
   }
 
   private normalizeItem(item: ImageItem): ImageItem {
@@ -1044,7 +1154,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private getPlacementPolicy(): ImageSessionPlacementPolicy {
     const policy = this.getConfig<ImageSessionPlacementPolicy>(
-      "image.session.placementPolicy",
+      this.getConfigKey("session.placementPolicy"),
       "free",
     );
     return policy === "warn" || policy === "strict" ? policy : "free";
@@ -1297,7 +1407,7 @@ export class ImageTool implements ExtensionDefinition {
         const configService = this.context?.services.get<ConfigurationService>(
           CONFIGURATION_SERVICE,
         );
-        configService?.update("image.items", this.items);
+        configService?.update(this.getConfigKey("items"), this.items);
 
         if (!skipCanvasUpdate) {
           this.updateImages();
@@ -1324,13 +1434,13 @@ export class ImageTool implements ExtensionDefinition {
   private getImageObjects(): any[] {
     if (!this.canvasService) return [];
     return this.canvasService.canvas.getObjects().filter((obj: any) => {
-      return obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID;
+      return obj?.data?.layerId === this.imageLayerId;
     }) as any[];
   }
 
   private getOverlayObjects(): any[] {
     if (!this.canvasService) return [];
-    return this.canvasService.getPassObjects(IMAGE_OVERLAY_LAYER_ID) as any[];
+    return this.canvasService.getPassObjects(this.overlayLayerId) as any[];
   }
 
   private getImageObject(id: string): any | undefined {
@@ -1481,7 +1591,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private getFrameVisualConfig(): FrameVisualConfig {
     const strokeStyleRaw = (this.getConfig<string>(
-      "image.frame.strokeStyle",
+      this.getConfigKey("frame.strokeStyle"),
       "dashed",
     ) || "dashed") as string;
     const strokeStyle: "solid" | "dashed" | "hidden" =
@@ -1490,26 +1600,32 @@ export class ImageTool implements ExtensionDefinition {
         : "dashed";
 
     const strokeWidth = Number(
-      this.getConfig<number>("image.frame.strokeWidth", 2) ?? 2,
+      this.getConfig<number>(this.getConfigKey("frame.strokeWidth"), 2) ?? 2,
     );
     const dashLength = Number(
-      this.getConfig<number>("image.frame.dashLength", 8) ?? 8,
+      this.getConfig<number>(this.getConfigKey("frame.dashLength"), 8) ?? 8,
     );
 
     return {
       strokeColor:
-        this.getConfig<string>("image.frame.strokeColor", "#808080") ||
+        this.getConfig<string>(
+          this.getConfigKey("frame.strokeColor"),
+          "#808080",
+        ) ||
         "#808080",
       strokeWidth: Number.isFinite(strokeWidth) ? Math.max(0, strokeWidth) : 2,
       strokeStyle,
       dashLength: Number.isFinite(dashLength) ? Math.max(1, dashLength) : 8,
       innerBackground:
         this.getConfig<string>(
-          "image.frame.innerBackground",
+          this.getConfigKey("frame.innerBackground"),
           "rgba(0,0,0,0)",
         ) || "rgba(0,0,0,0)",
       outerBackground:
-        this.getConfig<string>("image.frame.outerBackground", "#f5f5f5") ||
+        this.getConfig<string>(
+          this.getConfigKey("frame.outerBackground"),
+          "#f5f5f5",
+        ) ||
         "#f5f5f5",
     };
   }
@@ -1681,7 +1797,7 @@ export class ImageTool implements ExtensionDefinition {
         src: render.src,
         data: {
           id: item.id,
-          layerId: IMAGE_OBJECT_LAYER_ID,
+          layerId: this.imageLayerId,
           type: "image-item",
         },
         props,
@@ -1835,7 +1951,7 @@ export class ImageTool implements ExtensionDefinition {
     const target = e?.target;
     const id = target?.data?.id;
     const layerId = target?.data?.layerId;
-    if (typeof id !== "string" || layerId !== IMAGE_OBJECT_LAYER_ID) return;
+    if (typeof id !== "string" || layerId !== this.imageLayerId) return;
     if (this.movingImageId === id) {
       this.applyMoveSnapToTarget(target);
     }
@@ -2084,7 +2200,7 @@ export class ImageTool implements ExtensionDefinition {
   private async exportCroppedImageByIds(
     imageIds: string[],
     options: ExportCroppedImageOptions,
-  ): Promise<ExportUserCroppedImageResult> {
+  ): Promise<ImageExportUserCroppedImageResult> {
     if (!this.canvasService) {
       throw new Error("CanvasService not initialized");
     }
@@ -2120,7 +2236,7 @@ export class ImageTool implements ExtensionDefinition {
         .getObjects()
         .filter((obj: any) => {
           return (
-            obj?.data?.layerId === IMAGE_OBJECT_LAYER_ID &&
+            obj?.data?.layerId === this.imageLayerId &&
             typeof obj?.data?.id === "string" &&
             idSet.has(obj.data.id)
           );
@@ -2179,8 +2295,8 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private async exportUserCroppedImage(
-    options: ExportUserCroppedImageOptions = {},
-  ): Promise<ExportUserCroppedImageResult> {
+    options: ImageExportUserCroppedImageOptions = {},
+  ): Promise<ImageExportUserCroppedImageResult> {
     if (!this.canvasService) {
       throw new Error("CanvasService not initialized");
     }

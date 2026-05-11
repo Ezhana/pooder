@@ -1,4 +1,6 @@
+export * from "./capability";
 export * from "./ImageTool";
+export * from "./ImagePlacementCapabilityExtension";
 export * from "./commands";
 export * from "./config";
 export * from "./imageOperations";

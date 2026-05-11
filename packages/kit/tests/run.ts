@@ -14,6 +14,11 @@ import {
   isMaskConnected8,
 } from "../src/extensions/maskOps";
 import { computeDetectEdgeSize } from "../src/extensions/edgeScale";
+import {
+  IMAGE_PLACEMENT_CAPABILITY_ID,
+  createImagePlacementCapabilityDefinition,
+  type ImagePlacementCapabilityApi,
+} from "../src/extensions/image/capability";
 import { createImageCommands } from "../src/extensions/image/commands";
 import { createImageConfigurations } from "../src/extensions/image/config";
 import { createDesignExportCommands } from "../src/extensions/design-export/commands";
@@ -113,8 +118,21 @@ class FakeCanvasService {
 
   requestRenderAll() {}
 
+  getPassObjects() {
+    return [];
+  }
+
   getSceneScale() {
     return 1;
+  }
+
+  getScreenViewportRect() {
+    return {
+      left: 0,
+      top: 0,
+      width: this.canvas.width,
+      height: this.canvas.height,
+    };
   }
 
   toSceneRect<T extends { left: number; top: number; width: number; height: number }>(
@@ -145,18 +163,6 @@ class FakeCanvasService {
     return { ...point };
   }
 
-  getScreenViewportRect() {
-    return {
-      left: 0,
-      top: 0,
-      width: this.canvas.width,
-      height: this.canvas.height,
-    };
-  }
-
-  getPassObjects() {
-    return [];
-  }
 }
 
 class FakeBrowserSceneExportService {
@@ -959,6 +965,86 @@ async function testExtensionDependencyActivation() {
   );
 }
 
+async function testImagePlacementCapabilityExtension() {
+  const runtime = new Pooder();
+  const facade: ImagePlacementCapabilityApi = {
+    addImage: async () => "image-1",
+    applyImageOperation: async () => {},
+    completeSession: async () => ({ ok: true }),
+    exportUserCroppedImage: async () => ({
+      format: "png",
+      height: 1,
+      imageIds: [],
+      multiplier: 1,
+      url: "data:image/png;base64,test",
+      width: 1,
+    }),
+    focusImage: (id) => ({ ok: true, id }),
+    getViewState: () => ({
+      focusedId: null,
+      focusedItem: null,
+      hasAnyImage: false,
+      hasWorkingChanges: false,
+      isImageSelectionActive: false,
+      isToolActive: false,
+      items: [],
+      placementPolicy: "free",
+      sessionNotice: null,
+      source: "committed",
+    }),
+    resetSession: () => {},
+    setImageTransform: async () => {},
+    upsertImage: async () => ({ id: "image-1", mode: "add" }),
+    validateSession: async () => ({ ok: true }),
+  };
+  runtime.extensions.register({
+    id: "test.image-placement",
+    activate() {},
+    contribute() {
+      return {
+        capabilities: [
+          createImagePlacementCapabilityDefinition(facade, {
+            configNamespace: "storefrontImage",
+            layers: {
+              imageLayerId: "app.image",
+              overlayLayerId: "app.image.overlay",
+            },
+          }),
+        ],
+        configurations: createImageConfigurations("storefrontImage"),
+      };
+    },
+  });
+
+  await runtime.extensions.flushActivation();
+
+  const registeredFacade = runtime.capabilities.get<ImagePlacementCapabilityApi>(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
+  if (!registeredFacade) {
+    throw new Error("image placement capability facade should be registered");
+  }
+  assertDeepEqual(
+    registeredFacade.getViewState().items,
+    [],
+    "image placement capability facade should expose image state",
+  );
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(IMAGE_PLACEMENT_CAPABILITY_ID),
+    "image placement capability registration should not require a tool",
+  );
+  assert(
+    runtime.config.getDefinition("storefrontImage.items"),
+    "image placement capability should accept caller config namespace",
+  );
+
+  await runtime.dispose();
+}
+
 async function testDielineWorkflowExtensionActivation() {
   const runtime = new Pooder();
   const commandService =
@@ -1251,6 +1337,7 @@ async function main() {
   testContributionCompatibility();
   await testDesignExportExtensionCommand();
   await testExtensionDependencyActivation();
+  await testImagePlacementCapabilityExtension();
   await testDielineWorkflowExtensionActivation();
   await testDielineWorkflowExtensionCommands();
   console.log("ok");

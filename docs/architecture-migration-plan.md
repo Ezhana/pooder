@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M3 in progress; P3.S1 next.
+Current milestone: M3 in progress; P3.S2 next.
 
 Completed:
 
@@ -42,10 +42,14 @@ Completed:
   selected source layers, source elements, element-bounds crops, and scene frame
   crops through platform scene/layer contracts while legacy design export
   commands delegate through a compatibility bridge.
+- P3.S1 image placement capability has been added. Applications can resolve a
+  typed `pooder.kit.image-placement` facade for image placement state,
+  transforms, validation, and export while `ImageTool` remains as the legacy
+  tool wrapper.
 
 Next recommended slice:
 
-- P3.S1 - Image Placement Capability.
+- P3.S2 - Edge Detection And Dieline Geometry Capabilities.
 
 Resume instruction for a new thread:
 
