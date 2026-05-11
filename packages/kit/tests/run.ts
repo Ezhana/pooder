@@ -33,7 +33,12 @@ import {
 import { createImageCommands } from "../src/extensions/image/commands";
 import { createImageConfigurations } from "../src/extensions/image/config";
 import { createDesignExportCommands } from "../src/extensions/design-export/commands";
-import { DesignExportExtension } from "../src/extensions/design-export";
+import {
+  DESIGN_EXPORT_CAPABILITY_ID,
+  DesignExportCapabilityExtension,
+  DesignExportExtension,
+  type DesignExportCapabilityApi,
+} from "../src/extensions/design-export";
 import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
 import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config";
 import {
@@ -870,6 +875,12 @@ async function testDesignExportExtensionCommand() {
     undefined,
     "design export extension should not expose exportCutImage",
   );
+  assert(
+    !!runtime.capabilities.get<DesignExportCapabilityApi>(
+      DESIGN_EXPORT_CAPABILITY_ID,
+    ),
+    "design export extension should register a capability facade",
+  );
 
   const originalConsoleError = console.error;
   console.error = () => {};
@@ -943,6 +954,98 @@ async function testDesignExportExtensionCommand() {
     ["image.custom"],
     "legacy exportImage should map platform source layers",
   );
+
+  await runtime.dispose();
+}
+
+async function testDesignExportCapabilityExtension() {
+  const runtime = new Pooder();
+  const commandService =
+    runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
+  const exportService = new FakeBrowserSceneExportService();
+
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 1, top: 2, width: 30, height: 20 },
+    format: "png",
+    height: 60,
+    multiplier: 3,
+    sourceElementIds: ["element-1"],
+    sourceLayerIds: ["app.design"],
+    url: "data:image/png;base64,capability",
+    width: 90,
+  };
+
+  runtime.extensions.register(
+    new DesignExportCapabilityExtension({
+      layers: {
+        sourceLayerIds: ["app.design"],
+      },
+    }),
+  );
+  runtime.services.register(exportService as any, BROWSER_SCENE_EXPORT_SERVICE);
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState(DESIGN_EXPORT_CAPABILITY_ID)?.state,
+    "active",
+    "design export capability should activate",
+  );
+  assertEqual(
+    commandService.getCommand("exportImage"),
+    undefined,
+    "design export capability should not register legacy exportImage",
+  );
+
+  const facade = runtime.capabilities.get<DesignExportCapabilityApi>(
+    DESIGN_EXPORT_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("design export capability facade should be registered");
+  }
+
+  const result = await facade.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 1, top: 2, width: 30, height: 20 },
+    },
+    format: "png",
+    multiplier: 3,
+    sourceElementIds: ["element-1"],
+  });
+  const lastCall = exportService.calls[exportService.calls.length - 1];
+  assertDeepEqual(
+    lastCall.sourceLayerIds,
+    ["app.design"],
+    "design export capability should use caller default source layers",
+  );
+  assertDeepEqual(
+    lastCall.sourceElementIds,
+    ["element-1"],
+    "design export capability should delegate source element ids",
+  );
+  assertDeepEqual(
+    lastCall.crop,
+    { type: "sceneRect", rect: { left: 1, top: 2, width: 30, height: 20 } },
+    "design export capability should delegate explicit scene crop",
+  );
+  assertEqual(
+    result.url,
+    "data:image/png;base64,capability",
+    "design export capability should map platform export url",
+  );
+  assertDeepEqual(
+    result.sourceElementIds,
+    ["element-1"],
+    "design export capability should map platform source elements",
+  );
+  assertDeepEqual(
+    result.crop,
+    { left: 1, top: 2, width: 30, height: 20 },
+    "design export capability should map platform crop",
+  );
+
+  await runtime.dispose();
 }
 
 async function testExtensionDependencyActivation() {
@@ -1784,6 +1887,7 @@ async function main() {
   testImageViewStateHelper();
   testContributionCompatibility();
   await testDesignExportExtensionCommand();
+  await testDesignExportCapabilityExtension();
   await testExtensionDependencyActivation();
   await testImagePlacementCapabilityExtension();
   await testEdgeDetectionCapabilityExtension();

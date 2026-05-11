@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M4 in progress; P3.S5 next.
+Current milestone: M4 in progress; P3.S6 next.
 
 Completed:
 
@@ -61,10 +61,14 @@ Completed:
   enable each capability independently, and provide caller-owned config
   namespaces or layer ids where supported while legacy wrapper exports remain
   available.
+- P3.S5 export capability has been added. Applications can resolve a typed
+  `pooder.kit.design-export` facade for layer, element, scene-rect, and frame
+  exports while the legacy `exportImage` command remains available as a
+  compatibility bridge.
 
 Next recommended slice:
 
-- P3.S5 - Export Capability.
+- P3.S6 - Feature Capability.
 
 Resume instruction for a new thread:
 

@@ -6,50 +6,41 @@ import {
 import {
   BROWSER_SCENE_EXPORT_SERVICE,
   BrowserSceneExportService,
-  type BrowserSceneExportCrop,
-  type BrowserSceneExportOptions,
 } from "@pooder/platform-browser";
 import {
   IMAGE_OBJECT_LAYER_ID,
   WHITE_INK_OBJECT_LAYER_ID,
 } from "../../shared/constants/layers";
+import {
+  createDesignExportCapabilityDefinition,
+  DESIGN_EXPORT_CAPABILITY_ID,
+  normalizeDesignExportLayerIds,
+  type DesignExportCapabilityApi,
+  type DesignExportCapabilityOptions,
+  type ExportImageOptions,
+  type ExportImageResult,
+} from "./capability";
 import { createDesignExportCommands } from "./commands";
 
-export type ExportImageFormat = "png" | "jpeg";
-
-export interface ExportImageOptions
-  extends Omit<BrowserSceneExportOptions, "crop" | "sourceLayerIds"> {
-  format?: ExportImageFormat;
-  multiplier?: number;
-  layerIds?: readonly string[];
-  sourceLayerIds?: readonly string[];
-  crop?: BrowserSceneExportCrop;
-}
-
-export interface ExportImageResult {
-  url: string;
-  width: number;
-  height: number;
-  format: ExportImageFormat;
-  multiplier: number;
-  layerIds: string[];
-}
+export type {
+  ExportImageFormat,
+  ExportImageOptions,
+  ExportImageResult,
+} from "./capability";
 
 const DEFAULT_EXPORT_LAYER_IDS = [
   IMAGE_OBJECT_LAYER_ID,
   WHITE_INK_OBJECT_LAYER_ID,
 ] as const;
 
-function normalizeLayerIds(layerIds: unknown): string[] {
-  const values = Array.isArray(layerIds) ? layerIds : DEFAULT_EXPORT_LAYER_IDS;
-  const normalized = values
-    .map((layerId) => String(layerId || "").trim())
-    .filter((layerId) => layerId.length > 0);
-  return Array.from(new Set(normalized));
+export interface DesignExportExtensionOptions
+  extends DesignExportCapabilityOptions {
+  id?: string;
+  contributeCommands?: boolean;
 }
 
 export class DesignExportExtension implements ExtensionDefinition {
-  id = "pooder.kit.design-export";
+  id: string;
   public metadata = {
     name: "DesignExportExtension",
   };
@@ -58,6 +49,18 @@ export class DesignExportExtension implements ExtensionDefinition {
   };
 
   private exportService?: BrowserSceneExportService;
+  private readonly capabilityId: string;
+  private readonly defaultLayerIds: readonly string[];
+  private readonly contributeLegacyCommands: boolean;
+
+  constructor(options: DesignExportExtensionOptions = {}) {
+    this.id = String(options.id || DESIGN_EXPORT_CAPABILITY_ID).trim() ||
+      DESIGN_EXPORT_CAPABILITY_ID;
+    this.capabilityId = options.capabilityId || DESIGN_EXPORT_CAPABILITY_ID;
+    this.defaultLayerIds = options.layers?.sourceLayerIds ||
+      DEFAULT_EXPORT_LAYER_IDS;
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+  }
 
   activate(context: ExtensionContext) {
     this.exportService = context.services.getOrThrow<BrowserSceneExportService>(
@@ -66,9 +69,22 @@ export class DesignExportExtension implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      commands: createDesignExportCommands(this),
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createDesignExportCapabilityDefinition(this.getDesignExportFacade(), {
+          capabilityId: this.capabilityId,
+          layers: {
+            sourceLayerIds: this.defaultLayerIds,
+          },
+        }),
+      ],
     };
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = createDesignExportCommands(this);
+    }
+
+    return contributions;
   }
 
   async exportImage(
@@ -78,8 +94,9 @@ export class DesignExportExtension implements ExtensionDefinition {
       throw new Error("design-export-not-initialized");
     }
 
-    const layerIds = normalizeLayerIds(
+    const layerIds = normalizeDesignExportLayerIds(
       options.sourceLayerIds ?? options.layerIds,
+      this.defaultLayerIds,
     );
     try {
       const result = await this.exportService.exportImage({
@@ -96,6 +113,8 @@ export class DesignExportExtension implements ExtensionDefinition {
         format: result.format,
         multiplier: result.multiplier,
         layerIds: result.sourceLayerIds,
+        sourceElementIds: result.sourceElementIds,
+        crop: result.crop,
       };
     } catch (error) {
       if (error instanceof Error) {
@@ -117,5 +136,11 @@ export class DesignExportExtension implements ExtensionDefinition {
       }
       throw error;
     }
+  }
+
+  private getDesignExportFacade(): DesignExportCapabilityApi {
+    return {
+      exportImage: (options) => this.exportImage(options),
+    };
   }
 }

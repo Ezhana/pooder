@@ -20,6 +20,9 @@
   `pooder.kit.size`, and `pooder.kit.ruler` capability facades with
   capability-only extensions so presentational helpers can be enabled
   independently without registering kit-owned toolbar tools.
+- Added a typed `pooder.kit.design-export` capability facade and
+  capability-only design export extension for layer, element, scene-rect, and
+  frame exports while keeping the legacy `exportImage` command bridge.
 
 ### Changed
 
@@ -36,6 +39,8 @@
   register typed capability facades while preserving existing command/config
   compatibility. Capability-only variants accept caller-owned config
   namespaces or layer ids where supported.
+- Updated the legacy design export wrapper to register the typed export facade
+  while preserving the existing `exportImage` command behavior.
 
 ### Planning Notes
 

@@ -1,5 +1,5 @@
 import type { CommandContribution } from "@pooder/core";
-import type { ExportImageOptions } from "./DesignExportExtension";
+import type { ExportImageOptions } from "./capability";
 
 export function createDesignExportCommands(tool: {
   exportImage(options?: ExportImageOptions): Promise<unknown>;

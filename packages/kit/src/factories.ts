@@ -2,7 +2,10 @@ import {
   BackgroundCapabilityExtension,
   BackgroundTool,
 } from "./extensions/background";
-import { DesignExportExtension } from "./extensions/design-export";
+import {
+  DesignExportCapabilityExtension,
+  DesignExportExtension,
+} from "./extensions/design-export";
 import { DielineWorkflowExtension } from "./extensions/dieline-workflow";
 import {
   DielineGeometryCapabilityExtension,
@@ -33,7 +36,13 @@ export const createBackgroundCapability = (
   options?: ConstructorParameters<typeof BackgroundCapabilityExtension>[0],
 ) => new BackgroundCapabilityExtension(options);
 
-export const createDesignExportExtension = () => new DesignExportExtension();
+export const createDesignExportExtension = (
+  options?: ConstructorParameters<typeof DesignExportExtension>[0],
+) => new DesignExportExtension(options);
+
+export const createDesignExportCapability = (
+  options?: ConstructorParameters<typeof DesignExportCapabilityExtension>[0],
+) => new DesignExportCapabilityExtension(options);
 
 export const createDielineExtension = (
   options?: ConstructorParameters<typeof DielineTool>[0],
