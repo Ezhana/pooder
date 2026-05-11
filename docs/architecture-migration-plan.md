@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: P6 hardening in progress; P6.S2 next.
+Current milestone: capability-first migration complete.
 
 Completed:
 
@@ -101,16 +101,21 @@ Completed:
   contracts, browser scene adapter layer/element mapping, and kit capability
   definition plus layer-targeted helper behavior are now covered by package
   tests.
+- P6.S2 documentation has been added. Capability authorship, app-owned
+  workflow composition, and legacy kit migration notes are documented in
+  `docs/capability-authoring.md`, `docs/app-workflow-composition.md`, and
+  `docs/legacy-kit-migration.md`.
 
 Next recommended slice:
 
-- P6.S2 - Documentation.
+- None. The planned capability-first migration slices are complete.
 
 Resume instruction for a new thread:
 
 > Read `docs/architecture-migration-plan.md`, continue from `Current Progress`,
-> and execute the next incomplete slice. Keep changes scoped to that slice and
-> update `Current Progress` plus relevant package changelogs before finishing.
+> and execute the next incomplete slice if one is listed. Keep changes scoped to
+> that slice and update `Current Progress` plus relevant package changelogs
+> before finishing.
 
 ## Target Boundary
 

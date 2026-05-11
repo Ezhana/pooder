@@ -32,6 +32,8 @@
 - Added migration slice P6.S1 contract test coverage for capability registry
   registration, event, clone, and cleanup behavior plus headless scene
   validation, defensive copying, element movement, and rollback contracts.
+- Added migration slice P6.S2 documentation for capability authorship and
+  core-owned scene, extension, and capability contracts.
 
 ## 3.0.0
 

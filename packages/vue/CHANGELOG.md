@@ -12,6 +12,8 @@
   while Vue continues to provide only the runtime and canvas shell.
 - Verified migration slice P4.S4 with Pooder package builds plus storefront
   type and production build integration checks.
+- Added migration slice P6.S2 documentation for app-owned workflow composition
+  while Vue remains the runtime and canvas shell.
 
 ## 5.0.2
 

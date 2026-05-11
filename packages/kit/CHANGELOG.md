@@ -129,6 +129,9 @@
 - Added migration slice P6.S1 contract test coverage for kit capability
   definition metadata, caller-owned config namespaces and layer ids,
   capability-only registration, and layer-targeted dieline scene path upserts.
+- Added migration slice P6.S2 documentation for kit capability authoring,
+  app-owned workflow composition, legacy factory replacements, command bridges,
+  and `KIT_LEGACY_LAYER_PRESET` layer migration.
 
 ## 8.0.0
 

@@ -30,6 +30,8 @@
 - Added migration slice P6.S1 contract test coverage for browser scene adapter
   scoped layer sync, all core scene element type mappings, visibility, update,
   removal, and scene-owned stacking behavior.
+- Added migration slice P6.S2 documentation for platform-owned browser service
+  composition in capability-first applications.
 
 ## 1.0.2
 
