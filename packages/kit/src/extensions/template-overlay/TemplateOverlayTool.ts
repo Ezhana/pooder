@@ -13,7 +13,10 @@ import {
   type RenderPassSpec,
 } from "@pooder/platform-browser";
 import { Image as FabricImage } from "fabric";
-import { type FrameRect, resolveSurfaceFrameRect } from "../../shared/scene/frame";
+import {
+  type FrameRect,
+  resolveSurfaceFrameRect,
+} from "../../shared/scene/frame";
 import {
   createSourceSizeCache,
   type SourceSize,
@@ -30,10 +33,18 @@ import {
 import { createTemplateOverlayCommands } from "./commands";
 import { createTemplateOverlayConfigurations } from "./config";
 import {
+  createTemplateOverlayCapabilityDefinition,
+  getTemplateOverlayConfigKey,
+  normalizeTemplateOverlayConfigNamespace,
+  normalizeTemplateOverlayLayerId,
+  TEMPLATE_OVERLAY_CAPABILITY_ID,
+  type TemplateOverlayCapabilityApi,
+  type TemplateOverlayCapabilityOptions,
+} from "./capability";
+import {
   createEmptyTemplateOverlayConfig,
   normalizeTemplateOverlayConfig,
   patchTemplateOverlayConfig,
-  TEMPLATE_OVERLAY_CONFIG_KEY,
   type TemplateOverlayConfig,
   type TemplateOverlayConfigPatch,
   type TemplateOverlayPlacement,
@@ -44,19 +55,14 @@ const TEMPLATE_OVERLAY_UNDERLAY_STACK = 100;
 const TEMPLATE_OVERLAY_OVERLAY_STACK = 780;
 const DEFAULT_CLIP_TARGET_LAYER_IDS = [IMAGE_OBJECT_LAYER_ID];
 
-const RENDERED_OVERLAY_SLOTS: Array<{
-  layerId: string;
-  order: number;
-  slot: Exclude<TemplateOverlaySlotName, "back" | "normal">;
-}> = [
-  { layerId: TEMPLATE_OVERLAY_FRAME_LAYER_ID, order: 0, slot: "frame" },
-  { layerId: TEMPLATE_OVERLAY_PROD_LAYER_ID, order: 1, slot: "prod" },
-  { layerId: TEMPLATE_OVERLAY_SMALL_LAYER_ID, order: 2, slot: "small" },
-  { layerId: TEMPLATE_OVERLAY_RENDER_LAYER_ID, order: 3, slot: "render" },
-];
+export interface TemplateOverlayToolOptions extends TemplateOverlayCapabilityOptions {
+  id?: string;
+  contributeCommands?: boolean;
+  contributeConfigurations?: boolean;
+}
 
 export class TemplateOverlayTool implements ExtensionDefinition {
-  id = "pooder.kit.template-overlay";
+  id: string;
 
   metadata = {
     name: "TemplateOverlayTool",
@@ -78,13 +84,64 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   private readonly sourceSizeCache = createSourceSizeCache((src) =>
     this.loadImageSize(src),
   );
+  private readonly capabilityId: string;
+  private readonly configNamespace: string;
+  private readonly configKey: string;
+  private readonly normalLayerId: string;
+  private readonly frameLayerId: string;
+  private readonly prodLayerId: string;
+  private readonly smallLayerId: string;
+  private readonly renderLayerId: string;
+  private readonly clipTargetLayerIds: string[];
+  private readonly contributeLegacyCommands: boolean;
+  private readonly contributeConfigDefinitions: boolean;
+
+  constructor(options: TemplateOverlayToolOptions = {}) {
+    this.id =
+      String(options.id || "pooder.kit.template-overlay").trim() ||
+      "pooder.kit.template-overlay";
+    this.capabilityId = options.capabilityId || TEMPLATE_OVERLAY_CAPABILITY_ID;
+    this.configNamespace = normalizeTemplateOverlayConfigNamespace(
+      options.configNamespace,
+    );
+    this.configKey = getTemplateOverlayConfigKey(
+      this.configNamespace,
+      "config",
+    );
+    this.normalLayerId = normalizeTemplateOverlayLayerId(
+      options.layers?.normalLayerId,
+      TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
+    );
+    this.frameLayerId = normalizeTemplateOverlayLayerId(
+      options.layers?.frameLayerId,
+      TEMPLATE_OVERLAY_FRAME_LAYER_ID,
+    );
+    this.prodLayerId = normalizeTemplateOverlayLayerId(
+      options.layers?.prodLayerId,
+      TEMPLATE_OVERLAY_PROD_LAYER_ID,
+    );
+    this.smallLayerId = normalizeTemplateOverlayLayerId(
+      options.layers?.smallLayerId,
+      TEMPLATE_OVERLAY_SMALL_LAYER_ID,
+    );
+    this.renderLayerId = normalizeTemplateOverlayLayerId(
+      options.layers?.renderLayerId,
+      TEMPLATE_OVERLAY_RENDER_LAYER_ID,
+    );
+    this.clipTargetLayerIds =
+      options.layers?.clipTargetLayerIds?.map((id) =>
+        normalizeTemplateOverlayLayerId(id, IMAGE_OBJECT_LAYER_ID),
+      ) || DEFAULT_CLIP_TARGET_LAYER_IDS;
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+    this.contributeConfigDefinitions =
+      options.contributeConfigurations !== false;
+  }
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -98,14 +155,14 @@ export class TemplateOverlayTool implements ExtensionDefinition {
       CONFIGURATION_SERVICE,
     );
     this.config = normalizeTemplateOverlayConfig(
-      configService.get(TEMPLATE_OVERLAY_CONFIG_KEY),
+      configService.get(this.configKey),
     );
 
     this.subscriptions.onConfigChange(
       configService,
       (event: { key: string; value: unknown }) => {
         if (this.isUpdatingConfig) return;
-        if (event.key === TEMPLATE_OVERLAY_CONFIG_KEY) {
+        if (event.key === this.configKey) {
           this.config = normalizeTemplateOverlayConfig(event.value);
           this.updateOverlays();
         } else if (event.key.startsWith("size.")) {
@@ -144,10 +201,34 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      configurations: createTemplateOverlayConfigurations(),
-      commands: createTemplateOverlayCommands(this),
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createTemplateOverlayCapabilityDefinition(this.getTemplateFacade(), {
+          capabilityId: this.capabilityId,
+          configNamespace: this.configNamespace,
+          layers: {
+            clipTargetLayerIds: this.clipTargetLayerIds,
+            frameLayerId: this.frameLayerId,
+            normalLayerId: this.normalLayerId,
+            prodLayerId: this.prodLayerId,
+            renderLayerId: this.renderLayerId,
+            smallLayerId: this.smallLayerId,
+          },
+        }),
+      ],
     };
+
+    if (this.contributeConfigDefinitions) {
+      contributions.configurations = createTemplateOverlayConfigurations(
+        this.configNamespace,
+      );
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = createTemplateOverlayCommands(this);
+    }
+
+    return contributions;
   }
 
   getConfig(): TemplateOverlayConfig {
@@ -160,7 +241,9 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     return this.getConfig();
   }
 
-  async patchConfig(patch: TemplateOverlayConfigPatch): Promise<TemplateOverlayConfig> {
+  async patchConfig(
+    patch: TemplateOverlayConfigPatch,
+  ): Promise<TemplateOverlayConfig> {
     const next = patchTemplateOverlayConfig(this.config, patch);
     await this.writeConfig(next);
     return this.getConfig();
@@ -172,6 +255,20 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     return this.getConfig();
   }
 
+  refresh(): void {
+    this.updateOverlays();
+  }
+
+  private getTemplateFacade(): TemplateOverlayCapabilityApi {
+    return {
+      clearConfig: () => this.clearConfig(),
+      getConfig: () => this.getConfig(),
+      patchConfig: (patch) => this.patchConfig(patch),
+      refresh: () => this.refresh(),
+      replaceConfig: (config) => this.replaceConfig(config),
+    };
+  }
+
   private onSceneLayoutChanged = () => {
     this.updateOverlays();
   };
@@ -180,7 +277,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     this.config = normalizeTemplateOverlayConfig(next);
     this.isUpdatingConfig = true;
     try {
-      this.getConfigService()?.update(TEMPLATE_OVERLAY_CONFIG_KEY, this.config);
+      this.getConfigService()?.update(this.configKey, this.config);
     } finally {
       this.isUpdatingConfig = false;
     }
@@ -202,13 +299,13 @@ export class TemplateOverlayTool implements ExtensionDefinition {
 
     return [
       {
-        id: TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
+        id: this.normalLayerId,
         stack: TEMPLATE_OVERLAY_UNDERLAY_STACK,
         order: 0,
         effects: clipEffects,
         objects: this.normalSpecs,
       },
-      ...RENDERED_OVERLAY_SLOTS.map(({ layerId, order }) => ({
+      ...this.getRenderedOverlaySlots().map(({ layerId, order }) => ({
         id: layerId,
         stack: TEMPLATE_OVERLAY_OVERLAY_STACK,
         order,
@@ -238,7 +335,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     const targetPassIds =
       Array.isArray(clip.targetLayerIds) && clip.targetLayerIds.length > 0
         ? clip.targetLayerIds
-        : DEFAULT_CLIP_TARGET_LAYER_IDS;
+        : this.clipTargetLayerIds;
 
     return [
       {
@@ -296,11 +393,11 @@ export class TemplateOverlayTool implements ExtensionDefinition {
 
     const normalSpec = await this.buildSlotSpec(
       "normal",
-      TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
+      this.normalLayerId,
       frame,
     );
     const overlayEntries = await Promise.all(
-      RENDERED_OVERLAY_SLOTS.map(async ({ layerId, slot }) => ({
+      this.getRenderedOverlaySlots().map(async ({ layerId, slot }) => ({
         layerId,
         spec: await this.buildSlotSpec(slot, layerId, frame),
       })),
@@ -339,8 +436,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     return this.createStretchImageSpec({
       frame: this.resolveSlotFrame(frame, slotConfig.placement),
       layerId,
-      opacity:
-        typeof slotConfig.opacity === "number" ? slotConfig.opacity : 1,
+      opacity: typeof slotConfig.opacity === "number" ? slotConfig.opacity : 1,
       size,
       slot,
       src,
@@ -361,6 +457,19 @@ export class TemplateOverlayTool implements ExtensionDefinition {
       width: placement.width * frame.width,
       height: placement.height * frame.height,
     };
+  }
+
+  private getRenderedOverlaySlots(): Array<{
+    layerId: string;
+    order: number;
+    slot: Exclude<TemplateOverlaySlotName, "back" | "normal">;
+  }> {
+    return [
+      { layerId: this.frameLayerId, order: 0, slot: "frame" },
+      { layerId: this.prodLayerId, order: 1, slot: "prod" },
+      { layerId: this.smallLayerId, order: 2, slot: "small" },
+      { layerId: this.renderLayerId, order: 3, slot: "render" },
+    ];
   }
 
   private createStretchImageSpec(options: {

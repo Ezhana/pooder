@@ -1,4 +1,7 @@
-import { BackgroundTool } from "./extensions/background";
+import {
+  BackgroundCapabilityExtension,
+  BackgroundTool,
+} from "./extensions/background";
 import { DesignExportExtension } from "./extensions/design-export";
 import { DielineWorkflowExtension } from "./extensions/dieline-workflow";
 import {
@@ -11,9 +14,12 @@ import {
   ImagePlacementCapabilityExtension,
   ImageTool,
 } from "./extensions/image";
-import { RulerTool } from "./extensions/ruler";
-import { SizeTool } from "./extensions/size";
-import { TemplateOverlayTool } from "./extensions/template-overlay";
+import { RulerCapabilityExtension, RulerTool } from "./extensions/ruler";
+import { SizeCapabilityExtension, SizeTool } from "./extensions/size";
+import {
+  TemplateOverlayCapabilityExtension,
+  TemplateOverlayTool,
+} from "./extensions/template-overlay";
 import {
   WhiteInkCapabilityExtension,
   WhiteInkTool,
@@ -22,6 +28,10 @@ import {
 export const createBackgroundExtension = (
   options?: ConstructorParameters<typeof BackgroundTool>[0],
 ) => new BackgroundTool(options);
+
+export const createBackgroundCapability = (
+  options?: ConstructorParameters<typeof BackgroundCapabilityExtension>[0],
+) => new BackgroundCapabilityExtension(options);
 
 export const createDesignExportExtension = () => new DesignExportExtension();
 
@@ -56,7 +66,21 @@ export const createRulerExtension = (
 
 export const createSizeExtension = () => new SizeTool();
 
-export const createTemplateOverlayExtension = () => new TemplateOverlayTool();
+export const createSizeCapability = (
+  options?: ConstructorParameters<typeof SizeCapabilityExtension>[0],
+) => new SizeCapabilityExtension(options);
+
+export const createTemplateOverlayExtension = (
+  options?: ConstructorParameters<typeof TemplateOverlayTool>[0],
+) => new TemplateOverlayTool(options);
+
+export const createTemplateOverlayCapability = (
+  options?: ConstructorParameters<typeof TemplateOverlayCapabilityExtension>[0],
+) => new TemplateOverlayCapabilityExtension(options);
+
+export const createRulerCapability = (
+  options?: ConstructorParameters<typeof RulerCapabilityExtension>[0],
+) => new RulerCapabilityExtension(options);
 
 export const createWhiteInkExtension = () => new WhiteInkTool();
 

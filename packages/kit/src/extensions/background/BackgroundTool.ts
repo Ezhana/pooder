@@ -22,6 +22,15 @@ import {
   type SourceSize,
 } from "../../shared/imaging/sourceSizeCache";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import {
+  BACKGROUND_CAPABILITY_ID,
+  createBackgroundCapabilityDefinition,
+  getBackgroundConfigKey,
+  normalizeBackgroundConfigNamespace,
+  normalizeBackgroundLayerId,
+  type BackgroundCapabilityApi,
+  type BackgroundCapabilityOptions,
+} from "./capability";
 
 interface Rect {
   left: number;
@@ -73,10 +82,16 @@ export interface BackgroundConfig {
   layers: BackgroundLayer[];
 }
 
-const BACKGROUND_CONFIG_KEY = "background.config";
-
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
+
+export interface BackgroundToolOptions extends BackgroundCapabilityOptions {
+  id?: string;
+  initialConfig?: Partial<BackgroundConfig>;
+  contributeTool?: boolean;
+  contributeCommands?: boolean;
+  contributeConfigurations?: boolean;
+}
 
 const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
   version: 1,
@@ -373,7 +388,7 @@ function configSignature(config: BackgroundConfig): string {
 }
 
 export class BackgroundTool implements ExtensionDefinition {
-  id = "pooder.kit.background";
+  id: string;
 
   public metadata = {
     name: "BackgroundTool",
@@ -396,6 +411,12 @@ export class BackgroundTool implements ExtensionDefinition {
   private sourceSizeCache = createSourceSizeCache((src) =>
     this.loadImageSize(src),
   );
+  private readonly capabilityId: string;
+  private readonly configNamespace: string;
+  private readonly configKey: string;
+  private readonly backgroundLayerId: string;
+  private readonly contributeLegacyCommands: boolean;
+  private readonly contributeConfigDefinitions: boolean;
 
   private onCanvasResized = () => {
     this.latestSceneLayout = null;
@@ -407,28 +428,54 @@ export class BackgroundTool implements ExtensionDefinition {
     this.updateBackground();
   };
 
-  constructor(options?: Partial<BackgroundConfig>) {
-    if (options && typeof options === "object") {
-      this.config = mergeConfig(this.config, options);
+  constructor(options: BackgroundToolOptions | Partial<BackgroundConfig> = {}) {
+    const capabilityOptions = options as BackgroundToolOptions;
+    this.id =
+      String(capabilityOptions.id || "pooder.kit.background").trim() ||
+      "pooder.kit.background";
+    this.capabilityId =
+      capabilityOptions.capabilityId || BACKGROUND_CAPABILITY_ID;
+    this.configNamespace = normalizeBackgroundConfigNamespace(
+      capabilityOptions.configNamespace,
+    );
+    this.configKey = getBackgroundConfigKey(this.configNamespace, "config");
+    this.backgroundLayerId = normalizeBackgroundLayerId(
+      Array.isArray((capabilityOptions as any).layers)
+        ? undefined
+        : capabilityOptions.layers?.backgroundLayerId,
+      BACKGROUND_LAYER_ID,
+    );
+    this.contributeLegacyCommands =
+      capabilityOptions.contributeCommands !== false;
+    this.contributeConfigDefinitions =
+      capabilityOptions.contributeConfigurations !== false;
+
+    const legacyConfig = options as Partial<BackgroundConfig>;
+    const initialConfig =
+      capabilityOptions.initialConfig ||
+      (Array.isArray(legacyConfig.layers) || legacyConfig.version !== undefined
+        ? legacyConfig
+        : undefined);
+    if (initialConfig && typeof initialConfig === "object") {
+      this.config = mergeConfig(this.config, initialConfig);
     }
   }
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
 
     this.configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
     this.config = normalizeConfig(
-      this.configService.get(BACKGROUND_CONFIG_KEY, DEFAULT_BACKGROUND_CONFIG),
+      this.configService.get(this.configKey, DEFAULT_BACKGROUND_CONFIG),
     );
     this.subscriptions.onConfigChange(
       this.configService,
       (e: { key: string; value: any }) => {
-        if (e.key === BACKGROUND_CONFIG_KEY) {
+        if (e.key === this.configKey) {
           this.config = normalizeConfig(e.value);
           this.updateBackground();
           return;
@@ -448,6 +495,7 @@ export class BackgroundTool implements ExtensionDefinition {
         passes: [
           {
             id: BACKGROUND_LAYER_ID,
+            targetLayerId: this.backgroundLayerId,
             stack: 0,
             order: 0,
             objects: this.specs,
@@ -491,105 +539,152 @@ export class BackgroundTool implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      configurations: [
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createBackgroundCapabilityDefinition(this.getBackgroundFacade(), {
+          capabilityId: this.capabilityId,
+          configNamespace: this.configNamespace,
+          layers: {
+            backgroundLayerId: this.backgroundLayerId,
+          },
+        }),
+      ],
+    };
+
+    if (this.contributeConfigDefinitions) {
+      contributions.configurations = [
         {
-          id: BACKGROUND_CONFIG_KEY,
+          id: this.configKey,
           type: "json",
           label: "Background Config",
           default: cloneConfig(DEFAULT_BACKGROUND_CONFIG),
         },
-      ],
-      commands: [
+      ];
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = [
         {
           id: "background.getConfig",
           command: "background.getConfig",
           title: "Get Background Config",
-          handler: () => cloneConfig(this.config),
+          handler: () => this.getConfig(),
         },
         {
           id: "background.resetConfig",
           command: "background.resetConfig",
           title: "Reset Background Config",
-          handler: () => {
-            this.commitConfig(cloneConfig(DEFAULT_BACKGROUND_CONFIG));
-            return true;
-          },
+          handler: () => this.resetConfig(),
         },
         {
           id: "background.replaceConfig",
           command: "background.replaceConfig",
           title: "Replace Background Config",
-          handler: (config: BackgroundConfig) => {
-            this.commitConfig(normalizeConfig(config));
-            return true;
-          },
+          handler: (config: BackgroundConfig) => this.replaceConfig(config),
         },
         {
           id: "background.patchConfig",
           command: "background.patchConfig",
           title: "Patch Background Config",
-          handler: (patch: Partial<BackgroundConfig>) => {
-            this.commitConfig(mergeConfig(this.config, patch || {}));
-            return true;
-          },
+          handler: (patch: Partial<BackgroundConfig>) =>
+            this.patchConfig(patch),
         },
         {
           id: "background.upsertLayer",
           command: "background.upsertLayer",
           title: "Upsert Background Layer",
-          handler: (layer: Partial<BackgroundLayer> & { id: string }) => {
-            const normalized = normalizeLayer(layer, 0);
-            const existingIndex = this.config.layers.findIndex(
-              (item) => item.id === normalized.id,
-            );
-            const nextLayers = [...this.config.layers];
-            if (existingIndex >= 0) {
-              nextLayers[existingIndex] = normalizeLayer(
-                { ...nextLayers[existingIndex], ...layer },
-                existingIndex,
-                nextLayers[existingIndex],
-              );
-            } else {
-              nextLayers.push(
-                normalizeLayer(
-                  {
-                    ...normalized,
-                    order: Number.isFinite(Number(layer.order))
-                      ? Number(layer.order)
-                      : nextLayers.length,
-                  },
-                  nextLayers.length,
-                ),
-              );
-            }
-            this.commitConfig(
-              normalizeConfig({
-                ...this.config,
-                layers: nextLayers,
-              }),
-            );
-            return true;
-          },
+          handler: (layer: Partial<BackgroundLayer> & { id: string }) =>
+            this.upsertLayer(layer),
         },
         {
           id: "background.removeLayer",
           command: "background.removeLayer",
           title: "Remove Background Layer",
-          handler: (id: string) => {
-            const nextLayers = this.config.layers.filter(
-              (layer) => layer.id !== id,
-            );
-            this.commitConfig(
-              normalizeConfig({
-                ...this.config,
-                layers: nextLayers,
-              }),
-            );
-            return true;
-          },
+          handler: (id: string) => this.removeLayer(id),
         },
-      ],
+      ];
+    }
+
+    return contributions;
+  }
+
+  getConfig(): BackgroundConfig {
+    return cloneConfig(this.config);
+  }
+
+  resetConfig(): boolean {
+    this.commitConfig(cloneConfig(DEFAULT_BACKGROUND_CONFIG));
+    return true;
+  }
+
+  replaceConfig(config: BackgroundConfig): boolean {
+    this.commitConfig(normalizeConfig(config));
+    return true;
+  }
+
+  patchConfig(patch: Partial<BackgroundConfig>): boolean {
+    this.commitConfig(mergeConfig(this.config, patch || {}));
+    return true;
+  }
+
+  upsertLayer(layer: Partial<BackgroundLayer> & { id: string }): boolean {
+    const normalized = normalizeLayer(layer, 0);
+    const existingIndex = this.config.layers.findIndex(
+      (item) => item.id === normalized.id,
+    );
+    const nextLayers = [...this.config.layers];
+    if (existingIndex >= 0) {
+      nextLayers[existingIndex] = normalizeLayer(
+        { ...nextLayers[existingIndex], ...layer },
+        existingIndex,
+        nextLayers[existingIndex],
+      );
+    } else {
+      nextLayers.push(
+        normalizeLayer(
+          {
+            ...normalized,
+            order: Number.isFinite(Number(layer.order))
+              ? Number(layer.order)
+              : nextLayers.length,
+          },
+          nextLayers.length,
+        ),
+      );
+    }
+    this.commitConfig(
+      normalizeConfig({
+        ...this.config,
+        layers: nextLayers,
+      }),
+    );
+    return true;
+  }
+
+  removeLayer(id: string): boolean {
+    const nextLayers = this.config.layers.filter((layer) => layer.id !== id);
+    this.commitConfig(
+      normalizeConfig({
+        ...this.config,
+        layers: nextLayers,
+      }),
+    );
+    return true;
+  }
+
+  refresh(): void {
+    this.updateBackground();
+  }
+
+  private getBackgroundFacade(): BackgroundCapabilityApi {
+    return {
+      getConfig: () => this.getConfig(),
+      patchConfig: (patch) => this.patchConfig(patch),
+      refresh: () => this.refresh(),
+      removeLayer: (id) => this.removeLayer(id),
+      replaceConfig: (config) => this.replaceConfig(config),
+      resetConfig: () => this.resetConfig(),
+      upsertLayer: (layer) => this.upsertLayer(layer),
     };
   }
 
@@ -600,7 +695,7 @@ export class BackgroundTool implements ExtensionDefinition {
     }
 
     if (this.configService) {
-      this.configService.update(BACKGROUND_CONFIG_KEY, cloneConfig(normalized));
+      this.configService.update(this.configKey, cloneConfig(normalized));
       return;
     }
 
@@ -644,7 +739,9 @@ export class BackgroundTool implements ExtensionDefinition {
     };
   }
 
-  private resolveTargetFrameRect(frame: BackgroundRegistrationFrame): Rect | null {
+  private resolveTargetFrameRect(
+    frame: BackgroundRegistrationFrame,
+  ): Rect | null {
     if (frame === "viewport") {
       return this.getViewportRect();
     }
@@ -817,7 +914,7 @@ export class BackgroundTool implements ExtensionDefinition {
       space: "screen",
       data: {
         id: `background.layer.${layer.id}.color`,
-        layerId: BACKGROUND_LAYER_ID,
+        layerId: this.backgroundLayerId,
         type: "background-layer",
         layerRef: layer.id,
         layerKind: layer.kind,
@@ -861,7 +958,7 @@ export class BackgroundTool implements ExtensionDefinition {
         space: "screen",
         data: {
           id: `background.layer.${layer.id}.image`,
-          layerId: BACKGROUND_LAYER_ID,
+          layerId: this.backgroundLayerId,
           type: "background-layer",
           layerRef: layer.id,
           layerKind: layer.kind,

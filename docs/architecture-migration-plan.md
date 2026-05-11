@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: M4 in progress; P3.S4 next.
+Current milestone: M4 in progress; P3.S5 next.
 
 Completed:
 
@@ -55,10 +55,16 @@ Completed:
   `pooder.kit.white-ink` facade for white ink mask generation, print settings,
   preview refresh, session state, and caller-owned source/target layers while
   `WhiteInkTool` remains as the legacy tool wrapper.
+- P3.S4 template overlay, background, size, and ruler capabilities have been
+  added. Applications can resolve typed `pooder.kit.template-overlay`,
+  `pooder.kit.background`, `pooder.kit.size`, and `pooder.kit.ruler` facades,
+  enable each capability independently, and provide caller-owned config
+  namespaces or layer ids where supported while legacy wrapper exports remain
+  available.
 
 Next recommended slice:
 
-- P3.S4 - Template, Background, Size, Ruler Capabilities.
+- P3.S5 - Export Capability.
 
 Resume instruction for a new thread:
 

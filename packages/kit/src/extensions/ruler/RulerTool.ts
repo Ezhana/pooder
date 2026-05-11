@@ -18,6 +18,16 @@ import {
 } from "@pooder/platform-browser";
 import type { Unit } from "../../coordinate";
 import { RULER_LAYER_ID } from "../../shared/constants/layers";
+import {
+  createRulerCapabilityDefinition,
+  getRulerConfigKey,
+  normalizeRulerConfigNamespace,
+  normalizeRulerLayerId,
+  RULER_CAPABILITY_ID,
+  type RulerCapabilityApi,
+  type RulerCapabilityOptions,
+  type RulerTheme,
+} from "./capability";
 const EXTENSION_LINE_LENGTH = 5;
 const MIN_ARROW_SIZE = 4;
 const THICKNESS_TO_STROKE_WIDTH_RATIO = 20;
@@ -28,7 +38,6 @@ const DEFAULT_FONT_SIZE = 10;
 const DEFAULT_BACKGROUND_COLOR = "#f0f0f0";
 const DEFAULT_TEXT_COLOR = "#333333";
 const DEFAULT_LINE_COLOR = "#999999";
-const RULER_DEBUG_KEY = "ruler.debug";
 
 const RULER_THICKNESS_MIN = 10;
 const RULER_THICKNESS_MAX = 100;
@@ -39,8 +48,18 @@ const RULER_FONT_SIZE_MAX = 24;
 
 type Point = { x: number; y: number };
 
+export interface RulerToolOptions
+  extends Partial<RulerTheme>, RulerCapabilityOptions {
+  id?: string;
+  contributeTool?: boolean;
+  contributeCommands?: boolean;
+  contributeConfigurations?: boolean;
+  toolName?: string;
+  legacyVisibility?: boolean;
+}
+
 export class RulerTool implements ExtensionDefinition {
-  id = "pooder.kit.ruler";
+  id: string;
 
   public metadata = {
     name: "RulerTool",
@@ -63,30 +82,48 @@ export class RulerTool implements ExtensionDefinition {
 
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
+  private readonly capabilityId: string;
+  private readonly configNamespace: string;
+  private readonly rulerLayerId: string;
+  private readonly contributeLegacyCommands: boolean;
+  private readonly contributeConfigDefinitions: boolean;
+  private readonly visibility: RulerCapabilityOptions["visibility"];
   private onCanvasResized = () => {
     this.updateRuler();
   };
 
-  constructor(
-    options?: Partial<{
-      thickness: number;
-      backgroundColor: string;
-      textColor: string;
-      lineColor: string;
-      fontSize: number;
-      gap: number;
-    }>,
-  ) {
-    if (options) {
-      Object.assign(this, options);
-    }
+  constructor(options: RulerToolOptions = {}) {
+    this.id =
+      String(options.id || "pooder.kit.ruler").trim() || "pooder.kit.ruler";
+    this.capabilityId = options.capabilityId || RULER_CAPABILITY_ID;
+    this.configNamespace = normalizeRulerConfigNamespace(
+      options.configNamespace,
+    );
+    this.rulerLayerId = normalizeRulerLayerId(
+      options.layers?.rulerLayerId,
+      RULER_LAYER_ID,
+    );
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+    this.contributeConfigDefinitions =
+      options.contributeConfigurations !== false;
+    this.visibility =
+      options.visibility ||
+      (options.legacyVisibility === false
+        ? undefined
+        : {
+            op: "not",
+            expr: {
+              op: "activeToolIn",
+              ids: ["pooder.kit.white-ink"],
+            },
+          });
+    this.setInitialTheme(options);
   }
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = this.canvasService.registerRenderProducer(
       this.id,
@@ -94,16 +131,11 @@ export class RulerTool implements ExtensionDefinition {
         passes: [
           {
             id: RULER_LAYER_ID,
+            targetLayerId: this.rulerLayerId,
             stack: 950,
             order: 0,
             replace: true,
-            visibility: {
-              op: "not",
-              expr: {
-                op: "activeToolIn",
-                ids: ["pooder.kit.white-ink"],
-              },
-            },
+            visibility: this.visibility,
             objects: this.specs,
           },
         ],
@@ -117,15 +149,15 @@ export class RulerTool implements ExtensionDefinition {
     this.syncConfig(configService);
     configService.onAnyChange((e: { key: string; value: any }) => {
       let shouldUpdate = false;
-      if (e.key === RULER_DEBUG_KEY) {
+      if (e.key === this.getConfigKey("debug")) {
         this.debugEnabled = e.value === true;
         this.log("config:update", {
           key: e.key,
           raw: e.value,
           normalized: this.debugEnabled,
         });
-      } else if (e.key.startsWith("ruler.")) {
-        const prop = e.key.split(".")[1];
+      } else if (e.key.startsWith(`${this.configNamespace}.`)) {
+        const prop = e.key.slice(this.configNamespace.length + 1);
         if (prop && prop in this) {
           if (this.numericProps.has(prop)) {
             (this as any)[prop] = this.toFiniteNumber(
@@ -170,10 +202,23 @@ export class RulerTool implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      configurations: [
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createRulerCapabilityDefinition(this.getRulerFacade(), {
+          capabilityId: this.capabilityId,
+          configNamespace: this.configNamespace,
+          layers: {
+            rulerLayerId: this.rulerLayerId,
+          },
+          visibility: this.visibility,
+        }),
+      ],
+    };
+
+    if (this.contributeConfigDefinitions) {
+      contributions.configurations = [
         {
-          id: "ruler.thickness",
+          id: this.getConfigKey("thickness"),
           type: "number",
           label: "Thickness",
           min: RULER_THICKNESS_MIN,
@@ -181,7 +226,7 @@ export class RulerTool implements ExtensionDefinition {
           default: DEFAULT_THICKNESS,
         },
         {
-          id: "ruler.gap",
+          id: this.getConfigKey("gap"),
           type: "number",
           label: "Gap",
           min: RULER_GAP_MIN,
@@ -189,25 +234,25 @@ export class RulerTool implements ExtensionDefinition {
           default: DEFAULT_GAP,
         },
         {
-          id: "ruler.backgroundColor",
+          id: this.getConfigKey("backgroundColor"),
           type: "color",
           label: "Background Color",
           default: DEFAULT_BACKGROUND_COLOR,
         },
         {
-          id: "ruler.textColor",
+          id: this.getConfigKey("textColor"),
           type: "color",
           label: "Text Color",
           default: DEFAULT_TEXT_COLOR,
         },
         {
-          id: "ruler.lineColor",
+          id: this.getConfigKey("lineColor"),
           type: "color",
           label: "Line Color",
           default: DEFAULT_LINE_COLOR,
         },
         {
-          id: "ruler.fontSize",
+          id: this.getConfigKey("fontSize"),
           type: "number",
           label: "Font Size",
           min: RULER_FONT_SIZE_MIN,
@@ -215,56 +260,89 @@ export class RulerTool implements ExtensionDefinition {
           default: DEFAULT_FONT_SIZE,
         },
         {
-          id: RULER_DEBUG_KEY,
+          id: this.getConfigKey("debug"),
           type: "boolean",
           label: "Ruler Debug Log",
           default: false,
         },
-      ],
-      commands: [
+      ];
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = [
         {
           id: "setTheme",
           command: "setTheme",
           title: "Set Ruler Theme",
-          handler: (
-            theme: Partial<{
-              backgroundColor: string;
-              textColor: string;
-              lineColor: string;
-              fontSize: number;
-              thickness: number;
-              gap: number;
-            }>,
-          ) => {
-            const oldState = {
-              backgroundColor: this.backgroundColor,
-              textColor: this.textColor,
-              lineColor: this.lineColor,
-              fontSize: this.fontSize,
-              thickness: this.thickness,
-              gap: this.gap,
-            };
-            const newState = { ...oldState, ...theme };
-            if (JSON.stringify(newState) === JSON.stringify(oldState)) {
-              return true;
-            }
-
-            Object.assign(this, newState);
-            this.thickness = this.toFiniteNumber(
-              this.thickness,
-              DEFAULT_THICKNESS,
-            );
-            this.gap = this.toFiniteNumber(this.gap, DEFAULT_GAP);
-            this.fontSize = this.toFiniteNumber(
-              this.fontSize,
-              DEFAULT_FONT_SIZE,
-            );
-            this.updateRuler();
-            return true;
-          },
+          handler: (theme: Partial<RulerTheme>) => this.setTheme(theme),
         },
-      ],
+      ];
+    }
+
+    return contributions;
+  }
+
+  getTheme(): RulerTheme {
+    return {
+      backgroundColor: this.backgroundColor,
+      gap: this.gap,
+      fontSize: this.fontSize,
+      lineColor: this.lineColor,
+      textColor: this.textColor,
+      thickness: this.thickness,
     };
+  }
+
+  setTheme(theme: Partial<RulerTheme>): boolean {
+    const oldState = this.getTheme();
+    const newState = { ...oldState, ...theme };
+    if (JSON.stringify(newState) === JSON.stringify(oldState)) {
+      return true;
+    }
+
+    Object.assign(this, newState);
+    this.thickness = this.toFiniteNumber(this.thickness, DEFAULT_THICKNESS);
+    this.gap = this.toFiniteNumber(this.gap, DEFAULT_GAP);
+    this.fontSize = this.toFiniteNumber(this.fontSize, DEFAULT_FONT_SIZE);
+    this.updateRuler();
+    return true;
+  }
+
+  refresh(): void {
+    this.updateRuler();
+  }
+
+  private getRulerFacade(): RulerCapabilityApi {
+    return {
+      getTheme: () => this.getTheme(),
+      refresh: () => this.refresh(),
+      setTheme: (theme) => this.setTheme(theme),
+    };
+  }
+
+  private getConfigKey(path: string): string {
+    return getRulerConfigKey(this.configNamespace, path);
+  }
+
+  private setInitialTheme(theme: Partial<RulerTheme>) {
+    if (theme.backgroundColor !== undefined) {
+      this.backgroundColor = theme.backgroundColor;
+    }
+    if (theme.textColor !== undefined) {
+      this.textColor = theme.textColor;
+    }
+    if (theme.lineColor !== undefined) {
+      this.lineColor = theme.lineColor;
+    }
+    if (theme.fontSize !== undefined) {
+      this.fontSize = this.toFiniteNumber(theme.fontSize, DEFAULT_FONT_SIZE);
+    }
+    if (theme.thickness !== undefined) {
+      this.thickness = this.toFiniteNumber(theme.thickness, DEFAULT_THICKNESS);
+    }
+    if (theme.gap !== undefined) {
+      this.gap = this.toFiniteNumber(theme.gap, DEFAULT_GAP);
+    }
   }
 
   private isDebugEnabled(): boolean {
@@ -282,28 +360,34 @@ export class RulerTool implements ExtensionDefinition {
 
   private syncConfig(configService: ConfigurationService) {
     this.thickness = this.toFiniteNumber(
-      configService.get("ruler.thickness", this.thickness),
+      configService.get(this.getConfigKey("thickness"), this.thickness),
       DEFAULT_THICKNESS,
     );
     this.gap = Math.max(
       0,
       this.toFiniteNumber(
-        configService.get("ruler.gap", this.gap),
+        configService.get(this.getConfigKey("gap"), this.gap),
         DEFAULT_GAP,
       ),
     );
     this.backgroundColor = configService.get(
-      "ruler.backgroundColor",
+      this.getConfigKey("backgroundColor"),
       this.backgroundColor,
     );
-    this.textColor = configService.get("ruler.textColor", this.textColor);
-    this.lineColor = configService.get("ruler.lineColor", this.lineColor);
+    this.textColor = configService.get(
+      this.getConfigKey("textColor"),
+      this.textColor,
+    );
+    this.lineColor = configService.get(
+      this.getConfigKey("lineColor"),
+      this.lineColor,
+    );
     this.fontSize = this.toFiniteNumber(
-      configService.get("ruler.fontSize", this.fontSize),
+      configService.get(this.getConfigKey("fontSize"), this.fontSize),
       DEFAULT_FONT_SIZE,
     );
     this.debugEnabled =
-      configService.get(RULER_DEBUG_KEY, this.debugEnabled) === true;
+      configService.get(this.getConfigKey("debug"), this.debugEnabled) === true;
 
     this.log("config:loaded", {
       thickness: this.thickness,

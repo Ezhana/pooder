@@ -16,6 +16,10 @@
   white ink extension that accepts caller-provided source layer ids, render
   layer ids, and config namespaces while keeping `WhiteInkTool` as the
   compatibility wrapper.
+- Added typed `pooder.kit.template-overlay`, `pooder.kit.background`,
+  `pooder.kit.size`, and `pooder.kit.ruler` capability facades with
+  capability-only extensions so presentational helpers can be enabled
+  independently without registering kit-owned toolbar tools.
 
 ### Changed
 
@@ -28,6 +32,10 @@
 - Updated legacy white ink commands to delegate through the white ink
   capability wrapper and made white ink settings namespace-aware for
   capability-only use.
+- Updated legacy template overlay, background, size, and ruler wrappers to
+  register typed capability facades while preserving existing command/config
+  compatibility. Capability-only variants accept caller-owned config
+  namespaces or layer ids where supported.
 
 ### Planning Notes
 

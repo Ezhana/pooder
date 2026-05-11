@@ -1,13 +1,13 @@
 import type { ConfigurationContribution } from "@pooder/core";
-import {
-  createEmptyTemplateOverlayConfig,
-  TEMPLATE_OVERLAY_CONFIG_KEY,
-} from "./model";
+import { getTemplateOverlayConfigKey } from "./capability";
+import { createEmptyTemplateOverlayConfig } from "./model";
 
-export function createTemplateOverlayConfigurations(): ConfigurationContribution[] {
+export function createTemplateOverlayConfigurations(
+  namespace?: string,
+): ConfigurationContribution[] {
   return [
     {
-      id: TEMPLATE_OVERLAY_CONFIG_KEY,
+      id: getTemplateOverlayConfigKey(namespace, "config"),
       type: "json",
       label: "Template Overlay Config",
       default: createEmptyTemplateOverlayConfig(),

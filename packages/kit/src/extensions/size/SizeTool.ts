@@ -19,18 +19,42 @@ import {
 } from "@pooder/platform-browser";
 import type { Unit } from "../../coordinate";
 import { IMAGE_OBJECT_LAYER_ID } from "../../shared/constants/layers";
+import {
+  createSizeCapabilityDefinition,
+  SIZE_CAPABILITY_ID,
+  type SizeCapabilityApi,
+  type SizeCapabilityOptions,
+  type UpdateSizeDimensionsInput,
+} from "./capability";
 
-type ChangedField = "width" | "height" | "both";
+export type ChangedSizeField = "width" | "height" | "both";
 
-interface UpdateSizeDimensionsInput {
-  width?: number;
-  height?: number;
-  unit?: Unit;
-  changed?: ChangedField;
+export interface SizeViewState {
+  unit: Unit;
+  actualWidthMm: number;
+  actualHeightMm: number;
+  constraintMode: SizeConstraintMode;
+  aspectRatio: number;
+  cutMode: string;
+  cutMarginMm: number;
+  viewPadding: number | string;
+  minMm: number;
+  maxMm: number;
+  stepMm: number;
+  actualWidth: number;
+  actualHeight: number;
+}
+
+export interface SizeToolOptions extends SizeCapabilityOptions {
+  id?: string;
+  contributeTool?: boolean;
+  contributeCommands?: boolean;
+  contributeConfigurations?: boolean;
+  toolName?: string;
 }
 
 export class SizeTool implements ExtensionDefinition {
-  id = "pooder.kit.size";
+  id: string;
   metadata = {
     name: "SizeTool",
   };
@@ -40,6 +64,22 @@ export class SizeTool implements ExtensionDefinition {
 
   private context?: ExtensionContext;
   private canvasService?: CanvasService;
+  private readonly capabilityId: string;
+  private readonly contributeLegacyTool: boolean;
+  private readonly contributeLegacyCommands: boolean;
+  private readonly contributeConfigDefinitions: boolean;
+  private readonly toolName: string;
+
+  constructor(options: SizeToolOptions = {}) {
+    this.id =
+      String(options.id || "pooder.kit.size").trim() || "pooder.kit.size";
+    this.capabilityId = options.capabilityId || SIZE_CAPABILITY_ID;
+    this.contributeLegacyTool = options.contributeTool !== false;
+    this.contributeLegacyCommands = options.contributeCommands !== false;
+    this.contributeConfigDefinitions =
+      options.contributeConfigurations !== false;
+    this.toolName = options.toolName || "Size";
+  }
 
   activate(context: ExtensionContext) {
     this.context = context;
@@ -58,15 +98,26 @@ export class SizeTool implements ExtensionDefinition {
   }
 
   contribute(): ExtensionContributions {
-    return {
-      tools: [
+    const contributions: ExtensionContributions = {
+      capabilities: [
+        createSizeCapabilityDefinition(this.getSizeFacade(), {
+          capabilityId: this.capabilityId,
+        }),
+      ],
+    };
+
+    if (this.contributeLegacyTool) {
+      contributions.tools = [
         {
           id: this.id,
-          name: "Size",
+          name: this.toolName,
           interaction: "instant",
         },
-      ],
-      configurations: [
+      ];
+    }
+
+    if (this.contributeConfigDefinitions) {
+      contributions.configurations = [
         {
           id: "size.unit",
           type: "select",
@@ -158,8 +209,11 @@ export class SizeTool implements ExtensionDefinition {
           step: 0.001,
           default: 0.1,
         },
-      ],
-      commands: [
+      ];
+    }
+
+    if (this.contributeLegacyCommands) {
+      contributions.commands = [
         {
           id: "getSizeState",
           command: "getSizeState",
@@ -198,7 +252,20 @@ export class SizeTool implements ExtensionDefinition {
           title: "Get Selected Image Size",
           handler: (id?: string) => this.getSelectedImageSize(id),
         },
-      ],
+      ];
+    }
+
+    return contributions;
+  }
+
+  private getSizeFacade(): SizeCapabilityApi {
+    return {
+      getSelectedImageSize: (id) => this.getSelectedImageSize(id),
+      getState: () => this.getStateForUI(),
+      setConstraintMode: (mode) => this.setConstraintMode(mode),
+      setCut: (cutMode, cutMarginMm) => this.setCut(cutMode, cutMarginMm),
+      setUnit: (unit) => this.setUnit(unit),
+      updateDimensions: (input = {}) => this.updateDimensions(input),
     };
   }
 
@@ -232,7 +299,7 @@ export class SizeTool implements ExtensionDefinition {
     this.context?.eventBus.emit("size:state:changed", state);
   }
 
-  private getStateForUI() {
+  private getStateForUI(): SizeViewState | null {
     const configService = this.getConfigService();
     if (!configService) return null;
     const state = readSizeState(configService);
@@ -249,7 +316,7 @@ export class SizeTool implements ExtensionDefinition {
 
     const state = readSizeState(configService);
     const inputUnit = normalizeUnit(input.unit ?? state.unit);
-    const changed: ChangedField = input.changed || "both";
+    const changed: ChangedSizeField = input.changed || "both";
 
     const providedWidthMm = Number.isFinite(input.width as any)
       ? toMm(Number(input.width), inputUnit)

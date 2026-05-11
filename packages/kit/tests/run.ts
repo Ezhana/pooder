@@ -41,6 +41,26 @@ import {
   WhiteInkCapabilityExtension,
   type WhiteInkCapabilityApi,
 } from "../src/extensions/white-ink";
+import {
+  BACKGROUND_CAPABILITY_ID,
+  BackgroundCapabilityExtension,
+  type BackgroundCapabilityApi,
+} from "../src/extensions/background";
+import {
+  RULER_CAPABILITY_ID,
+  RulerCapabilityExtension,
+  type RulerCapabilityApi,
+} from "../src/extensions/ruler";
+import {
+  SIZE_CAPABILITY_ID,
+  SizeCapabilityExtension,
+  type SizeCapabilityApi,
+} from "../src/extensions/size";
+import {
+  TEMPLATE_OVERLAY_CAPABILITY_ID,
+  TemplateOverlayCapabilityExtension,
+  type TemplateOverlayCapabilityApi,
+} from "../src/extensions/template-overlay";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
 import {
@@ -1268,6 +1288,208 @@ async function testWhiteInkCapabilityExtension() {
   await runtime.dispose();
 }
 
+async function testBackgroundCapabilityExtension() {
+  const runtime = new Pooder();
+
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.extensions.register(
+    new BackgroundCapabilityExtension({
+      configNamespace: "storefrontBackground",
+      layers: {
+        backgroundLayerId: "app.background",
+      },
+    }),
+  );
+
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState(BACKGROUND_CAPABILITY_ID)?.state,
+    "active",
+    "background capability should activate",
+  );
+
+  const facade = runtime.capabilities.get<BackgroundCapabilityApi>(
+    BACKGROUND_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("background capability facade should be registered");
+  }
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(BACKGROUND_CAPABILITY_ID),
+    "background capability registration should not require a tool",
+  );
+  assert(
+    runtime.config.getDefinition("storefrontBackground.config"),
+    "background capability should accept caller config namespace",
+  );
+
+  facade.upsertLayer({
+    id: "hero",
+    kind: "color",
+    anchor: "viewport",
+    fit: "cover",
+    opacity: 1,
+    order: 1,
+    enabled: true,
+    exportable: false,
+    color: "#fff",
+  });
+  assert(
+    facade.getConfig().layers.some((layer) => layer.id === "hero"),
+    "background capability should expose config mutation facade",
+  );
+
+  await runtime.dispose();
+}
+
+async function testTemplateOverlayCapabilityExtension() {
+  const runtime = new Pooder();
+
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.extensions.register(
+    new TemplateOverlayCapabilityExtension({
+      configNamespace: "storefrontTemplate",
+      layers: {
+        clipTargetLayerIds: ["app.image"],
+        normalLayerId: "app.template.normal",
+      },
+    }),
+  );
+
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState(TEMPLATE_OVERLAY_CAPABILITY_ID)?.state,
+    "active",
+    "template overlay capability should activate",
+  );
+
+  const facade = runtime.capabilities.get<TemplateOverlayCapabilityApi>(
+    TEMPLATE_OVERLAY_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("template overlay capability facade should be registered");
+  }
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(TEMPLATE_OVERLAY_CAPABILITY_ID),
+    "template overlay capability registration should not require a tool",
+  );
+  assert(
+    runtime.config.getDefinition("storefrontTemplate.config"),
+    "template overlay capability should accept caller config namespace",
+  );
+
+  const patched = await facade.patchConfig({
+    clip: { enabled: true, targetLayerIds: ["app.image"] },
+  });
+  assert(
+    patched.clip?.targetLayerIds?.[0] === "app.image",
+    "template overlay capability should expose config mutation facade",
+  );
+
+  await runtime.dispose();
+}
+
+async function testSizeCapabilityExtension() {
+  const runtime = new Pooder();
+
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.extensions.register(new SizeCapabilityExtension());
+
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState(SIZE_CAPABILITY_ID)?.state,
+    "active",
+    "size capability should activate",
+  );
+
+  const facade =
+    runtime.capabilities.get<SizeCapabilityApi>(SIZE_CAPABILITY_ID);
+  if (!facade) {
+    throw new Error("size capability facade should be registered");
+  }
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(SIZE_CAPABILITY_ID),
+    "size capability registration should not require a tool",
+  );
+
+  facade.setUnit("cm");
+  assertEqual(
+    runtime.config.get("size.unit"),
+    "cm",
+    "size capability should mutate shared size config",
+  );
+  assert(
+    !!facade.getState(),
+    "size capability should expose current size state",
+  );
+
+  await runtime.dispose();
+}
+
+async function testRulerCapabilityExtension() {
+  const runtime = new Pooder();
+
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.extensions.register(
+    new RulerCapabilityExtension({
+      configNamespace: "storefrontRuler",
+      layers: {
+        rulerLayerId: "app.ruler",
+      },
+    }),
+  );
+
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState(RULER_CAPABILITY_ID)?.state,
+    "active",
+    "ruler capability should activate",
+  );
+
+  const facade =
+    runtime.capabilities.get<RulerCapabilityApi>(RULER_CAPABILITY_ID);
+  if (!facade) {
+    throw new Error("ruler capability facade should be registered");
+  }
+
+  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
+    "ToolRegistryService",
+  );
+  assert(
+    !toolRegistry.hasTool(RULER_CAPABILITY_ID),
+    "ruler capability registration should not require a tool",
+  );
+  assert(
+    runtime.config.getDefinition("storefrontRuler.thickness"),
+    "ruler capability should accept caller config namespace",
+  );
+
+  facade.setTheme({ lineColor: "#111111" });
+  assertEqual(
+    facade.getTheme().lineColor,
+    "#111111",
+    "ruler capability should expose theme mutation facade",
+  );
+
+  await runtime.dispose();
+}
+
 async function testDielineWorkflowExtensionActivation() {
   const runtime = new Pooder();
   const commandService =
@@ -1567,6 +1789,10 @@ async function main() {
   await testEdgeDetectionCapabilityExtension();
   await testDielineGeometryCapabilityExtension();
   await testWhiteInkCapabilityExtension();
+  await testBackgroundCapabilityExtension();
+  await testTemplateOverlayCapabilityExtension();
+  await testSizeCapabilityExtension();
+  await testRulerCapabilityExtension();
   await testDielineWorkflowExtensionActivation();
   await testDielineWorkflowExtensionCommands();
   console.log("ok");
