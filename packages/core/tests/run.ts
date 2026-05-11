@@ -51,6 +51,17 @@ function assertDeepEqual(actual: unknown, expected: unknown, message?: string) {
   }
 }
 
+function assertThrows(run: () => void, message: string) {
+  try {
+    run();
+  } catch (error) {
+    assertEqual((error as Error).message, message);
+    return;
+  }
+
+  throw new Error(`Expected error: ${message}`);
+}
+
 function createCommandExtension(
   id: string,
   commandId: string,
@@ -622,6 +633,89 @@ async function testDuplicateCapabilityIdsFailWithoutLeakingContributions() {
   });
 }
 
+async function testCapabilityRegistryContractUsesDefensiveCopiesAndEvents() {
+  await withRuntime(async (runtime) => {
+    const registry = runtime.services.getOrThrow(CAPABILITY_REGISTRY_SERVICE);
+    const events: Array<{ added: string[]; removed: string[]; extensionId?: string }> =
+      [];
+    const facade = { inspect: () => "ready" };
+    let registrations = 0;
+    let unregistrations = 0;
+    const subscription = registry.onDidChange((event) => {
+      events.push(event);
+    });
+
+    const disposable = registry.registerCapability("contract.extension", {
+      id: "contract.capability",
+      metadata: {
+        name: "Contract Capability",
+        tags: ["contract"],
+      },
+      dependencies: {
+        capabilities: ["contract.dependency"],
+        extensions: ["contract.extension.dependency"],
+        services: [COMMAND_SERVICE],
+      },
+      commands: [
+        "contract.legacyCommand",
+        { id: "contract.typedCommand", title: "Typed Command" },
+      ],
+      facade,
+      onRegister: () => {
+        registrations += 1;
+      },
+      onUnregister: () => {
+        unregistrations += 1;
+      },
+    });
+
+    const listed = registry.listCapabilities()[0];
+    assertEqual(registrations, 1);
+    assertEqual(registry.getFacade("contract.capability"), facade);
+    assertEqual(listed?.extensionId, "contract.extension");
+
+    listed?.metadata?.tags?.push("mutated");
+    listed?.dependencies?.capabilities?.push("mutated.capability");
+    const typedCommand = listed?.commands?.find(
+      (command) => typeof command !== "string",
+    );
+    if (typedCommand && typeof typedCommand !== "string") {
+      typedCommand.title = "Mutated Command";
+    }
+
+    const reread = registry.getCapability("contract.capability");
+    assertDeepEqual(reread?.metadata?.tags, ["contract"]);
+    assertDeepEqual(reread?.dependencies?.capabilities, [
+      "contract.dependency",
+    ]);
+    assertEqual(reread?.dependencies?.services?.[0], COMMAND_SERVICE);
+    assertDeepEqual(reread?.commands, [
+      "contract.legacyCommand",
+      { id: "contract.typedCommand", title: "Typed Command" },
+    ]);
+
+    disposable.dispose();
+    disposable.dispose();
+
+    assertEqual(unregistrations, 1);
+    assertDeepEqual(events, [
+      {
+        added: ["contract.capability"],
+        removed: [],
+        extensionId: "contract.extension",
+      },
+      {
+        added: [],
+        removed: ["contract.capability"],
+        extensionId: "contract.extension",
+      },
+    ]);
+    assertEqual(registry.unregisterCapability("contract.capability"), false);
+
+    subscription.dispose();
+  });
+}
+
 async function testSceneLayersAndElements() {
   await withRuntime(async (runtime) => {
     const scene = runtime.services.getOrThrow(SCENE_SERVICE);
@@ -690,6 +784,79 @@ async function testSceneLayersAndElements() {
     );
     assertEqual(scene.removeElement("path-1"), true);
     assertEqual(scene.getElement("path-1"), undefined);
+  });
+}
+
+async function testSceneServiceContractValidatesAndClonesState() {
+  await withRuntime(async (runtime) => {
+    const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    const layer = scene.addLayer({
+      id: " source ",
+      metadata: { owner: "app" },
+    });
+    scene.addLayer({ id: "target", order: 2 });
+
+    layer.metadata!.owner = "mutated";
+    assertEqual(scene.getLayer("source")?.metadata?.owner, "app");
+
+    const rect = scene.addElement({
+      id: "rect",
+      layerId: "source",
+      type: "rect",
+      width: 10,
+      height: 20,
+      metadata: { selected: false },
+      data: { role: "shape" },
+      style: { fill: "red" },
+      transform: { left: 1, top: 2 },
+    });
+    rect.metadata!.selected = true;
+    rect.data!.role = "mutated";
+    rect.style!.fill = "blue";
+    rect.transform!.left = 99;
+
+    const stored = scene.getElement("rect");
+    assertEqual(stored?.metadata?.selected, false);
+    assertEqual(stored?.data?.role, "shape");
+    assertEqual(stored?.style?.fill, "red");
+    assertEqual(stored?.transform?.left, 1);
+
+    scene.updateElement("rect", {
+      layerId: "target",
+      order: 0,
+      metadata: { selected: true },
+    });
+    assertDeepEqual(
+      scene.listElements({ layerId: "target" }).map((element) => element.id),
+      ["rect"],
+    );
+    assertEqual(scene.getElement("rect")?.metadata?.selected, true);
+
+    assertThrows(
+      () => scene.addLayer({ id: "source" }),
+      'Scene layer "source" is already registered.',
+    );
+    assertThrows(
+      () =>
+        scene.addElement({
+          id: "orphan",
+          layerId: "missing",
+          type: "rect",
+          width: 1,
+          height: 1,
+        }),
+      'Scene layer "missing" not found.',
+    );
+    assertThrows(
+      () =>
+        scene.addElement({
+          id: "bad-image",
+          layerId: "source",
+          type: "image",
+          src: "",
+        }),
+      "Scene image element src is required.",
+    );
   });
 }
 
@@ -944,7 +1111,15 @@ async function main() {
       "fails duplicate capability ids without leaking dynamic contributions",
       testDuplicateCapabilityIdsFailWithoutLeakingContributions,
     ],
+    [
+      "keeps capability registry contracts immutable and observable",
+      testCapabilityRegistryContractUsesDefensiveCopiesAndEvents,
+    ],
     ["manages headless scene layers and elements", testSceneLayersAndElements],
+    [
+      "validates and clones headless scene contract state",
+      testSceneServiceContractValidatesAndClonesState,
+    ],
     [
       "batches and rolls back scene transactions",
       testSceneTransactionsBatchAndRollback,

@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: P6 hardening next; P6.S1 next.
+Current milestone: P6 hardening in progress; P6.S2 next.
 
 Completed:
 
@@ -97,10 +97,14 @@ Completed:
   factories or `*Tool` wrapper barrels, the legacy kit-owned dieline workflow
   has been removed, and former storefront layer defaults are available through
   the explicit `KIT_LEGACY_LAYER_PRESET`.
+- P6.S1 contract tests have been added. Core scene and capability registry
+  contracts, browser scene adapter layer/element mapping, and kit capability
+  definition plus layer-targeted helper behavior are now covered by package
+  tests.
 
 Next recommended slice:
 
-- P6.S1 - Contract Tests.
+- P6.S2 - Documentation.
 
 Resume instruction for a new thread:
 

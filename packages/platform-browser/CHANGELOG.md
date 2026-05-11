@@ -27,6 +27,9 @@
   `../../docs/naming-and-contribution-policy.md`.
 - Verified migration slice P4.S4 with Pooder package builds plus storefront
   type and production build integration checks.
+- Added migration slice P6.S1 contract test coverage for browser scene adapter
+  scoped layer sync, all core scene element type mappings, visibility, update,
+  removal, and scene-owned stacking behavior.
 
 ## 1.0.2
 

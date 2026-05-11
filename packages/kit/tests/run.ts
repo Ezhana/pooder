@@ -17,11 +17,14 @@ import { computeDetectEdgeSize } from "../src/extensions/edgeScale";
 import {
   IMAGE_PLACEMENT_CAPABILITY_ID,
   createImagePlacementCapabilityDefinition,
+  normalizeImagePlacementConfigNamespace,
+  normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,
 } from "../src/extensions/image/capability";
 import {
   DIELINE_GEOMETRY_CAPABILITY_ID,
   createDielineGeometryCapabilityDefinition,
+  normalizeDielineGeometryLayerId,
   upsertScenePathElement,
   type DielineGeometryCapabilityApi,
 } from "../src/extensions/dieline/capability";
@@ -37,6 +40,8 @@ import {
   DESIGN_EXPORT_CAPABILITY_ID,
   DesignExportCapabilityExtension,
   DesignExportExtension,
+  createDesignExportCapabilityDefinition,
+  normalizeDesignExportLayerIds,
   type DesignExportCapabilityApi,
 } from "../src/extensions/design-export";
 import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
@@ -44,16 +49,28 @@ import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config
 import {
   WHITE_INK_CAPABILITY_ID,
   WhiteInkCapabilityExtension,
+  createWhiteInkCapabilityDefinition,
+  getWhiteInkConfigKey,
+  normalizeWhiteInkConfigNamespace,
+  normalizeWhiteInkLayerId,
   type WhiteInkCapabilityApi,
 } from "../src/extensions/white-ink";
 import {
   BACKGROUND_CAPABILITY_ID,
   BackgroundCapabilityExtension,
+  createBackgroundCapabilityDefinition,
+  getBackgroundConfigKey,
+  normalizeBackgroundConfigNamespace,
+  normalizeBackgroundLayerId,
   type BackgroundCapabilityApi,
 } from "../src/extensions/background";
 import {
   RULER_CAPABILITY_ID,
   RulerCapabilityExtension,
+  createRulerCapabilityDefinition,
+  getRulerConfigKey,
+  normalizeRulerConfigNamespace,
+  normalizeRulerLayerId,
   type RulerCapabilityApi,
 } from "../src/extensions/ruler";
 import {
@@ -64,6 +81,7 @@ import {
 import {
   TEMPLATE_OVERLAY_CAPABILITY_ID,
   TemplateOverlayCapabilityExtension,
+  createTemplateOverlayCapabilityDefinition,
   type TemplateOverlayCapabilityApi,
 } from "../src/extensions/template-overlay";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
@@ -103,6 +121,10 @@ import {
   Pooder,
   ToolRegistryService,
 } from "@pooder/core";
+
+declare const process: {
+  exit(code: number): never;
+};
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -865,6 +887,146 @@ function testContributionCompatibility() {
   );
 }
 
+function testKitCapabilityContractDefinitionsAndNormalization() {
+  assertEqual(
+    normalizeImagePlacementConfigNamespace(" storefrontImage "),
+    "storefrontImage",
+    "image placement config namespace should trim caller input",
+  );
+  assertEqual(
+    normalizeImagePlacementConfigNamespace(""),
+    "image",
+    "image placement config namespace should fall back",
+  );
+  assertEqual(
+    normalizeImagePlacementLayerId(" app.image ", "legacy.image"),
+    "app.image",
+    "image placement layer id should trim caller input",
+  );
+  assertEqual(
+    normalizeImagePlacementLayerId("", "legacy.image"),
+    "legacy.image",
+    "image placement layer id should fall back",
+  );
+  assertEqual(
+    normalizeDielineGeometryLayerId(" app.dieline ", "legacy.dieline"),
+    "app.dieline",
+    "dieline geometry layer id should trim caller input",
+  );
+  assertDeepEqual(
+    normalizeDesignExportLayerIds(
+      [" app.artwork ", "", "app.artwork", "app.white"],
+      ["legacy.image"],
+    ),
+    ["app.artwork", "app.white"],
+    "design export should trim, filter, and dedupe caller layer ids",
+  );
+  assertDeepEqual(
+    normalizeDesignExportLayerIds(undefined, ["legacy.image"]),
+    ["legacy.image"],
+    "design export should use fallback layer ids",
+  );
+  assertEqual(
+    normalizeWhiteInkConfigNamespace(" storefrontWhiteInk "),
+    "storefrontWhiteInk",
+    "white ink config namespace should trim caller input",
+  );
+  assertEqual(
+    getWhiteInkConfigKey("storefrontWhiteInk", "print.enabled"),
+    "storefrontWhiteInk.print.enabled",
+    "white ink config keys should stay caller-namespaced",
+  );
+  assertEqual(
+    normalizeWhiteInkLayerId(" app.white ", "legacy.white"),
+    "app.white",
+    "white ink layer id should trim caller input",
+  );
+  assertEqual(
+    normalizeBackgroundConfigNamespace(" storefrontBackground "),
+    "storefrontBackground",
+    "background config namespace should trim caller input",
+  );
+  assertEqual(
+    getBackgroundConfigKey("storefrontBackground", "layers"),
+    "storefrontBackground.layers",
+    "background config keys should stay caller-namespaced",
+  );
+  assertEqual(
+    normalizeBackgroundLayerId("", "legacy.background"),
+    "legacy.background",
+    "background layer id should fall back",
+  );
+  assertEqual(
+    normalizeRulerConfigNamespace(" storefrontRuler "),
+    "storefrontRuler",
+    "ruler config namespace should trim caller input",
+  );
+  assertEqual(
+    getRulerConfigKey("storefrontRuler", "thickness"),
+    "storefrontRuler.thickness",
+    "ruler config keys should stay caller-namespaced",
+  );
+  assertEqual(
+    normalizeRulerLayerId(" app.ruler ", "legacy.ruler"),
+    "app.ruler",
+    "ruler layer id should trim caller input",
+  );
+
+  const definitions = [
+    createImagePlacementCapabilityDefinition({} as ImagePlacementCapabilityApi, {
+      capabilityId: "custom.image",
+    }),
+    createDielineGeometryCapabilityDefinition(
+      {} as DielineGeometryCapabilityApi,
+      { capabilityId: "custom.dieline" },
+    ),
+    createDesignExportCapabilityDefinition({} as DesignExportCapabilityApi, {
+      capabilityId: "custom.export",
+    }),
+    createWhiteInkCapabilityDefinition({} as WhiteInkCapabilityApi, {
+      capabilityId: "custom.white-ink",
+    }),
+    createBackgroundCapabilityDefinition({} as BackgroundCapabilityApi, {
+      capabilityId: "custom.background",
+    }),
+    createRulerCapabilityDefinition({} as RulerCapabilityApi, {
+      capabilityId: "custom.ruler",
+    }),
+    createTemplateOverlayCapabilityDefinition(
+      {} as TemplateOverlayCapabilityApi,
+      { capabilityId: "custom.template-overlay" },
+    ),
+    createFeatureCapabilityDefinition({} as FeatureCapabilityApi, {
+      capabilityId: "custom.feature",
+    }),
+  ];
+
+  assertDeepEqual(
+    definitions.map((definition) => definition.id),
+    [
+      "custom.image",
+      "custom.dieline",
+      "custom.export",
+      "custom.white-ink",
+      "custom.background",
+      "custom.ruler",
+      "custom.template-overlay",
+      "custom.feature",
+    ],
+    "capability definitions should accept caller-provided capability ids",
+  );
+  for (const definition of definitions) {
+    assert(
+      definition.metadata?.tags?.includes("kit"),
+      `${definition.id} should be tagged as a kit capability`,
+    );
+    assert(
+      (definition.commands || []).length > 0,
+      `${definition.id} should document command bridge references`,
+    );
+  }
+}
+
 async function testDesignExportExtensionCommand() {
   const runtime = new Pooder();
   const commandService =
@@ -1061,6 +1223,18 @@ async function testDesignExportCapabilityExtension() {
 async function testKitCapabilityFactoriesDoNotRegisterTools() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.services
+    .getOrThrow<CommandService>(COMMAND_SERVICE)
+    .registerCommand("getSceneGeometry", () => ({
+      x: 50,
+      y: 40,
+      width: 100,
+      height: 80,
+      radius: 0,
+      scale: 1,
+      shape: "rect",
+      shapeStyle: { fitMode: "stretch" },
+    }));
   runtime.extensions.register(createImagePlacementCapability());
   runtime.extensions.register(createWhiteInkCapability());
   runtime.extensions.register(createDielineGeometryCapability());
@@ -1317,6 +1491,8 @@ async function testDielineGeometryCapabilityExtension() {
   const element = registeredFacade.upsertPathElement({
     elementId: "app.dieline.path",
     pathData: "M0 0 L1 1",
+    style: { stroke: "#123456" },
+    metadata: { source: "contract" },
   });
   assertEqual(
     element?.id,
@@ -1332,6 +1508,30 @@ async function testDielineGeometryCapabilityExtension() {
     sceneService.getElement("app.dieline.path")?.type,
     "path",
     "dieline geometry should create a scene path element",
+  );
+  assertEqual(
+    sceneService.getElement("app.dieline.path")?.style?.stroke,
+    "#123456",
+    "dieline geometry should preserve caller-owned path style",
+  );
+
+  const updatedElement = registeredFacade.upsertPathElement({
+    elementId: "app.dieline.path",
+    pathData: "M2 2 L3 3",
+    style: { stroke: "#654321" },
+  });
+  if (!updatedElement || updatedElement.type !== "path") {
+    throw new Error("dieline geometry upsert should return a path element");
+  }
+  assertEqual(
+    updatedElement.path,
+    "M2 2 L3 3",
+    "dieline geometry should update existing caller-owned path elements",
+  );
+  assertEqual(
+    sceneService.listElements({ layerId: "app.dieline" }).length,
+    1,
+    "dieline geometry upsert should not duplicate path elements",
   );
 
   await runtime.dispose();
@@ -1774,6 +1974,7 @@ async function main() {
   testVisibilityDsl();
   testImageViewStateHelper();
   testContributionCompatibility();
+  testKitCapabilityContractDefinitionsAndNormalization();
   await testDesignExportExtensionCommand();
   await testDesignExportCapabilityExtension();
   await testKitCapabilityFactoriesDoNotRegisterTools();
@@ -1789,4 +1990,9 @@ async function main() {
   console.log("ok");
 }
 
-void main();
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

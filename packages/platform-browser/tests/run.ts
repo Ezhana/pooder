@@ -791,6 +791,154 @@ async function testFabricSceneAdapterSyncsCoreSceneToScopedPasses() {
   await runtime.dispose();
 }
 
+async function testFabricSceneAdapterMapsSceneElementContracts() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const adapter = new FabricSceneAdapter();
+
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_SCENE_ADAPTER);
+  await adapter.flush();
+  canvasService.passCalls = [];
+
+  const scene = runtime.services.getOrThrow(SCENE_SERVICE);
+  scene.transaction(() => {
+    scene.addLayer({ id: "primary", order: 2 });
+    scene.addLayer({ id: "overlay", order: 1, visible: false });
+    scene.addElement({
+      id: "image",
+      layerId: "primary",
+      type: "image",
+      src: "image.png",
+      width: 120,
+      height: 80,
+      order: 1,
+      metadata: { source: "contract" },
+      data: { role: "artwork" },
+      transform: { left: 10, top: 20, angle: 15 },
+    });
+    scene.addElement({
+      id: "path",
+      layerId: "primary",
+      type: "path",
+      path: "M0 0 L10 10",
+      order: 2,
+      style: { stroke: "#111111" },
+    });
+    scene.addElement({
+      id: "rect",
+      layerId: "primary",
+      type: "rect",
+      width: 30,
+      height: 40,
+      order: 3,
+      visible: false,
+    });
+    scene.addElement({
+      id: "text",
+      layerId: "overlay",
+      type: "text",
+      text: "Hidden",
+      order: 1,
+    });
+  });
+
+  await adapter.flush();
+
+  const primaryPass = canvasService.passCalls.find(
+    (call) => call.passId === "primary",
+  );
+  const overlayPass = canvasService.passCalls.find(
+    (call) => call.passId === "overlay",
+  );
+  assert(primaryPass, "primary layer should sync");
+  assert(overlayPass, "overlay layer should sync");
+  assertDeepEqual(
+    primaryPass.specs.map((spec) => spec.id),
+    ["image", "path", "rect"],
+    "scene elements should sync in element order",
+  );
+
+  const specs = new Map(primaryPass.specs.map((spec) => [spec.id, spec]));
+  assertEqual(
+    specs.get("image")?.src,
+    "image.png",
+    "image element src should map to render spec",
+  );
+  assertEqual(
+    specs.get("image")?.props.width,
+    120,
+    "image element width should map to render props",
+  );
+  assertEqual(
+    specs.get("image")?.props.angle,
+    15,
+    "image transform should map to render props",
+  );
+  assertDeepEqual(
+    specs.get("image")?.data,
+    {
+      role: "artwork",
+      sceneElementId: "image",
+      sceneLayerId: "primary",
+      sceneMetadata: { source: "contract" },
+    },
+    "scene element data and metadata should map to render data",
+  );
+  assertEqual(
+    specs.get("path")?.props.path,
+    "M0 0 L10 10",
+    "path element data should map to render props",
+  );
+  assertEqual(
+    specs.get("path")?.props.stroke,
+    "#111111",
+    "path style should map to render props",
+  );
+  assertEqual(
+    specs.get("rect")?.props.visible,
+    false,
+    "hidden scene elements should sync as invisible",
+  );
+  assertEqual(
+    overlayPass.specs[0]?.props.text,
+    "Hidden",
+    "text element content should map to render props",
+  );
+  assertEqual(
+    overlayPass.specs[0]?.props.visible,
+    false,
+    "hidden scene layers should sync contained elements as invisible",
+  );
+
+  canvasService.passCalls = [];
+  scene.updateElement("image", { src: "updated.png", width: 140 });
+  scene.removeElement("path");
+  await adapter.flush();
+
+  const updatedPrimaryPass = canvasService.passCalls.find(
+    (call) => call.passId === "primary",
+  );
+  assert(updatedPrimaryPass, "updated primary layer should sync");
+  assertDeepEqual(
+    updatedPrimaryPass.specs.map((spec) => spec.id),
+    ["image", "rect"],
+    "removed scene elements should be omitted from the next scoped pass",
+  );
+  assertEqual(
+    updatedPrimaryPass.specs[0]?.src,
+    "updated.png",
+    "updated image src should sync",
+  );
+  assertEqual(
+    updatedPrimaryPass.specs[0]?.props.width,
+    140,
+    "updated image width should sync",
+  );
+
+  await runtime.dispose();
+}
+
 async function testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope() {
   const { canvas, service } = createCanvasServiceForRenderTests();
   let passes: RenderPassSpec[] = [
@@ -1073,6 +1221,7 @@ async function main() {
   await testBrowserSceneExportElementBoundsCrop();
   await testBrowserSceneExportFrameCrop();
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
+  await testFabricSceneAdapterMapsSceneElementContracts();
   await testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope();
   await testRenderProducerVisibilityIsSourceScoped();
   testVisibilityDslSupportsWorkflowAndContextPredicates();

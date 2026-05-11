@@ -29,6 +29,9 @@
   capability-first APIs. See `../../docs/naming-and-contribution-policy.md`.
 - Verified migration slice P4.S4 with Pooder package builds plus storefront
   type and production build integration checks.
+- Added migration slice P6.S1 contract test coverage for capability registry
+  registration, event, clone, and cleanup behavior plus headless scene
+  validation, defensive copying, element movement, and rollback contracts.
 
 ## 3.0.0
 

@@ -126,6 +126,9 @@
   `../../docs/naming-and-contribution-policy.md`.
 - Verified migration slice P4.S4 with Pooder package builds plus storefront
   type and production build integration checks.
+- Added migration slice P6.S1 contract test coverage for kit capability
+  definition metadata, caller-owned config namespaces and layer ids,
+  capability-only registration, and layer-targeted dieline scene path upserts.
 
 ## 8.0.0
 
