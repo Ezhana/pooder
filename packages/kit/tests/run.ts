@@ -17,7 +17,6 @@ import { computeDetectEdgeSize } from "../src/extensions/edgeScale";
 import {
   IMAGE_PLACEMENT_CAPABILITY_ID,
   createImagePlacementCapabilityDefinition,
-  normalizeImagePlacementConfigNamespace,
   normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,
 } from "../src/extensions/image/capability";
@@ -35,8 +34,6 @@ import {
   EdgeDetectionCapabilityExtension,
   type EdgeDetectionCapabilityApi,
 } from "../src/extensions/edge-detection";
-import { createImageCommands } from "../src/extensions/image/commands";
-import { createImageConfigurations } from "../src/extensions/image/config";
 import { createDesignExportCommands } from "../src/extensions/design-export/commands";
 import {
   DESIGN_EXPORT_CAPABILITY_ID,
@@ -115,6 +112,7 @@ import {
 import {
   SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
+  SCENE_LAYOUT_SERVICE,
   evaluateVisibilityExpr,
 } from "@pooder/core";
 import type {
@@ -797,40 +795,33 @@ function testImageViewStateHelper() {
   );
   assert(
     hasAnyImageInViewState({
-      items: [],
+      slots: [],
       hasAnyImage: false,
-      focusedId: null,
-      focusedItem: null,
-      isToolActive: false,
-      isImageSelectionActive: false,
+      activeSlotId: null,
+      focusedSlot: null,
       hasWorkingChanges: false,
-      source: "committed",
-      placementPolicy: "free",
       sessionNotice: null,
     }) === false,
     "empty image state should report false",
   );
   assert(
     hasAnyImageInViewState({
-      items: [
+      slots: [
         {
-          id: "img-1",
-          url: "blob:test",
-          opacity: 1,
+          id: "slot-1",
+          frame: { left: 0, top: 0, width: 100, height: 100 },
+          fit: "cover",
+          hasImage: true,
+          image: { src: "blob:test", opacity: 1 },
+          layerId: "image",
+          order: 0,
+          visible: true,
         },
       ],
       hasAnyImage: true,
-      focusedId: "img-1",
-      focusedItem: {
-        id: "img-1",
-        url: "blob:test",
-        opacity: 1,
-      },
-      isToolActive: true,
-      isImageSelectionActive: true,
+      activeSlotId: "slot-1",
+      focusedSlot: null,
       hasWorkingChanges: true,
-      source: "working",
-      placementPolicy: "free",
       sessionNotice: null,
     }) === true,
     "non-empty image state should report true",
@@ -838,9 +829,6 @@ function testImageViewStateHelper() {
 }
 
 function testContributionCompatibility() {
-  const imageCommandNames = createImageCommands({} as any).map(
-    (entry) => entry.command,
-  );
   const designExportCommandNames = createDesignExportCommands({} as any).map(
     (entry) => entry.command,
   );
@@ -852,23 +840,6 @@ function testContributionCompatibility() {
     height: 0,
   }).map((entry) => entry.command);
 
-  const expectedImageCommands = [
-    "addImage",
-    "upsertImage",
-    "applyImageOperation",
-    "getImageViewState",
-    "setImageTransform",
-    "imageSessionReset",
-    "validateImageSession",
-    "completeImages",
-    "exportUserCroppedImage",
-    "focusImage",
-    "removeImage",
-    "updateImage",
-    "clearImages",
-    "bringToFront",
-    "sendToBack",
-  ];
   const expectedDesignExportCommands = ["exportImage"];
   const expectedWhiteInkCommands = [
     "addWhiteInk",
@@ -889,10 +860,6 @@ function testContributionCompatibility() {
   const expectedDielineCommands = ["updateFeaturePosition", "detectEdge"];
 
   assert(
-    JSON.stringify(imageCommandNames) === JSON.stringify(expectedImageCommands),
-    `image command set changed: ${JSON.stringify(imageCommandNames)}`,
-  );
-  assert(
     JSON.stringify(designExportCommandNames) ===
       JSON.stringify(expectedDesignExportCommands),
     `design export command set changed: ${JSON.stringify(designExportCommandNames)}`,
@@ -908,7 +875,6 @@ function testContributionCompatibility() {
     `dieline command set changed: ${JSON.stringify(dielineCommandNames)}`,
   );
 
-  const imageConfigKeys = createImageConfigurations().map((entry) => entry.id);
   const whiteInkConfigKeys = createWhiteInkConfigurations().map(
     (entry) => entry.id,
   );
@@ -923,26 +889,6 @@ function testContributionCompatibility() {
     features: [],
   }).map((entry) => entry.id);
 
-  const expectedImageConfigKeys = [
-    "image.items",
-    "image.debug",
-    "image.control.cornerSize",
-    "image.control.touchCornerSize",
-    "image.control.cornerStyle",
-    "image.control.cornerColor",
-    "image.control.cornerStrokeColor",
-    "image.control.transparentCorners",
-    "image.control.borderColor",
-    "image.control.borderScaleFactor",
-    "image.control.padding",
-    "image.frame.strokeColor",
-    "image.frame.strokeWidth",
-    "image.frame.strokeStyle",
-    "image.frame.dashLength",
-    "image.frame.innerBackground",
-    "image.frame.outerBackground",
-    "image.session.placementPolicy",
-  ];
   const expectedWhiteInkConfigKeys = [
     "whiteInk.items",
     "whiteInk.printWithWhiteInk",
@@ -967,10 +913,6 @@ function testContributionCompatibility() {
   ];
 
   assert(
-    JSON.stringify(imageConfigKeys) === JSON.stringify(expectedImageConfigKeys),
-    `image config keys changed: ${JSON.stringify(imageConfigKeys)}`,
-  );
-  assert(
     JSON.stringify(whiteInkConfigKeys) ===
       JSON.stringify(expectedWhiteInkConfigKeys),
     `white-ink config keys changed: ${JSON.stringify(whiteInkConfigKeys)}`,
@@ -983,16 +925,6 @@ function testContributionCompatibility() {
 }
 
 function testKitCapabilityContractDefinitionsAndNormalization() {
-  assertEqual(
-    normalizeImagePlacementConfigNamespace(" storefrontImage "),
-    "storefrontImage",
-    "image placement config namespace should trim caller input",
-  );
-  assertEqual(
-    normalizeImagePlacementConfigNamespace(""),
-    "image",
-    "image placement config namespace should fall back",
-  );
   assertEqual(
     normalizeImagePlacementLayerId(" app.image ", "legacy.image"),
     "app.image",
@@ -1333,7 +1265,6 @@ function createFakeCapabilityExtension(
 async function testApplyKitEditorDocument() {
   const runtime = new Pooder();
   const templateCalls: any[] = [];
-  const imageCalls: any[] = [];
   const dielineCalls: any[] = [];
   const featureCalls: any[] = [];
   runtime.extensions.register(
@@ -1349,19 +1280,18 @@ async function testApplyKitEditorDocument() {
         refresh: () => {},
       } satisfies TemplateOverlayCapabilityApi,
       [IMAGE_PLACEMENT_CAPABILITY_ID]: {
+        beginSession: async () => ({ ok: true }),
+        requestUpload: async () => ({ ok: true }),
+        setImageSource: async () => ({ ok: true }),
+        setImageTransform: async () => ({ ok: true }),
+        applyImageOperation: async () => ({ ok: true }),
+        clearImage: async () => ({ ok: true }),
+        focusSlot: () => ({ ok: true }),
         getViewState: () => ({}) as any,
-        addImage: async () => "image-1",
-        upsertImage: async (url: string, options: any) => {
-          imageCalls.push({ url, options });
-          return { id: options?.id ?? "image-1", mode: "add" as const };
-        },
-        setImageTransform: async () => {},
-        applyImageOperation: async () => {},
-        focusImage: () => ({ ok: true }),
         resetSession: () => {},
         validateSession: async () => ({ ok: true }),
         completeSession: async () => ({ ok: true }),
-        exportUserCroppedImage: async () => ({}) as any,
+        exportPlacementImage: async () => ({}) as any,
       } satisfies ImagePlacementCapabilityApi,
       [DIELINE_GEOMETRY_CAPABILITY_ID]: {
         getState: () => ({}) as any,
@@ -1439,13 +1369,9 @@ async function testApplyKitEditorDocument() {
                 id: "front-slot",
                 type: "slot",
                 accepts: ["image"],
-                frame: { x: 10, y: 20, width: 30, height: 40 },
-              },
-              {
-                id: "front-photo",
-                type: "image",
-                assetId: "photo",
                 effects: [{ type: "image-placement" }],
+                frame: { x: 10, y: 20, width: 30, height: 40 },
+                image: { assetId: "photo" },
               },
             ],
           },
@@ -1484,14 +1410,10 @@ async function testApplyKitEditorDocument() {
   );
   assert(templateCalls.length > 0, "template effect should call facade");
   assertEqual(
-    imageCalls[0]?.url,
+    ((scene.getElement("front-slot")?.data as any)?.imagePlacement?.image as any)
+      ?.src,
     "/photo.png",
-    "image placement effect should use image asset source",
-  );
-  assertEqual(
-    imageCalls[0]?.options?.mode,
-    "add",
-    "document image placement should add new image objects",
+    "slot image placement should resolve image asset source",
   );
   assert(dielineCalls.length > 0, "dieline effect should refresh facade");
   assertEqual(
@@ -1586,33 +1508,32 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 async function testImagePlacementCapabilityExtension() {
   const runtime = new Pooder();
   const facade: ImagePlacementCapabilityApi = {
-    addImage: async () => "image-1",
-    applyImageOperation: async () => {},
+    beginSession: async () => ({ ok: true }),
+    requestUpload: async () => ({ ok: true }),
+    setImageSource: async () => ({ ok: true }),
+    setImageTransform: async () => ({ ok: true }),
+    applyImageOperation: async () => ({ ok: true }),
+    clearImage: async () => ({ ok: true }),
     completeSession: async () => ({ ok: true }),
-    exportUserCroppedImage: async () => ({
+    exportPlacementImage: async () => ({
       format: "png",
       height: 1,
       imageIds: [],
       multiplier: 1,
+      slotIds: [],
       url: "data:image/png;base64,test",
       width: 1,
     }),
-    focusImage: (id) => ({ ok: true, id }),
+    focusSlot: (id) => ({ ok: true, id }),
     getViewState: () => ({
-      focusedId: null,
-      focusedItem: null,
+      activeSlotId: null,
+      focusedSlot: null,
       hasAnyImage: false,
       hasWorkingChanges: false,
-      isImageSelectionActive: false,
-      isToolActive: false,
-      items: [],
-      placementPolicy: "free",
       sessionNotice: null,
-      source: "committed",
+      slots: [],
     }),
     resetSession: () => {},
-    setImageTransform: async () => {},
-    upsertImage: async () => ({ id: "image-1", mode: "add" }),
     validateSession: async () => ({ ok: true }),
   };
   runtime.extensions.register({
@@ -1622,14 +1543,12 @@ async function testImagePlacementCapabilityExtension() {
       return {
         capabilities: [
           createImagePlacementCapabilityDefinition(facade, {
-            configNamespace: "storefrontImage",
             layers: {
               imageLayerId: "app.image",
               overlayLayerId: "app.image.overlay",
             },
           }),
         ],
-        configurations: createImageConfigurations("storefrontImage"),
       };
     },
   });
@@ -1644,7 +1563,7 @@ async function testImagePlacementCapabilityExtension() {
     throw new Error("image placement capability facade should be registered");
   }
   assertDeepEqual(
-    registeredFacade.getViewState().items,
+    registeredFacade.getViewState().slots,
     [],
     "image placement capability facade should expose image state",
   );
@@ -1656,9 +1575,275 @@ async function testImagePlacementCapabilityExtension() {
     !toolRegistry.hasTool(IMAGE_PLACEMENT_CAPABILITY_ID),
     "image placement capability registration should not require a tool",
   );
+  await runtime.dispose();
+}
+
+async function testImagePlacementSessionUsesEditableWorkingObject() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const exportService = new FakeSceneExportService();
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 100, top: 120, width: 200, height: 160 },
+    format: "png",
+    height: 320,
+    multiplier: 2,
+    sourceElementIds: ["slot"],
+    sourceLayerIds: ["image.user"],
+    url: "data:image/png;base64,cropped-slot",
+    width: 400,
+  };
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
+
+  const rectByCenter = (
+    centerX: number,
+    centerY: number,
+    width: number,
+    height: number,
+  ): SceneRect => ({
+    centerX,
+    centerY,
+    height,
+    left: centerX - width / 2,
+    top: centerY - height / 2,
+    width,
+  });
+  const layout: SceneLayoutSnapshot = {
+    bleedRect: rectByCenter(400, 300, 360, 360),
+    canvasHeight: 600,
+    canvasWidth: 800,
+    cutHeightMm: 120,
+    cutMarginMm: 10,
+    cutMode: "outset",
+    cutRect: rectByCenter(400, 300, 360, 360),
+    cutWidthMm: 120,
+    scale: 3,
+    trimHeightMm: 100,
+    trimRect: rectByCenter(400, 300, 300, 300),
+    trimWidthMm: 100,
+  };
+  runtime.services.register(
+    {
+      getLayout: () => layout,
+      getGeometry: () => ({
+        height: layout.trimRect.height,
+        offset: (layout.cutRect.width - layout.trimRect.width) / 2,
+        radius: 0,
+        scale: layout.scale,
+        shape: "circle",
+        shapeStyle: { fitMode: "stretch" },
+        unit: "px",
+        width: layout.trimRect.width,
+        x: layout.trimRect.centerX,
+        y: layout.trimRect.centerY,
+      }),
+    } as any,
+    SCENE_LAYOUT_SERVICE,
+  );
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "artwork" });
+  scene.addElement({
+    id: "slot",
+    layerId: "artwork",
+    type: "rect",
+    width: 200,
+    height: 160,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 100, y: 120, width: 200, height: 160 },
+        image: {
+          src: "/photo.png",
+          metadata: { width: 100, height: 80 },
+          left: 0.5,
+          top: 0.5,
+          scale: 1,
+          angle: 0,
+        },
+      },
+    },
+  });
+  const imageExtension = createImagePlacementCapability();
+  runtime.extensions.register(imageExtension);
+  await runtime.extensions.flushActivation();
+
+  const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
+  await facade.beginSession("slot");
+
+  const render = (await canvasService.getRenderProducerResult(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  )) as any;
+  const imagePass = render.passes.find((pass: any) => pass.id === "image.user");
+  const sessionPass = render.passes.find(
+    (pass: any) => pass.id === "image-overlay.session",
+  );
   assert(
-    runtime.config.getDefinition("storefrontImage.items"),
-    "image placement capability should accept caller config namespace",
+    !imagePass.objects.some((spec: any) => spec.id === "image:slot"),
+    "committed image object should be hidden while its working session is active",
+  );
+  const sessionImage = sessionPass.objects.find(
+    (spec: any) => spec.id === "session-image:slot",
+  );
+  assert(sessionImage, "image session should render a separate working object");
+  assertEqual(
+    sessionImage.props.selectable,
+    true,
+    "session image should be selectable",
+  );
+  assertEqual(
+    sessionImage.props.lockUniScaling,
+    true,
+    "session image should keep aspect ratio while scaling",
+  );
+  assertEqual(
+    sessionImage.props.lockRotation,
+    false,
+    "session image should support rotation",
+  );
+  assert(
+    sessionPass.objects.some((spec: any) => spec.id === "image.cropShapeHatch"),
+    "image session should render dieline hatch overlay",
+  );
+  const snapTarget = {
+    data: {
+      slotId: "slot",
+      source: "working",
+      type: "image-placement-image",
+    },
+    left: 103,
+    top: 180,
+    width: 50,
+    height: 50,
+    scaleX: 1,
+    scaleY: 1,
+    getBoundingRect: () => ({ left: 103, top: 180, width: 50, height: 50 }),
+    set(values: Record<string, number>) {
+      Object.assign(this, values);
+    },
+    setCoords() {},
+  };
+  (imageExtension as any).applyMoveSnapToTarget(snapTarget);
+  assertEqual(
+    snapTarget.left,
+    100,
+    "image session should snap a moving image edge to the slot edge",
+  );
+
+  await facade.setImageTransform("slot", {
+    angle: 22,
+    left: 0.6,
+    scale: 1.3,
+    top: 0.4,
+  });
+  await facade.completeSession();
+  const committedImage = (scene.getElement("slot")?.data as any)?.imagePlacement
+    ?.image;
+  assertEqual(
+    committedImage.src,
+    "data:image/png;base64,cropped-slot",
+    "completed session should write the cropped production image to the slot",
+  );
+  assertEqual(
+    committedImage.angle,
+    0,
+    "cropped production image should reset session rotation in the slot",
+  );
+  assertEqual(
+    committedImage.scale,
+    1,
+    "cropped production image should reset session scale in the slot",
+  );
+  assertEqual(
+    committedImage.left,
+    0.5,
+    "cropped production image should be centered in the slot",
+  );
+  assertEqual(
+    committedImage.metadata?.sourceSrc,
+    "/photo.png",
+    "completed session should keep the original source image in metadata",
+  );
+  assertDeepEqual(
+    committedImage.metadata?.sourceTransform,
+    {
+      left: 0.6,
+      top: 0.4,
+      scale: 1.3,
+      angle: 22,
+      opacity: 1,
+    },
+    "completed session should keep the editable source transform in metadata",
+  );
+  assertDeepEqual(
+    exportService.calls[0]?.crop,
+    { type: "sceneRect", rect: { left: 100, top: 120, width: 200, height: 160 } },
+    "complete session should crop the working image by the slot frame",
+  );
+  assertDeepEqual(
+    exportService.calls[0]?.sourceElementIds,
+    ["session-image:slot"],
+    "complete session should export the active working slot image",
+  );
+  assertDeepEqual(
+    exportService.calls[0]?.sourceLayerIds,
+    ["image-overlay.session"],
+    "complete session should export the working image from the session pass",
+  );
+
+  const committedRender = (await canvasService.getRenderProducerResult(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  )) as any;
+  const committedImagePass = committedRender.passes.find(
+    (pass: any) => pass.id === "image.user",
+  );
+  assert(
+    committedImagePass.objects.some((spec: any) => spec.id === "image:slot"),
+    "completed slot should render the processed production image object",
+  );
+
+  await facade.beginSession("slot");
+  const reopenedState = facade.getViewState();
+  assertEqual(
+    reopenedState.focusedSlot?.image?.src,
+    "/photo.png",
+    "reopened image session should edit from the original source image",
+  );
+  assertEqual(
+    reopenedState.focusedSlot?.image?.scale,
+    1.3,
+    "reopened image session should restore the source transform",
+  );
+  facade.resetSession("slot");
+
+  await facade.beginSession("slot");
+  await facade.setImageSource("slot", {
+    src: "/photo.png",
+    metadata: { width: 100, height: 80 },
+  });
+  await facade.setImageTransform("slot", { left: -1 });
+  const warnResult = await facade.completeSession("slot");
+  assertEqual(
+    (warnResult as any).ok,
+    true,
+    "image placement should default to warn and allow outside-frame completion",
+  );
+
+  runtime.config.update("image.session.placementPolicy", "strict");
+  await facade.beginSession("slot");
+  await facade.setImageSource("slot", {
+    src: "/photo.png",
+    metadata: { width: 100, height: 80 },
+  });
+  await facade.setImageTransform("slot", { left: -1 });
+  const strictResult = await facade.completeSession("slot");
+  assertEqual(
+    (strictResult as any).ok,
+    false,
+    "strict image placement policy should block outside-frame completion",
   );
 
   await runtime.dispose();
@@ -2454,6 +2639,7 @@ async function main() {
   await testApplyKitEditorDocument();
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
+  await testImagePlacementSessionUsesEditableWorkingObject();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayVisibilityFollowsEditingSessions();
   testImageSessionShapeOverlayUsesDielineGeometry();

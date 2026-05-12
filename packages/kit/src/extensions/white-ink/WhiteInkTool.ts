@@ -316,11 +316,6 @@ export class WhiteInkTool implements ExtensionDefinition {
           return;
         }
 
-        if (e.key === "image.items") {
-          this.updateWhiteInks();
-          return;
-        }
-
         if (e.key === this.getConfigKey("debug")) {
           return;
         }
@@ -822,43 +817,8 @@ export class WhiteInkTool implements ExtensionDefinition {
   }
 
   private getImagePlacementState(id?: string): ImagePlacementState | null {
-    const rawItems = this.getConfig<any[]>("image.items", []);
-    if (!Array.isArray(rawItems) || rawItems.length === 0) return null;
-
-    const matched =
-      (id
-        ? rawItems.find(
-            (item: any) =>
-              item &&
-              typeof item === "object" &&
-              typeof item.id === "string" &&
-              item.id === id,
-          )
-        : undefined) || rawItems[0];
-
-    if (!matched || typeof matched !== "object") return null;
-
-    const sourceUrl =
-      typeof matched.sourceUrl === "string" && matched.sourceUrl.length > 0
-        ? matched.sourceUrl
-        : typeof matched.url === "string"
-          ? matched.url
-          : "";
-    const committedUrl =
-      typeof matched.committedUrl === "string" ? matched.committedUrl : "";
-
-    return {
-      id:
-        typeof matched.id === "string" && matched.id.length > 0
-          ? matched.id
-          : id || "image",
-      sourceUrl,
-      committedUrl,
-      left: Number.isFinite(matched.left) ? Number(matched.left) : 0.5,
-      top: Number.isFinite(matched.top) ? Number(matched.top) : 0.5,
-      scale: Number.isFinite(matched.scale) ? Math.max(0.05, matched.scale) : 1,
-      angle: Number.isFinite(matched.angle) ? matched.angle : 0,
-    };
+    void id;
+    return null;
   }
 
   private shouldRestoreSnapshotToSource(

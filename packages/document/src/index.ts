@@ -110,6 +110,18 @@ export interface EditorSlotObject extends EditorObjectBase {
   frame: EditorRect;
   fit?: EditorSlotFit;
   constraints?: Record<string, unknown>;
+  image?: EditorSlotImage;
+}
+
+export interface EditorSlotImage {
+  assetId?: string;
+  src?: string;
+  left?: number;
+  top?: number;
+  scale?: number;
+  angle?: number;
+  opacity?: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface EditorTemplateObject extends EditorObjectBase {
@@ -257,6 +269,27 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
   return Object.keys(transform).length ? transform : undefined;
 }
 
+function normalizeSlotImage(value: unknown): EditorSlotImage | undefined {
+  if (!isRecord(value)) return undefined;
+  const assetId = normalizeId(value.assetId);
+  const src = normalizeId(value.src);
+  const image: EditorSlotImage = {};
+  if (assetId) image.assetId = assetId;
+  if (src) image.src = src;
+  const left = normalizeFiniteNumber(value.left);
+  if (left !== undefined) image.left = left;
+  const top = normalizeFiniteNumber(value.top);
+  if (top !== undefined) image.top = top;
+  const scale = normalizePositiveNumber(value.scale);
+  if (scale !== undefined) image.scale = scale;
+  const angle = normalizeFiniteNumber(value.angle);
+  if (angle !== undefined) image.angle = angle;
+  const opacity = normalizeFiniteNumber(value.opacity);
+  if (opacity !== undefined) image.opacity = opacity;
+  if (isRecord(value.metadata)) image.metadata = cloneRecord(value.metadata);
+  return Object.keys(image).length ? image : undefined;
+}
+
 function normalizeEffect(value: unknown): EditorEffect | null {
   if (!isRecord(value)) return null;
   const type = normalizeId(value.type);
@@ -336,6 +369,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
         constraints: isRecord(value.constraints)
           ? cloneRecord(value.constraints)
           : undefined,
+        image: normalizeSlotImage(value.image),
       };
     }
     case "template": {
@@ -675,6 +709,18 @@ export function validateEditorDocument(
             code: "slot-accepts-required",
             message: `Slot object "${object.id}" requires accepts.`,
             path: `${objectPath}.accepts`,
+          });
+        }
+        if (
+          object.type === "slot" &&
+          object.image?.assetId &&
+          !assetIds.has(object.image.assetId)
+        ) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "slot-image-asset-missing",
+            message: `Slot object "${object.id}" references missing image asset "${object.image.assetId}".`,
+            path: `${objectPath}.image.assetId`,
           });
         }
         validateEffects(diagnostics, object.effects, objectPath, options);

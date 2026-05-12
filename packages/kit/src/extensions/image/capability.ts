@@ -1,12 +1,11 @@
 import type { CapabilityDefinition } from "@pooder/core";
 import type {
-  ImageExportUserCroppedImageOptions,
-  ImageExportUserCroppedImageResult,
-  ImageItem,
-  ImageTransformUpdates,
-  ImageViewState,
-  UpdateImageOptions,
-  UpsertImageOptions,
+  ImageExportPlacementImageOptions,
+  ImageExportPlacementImageResult,
+  ImagePlacementSessionNotice,
+  ImagePlacementSlotState,
+  ImagePlacementSource,
+  ImagePlacementTransformUpdates,
 } from "./ImageTool";
 import type { ImageOperation } from "./imageOperations";
 
@@ -20,48 +19,48 @@ export interface ImagePlacementLayerOptions {
 
 export interface ImagePlacementCapabilityOptions {
   capabilityId?: string;
-  configNamespace?: string;
   layers?: ImagePlacementLayerOptions;
+  requestUpload?: (
+    slot: ImagePlacementSlotState,
+  ) => Promise<ImagePlacementSource | null | undefined>;
+}
+
+export interface ImagePlacementViewState {
+  slots: ImagePlacementSlotState[];
+  activeSlotId: string | null;
+  focusedSlot: ImagePlacementSlotState | null;
+  hasAnyImage: boolean;
+  hasWorkingChanges: boolean;
+  sessionNotice: ImagePlacementSessionNotice | null;
 }
 
 export interface ImagePlacementCapabilityApi {
-  getViewState(): ImageViewState;
-  addImage(
-    url: string,
-    options?: Partial<ImageItem>,
-    operation?: ImageOperation,
-  ): Promise<string>;
-  upsertImage(
-    url: string,
-    options?: UpsertImageOptions,
-  ): Promise<{ id: string; mode: "replace" | "add" }>;
+  getViewState(): ImagePlacementViewState;
+  beginSession(slotId: string): Promise<{ ok: boolean; reason?: string }>;
+  requestUpload(slotId: string): Promise<{ ok: boolean; reason?: string }>;
+  setImageSource(
+    slotId: string,
+    source: ImagePlacementSource,
+  ): Promise<{ ok: boolean; reason?: string }>;
   setImageTransform(
-    id: string,
-    updates: ImageTransformUpdates,
-    options?: UpdateImageOptions,
-  ): Promise<void>;
+    slotId: string,
+    updates: ImagePlacementTransformUpdates,
+  ): Promise<{ ok: boolean; reason?: string }>;
   applyImageOperation(
-    id: string,
+    slotId: string,
     operation: ImageOperation,
-    options?: UpdateImageOptions,
-  ): Promise<void>;
-  focusImage(
-    id: string | null,
+  ): Promise<{ ok: boolean; reason?: string }>;
+  clearImage(slotId: string): Promise<{ ok: boolean; reason?: string }>;
+  resetSession(slotId?: string): void;
+  validateSession(slotId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
+  completeSession(slotId?: string): Promise<{ ok: boolean } | ImagePlacementSessionNotice>;
+  focusSlot(
+    slotId: string | null,
     options?: { syncCanvasSelection?: boolean; skipRender?: boolean },
   ): { ok: boolean; id?: string | null; reason?: string };
-  resetSession(): void;
-  validateSession(): Promise<unknown>;
-  completeSession(): Promise<unknown>;
-  exportUserCroppedImage(
-    options?: ImageExportUserCroppedImageOptions,
-  ): Promise<ImageExportUserCroppedImageResult>;
-}
-
-export function normalizeImagePlacementConfigNamespace(
-  namespace: string | undefined,
-): string {
-  const normalized = String(namespace || "image").trim();
-  return normalized || "image";
+  exportPlacementImage(
+    options?: ImageExportPlacementImageOptions,
+  ): Promise<ImageExportPlacementImageResult>;
 }
 
 export function normalizeImagePlacementLayerId(
@@ -81,17 +80,17 @@ export function createImagePlacementCapabilityDefinition(
     metadata: {
       name: "Image Placement",
       description:
-        "Place, transform, validate, and export image elements without " +
-        "requiring a kit-owned toolbar tool.",
+        "Upload, place, validate, and export document-defined image slots.",
       tags: ["kit", "image", "placement"],
     },
     commands: [
-      { id: "addImage", title: "Add Image" },
-      { id: "upsertImage", title: "Upsert Image" },
+      { id: "beginSession", title: "Begin Image Placement Session" },
+      { id: "requestUpload", title: "Request Image Upload" },
+      { id: "setImageSource", title: "Set Image Source" },
       { id: "setImageTransform", title: "Set Image Transform" },
       { id: "applyImageOperation", title: "Apply Image Operation" },
       { id: "getImageViewState", title: "Get Image View State" },
-      { id: "exportUserCroppedImage", title: "Export User Cropped Image" },
+      { id: "exportPlacementImage", title: "Export Placement Image" },
     ],
     facade,
   };

@@ -85,6 +85,37 @@ function testNormalizeDefaults() {
   );
 }
 
+function testImagePlacementSlotDoesNotRequireSource() {
+  const diagnostics = validateKitEditorDocument({
+    version: 1,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [
+          {
+            id: "image.user",
+            objects: [
+              {
+                id: "image-slot",
+                type: "slot",
+                accepts: ["image"],
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+                effects: [{ type: "image-placement" }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert(
+    !diagnostics.some((item) => item.code.includes("src")),
+    "image-placement slots should not require asset or src",
+  );
+}
+
 function testValidationStructureAndReferences() {
   const diagnostics = validateKitEditorDocument({
     version: 1,
@@ -232,6 +263,7 @@ function testRequirePolicyDiagnostics() {
 
 function main() {
   testNormalizeDefaults();
+  testImagePlacementSlotDoesNotRequireSource();
   testValidationStructureAndReferences();
   testCustomEffectRequiresCapabilityId();
   testKitEffectCapabilityResolution();

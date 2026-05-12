@@ -78,6 +78,7 @@ export type {
   EditorEffect,
   EditorLayer,
   EditorObject,
+  EditorSlotImage,
   EditorSurface,
   EditorView,
 } from "./index";

@@ -17,6 +17,7 @@ import {
   type EditorEffect,
   type EditorLayer,
   type EditorObject,
+  type EditorSlotImage,
   type EditorSurface,
 } from "@pooder/document/kit";
 import {
@@ -34,7 +35,6 @@ import type { DielineGeometryCapabilityApi } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
 import type { FeatureCapabilityApi } from "../extensions/feature";
 import { IMAGE_PLACEMENT_CAPABILITY_ID } from "../extensions/image";
-import type { ImagePlacementCapabilityApi } from "../extensions/image";
 import { TEMPLATE_OVERLAY_CAPABILITY_ID } from "../extensions/template-overlay";
 import type { TemplateOverlayCapabilityApi } from "../extensions/template-overlay";
 import { WHITE_INK_CAPABILITY_ID } from "../extensions/white-ink";
@@ -69,6 +69,22 @@ interface EffectContext {
   layer?: EditorLayer;
   object?: EditorObject;
 }
+
+const IMAGE_PLACEMENT_SLOT_STYLE = {
+  evented: false,
+  excludeFromExport: true,
+  fill: "rgba(0,0,0,0)",
+  hasBorders: false,
+  hasControls: false,
+  lockMovementX: true,
+  lockMovementY: true,
+  lockRotation: true,
+  lockScalingFlip: true,
+  lockScalingX: true,
+  lockScalingY: true,
+  selectable: false,
+  strokeWidth: 0,
+};
 
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [BACKGROUND_CAPABILITY_ID]: () => createBackgroundCapability(),
@@ -215,6 +231,20 @@ function upsertSceneLayer(
   }
 }
 
+function findImagePlacementEffect(
+  effects: readonly EditorEffect[] | undefined,
+): EditorEffect | undefined {
+  return effects?.find(
+    (effect) =>
+      resolveKitEditorDocumentEffectCapabilityId(effect) ===
+      IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
+}
+
+function readImagePlacementPayload(effect: EditorEffect | undefined) {
+  return isRecord(effect?.payload) ? effect.payload : {};
+}
+
 function createSceneElement(
   surface: EditorSurface,
   layer: EditorLayer,
@@ -268,12 +298,20 @@ function createSceneElement(
         },
       };
     }
-    case "slot":
+    case "slot": {
+      const imagePlacement = createSlotImagePlacementData(object, assetsById);
       return {
         ...base,
         type: "rect",
+        visible: imagePlacement ? false : base.visible,
         width: object.frame.width,
         height: object.frame.height,
+        style: imagePlacement
+          ? {
+              ...(base.style ?? {}),
+              ...IMAGE_PLACEMENT_SLOT_STYLE,
+            }
+          : base.style,
         transform: {
           ...(object.transform ?? {}),
           left: object.frame.x,
@@ -283,12 +321,22 @@ function createSceneElement(
         },
         data: {
           ...base.data,
+          ...(imagePlacement
+            ? {
+                id: object.id,
+                layerId: layer.id,
+                slotId: object.id,
+                type: "image-placement-slot",
+              }
+            : {}),
           accepts: object.accepts,
           fit: object.fit,
           constraints: object.constraints,
           frame: object.frame,
+          ...(imagePlacement ? { imagePlacement } : {}),
         },
       };
+    }
     case "path":
       return { ...base, type: "path", path: object.path };
     case "rect":
@@ -298,6 +346,42 @@ function createSceneElement(
     default:
       return null;
   }
+}
+
+function createSlotImagePlacementData(
+  object: Extract<EditorObject, { type: "slot" }>,
+  assetsById: Map<string, EditorAsset>,
+) {
+  const imagePlacementEffect = findImagePlacementEffect(object.effects);
+  if (!imagePlacementEffect) return null;
+  const payload = readImagePlacementPayload(imagePlacementEffect);
+  return {
+    enabled: true,
+    slotId: object.id,
+    frame: object.frame,
+    fit: object.fit,
+    image: normalizeSlotImageState(object.image, assetsById),
+    ...(isRecord(payload.placeholder) ? { placeholder: payload.placeholder } : {}),
+  };
+}
+
+function normalizeSlotImageState(
+  image: EditorSlotImage | undefined,
+  assetsById: Map<string, EditorAsset>,
+) {
+  if (!image) return undefined;
+  const asset = image.assetId ? assetsById.get(image.assetId) : undefined;
+  const src = image.src || asset?.src;
+  return {
+    ...(image.assetId ? { assetId: image.assetId } : {}),
+    ...(src ? { src } : {}),
+    ...(Number.isFinite(image.left) ? { left: image.left } : {}),
+    ...(Number.isFinite(image.top) ? { top: image.top } : {}),
+    ...(Number.isFinite(image.scale) ? { scale: image.scale } : {}),
+    ...(Number.isFinite(image.angle) ? { angle: image.angle } : {}),
+    ...(Number.isFinite(image.opacity) ? { opacity: image.opacity } : {}),
+    ...(image.metadata ? { metadata: image.metadata } : {}),
+  };
 }
 
 function collectEffectEntries(document: EditorDocument): Array<{
@@ -465,36 +549,14 @@ function applyFeatureEffect(runtime: KitEditorDocumentRuntime, effect: EditorEff
 }
 
 async function applyImagePlacementEffect(
-  runtime: KitEditorDocumentRuntime,
+  _runtime: KitEditorDocumentRuntime,
   effect: EditorEffect,
   context: EffectContext,
-  assetsById: Map<string, EditorAsset>,
+  _assetsById: Map<string, EditorAsset>,
 ) {
-  const facade = runtime.capabilities.get<ImagePlacementCapabilityApi>(
-    IMAGE_PLACEMENT_CAPABILITY_ID,
-  );
-  if (!facade) return;
-  const payload = getPayload(effect);
-  const object = context.object;
-  const asset =
-    object?.type === "image" && object.assetId
-      ? assetsById.get(object.assetId)
-      : undefined;
-  const src =
-    (typeof payload.src === "string" && payload.src) ||
-    (object?.type === "image" ? object.src : undefined) ||
-    asset?.src;
-  if (!src) return;
-  const options = isRecord(payload.options) ? payload.options : {};
-  await facade.upsertImage(src, {
-    ...options,
-    addOptions: {
-      ...(isRecord(options.addOptions) ? options.addOptions : {}),
-      ...(object?.id ? { id: object.id } : {}),
-    },
-    id: typeof options.id === "string" ? options.id : undefined,
-    mode: options.mode === "replace" ? "replace" : "add",
-  } as any);
+  void effect;
+  void context;
+  return;
 }
 
 async function applyWhiteInkEffect(
@@ -531,6 +593,7 @@ async function applyWhiteInkEffect(
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
+
 
 function applySurfaceSizeConfig(
   runtime: KitEditorDocumentRuntime,

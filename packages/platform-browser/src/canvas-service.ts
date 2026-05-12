@@ -128,6 +128,9 @@ export default class CanvasService implements Service, CanvasServiceContract {
   private readonly forwardObjectModified = (e: any) => {
     this.eventBus?.emit("object:modified", e);
   };
+  private readonly forwardMouseDown = (e: any) => {
+    this.eventBus?.emit("mouse:down", e);
+  };
   private readonly forwardObjectAdded = (e: any) => {
     this.eventBus?.emit("object:added", e);
   };
@@ -206,6 +209,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     this.canvas.on("selection:updated", this.forwardSelectionUpdated);
     this.canvas.on("selection:cleared", this.forwardSelectionCleared);
     this.canvas.on("object:modified", this.forwardObjectModified);
+    this.canvas.on("mouse:down", this.forwardMouseDown);
     this.canvas.on("object:added", this.forwardObjectAdded);
     this.canvas.on("object:removed", this.forwardObjectRemoved);
     this.canvasForwardersBound = true;

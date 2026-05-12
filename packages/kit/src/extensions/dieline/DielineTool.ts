@@ -316,10 +316,10 @@ export class DielineTool implements ExtensionDefinition {
   }
 
   private hasImageItems(): boolean {
-    const configService = this.getConfigService();
-    if (!configService) return false;
-    const items = configService.get("image.items", []) as unknown;
-    return Array.isArray(items) && items.length > 0;
+    if (!this.canvasService) return false;
+    return this.imageClipLayerIds.some(
+      (layerId) => this.canvasService!.getObjects({ layerId }).length > 0,
+    );
   }
 
   private buildDielineSpecs(
