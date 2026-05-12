@@ -483,25 +483,14 @@ async function applyTemplateOverlayEffect(
   runtime: KitEditorDocumentRuntime,
   effect: EditorEffect,
   context: EffectContext,
-  assetsById: Map<string, EditorAsset>,
+  _assetsById: Map<string, EditorAsset>,
 ) {
+  if (context.object) return;
   const facade = runtime.capabilities.get<TemplateOverlayCapabilityApi>(
     TEMPLATE_OVERLAY_CAPABILITY_ID,
   );
   if (!facade) return;
-  const payload = { ...getPayload(effect) };
-  if (context.object?.type === "template") {
-    const asset = assetsById.get(context.object.assetId);
-    if (asset?.src && !payload.slots) {
-      payload.slots = {
-        normal: {
-          src: asset.src,
-          enabled: true,
-        },
-      };
-    }
-  }
-  await facade.patchConfig(payload as any);
+  await facade.patchConfig(getPayload(effect) as any);
 }
 
 function applyDielineEffect(

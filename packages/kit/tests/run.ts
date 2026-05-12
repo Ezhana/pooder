@@ -1345,6 +1345,19 @@ async function testApplyKitEditorDocument() {
           {
             id: "front-template",
             role: "background",
+            effects: [
+              {
+                type: "template-overlay",
+                payload: {
+                  slots: {
+                    normal: {
+                      enabled: true,
+                      src: "/layer-template.png",
+                    },
+                  },
+                },
+              },
+            ],
             objects: [
               {
                 id: "front-template-image",
@@ -1408,7 +1421,16 @@ async function testApplyKitEditorDocument() {
     "circle",
     "dieline payload should update config",
   );
-  assert(templateCalls.length > 0, "template effect should call facade");
+  assertEqual(
+    templateCalls.length,
+    1,
+    "only explicit layer template overlay effects should call facade",
+  );
+  assertEqual(
+    templateCalls[0]?.slots?.normal?.src,
+    "/layer-template.png",
+    "template overlay should use explicit layer payload",
+  );
   assertEqual(
     ((scene.getElement("front-slot")?.data as any)?.imagePlacement?.image as any)
       ?.src,
