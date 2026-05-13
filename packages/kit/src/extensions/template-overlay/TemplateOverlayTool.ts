@@ -55,6 +55,7 @@ import {
   createEmptyTemplateOverlayConfig,
   normalizeTemplateOverlayConfig,
   patchTemplateOverlayConfig,
+  TEMPLATE_OVERLAY_SLOT_NAMES,
   type TemplateOverlayConfig,
   type TemplateOverlayConfigPatch,
   type TemplateOverlayPlacement,
@@ -73,6 +74,17 @@ export interface TemplateOverlayToolOptions extends TemplateOverlayCapabilityOpt
 
 interface TemplateOverlayEffectPayload {
   role?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readTemplateOverlaySlot(value: unknown): TemplateOverlaySlotName | null {
+  const slot = String(value || "").trim();
+  return (TEMPLATE_OVERLAY_SLOT_NAMES as readonly string[]).includes(slot)
+    ? (slot as TemplateOverlaySlotName)
+    : null;
 }
 
 export class TemplateOverlayTool implements ExtensionDefinition {
@@ -178,6 +190,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
         if (this.isUpdatingConfig) return;
         if (event.key === this.configKey) {
           this.config = normalizeTemplateOverlayConfig(event.value);
+          this.syncSceneTemplateOverlayElements();
           this.updateOverlays();
         } else if (event.key.startsWith("size.")) {
           this.updateOverlays();
@@ -376,6 +389,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
 
   private async writeConfig(next: TemplateOverlayConfig) {
     this.config = normalizeTemplateOverlayConfig(next);
+    this.syncSceneTemplateOverlayElements();
     this.isUpdatingConfig = true;
     try {
       this.getConfigService()?.update(this.configKey, this.config);
@@ -393,6 +407,67 @@ export class TemplateOverlayTool implements ExtensionDefinition {
 
   private getSurfaceFrameRect(): FrameRect {
     return resolveSurfaceFrameRect(this.canvasService, this.getConfigService());
+  }
+
+  private getSceneService(): SceneService | undefined {
+    return this.context?.services.get<SceneService>(SCENE_SERVICE);
+  }
+
+  private readElementTemplateOverlaySlot(element: {
+    data?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }): TemplateOverlaySlotName | null {
+    const data = isRecord(element.data?.templateOverlay)
+      ? element.data.templateOverlay
+      : {};
+    const metadata = isRecord(element.metadata?.templateOverlay)
+      ? element.metadata.templateOverlay
+      : {};
+
+    return (
+      readTemplateOverlaySlot(data.targetOverlaySlot) ||
+      readTemplateOverlaySlot(data.slot) ||
+      readTemplateOverlaySlot(metadata.targetOverlaySlot) ||
+      readTemplateOverlaySlot(metadata.slot)
+    );
+  }
+
+  private syncSceneTemplateOverlayElements() {
+    const sceneService = this.getSceneService();
+    if (!sceneService) return;
+
+    const surfaceFrame = this.getSurfaceFrameRect();
+    if (surfaceFrame.width <= 0 || surfaceFrame.height <= 0) return;
+
+    sceneService.transaction(() => {
+      sceneService.listElements({ type: "image" }).forEach((element) => {
+        const slot = this.readElementTemplateOverlaySlot(element);
+        if (!slot) return;
+
+        const slotConfig = this.config.slots[slot];
+        if (!slotConfig) return;
+
+        const slotFrame = this.resolveSlotFrame(
+          surfaceFrame,
+          slotConfig.placement,
+        );
+        const src = slotConfig.src.trim();
+
+        sceneService.updateElement(element.id, {
+          ...(src ? { src } : {}),
+          visible: slotConfig.enabled !== false && Boolean(src),
+          width: slotFrame.width,
+          height: slotFrame.height,
+          transform: {
+            ...(element.transform ?? {}),
+            left: slotFrame.left,
+            top: slotFrame.top,
+            originX: element.transform?.originX ?? "left",
+            originY: element.transform?.originY ?? "top",
+          },
+        });
+      });
+    });
   }
 
   private buildRenderPasses(): RenderPassSpec[] {

@@ -2436,6 +2436,93 @@ async function testTemplateOverlayCapabilityExtension() {
   await runtime.dispose();
 }
 
+async function testTemplateOverlayConfigSyncsSceneProjectionSources() {
+  const runtime = new Pooder();
+
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.config.update("size.actualWidthMm", 200);
+  runtime.config.update("size.actualHeightMm", 100);
+  runtime.config.update("size.cutMode", "trim");
+  runtime.config.update("size.cutMarginMm", 0);
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "front.template-overlay" });
+  scene.addElement({
+    id: "front.template.normal",
+    layerId: "front.template-overlay",
+    type: "image",
+    src: "/old-template.png",
+    width: 200,
+    height: 100,
+    metadata: {
+      templateOverlay: {
+        targetOverlaySlot: "normal",
+      },
+    },
+    transform: {
+      left: 0,
+      top: 0,
+      originX: "left",
+      originY: "top",
+    },
+  });
+  runtime.extensions.register(new TemplateOverlayCapabilityExtension());
+  await runtime.extensions.flushActivation();
+
+  const facade = runtime.capabilities.get<TemplateOverlayCapabilityApi>(
+    TEMPLATE_OVERLAY_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("template overlay capability facade should be registered");
+  }
+
+  await facade.replaceConfig({
+    version: 1,
+    slots: {
+      normal: {
+        enabled: true,
+        src: "/new-template.png",
+        placement: {
+          space: "surfaceFrameRatio",
+          x: 0.25,
+          y: 0.1,
+          width: 0.5,
+          height: 0.4,
+        },
+      },
+    },
+  });
+
+  const source = scene.getElement("front.template.normal") as any;
+  assertEqual(
+    source.src,
+    "/new-template.png",
+    "template overlay config should update scene projection source src",
+  );
+  assertEqual(
+    source.width,
+    100,
+    "template overlay config should update scene projection source width",
+  );
+  assertEqual(
+    source.height,
+    40,
+    "template overlay config should update scene projection source height",
+  );
+  assertEqual(
+    source.transform.left,
+    350,
+    "template overlay config should update scene projection source x",
+  );
+  assertEqual(
+    source.transform.top,
+    260,
+    "template overlay config should update scene projection source y",
+  );
+
+  await runtime.dispose();
+}
+
 async function testSizeCapabilityExtension() {
   const runtime = new Pooder();
 
@@ -2719,6 +2806,7 @@ async function main() {
   await testWhiteInkCapabilityExtension();
   await testBackgroundCapabilityExtension();
   await testTemplateOverlayCapabilityExtension();
+  await testTemplateOverlayConfigSyncsSceneProjectionSources();
   await testSizeCapabilityExtension();
   await testRulerCapabilityExtension();
   await testFeatureCapabilityDefinition();

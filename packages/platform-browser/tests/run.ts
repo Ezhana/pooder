@@ -1209,6 +1209,77 @@ async function testRenderProducerProjectionClonesBusinessObjects() {
   );
 }
 
+async function testSessionProjectionAboveStacksOverSessionImage() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+
+  await service.applyObjectSpecsToPass(
+    "front.image.user",
+    [
+      rectSpec(
+        "business-image",
+        {},
+        {
+          sceneElementId: "front.image.user",
+          sceneLayerId: "front.image.user",
+        },
+      ),
+    ],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  await service.applyObjectSpecsToPass(
+    "front.template-overlay",
+    [
+      rectSpec(
+        "template-overlay-source",
+        {},
+        {
+          sceneElementId: "front.template.normal",
+          sceneLayerId: "front.template-overlay",
+        },
+      ),
+    ],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  service.syncPassStacking([
+    { id: "front.image.user", stack: 0, order: 10 },
+    { id: "front.template-overlay", stack: 780, order: 20 },
+  ]);
+  service.registerRenderProducer("pooder.kit.image-placement", () => ({
+    passes: [
+      {
+        id: "image.user.session.image",
+        stack: 800,
+        order: 1,
+        visibility: { op: "const", value: true },
+        objects: [rectSpec("session-image")],
+      },
+      {
+        id: "image.user.session.overlay",
+        stack: 800,
+        order: 2,
+        visibility: { op: "const", value: true },
+        projections: [
+          {
+            id: "template-overlay",
+            sourceLayerIds: ["front.template-overlay"],
+            hideSource: true,
+          },
+        ],
+        objects: [],
+      },
+    ],
+  }));
+
+  await service.flushRenderFromProducers();
+
+  const stackedIds = canvas.objects.map((obj) => obj.data.id);
+  assert(
+    stackedIds.indexOf("session-image") <
+      stackedIds.indexOf("projection:template-overlay:front.template.normal"),
+    "above session projection should stack over the working image",
+  );
+}
+
 async function testRenderObjectsAreNonInteractiveByDefault() {
   const { canvas, service } = createCanvasServiceForRenderTests();
 
@@ -1449,6 +1520,7 @@ async function main() {
   await testRenderProducerVisibilityIsSourceScoped();
   await testSceneStackingKeepsSessionPassAboveBusinessLayers();
   await testRenderProducerProjectionClonesBusinessObjects();
+  await testSessionProjectionAboveStacksOverSessionImage();
   await testRenderObjectsAreNonInteractiveByDefault();
   testVisibilityDslSupportsWorkflowAndContextPredicates();
   await testRenderProducerVisibilityUsesContextValues();
