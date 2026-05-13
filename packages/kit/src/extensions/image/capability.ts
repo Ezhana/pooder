@@ -17,6 +17,18 @@ export interface ImagePlacementLayerOptions {
   overlayLayerId?: string;
 }
 
+export type ImageSessionProjectionPlacement = "below" | "above" | "controls";
+
+export interface ImageSessionProjection {
+  id: string;
+  sourceLayerIds?: string[];
+  sourceElementIds?: string[];
+  placement: ImageSessionProjectionPlacement;
+  opacity?: number;
+  interactive?: boolean;
+  hideSource?: boolean;
+}
+
 export interface ImagePlacementCapabilityOptions {
   capabilityId?: string;
   layers?: ImagePlacementLayerOptions;

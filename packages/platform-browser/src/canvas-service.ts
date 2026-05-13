@@ -22,6 +22,7 @@ import {
   type RenderObjectSpec,
   type RenderPassSpec,
   type RenderPatternSpec,
+  type RenderProjectionSpec,
   type VisibilityLayerState,
 } from "@pooder/core";
 import { ViewportSystem } from "./viewport-system";
@@ -65,6 +66,7 @@ interface ResolvedRenderPassSpec {
   visibility?: RenderPassSpec["visibility"];
   effects: RenderEffectSpec[];
   objects: RenderObjectSpec[];
+  projections: RenderProjectionSpec[];
 }
 
 interface ResolvedClipPathEffectSpec {
@@ -114,6 +116,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
   private managedPassEffects: ResolvedClipPathEffectSpec[] = [];
   private layerStackingMetas: Map<string, CanvasPassStackingMeta> = new Map();
   private visibilityContextValues: Map<string, unknown> = new Map();
+  private projectionHiddenSources: Map<FabricObject, boolean> = new Map();
 
   private canvasForwardersBound = false;
   private readonly forwardSelectionCreated = (e: any) => {
@@ -224,6 +227,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     this.managedPassMetas.clear();
     this.managedPassEffects = [];
     this.layerStackingMetas.clear();
+    this.restoreProjectionSourceVisibility();
     this.context = undefined;
     this.workbenchService = undefined;
     this.toolSessionService = undefined;
@@ -344,6 +348,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       visibility: spec.visibility,
       effects: Array.isArray(spec.effects) ? [...spec.effects] : [],
       objects: Array.isArray(spec.objects) ? [...spec.objects] : [],
+      projections: Array.isArray(spec.projections) ? [...spec.projections] : [],
     };
   }
 
@@ -401,6 +406,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     }
 
     existing.objects.push(...normalized.objects);
+    existing.projections.push(...normalized.projections);
     existing.replace = existing.replace || normalized.replace;
     existing.targetLayerId = normalized.targetLayerId;
     existing.stack = normalized.stack;
@@ -410,7 +416,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
     }
     existing.effects.push(...normalized.effects);
 
-    if (normalized.objects.length === 0 && normalized.effects.length === 0) {
+    if (
+      normalized.objects.length === 0 &&
+      normalized.effects.length === 0 &&
+      normalized.projections.length === 0
+    ) {
       console.debug(
         `[CanvasService] pass "${normalized.id}" from producer "${entry.toolId}" updated ordering/visibility only.`,
       );
@@ -496,7 +506,37 @@ export default class CanvasService implements Service, CanvasServiceContract {
       this.layerStackingMetas.set(pass.id, { ...pass });
     });
 
-    this.syncLayerStacking(orderedPasses);
+    this.syncLayerStacking(
+      this.resolveCombinedPassStacking(Array.from(this.managedPassMetas.values())),
+    );
+  }
+
+  private resolveCombinedPassStacking(
+    managedPasses: Array<{ targetLayerId: string; stack: number; order: number }>,
+  ): Array<{ id: string; stack: number; order: number }> {
+    const targetLayers = new Map<
+      string,
+      { id: string; stack: number; order: number }
+    >();
+
+    this.layerStackingMetas.forEach((meta, id) => {
+      targetLayers.set(id, {
+        id,
+        stack: Number.isFinite(meta.stack) ? Number(meta.stack) : 0,
+        order: Number.isFinite(meta.order) ? Number(meta.order) : 0,
+      });
+    });
+
+    managedPasses.forEach((pass) => {
+      if (targetLayers.has(pass.targetLayerId)) return;
+      targetLayers.set(pass.targetLayerId, {
+        id: pass.targetLayerId,
+        stack: pass.stack,
+        order: pass.order,
+      });
+    });
+
+    return Array.from(targetLayers.values());
   }
 
   private syncLayerStacking(
@@ -542,29 +582,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
   }
 
   private syncManagedPassStacking(passes: ManagedPassMeta[]) {
-    const targetLayers = new Map<
-      string,
-      { id: string; stack: number; order: number }
-    >();
-
-    this.layerStackingMetas.forEach((meta, id) => {
-      targetLayers.set(id, {
-        id,
-        stack: Number.isFinite(meta.stack) ? Number(meta.stack) : 0,
-        order: Number.isFinite(meta.order) ? Number(meta.order) : 0,
-      });
-    });
-
-    passes.forEach((pass) => {
-      if (targetLayers.has(pass.targetLayerId)) return;
-      targetLayers.set(pass.targetLayerId, {
-        id: pass.targetLayerId,
-        stack: pass.stack,
-        order: pass.order,
-      });
-    });
-
-    this.syncLayerStacking(Array.from(targetLayers.values()));
+    this.syncLayerStacking(this.resolveCombinedPassStacking(passes));
   }
 
   private getPassRuntimeState(): Map<string, VisibilityLayerState> {
@@ -749,6 +767,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
     this.producerApplyInProgress = true;
     try {
+      this.restoreProjectionSourceVisibility();
       for (const entry of entries) {
         try {
           const result = await entry.producer();
@@ -798,6 +817,21 @@ export default class CanvasService implements Service, CanvasServiceContract {
           scope: pass.scope,
           orderOffset: orderOffsets.get(pass.sourceKey) ?? 0,
         });
+        const projectionVisible = evaluateVisibilityExpr(
+          pass.visibility,
+          this.buildVisibilityEvalContext(this.getPassRuntimeState()),
+        );
+        if (projectionVisible) {
+          await this.applyProjectionSpecsToPass(
+            pass.targetLayerId,
+            pass.projections,
+            {
+              scope: pass.scope,
+              orderOffset:
+                (orderOffsets.get(pass.sourceKey) ?? 0) + pass.objects.length,
+            },
+          );
+        }
 
         pass.effects.forEach((effect, index) => {
           const normalized = this.normalizeClipPathEffectSpec(
@@ -1329,6 +1363,156 @@ export default class CanvasService implements Service, CanvasServiceContract {
       return copied;
     } catch {
       return undefined;
+    }
+  }
+
+  private normalizeProjectionIds(values: unknown): string[] {
+    if (!Array.isArray(values)) return [];
+    return Array.from(
+      new Set(
+        values
+          .map((value) => String(value || "").trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
+  }
+
+  private readProjectionLayerId(object: any): string {
+    return String(
+      object?.data?.sceneLayerId || object?.data?.layerId || object?.data?.passId || "",
+    ).trim();
+  }
+
+  private readProjectionElementId(object: any): string {
+    return String(object?.data?.sceneElementId || object?.data?.id || "").trim();
+  }
+
+  private getProjectionSourceObjects(
+    projection: RenderProjectionSpec,
+  ): FabricObject[] {
+    const sourceLayerIds = new Set(
+      this.normalizeProjectionIds(projection.sourceLayerIds),
+    );
+    const sourceElementIds = new Set(
+      this.normalizeProjectionIds(projection.sourceElementIds),
+    );
+    if (!sourceLayerIds.size && !sourceElementIds.size) return [];
+
+    const seen = new Set<FabricObject>();
+    const sources: FabricObject[] = [];
+    this.canvas.getObjects().forEach((object: any) => {
+      if (object?.visible === false) return;
+      if (this.isManagedPassObject(object as FabricObject)) return;
+      const layerId = this.readProjectionLayerId(object);
+      const elementId = this.readProjectionElementId(object);
+      if (
+        (layerId && sourceLayerIds.has(layerId)) ||
+        (elementId && sourceElementIds.has(elementId))
+      ) {
+        if (!seen.has(object as FabricObject)) {
+          seen.add(object as FabricObject);
+          sources.push(object as FabricObject);
+        }
+      }
+    });
+    return sources;
+  }
+
+  private restoreProjectionSourceVisibility() {
+    this.projectionHiddenSources.forEach((visible, object: any) => {
+      object?.set?.({ visible });
+      object?.setCoords?.();
+    });
+    this.projectionHiddenSources.clear();
+  }
+
+  private hideProjectionSource(object: FabricObject) {
+    if (!this.projectionHiddenSources.has(object)) {
+      this.projectionHiddenSources.set(object, (object as any)?.visible !== false);
+    }
+    (object as any).set?.({ visible: false });
+    (object as any).setCoords?.();
+  }
+
+  private getProjectionCloneOpacity(
+    source: any,
+    projection: RenderProjectionSpec,
+  ): number {
+    const projectionOpacity = Number(projection.opacity);
+    if (!Number.isFinite(projectionOpacity)) {
+      return Number.isFinite(source?.opacity) ? Number(source.opacity) : 1;
+    }
+    const sourceOpacity = Number.isFinite(source?.opacity)
+      ? Number(source.opacity)
+      : 1;
+    return sourceOpacity * Math.max(0, Math.min(1, projectionOpacity));
+  }
+
+  private async applyProjectionSpecsToPass(
+    passId: string,
+    projections: RenderProjectionSpec[],
+    options: {
+      orderOffset?: number;
+      scope?: string;
+    } = {},
+  ): Promise<void> {
+    const normalizedPassId = String(passId || "").trim();
+    if (!normalizedPassId || projections.length === 0) return;
+    const scope = String(options.scope || "").trim() || undefined;
+    const orderOffset = Number.isFinite(options.orderOffset)
+      ? Number(options.orderOffset)
+      : 0;
+    let order = orderOffset;
+    (this.getPassCanvasObjects(normalizedPassId) as any[]).forEach((object) => {
+      if (scope && object?.data?.__renderScope !== scope) return;
+      if (object?.data?.type === "session-projection") {
+        this.canvas.remove(object);
+      }
+    });
+
+    for (const projection of projections) {
+      const projectionId = String(projection.id || "").trim();
+      if (!projectionId) continue;
+      const sources = this.getProjectionSourceObjects(projection);
+      for (let index = 0; index < sources.length; index += 1) {
+        const source = sources[index] as any;
+        const clone = await this.cloneFabricObject(source);
+        if (!clone) continue;
+        const sourceElementId = this.readProjectionElementId(source);
+        const sourceLayerId = this.readProjectionLayerId(source);
+        const cloneId = [
+          "projection",
+          projectionId,
+          sourceElementId || sourceLayerId || index,
+        ].join(":");
+        const interactive = projection.interactive === true;
+        (clone as any).set?.({
+          opacity: this.getProjectionCloneOpacity(source, projection),
+          selectable: interactive,
+          evented: interactive,
+          hasControls: interactive,
+          hasBorders: interactive,
+          excludeFromExport: true,
+          data: {
+            ...(source.data || {}),
+            id: cloneId,
+            layerId: normalizedPassId,
+            passId: normalizedPassId,
+            passOrder: order,
+            projectionId,
+            sourceElementId,
+            sourceLayerId,
+            type: "session-projection",
+            ...(scope ? { __renderScope: scope } : {}),
+          },
+        });
+        (clone as any).setCoords?.();
+        this.canvas.add(clone as any);
+        order += 1;
+        if (projection.hideSource !== false) {
+          this.hideProjectionSource(source as FabricObject);
+        }
+      }
     }
   }
 

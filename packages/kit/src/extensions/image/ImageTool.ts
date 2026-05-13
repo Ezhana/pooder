@@ -14,7 +14,9 @@ import {
   type EffectApplicationContext,
   type EffectApplicatorContribution,
   type RenderObjectSpec,
+  type RenderPassSpec,
   type RenderPatternSpec,
+  type RenderProjectionSpec,
   type SceneElement,
   type SceneExportService,
   type SceneLayoutService,
@@ -42,6 +44,8 @@ import {
   normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,
   type ImagePlacementCapabilityOptions,
+  type ImageSessionProjection,
+  type ImageSessionProjectionPlacement,
   type ImagePlacementViewState,
 } from "./capability";
 import {
@@ -92,6 +96,7 @@ interface ImagePlacementEffectPayload {
   accepts?: unknown;
   fit?: unknown;
   placeholder?: unknown;
+  sessionProjections?: unknown;
 }
 
 export interface ImagePlacementPlaceholderStyle {
@@ -115,6 +120,7 @@ export interface ImagePlacementSlotState {
   image: ImagePlacementImageState | null;
   hasImage: boolean;
   placeholderStyle?: ImagePlacementPlaceholderStyle;
+  sessionProjections?: ImageSessionProjection[];
   metadata?: Record<string, unknown>;
 }
 
@@ -331,6 +337,52 @@ function normalizePlaceholderStyle(
   return Object.keys(style).length ? style : undefined;
 }
 
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
+function normalizeSessionProjectionPlacement(
+  value: unknown,
+): ImageSessionProjectionPlacement {
+  return value === "below" || value === "controls" ? value : "above";
+}
+
+function normalizeSessionProjections(value: unknown): ImageSessionProjection[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index): ImageSessionProjection | null => {
+      if (!isRecord(item)) return null;
+      const sourceLayerIds = normalizeStringList(item.sourceLayerIds);
+      const sourceElementIds = normalizeStringList(item.sourceElementIds);
+      if (!sourceLayerIds.length && !sourceElementIds.length) return null;
+      const id = String(item.id || `projection-${index + 1}`).trim();
+      const opacity = finiteNumber(item.opacity, Number.NaN);
+      return {
+        id: id || `projection-${index + 1}`,
+        placement: normalizeSessionProjectionPlacement(item.placement),
+        ...(sourceLayerIds.length ? { sourceLayerIds } : {}),
+        ...(sourceElementIds.length ? { sourceElementIds } : {}),
+        ...(Number.isFinite(opacity)
+          ? { opacity: Math.max(0, Math.min(1, opacity)) }
+          : {}),
+        ...(typeof item.interactive === "boolean"
+          ? { interactive: item.interactive }
+          : {}),
+        ...(typeof item.hideSource === "boolean"
+          ? { hideSource: item.hideSource }
+          : {}),
+      };
+    })
+    .filter((item): item is ImageSessionProjection => Boolean(item));
+}
+
 function getImagePlacementData(element: SceneElement): Record<string, unknown> {
   const data = isRecord(element.data) ? element.data : {};
   const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
@@ -438,12 +490,7 @@ export class ImageTool implements ExtensionDefinition {
       this.id,
       () => ({
         passes: [
-          {
-            id: this.imageLayerId,
-            stack: IMAGE_OBJECT_STACK,
-            order: 0,
-            objects: this.buildImageSpecs(),
-          },
+          ...this.buildCommittedImagePasses(),
           {
             id: this.overlayLayerId,
             stack: IMAGE_OVERLAY_STACK,
@@ -451,17 +498,34 @@ export class ImageTool implements ExtensionDefinition {
             objects: this.buildUploadSpecs(),
           },
           {
-            id: `${this.imageLayerId}.session`,
-            stack: IMAGE_OBJECT_STACK,
+            id: `${this.imageLayerId}.session.underlay`,
+            stack: IMAGE_OVERLAY_STACK,
+            order: 0,
+            visibility: { op: "sessionActive", toolId: this.capabilityId },
+            projections: this.buildSessionProjectionSpecs("below"),
+            objects: [],
+          },
+          {
+            id: `${this.imageLayerId}.session.image`,
+            stack: IMAGE_OVERLAY_STACK,
             order: 1,
             visibility: { op: "sessionActive", toolId: this.capabilityId },
             objects: this.buildWorkingImageSpecs(),
           },
           {
-            id: `${this.overlayLayerId}.session`,
+            id: `${this.imageLayerId}.session.overlay`,
             stack: IMAGE_OVERLAY_STACK,
-            order: 1,
+            order: 2,
             visibility: { op: "sessionActive", toolId: this.capabilityId },
+            projections: this.buildSessionProjectionSpecs("above"),
+            objects: [],
+          },
+          {
+            id: `${this.overlayLayerId}.session.controls`,
+            stack: IMAGE_OVERLAY_STACK,
+            order: 3,
+            visibility: { op: "sessionActive", toolId: this.capabilityId },
+            projections: this.buildSessionProjectionSpecs("controls"),
             objects: this.buildSessionOverlaySpecs(),
           },
         ],
@@ -573,6 +637,9 @@ export class ImageTool implements ExtensionDefinition {
           ...(isRecord(payload.placeholder)
             ? { placeholder: payload.placeholder }
             : {}),
+          sessionProjections: normalizeSessionProjections(
+            payload.sessionProjections,
+          ),
         },
       },
     });
@@ -687,6 +754,9 @@ export class ImageTool implements ExtensionDefinition {
       image,
       hasImage: hasImageSource(image),
       placeholderStyle: normalizePlaceholderStyle(placement.placeholder),
+      sessionProjections: normalizeSessionProjections(
+        placement.sessionProjections,
+      ),
       metadata: isRecord(slot.metadata) ? { ...slot.metadata } : undefined,
     };
   }
@@ -1016,7 +1086,7 @@ export class ImageTool implements ExtensionDefinition {
       includeHidden: true,
       multiplier: 2,
       sourceElementIds: [`session-image:${slot.id}`],
-      sourceLayerIds: [`${this.imageLayerId}.session`],
+      sourceLayerIds: [`${this.imageLayerId}.session.image`],
     });
     return {
       url: result.url,
@@ -1053,7 +1123,8 @@ export class ImageTool implements ExtensionDefinition {
     slotId: string | null,
     options: { syncCanvasSelection?: boolean; skipRender?: boolean } = {},
   ) {
-    if (slotId && !this.getSlotElement(slotId)) {
+    const slot = slotId ? this.getSlotElement(slotId) : undefined;
+    if (slotId && !slot) {
       return { ok: false, reason: "slot-not-found" as const };
     }
     this.activeSlotId = slotId;
@@ -1062,7 +1133,8 @@ export class ImageTool implements ExtensionDefinition {
         this.canvasService.discardActiveObject();
       } else {
         const obj =
-          this.canvasService.getObject(`session-image:${slotId}`, `${this.overlayLayerId}.session`) ||
+          this.canvasService.getObject(`session-image:${slotId}`, `${this.imageLayerId}.session.image`) ||
+          this.canvasService.getObject(`image:${slotId}`, slot?.layerId) ||
           this.canvasService.getObject(`image:${slotId}`, this.overlayLayerId) ||
           this.canvasService.getObject(`image:${slotId}`, this.imageLayerId) ||
           this.canvasService.getObject(`upload:${slotId}`, this.overlayLayerId);
@@ -1484,12 +1556,28 @@ export class ImageTool implements ExtensionDefinition {
     });
   };
 
-  private buildImageSpecs(): RenderObjectSpec[] {
-    return this.getCommittedSlotStates()
+  private buildCommittedImagePasses(): RenderPassSpec[] {
+    const specsByLayerId = new Map<string, RenderObjectSpec[]>();
+
+    this.getCommittedSlotStates()
       .filter((slot) => !this.workingImages.has(slot.id))
       .filter((slot) => slot.image?.src)
-      .map((slot) => this.buildImageSpec(slot, { committed: true }))
-      .filter((spec): spec is RenderObjectSpec => Boolean(spec));
+      .forEach((slot) => {
+        const spec = this.buildImageSpec(slot, { committed: true });
+        if (!spec) return;
+        const layerId = slot.layerId || this.imageLayerId;
+        const specs = specsByLayerId.get(layerId) || [];
+        specs.push(spec);
+        specsByLayerId.set(layerId, specs);
+      });
+
+    return Array.from(specsByLayerId.entries()).map(([layerId, objects]) => ({
+      id: `${this.imageLayerId}:${layerId}`,
+      targetLayerId: layerId,
+      stack: IMAGE_OBJECT_STACK,
+      order: 0,
+      objects,
+    }));
   }
 
   private buildWorkingImageSpecs(): RenderObjectSpec[] {
@@ -1497,6 +1585,25 @@ export class ImageTool implements ExtensionDefinition {
       .filter((slot) => this.shouldRenderWorkingSlot(slot.id) && slot.image?.src)
       .map((slot) => this.buildImageSpec(slot, { committed: false }))
       .filter((spec): spec is RenderObjectSpec => Boolean(spec));
+  }
+
+  private buildSessionProjectionSpecs(
+    placement: ImageSessionProjectionPlacement,
+  ): RenderProjectionSpec[] {
+    return this.getSlotStates()
+      .filter((slot) => this.shouldRenderWorkingSlot(slot.id))
+      .flatMap((slot) =>
+        (slot.sessionProjections ?? [])
+          .filter((projection) => projection.placement === placement)
+          .map((projection) => ({
+            id: `${slot.id}.${projection.id}`,
+            sourceLayerIds: projection.sourceLayerIds,
+            sourceElementIds: projection.sourceElementIds,
+            opacity: projection.opacity,
+            interactive: projection.interactive,
+            hideSource: projection.hideSource,
+          })),
+      );
   }
 
   private shouldRenderWorkingSlot(slotId: string): boolean {
@@ -1523,7 +1630,7 @@ export class ImageTool implements ExtensionDefinition {
       space: "scene",
       data: {
         id: slot.id,
-        layerId: this.imageLayerId,
+        layerId: slot.layerId || this.imageLayerId,
         type: "image-placement-image",
         slotId: slot.id,
         source: options.committed ? "committed" : "working",

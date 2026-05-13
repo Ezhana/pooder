@@ -257,6 +257,54 @@ function readImagePlacementPayload(effect: EditorEffect | undefined) {
   return isRecord(effect?.payload) ? effect.payload : {};
 }
 
+function normalizeImageSessionProjectionIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
+function normalizeImageSessionProjections(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      if (!isRecord(item)) return null;
+      const sourceLayerIds = normalizeImageSessionProjectionIds(
+        item.sourceLayerIds,
+      );
+      const sourceElementIds = normalizeImageSessionProjectionIds(
+        item.sourceElementIds,
+      );
+      if (!sourceLayerIds.length && !sourceElementIds.length) return null;
+      const placement =
+        item.placement === "below" || item.placement === "controls"
+          ? item.placement
+          : "above";
+      const id = String(item.id || `projection-${index + 1}`).trim();
+      const opacity = Number(item.opacity);
+      return {
+        id: id || `projection-${index + 1}`,
+        placement,
+        ...(sourceLayerIds.length ? { sourceLayerIds } : {}),
+        ...(sourceElementIds.length ? { sourceElementIds } : {}),
+        ...(Number.isFinite(opacity)
+          ? { opacity: Math.max(0, Math.min(1, opacity)) }
+          : {}),
+        ...(typeof item.interactive === "boolean"
+          ? { interactive: item.interactive }
+          : {}),
+        ...(typeof item.hideSource === "boolean"
+          ? { hideSource: item.hideSource }
+          : {}),
+      };
+    })
+    .filter(Boolean);
+}
+
 function createSceneElement(
   surface: EditorSurface,
   layer: EditorLayer,
@@ -401,6 +449,9 @@ function createImagePlacementData(
     image,
     accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
     ...(isRecord(payload.placeholder) ? { placeholder: payload.placeholder } : {}),
+    sessionProjections: normalizeImageSessionProjections(
+      payload.sessionProjections,
+    ),
   };
 }
 

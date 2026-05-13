@@ -1687,6 +1687,14 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
           scale: 1,
           angle: 0,
         },
+        sessionProjections: [
+          {
+            id: "template-overlay",
+            sourceLayerIds: ["front.template-overlay"],
+            placement: "above",
+            interactive: false,
+          },
+        ],
       },
     },
   });
@@ -1702,16 +1710,26 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const render = (await canvasService.getRenderProducerResult(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   )) as any;
-  const imagePass = render.passes.find((pass: any) => pass.id === "image.user");
+  const imagePass = render.passes.find(
+    (pass: any) => pass.targetLayerId === "artwork",
+  );
   const imageSessionPass = render.passes.find(
-    (pass: any) => pass.id === "image.user.session",
+    (pass: any) => pass.id === "image.user.session.image",
   );
   const sessionPass = render.passes.find(
-    (pass: any) => pass.id === "image-overlay.session",
+    (pass: any) => pass.id === "image-overlay.session.controls",
+  );
+  const sessionOverlayPass = render.passes.find(
+    (pass: any) => pass.id === "image.user.session.overlay",
   );
   assert(
-    !imagePass.objects.some((spec: any) => spec.id === "image:slot"),
+    !imagePass?.objects.some((spec: any) => spec.id === "image:slot"),
     "committed image object should be hidden while its working session is active",
+  );
+  assertEqual(
+    imageSessionPass.stack,
+    800,
+    "image session working object should render above business document layers",
   );
   const sessionImage = imageSessionPass.objects.find(
     (spec: any) => spec.id === "session-image:slot",
@@ -1735,6 +1753,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   assert(
     sessionPass.objects.some((spec: any) => spec.id === "image.cropShapeHatch"),
     "image session should render dieline hatch overlay",
+  );
+  assertDeepEqual(
+    sessionOverlayPass.projections?.[0],
+    {
+      id: "slot.template-overlay",
+      sourceLayerIds: ["front.template-overlay"],
+      sourceElementIds: undefined,
+      opacity: undefined,
+      interactive: false,
+      hideSource: undefined,
+    },
+    "image session should project declared business helpers above the working image",
   );
   const snapTarget = {
     data: {
@@ -1818,7 +1848,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertDeepEqual(
     exportService.calls[0]?.sourceLayerIds,
-    ["image.user.session"],
+    ["image.user.session.image"],
     "complete session should export the working image from the session pass",
   );
 
@@ -1826,11 +1856,25 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     IMAGE_PLACEMENT_CAPABILITY_ID,
   )) as any;
   const committedImagePass = committedRender.passes.find(
-    (pass: any) => pass.id === "image.user",
+    (pass: any) => pass.targetLayerId === "artwork",
+  );
+  const clearedImageSessionPass = committedRender.passes.find(
+    (pass: any) => pass.id === "image.user.session.image",
+  );
+  assertEqual(
+    committedImagePass?.targetLayerId,
+    "artwork",
+    "completed slot should render through the slot business layer",
   );
   assert(
-    committedImagePass.objects.some((spec: any) => spec.id === "image:slot"),
+    committedImagePass?.objects.some((spec: any) => spec.id === "image:slot"),
     "completed slot should render the processed production image object",
+  );
+  assert(
+    !clearedImageSessionPass?.objects.some(
+      (spec: any) => spec.id === "session-image:slot",
+    ),
+    "completed slot should clear the framework session image pass",
   );
 
   await facade.beginSession("slot");

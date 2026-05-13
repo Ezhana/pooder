@@ -50,6 +50,15 @@ export interface RenderObjectSpec {
   layout?: RenderObjectLayoutSpec;
 }
 
+export interface RenderProjectionSpec {
+  id: string;
+  sourceLayerIds?: readonly string[];
+  sourceElementIds?: readonly string[];
+  opacity?: number;
+  interactive?: boolean;
+  hideSource?: boolean;
+}
+
 export interface RenderPatternSpec {
   type: "pattern";
   kind: "diagonalHatch";
@@ -98,6 +107,7 @@ export interface RenderPassSpec {
   replace?: boolean;
   visibility?: VisibilityExpr;
   effects?: RenderEffectSpec[];
+  projections?: RenderProjectionSpec[];
   objects: RenderObjectSpec[];
 }
 

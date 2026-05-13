@@ -91,6 +91,7 @@ class FakeFabricObject {
   scaleX = 1;
   scaleY = 1;
   angle = 0;
+  opacity = 1;
   excludeFromExport = false;
   selectable = false;
   evented = false;
@@ -111,6 +112,7 @@ class FakeFabricObject {
       excludeFromExport: this.excludeFromExport,
       height: this.height,
       left: this.left,
+      opacity: this.opacity,
       scaleX: this.scaleX,
       scaleY: this.scaleY,
       top: this.top,
@@ -204,6 +206,7 @@ function createCanvasServiceForRenderTests() {
   service.managedPassEffects = [];
   service.layerStackingMetas = new Map();
   service.visibilityContextValues = new Map();
+  service.projectionHiddenSources = new Map();
   service.createFabricObject = async (spec: RenderObjectSpec) => {
     const obj = new FakeFabricObject(spec.type);
     obj.set({
@@ -1063,6 +1066,149 @@ async function testRenderProducerVisibilityIsSourceScoped() {
   );
 }
 
+async function testSceneStackingKeepsSessionPassAboveBusinessLayers() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+  let sessionObjects = [rectSpec("session-image")];
+
+  await service.applyObjectSpecsToPass(
+    "front.image.user",
+    [rectSpec("business-image")],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  await service.applyObjectSpecsToPass(
+    "front.template-overlay",
+    [rectSpec("frame-overlay")],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  service.registerRenderProducer("pooder.kit.image-placement", () => ({
+    passes: [
+      {
+        id: "image.user.session",
+        stack: 800,
+        order: 0,
+        objects: sessionObjects,
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  service.syncPassStacking([
+    { id: "front.image.user", stack: 0, order: 10 },
+    { id: "front.template-overlay", stack: 780, order: 20 },
+  ]);
+
+  const stackedIds = canvas.objects.map((obj) => obj.data.id);
+  assert(
+    stackedIds.indexOf("business-image") < stackedIds.indexOf("frame-overlay"),
+    "business image layer should stay below template overlay",
+  );
+  assert(
+    stackedIds.indexOf("frame-overlay") < stackedIds.indexOf("session-image"),
+    "framework session image should stay above all business layers",
+  );
+
+  sessionObjects = [];
+  await service.flushRenderFromProducers();
+
+  assert(
+    !canvas.objects.some((obj) => obj.data.id === "session-image"),
+    "empty session producer pass should clear framework session objects",
+  );
+}
+
+async function testRenderProducerProjectionClonesBusinessObjects() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+  let projections: RenderPassSpec["projections"] = [
+    {
+      id: "template-overlay",
+      sourceElementIds: ["front.template.normal"],
+      opacity: 0.5,
+    },
+  ];
+  let visible = false;
+
+  await service.applyObjectSpecsToPass(
+    "front.template-overlay",
+    [
+      rectSpec(
+        "template-source",
+        {
+          evented: true,
+          opacity: 0.6,
+          selectable: true,
+        },
+        {
+          sceneElementId: "front.template.normal",
+          sceneLayerId: "front.template-overlay",
+        },
+      ),
+    ],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+  service.registerRenderProducer("pooder.kit.image-placement", () => ({
+    passes: [
+      {
+        id: "image.user.session.overlay",
+        stack: 800,
+        order: 2,
+        visibility: { op: "const", value: visible },
+        projections,
+        objects: [],
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  const source = canvas.objects.find((obj) => obj.data.id === "template-source");
+  assert(source, "projection source should remain in the business pass");
+  assertEqual(
+    source.visible,
+    true,
+    "inactive projection pass should not hide its source",
+  );
+  assert(
+    !canvas.objects.some(
+      (obj) => obj.data.id === "projection:template-overlay:front.template.normal",
+    ),
+    "inactive projection pass should not render a clone",
+  );
+
+  visible = true;
+  await service.flushRenderFromProducers();
+
+  const clone = canvas.objects.find(
+    (obj) => obj.data.id === "projection:template-overlay:front.template.normal",
+  );
+  assert(clone, "projection clone should render into the session pass");
+  assertEqual(source.visible, false, "active projection should hide its source");
+  assertEqual(
+    clone?.data.passId,
+    "image.user.session.overlay",
+    "projection clone should target the session pass",
+  );
+  assertEqual(clone?.selectable, false, "projection clone should be non-selectable");
+  assertEqual(clone?.evented, false, "projection clone should be non-evented");
+  assertEqual(
+    clone?.excludeFromExport,
+    true,
+    "projection clone should be excluded from export",
+  );
+  assertEqual(clone?.opacity, 0.3, "projection opacity should multiply source opacity");
+
+  projections = [];
+  await service.flushRenderFromProducers();
+
+  assertEqual(
+    source.visible,
+    true,
+    "cleared projection should restore source visibility",
+  );
+  assert(
+    !canvas.objects.some((obj) => obj.data.id === clone?.data.id),
+    "cleared projection should remove the session clone",
+  );
+}
+
 async function testRenderObjectsAreNonInteractiveByDefault() {
   const { canvas, service } = createCanvasServiceForRenderTests();
 
@@ -1301,6 +1447,8 @@ async function main() {
   await testFabricSceneAdapterMapsSceneElementContracts();
   await testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope();
   await testRenderProducerVisibilityIsSourceScoped();
+  await testSceneStackingKeepsSessionPassAboveBusinessLayers();
+  await testRenderProducerProjectionClonesBusinessObjects();
   await testRenderObjectsAreNonInteractiveByDefault();
   testVisibilityDslSupportsWorkflowAndContextPredicates();
   await testRenderProducerVisibilityUsesContextValues();
