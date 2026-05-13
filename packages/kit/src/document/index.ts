@@ -97,9 +97,49 @@ const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [WHITE_INK_CAPABILITY_ID]: () => createWhiteInkCapability(),
 };
 
+function layerHasEffect(layer: EditorLayer, capabilityId: string): boolean {
+  return Boolean(
+    layer.effects?.some(
+      (effect) => resolveKitEditorDocumentEffectCapabilityId(effect) === capabilityId,
+    ),
+  );
+}
+
+function layerHasObjectEffect(layer: EditorLayer, capabilityId: string): boolean {
+  return Boolean(
+    layer.objects?.some((object) =>
+      object.effects?.some(
+        (effect) => resolveKitEditorDocumentEffectCapabilityId(effect) === capabilityId,
+      ),
+    ),
+  );
+}
+
+function inferDielineCapabilityLayers(document: EditorDocument) {
+  let targetLayerId: string | undefined;
+  const imageClipLayerIds: string[] = [];
+
+  document.surfaces.forEach((surface) => {
+    surface.layers.forEach((layer) => {
+      if (!targetLayerId && layerHasEffect(layer, DIELINE_GEOMETRY_CAPABILITY_ID)) {
+        targetLayerId = layer.id;
+      }
+      if (layerHasObjectEffect(layer, IMAGE_PLACEMENT_CAPABILITY_ID)) {
+        imageClipLayerIds.push(layer.id);
+      }
+    });
+  });
+
+  return {
+    targetLayerId,
+    imageClipLayerIds: Array.from(new Set(imageClipLayerIds)),
+  };
+}
+
 export function createKitCapabilitiesForDocument(
   value: unknown,
 ): ExtensionDefinition[] {
+  const document = normalizeKitEditorDocument(value);
   const result = collectKitEditorDocumentCapabilityRequirements(value, {
     includeIgnored: true,
   });
@@ -110,7 +150,24 @@ export function createKitCapabilitiesForDocument(
         .filter((id) => KIT_EFFECT_FACTORIES[id]),
     ),
   );
-  return capabilityIds.map((id) => KIT_EFFECT_FACTORIES[id]());
+  const dielineLayers = inferDielineCapabilityLayers(document);
+
+  return capabilityIds.map((id) => {
+    if (id === DIELINE_GEOMETRY_CAPABILITY_ID) {
+      return createDielineGeometryCapability({
+        layers: {
+          ...(dielineLayers.targetLayerId
+            ? { targetLayerId: dielineLayers.targetLayerId }
+            : {}),
+          ...(dielineLayers.imageClipLayerIds.length
+            ? { imageClipLayerIds: dielineLayers.imageClipLayerIds }
+            : {}),
+        },
+      });
+    }
+
+    return KIT_EFFECT_FACTORIES[id]();
+  });
 }
 
 export async function applyKitEditorDocument(

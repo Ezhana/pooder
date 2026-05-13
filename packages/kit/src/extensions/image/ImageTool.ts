@@ -1153,17 +1153,25 @@ export class ImageTool implements ExtensionDefinition {
       throw new Error("SceneExportService not initialized");
     }
     await this.updateImagesAsync();
-    const slotIds = options.slotIds?.length
-      ? options.slotIds
-      : this.getSlotStates().filter((slot) => slot.hasImage).map((slot) => slot.id);
+    const requestedSlotIds = options.slotIds?.length
+      ? new Set(options.slotIds)
+      : null;
+    const slots = this.getSlotStates().filter((slot) => {
+      if (requestedSlotIds) return requestedSlotIds.has(slot.id);
+      return slot.hasImage;
+    });
+    const slotIds = slots.map((slot) => slot.id);
     if (!slotIds.length) throw new Error("image-ids-required");
+    const sourceLayerIds = Array.from(
+      new Set(slots.map((slot) => slot.layerId || this.imageLayerId)),
+    );
     const result = await this.exportService.exportImage({
       crop: { type: "sceneRect", rect: this.getSurfaceFrameRect() },
       format: options.format === "jpeg" ? "jpeg" : "png",
       includeHidden: true,
       multiplier: Math.max(1, options.multiplier ?? 2),
       sourceElementIds: slotIds.map((id) => `image:${id}`),
-      sourceLayerIds: [this.imageLayerId],
+      sourceLayerIds: sourceLayerIds.length ? sourceLayerIds : [this.imageLayerId],
     });
     return {
       url: result.url,

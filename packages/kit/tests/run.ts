@@ -1252,6 +1252,50 @@ function testCreateKitCapabilitiesForDocument() {
   );
 }
 
+function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
+  const capabilities = createKitCapabilitiesForDocument({
+    version: 2,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "front.image.user",
+            objects: [
+              {
+                id: "front.image.user",
+                type: "image",
+                frame: { x: 0, y: 0, width: 100, height: 100 },
+                effects: [{ type: "image-placement" }],
+              },
+            ],
+          },
+          {
+            id: "front.dieline-overlay",
+            effects: [{ type: "dieline", payload: { shape: "circle" } }],
+          },
+        ],
+      },
+    ],
+  });
+  const dieline = capabilities.find(
+    (item) => item.id === DIELINE_GEOMETRY_CAPABILITY_ID,
+  ) as any;
+
+  assert(dieline, "document helper should create the dieline capability");
+  assertEqual(
+    dieline.targetLayerId,
+    "front.dieline-overlay",
+    "document helper should target the document dieline layer",
+  );
+  assertDeepEqual(
+    dieline.imageClipLayerIds,
+    ["front.image.user"],
+    "document helper should clip the document image placement layer",
+  );
+}
+
 function createFakeCapabilityExtension(
   facades: Record<string, unknown>,
 ): ExtensionDefinition {
@@ -1875,6 +1919,17 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       (spec: any) => spec.id === "session-image:slot",
     ),
     "completed slot should clear the framework session image pass",
+  );
+  await facade.exportPlacementImage({ slotIds: ["slot"] });
+  assertDeepEqual(
+    exportService.calls[exportService.calls.length - 1]?.sourceLayerIds,
+    ["artwork"],
+    "placement image export should use the committed slot business layer",
+  );
+  assertDeepEqual(
+    exportService.calls[exportService.calls.length - 1]?.sourceElementIds,
+    ["image:slot"],
+    "placement image export should target the committed production image object",
   );
 
   await facade.beginSession("slot");
@@ -2795,6 +2850,7 @@ async function main() {
   await testDesignExportCapabilityExtension();
   await testKitCapabilityFactoriesDoNotRegisterTools();
   testCreateKitCapabilitiesForDocument();
+  testCreateKitCapabilitiesForDocumentInfersDielineLayers();
   await testApplyKitEditorDocument();
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
