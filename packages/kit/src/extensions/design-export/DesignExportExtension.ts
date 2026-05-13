@@ -4,8 +4,11 @@ import {
   ExtensionDefinition,
 } from "@pooder/core";
 import {
+  SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
+  type SceneLayer,
   SceneExportService,
+  type SceneService,
 } from "@pooder/core";
 import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import {
@@ -30,6 +33,15 @@ const DEFAULT_EXPORT_LAYER_IDS = [
   KIT_LEGACY_LAYER_PRESET.whiteInkObject,
 ] as const;
 
+function isDefaultExportSceneLayer(layer: SceneLayer): boolean {
+  const metadata = layer.metadata ?? {};
+  if (metadata.exportable === false) return false;
+  const role = typeof metadata.documentLayerRole === "string"
+    ? metadata.documentLayerRole.trim()
+    : "";
+  return role !== "guide" && role !== "overlay";
+}
+
 export interface DesignExportExtensionOptions
   extends DesignExportCapabilityOptions {
   id?: string;
@@ -46,16 +58,16 @@ export class DesignExportExtension implements ExtensionDefinition {
   };
 
   private exportService?: SceneExportService;
+  private sceneService?: SceneService;
   private readonly capabilityId: string;
-  private readonly defaultLayerIds: readonly string[];
+  private readonly configuredLayerIds?: readonly string[];
   private readonly contributeLegacyCommands: boolean;
 
   constructor(options: DesignExportExtensionOptions = {}) {
     this.id = String(options.id || DESIGN_EXPORT_CAPABILITY_ID).trim() ||
       DESIGN_EXPORT_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || DESIGN_EXPORT_CAPABILITY_ID;
-    this.defaultLayerIds = options.layers?.sourceLayerIds ||
-      DEFAULT_EXPORT_LAYER_IDS;
+    this.configuredLayerIds = options.layers?.sourceLayerIds;
     this.contributeLegacyCommands = options.contributeCommands !== false;
   }
 
@@ -63,6 +75,7 @@ export class DesignExportExtension implements ExtensionDefinition {
     this.exportService = context.services.getOrThrow<SceneExportService>(
       SCENE_EXPORT_SERVICE,
     );
+    this.sceneService = context.services.get<SceneService>(SCENE_SERVICE);
   }
 
   contribute(): ExtensionContributions {
@@ -71,7 +84,7 @@ export class DesignExportExtension implements ExtensionDefinition {
         createDesignExportCapabilityDefinition(this.getDesignExportFacade(), {
           capabilityId: this.capabilityId,
           layers: {
-            sourceLayerIds: this.defaultLayerIds,
+            sourceLayerIds: this.resolveDefaultLayerIds(),
           },
         }),
       ],
@@ -84,6 +97,16 @@ export class DesignExportExtension implements ExtensionDefinition {
     return contributions;
   }
 
+  private resolveDefaultLayerIds(): readonly string[] {
+    if (this.configuredLayerIds) return this.configuredLayerIds;
+    const sceneLayerIds = this.sceneService
+      ?.listLayers()
+      .filter(isDefaultExportSceneLayer)
+      .map((layer) => layer.id)
+      .filter((id) => id.length > 0) ?? [];
+    return sceneLayerIds.length > 0 ? sceneLayerIds : DEFAULT_EXPORT_LAYER_IDS;
+  }
+
   async exportImage(
     options: ExportImageOptions = {},
   ): Promise<ExportImageResult> {
@@ -93,7 +116,7 @@ export class DesignExportExtension implements ExtensionDefinition {
 
     const layerIds = normalizeDesignExportLayerIds(
       options.sourceLayerIds ?? options.layerIds,
-      this.defaultLayerIds,
+      this.resolveDefaultLayerIds(),
     );
     try {
       const result = await this.exportService.exportImage({
