@@ -1,9 +1,13 @@
 import {
   CONFIGURATION_SERVICE,
+  SCENE_SERVICE,
   type ConfigurationService,
+  type EffectApplicationContext,
+  type EffectApplicatorContribution,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
+  type SceneService,
 } from "@pooder/core";
 import {
   CANVAS_SERVICE,
@@ -12,6 +16,13 @@ import {
   type RenderObjectSpec,
   type RenderPassSpec,
 } from "@pooder/core";
+import type {
+  EditorDocument,
+  EditorEffect,
+  EditorImageObject,
+  EditorLayer,
+  EditorSurface,
+} from "@pooder/document/kit";
 import {
   type FrameRect,
   resolveSurfaceFrameRect,
@@ -50,7 +61,7 @@ import {
   type TemplateOverlaySlotName,
 } from "./model";
 
-const TEMPLATE_OVERLAY_UNDERLAY_STACK = 100;
+const TEMPLATE_OVERLAY_UNDERLAY_STACK = 770;
 const TEMPLATE_OVERLAY_OVERLAY_STACK = 780;
 const DEFAULT_CLIP_TARGET_LAYER_IDS = [IMAGE_OBJECT_LAYER_ID];
 
@@ -58,6 +69,10 @@ export interface TemplateOverlayToolOptions extends TemplateOverlayCapabilityOpt
   id?: string;
   contributeCommands?: boolean;
   contributeConfigurations?: boolean;
+}
+
+interface TemplateOverlayEffectPayload {
+  role?: unknown;
 }
 
 export class TemplateOverlayTool implements ExtensionDefinition {
@@ -215,6 +230,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
           },
         }),
       ],
+      effectApplicators: [this.createEffectApplicator()],
     };
 
     if (this.contributeConfigDefinitions) {
@@ -228,6 +244,92 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     }
 
     return contributions;
+  }
+
+  private createEffectApplicator(): EffectApplicatorContribution<
+    EditorEffect<TemplateOverlayEffectPayload>,
+    EditorDocument
+  > {
+    return {
+      capabilityId: this.capabilityId,
+      effectType: "template-overlay",
+      apply: (context) => this.applyDocumentTemplateOverlayEffect(context),
+    };
+  }
+
+  private applyDocumentTemplateOverlayEffect(
+    context: EffectApplicationContext<
+      EditorEffect<TemplateOverlayEffectPayload>,
+      EditorDocument
+    >,
+  ) {
+    if (context.target.kind !== "object" || !context.target.objectId) return;
+    const resolved = this.findDocumentImageObject(
+      context.document,
+      context.target.objectId,
+    );
+    if (!resolved) return;
+
+    const sceneService = context.services.get<SceneService>(SCENE_SERVICE);
+    const element = sceneService?.getElement(context.target.objectId);
+    if (!sceneService || !element) return;
+
+    const data = element.data && typeof element.data === "object"
+      ? element.data
+      : {};
+    const metadata = element.metadata && typeof element.metadata === "object"
+      ? element.metadata
+      : {};
+    const payload =
+      context.effect.payload && typeof context.effect.payload === "object"
+        ? context.effect.payload
+        : {};
+    const role = typeof payload.role === "string" && payload.role.trim()
+      ? payload.role.trim()
+      : "default-artwork";
+
+    sceneService.updateElement(element.id, {
+      metadata: {
+        ...metadata,
+        templateOverlay: {
+          ...(metadata.templateOverlay &&
+          typeof metadata.templateOverlay === "object"
+            ? metadata.templateOverlay
+            : {}),
+          role,
+        },
+      },
+      data: {
+        ...data,
+        templateOverlay: {
+          ...(data.templateOverlay && typeof data.templateOverlay === "object"
+            ? data.templateOverlay
+            : {}),
+          enabled: true,
+          role,
+          defaultArtwork: true,
+        },
+      },
+    });
+    this.updateOverlays();
+  }
+
+  private findDocumentImageObject(document: EditorDocument, objectId: string):
+    | {
+        surface: EditorSurface;
+        layer: EditorLayer;
+        object: EditorImageObject;
+      }
+    | null {
+    for (const surface of document.surfaces) {
+      for (const layer of surface.layers) {
+        const object = layer.objects?.find((item) => item.id === objectId);
+        if (object?.type === "image") {
+          return { surface, layer, object };
+        }
+      }
+    }
+    return null;
   }
 
   getConfig(): TemplateOverlayConfig {

@@ -1,5 +1,8 @@
 import {
+  EFFECT_APPLICATOR_REGISTRY_SERVICE,
   SCENE_SERVICE,
+  type EffectApplicationTarget,
+  type EffectApplicatorRegistryService,
   type ExtensionDefinition,
   type SceneElementInput,
   type SceneService,
@@ -15,9 +18,9 @@ import {
   type EditorDocument,
   type EditorDocumentDiagnostic,
   type EditorEffect,
+  type EditorImageObject,
   type EditorLayer,
   type EditorObject,
-  type EditorSlotImage,
   type EditorSurface,
 } from "@pooder/document/kit";
 import {
@@ -70,21 +73,20 @@ interface EffectContext {
   object?: EditorObject;
 }
 
-const IMAGE_PLACEMENT_SLOT_STYLE = {
-  evented: false,
-  excludeFromExport: true,
-  fill: "rgba(0,0,0,0)",
-  hasBorders: false,
-  hasControls: false,
-  lockMovementX: true,
-  lockMovementY: true,
-  lockRotation: true,
-  lockScalingFlip: true,
-  lockScalingX: true,
-  lockScalingY: true,
-  selectable: false,
-  strokeWidth: 0,
-};
+type KitEffectHandler = (
+  runtime: KitEditorDocumentRuntime,
+  effect: EditorEffect,
+  context: EffectContext,
+  assetsById: Map<string, EditorAsset>,
+) => void | Promise<void>;
+
+const EFFECT_PHASE_ORDER = {
+  document: 0,
+  layout: 1,
+  render: 2,
+  interaction: 3,
+  export: 4,
+} as const;
 
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [BACKGROUND_CAPABILITY_ID]: () => createBackgroundCapability(),
@@ -156,12 +158,22 @@ export async function applyKitEditorDocument(
     });
   });
 
-  for (const entry of collectEffectEntries(document)) {
+  const effectEntries = collectEffectEntries(document).sort(compareEffectEntries);
+  for (const entry of effectEntries) {
     const capabilityId = resolveKitEditorDocumentEffectCapabilityId(entry.effect);
     if (!capabilityId || !runtime.capabilities.has(capabilityId)) {
       continue;
     }
-    await applyKitEffect(runtime, capabilityId, entry.effect, entry.context, assetsById);
+    const appliedByApplicator = await applyKitEffectApplicators(
+      runtime,
+      document,
+      capabilityId,
+      entry.effect,
+      entry.context,
+    );
+    if (!appliedByApplicator) {
+      await applyKitEffect(runtime, capabilityId, entry.effect, entry.context, assetsById);
+    }
   }
 
   return createResult(
@@ -251,6 +263,7 @@ function createSceneElement(
   object: EditorObject,
   assetsById: Map<string, EditorAsset>,
 ): SceneElementInput | null {
+  if (!object.frame) return null;
   const base = {
     id: object.id,
     layerId: layer.id,
@@ -273,114 +286,145 @@ function createSceneElement(
 
   switch (object.type) {
     case "image": {
-      const asset = object.assetId ? assetsById.get(object.assetId) : undefined;
-      const src = object.src || asset?.src;
+      const imagePlacement = createImagePlacementData(object, assetsById);
+      if (imagePlacement) {
+        return {
+          ...base,
+          type: "rect",
+          visible: false,
+          width: object.frame.width,
+          height: object.frame.height,
+          transform: {
+            ...(object.transform ?? {}),
+            left: object.frame.x,
+            top: object.frame.y,
+            originX: object.transform?.originX ?? "left",
+            originY: object.transform?.originY ?? "top",
+          },
+          data: {
+            ...base.data,
+            id: object.id,
+            layerId: layer.id,
+            slotId: object.id,
+            type: "image-placement-slot",
+            frame: object.frame,
+            imagePlacement,
+          },
+        };
+      }
+
+      const src = resolveImageObjectSource(object, assetsById);
       if (!src) return null;
       return {
         ...base,
         type: "image",
         src,
-        width: object.width,
-        height: object.height,
-      };
-    }
-    case "template": {
-      const asset = assetsById.get(object.assetId);
-      if (!asset?.src) return null;
-      return {
-        ...base,
-        type: "image",
-        src: asset.src,
-        data: {
-          ...base.data,
-          assetId: object.assetId,
-          templateRole: object.role,
-        },
-      };
-    }
-    case "slot": {
-      const imagePlacement = createSlotImagePlacementData(object, assetsById);
-      return {
-        ...base,
-        type: "rect",
-        visible: imagePlacement ? false : base.visible,
-        width: object.frame.width,
-        height: object.frame.height,
-        style: imagePlacement
-          ? {
-              ...(base.style ?? {}),
-              ...IMAGE_PLACEMENT_SLOT_STYLE,
-            }
-          : base.style,
+        width: object.width ?? object.frame.width,
+        height: object.height ?? object.frame.height,
         transform: {
           ...(object.transform ?? {}),
-          left: object.frame.x,
-          top: object.frame.y,
+          left: object.transform?.left ?? object.frame.x,
+          top: object.transform?.top ?? object.frame.y,
           originX: object.transform?.originX ?? "left",
           originY: object.transform?.originY ?? "top",
-        },
-        data: {
-          ...base.data,
-          ...(imagePlacement
-            ? {
-                id: object.id,
-                layerId: layer.id,
-                slotId: object.id,
-                type: "image-placement-slot",
-              }
-            : {}),
-          accepts: object.accepts,
-          fit: object.fit,
-          constraints: object.constraints,
-          frame: object.frame,
-          ...(imagePlacement ? { imagePlacement } : {}),
         },
       };
     }
     case "path":
-      return { ...base, type: "path", path: object.path };
+      return {
+        ...base,
+        type: "path",
+        path: object.path,
+        transform: {
+          ...(object.transform ?? {}),
+          left: object.transform?.left ?? object.frame.x,
+          top: object.transform?.top ?? object.frame.y,
+        },
+      };
     case "rect":
-      return { ...base, type: "rect", width: object.width, height: object.height };
+      return {
+        ...base,
+        type: "rect",
+        width: object.width ?? object.frame.width,
+        height: object.height ?? object.frame.height,
+        transform: {
+          ...(object.transform ?? {}),
+          left: object.transform?.left ?? object.frame.x,
+          top: object.transform?.top ?? object.frame.y,
+          originX: object.transform?.originX ?? "left",
+          originY: object.transform?.originY ?? "top",
+        },
+      };
     case "text":
-      return { ...base, type: "text", text: object.text };
+      return {
+        ...base,
+        type: "text",
+        text: object.text,
+        transform: {
+          ...(object.transform ?? {}),
+          left: object.transform?.left ?? object.frame.x,
+          top: object.transform?.top ?? object.frame.y,
+          originX: object.transform?.originX ?? "left",
+          originY: object.transform?.originY ?? "top",
+        },
+      };
     default:
       return null;
   }
 }
 
-function createSlotImagePlacementData(
-  object: Extract<EditorObject, { type: "slot" }>,
+function resolveImageObjectSource(
+  object: EditorImageObject,
+  assetsById: Map<string, EditorAsset>,
+): string | undefined {
+  const asset = object.assetId ? assetsById.get(object.assetId) : undefined;
+  return object.src || asset?.src;
+}
+
+function createImagePlacementData(
+  object: EditorImageObject,
   assetsById: Map<string, EditorAsset>,
 ) {
+  if (!object.frame) return null;
   const imagePlacementEffect = findImagePlacementEffect(object.effects);
   if (!imagePlacementEffect) return null;
   const payload = readImagePlacementPayload(imagePlacementEffect);
+  const image = normalizeImagePlacementImageState(object, assetsById);
   return {
     enabled: true,
     slotId: object.id,
     frame: object.frame,
-    fit: object.fit,
-    image: normalizeSlotImageState(object.image, assetsById),
+    fit:
+      payload.fit === "contain" || payload.fit === "stretch"
+        ? payload.fit
+        : "cover",
+    image,
+    accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
     ...(isRecord(payload.placeholder) ? { placeholder: payload.placeholder } : {}),
   };
 }
 
-function normalizeSlotImageState(
-  image: EditorSlotImage | undefined,
+function normalizeImagePlacementImageState(
+  object: EditorImageObject,
   assetsById: Map<string, EditorAsset>,
 ) {
-  if (!image) return undefined;
-  const asset = image.assetId ? assetsById.get(image.assetId) : undefined;
-  const src = image.src || asset?.src;
+  const asset = object.assetId ? assetsById.get(object.assetId) : undefined;
+  const src = object.src || asset?.src;
+  const transform = object.transform ?? {};
+  const metadata = isRecord(object.metadata?.imagePlacement)
+    ? object.metadata.imagePlacement
+    : undefined;
+  if (!src && !object.assetId) return undefined;
   return {
-    ...(image.assetId ? { assetId: image.assetId } : {}),
+    ...(object.assetId ? { assetId: object.assetId } : {}),
     ...(src ? { src } : {}),
-    ...(Number.isFinite(image.left) ? { left: image.left } : {}),
-    ...(Number.isFinite(image.top) ? { top: image.top } : {}),
-    ...(Number.isFinite(image.scale) ? { scale: image.scale } : {}),
-    ...(Number.isFinite(image.angle) ? { angle: image.angle } : {}),
-    ...(Number.isFinite(image.opacity) ? { opacity: image.opacity } : {}),
-    ...(image.metadata ? { metadata: image.metadata } : {}),
+    ...(Number.isFinite(transform.left) ? { left: transform.left } : {}),
+    ...(Number.isFinite(transform.top) ? { top: transform.top } : {}),
+    ...(Number.isFinite(transform.scaleX) && transform.scaleX === transform.scaleY
+      ? { scale: transform.scaleX }
+      : {}),
+    ...(Number.isFinite(transform.angle) ? { angle: transform.angle } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -407,6 +451,16 @@ function collectEffectEntries(document: EditorDocument): Array<{
   return entries;
 }
 
+function compareEffectEntries(
+  a: { effect: EditorEffect },
+  b: { effect: EditorEffect },
+) {
+  const phaseDelta =
+    (EFFECT_PHASE_ORDER[a.effect.phase ?? "layout"] ?? 1) -
+    (EFFECT_PHASE_ORDER[b.effect.phase ?? "layout"] ?? 1);
+  return phaseDelta || (a.effect.order ?? 0) - (b.effect.order ?? 0);
+}
+
 async function applyKitEffect(
   runtime: KitEditorDocumentRuntime,
   capabilityId: string,
@@ -414,34 +468,139 @@ async function applyKitEffect(
   context: EffectContext,
   assetsById: Map<string, EditorAsset>,
 ) {
-  switch (capabilityId) {
-    case BACKGROUND_CAPABILITY_ID:
-      applyBackgroundEffect(runtime, effect, context, assetsById);
-      return;
-    case TEMPLATE_OVERLAY_CAPABILITY_ID:
-      await applyTemplateOverlayEffect(runtime, effect, context, assetsById);
-      return;
-    case DIELINE_GEOMETRY_CAPABILITY_ID:
-      applyDielineEffect(runtime, effect, context);
-      return;
-    case FEATURE_CAPABILITY_ID:
-      applyFeatureEffect(runtime, effect);
-      return;
-    case IMAGE_PLACEMENT_CAPABILITY_ID:
-      await applyImagePlacementEffect(runtime, effect, context, assetsById);
-      return;
-    case WHITE_INK_CAPABILITY_ID:
-      await applyWhiteInkEffect(runtime, effect, context, assetsById);
-      return;
-    default:
-      return;
-  }
+  const handler = KIT_EFFECT_HANDLERS[capabilityId];
+  if (!handler) return;
+  await handler(runtime, effect, context, assetsById);
 }
+
+const KIT_EFFECT_HANDLERS: Record<string, KitEffectHandler> = {
+  [BACKGROUND_CAPABILITY_ID]: applyBackgroundEffect,
+  [TEMPLATE_OVERLAY_CAPABILITY_ID]: applyTemplateOverlayEffect,
+  [DIELINE_GEOMETRY_CAPABILITY_ID]: applyDielineEffect,
+  [FEATURE_CAPABILITY_ID]: applyFeatureEffect,
+  [IMAGE_PLACEMENT_CAPABILITY_ID]: applyImagePlacementEffect,
+  [WHITE_INK_CAPABILITY_ID]: applyWhiteInkEffect,
+};
 
 function getPayload(effect: EditorEffect): Record<string, unknown> {
   return effect.payload && typeof effect.payload === "object"
     ? effect.payload
     : {};
+}
+
+async function applyKitEffectApplicators(
+  runtime: KitEditorDocumentRuntime,
+  document: EditorDocument,
+  capabilityId: string,
+  effect: EditorEffect,
+  context: EffectContext,
+): Promise<boolean> {
+  let registry: EffectApplicatorRegistryService | undefined;
+  try {
+    registry = runtime.services.getOrThrow<EffectApplicatorRegistryService>(
+      EFFECT_APPLICATOR_REGISTRY_SERVICE,
+      "EffectApplicatorRegistryService is required to apply effect applicators.",
+    );
+  } catch {
+    return false;
+  }
+
+  const applicators = registry.getApplicators({
+    capabilityId,
+    effectType: effect.type,
+  });
+  if (applicators.length === 0) {
+    return false;
+  }
+
+  const target = resolveEffectTarget(effect, context, document);
+  if (!target) {
+    return false;
+  }
+
+  for (const applicator of applicators) {
+    await applicator.apply({
+      document,
+      effect,
+      services: runtime.services as any,
+      target,
+    });
+  }
+  return true;
+}
+
+function resolveEffectTarget(
+  effect: EditorEffect,
+  context: EffectContext,
+  document: EditorDocument,
+): EffectApplicationTarget | null {
+  const target = effect.target ?? "self";
+  if (target === "self") {
+    if (context.object && context.layer) {
+      return {
+        kind: "object",
+        surfaceId: context.surface.id,
+        layerId: context.layer.id,
+        objectId: context.object.id,
+        objectType: context.object.type,
+      };
+    }
+    if (context.layer) {
+      return {
+        kind: "layer",
+        surfaceId: context.surface.id,
+        layerId: context.layer.id,
+      };
+    }
+    return { kind: "surface", surfaceId: context.surface.id };
+  }
+
+  if ("objectId" in target) {
+    const resolved = findObjectContext(document, target.objectId);
+    return resolved
+      ? {
+          kind: "object",
+          surfaceId: resolved.surface.id,
+          layerId: resolved.layer.id,
+          objectId: resolved.object.id,
+          objectType: resolved.object.type,
+        }
+      : null;
+  }
+  if ("layerId" in target) {
+    const resolved = findLayerContext(document, target.layerId);
+    return resolved
+      ? {
+          kind: "layer",
+          surfaceId: resolved.surface.id,
+          layerId: resolved.layer.id,
+        }
+      : null;
+  }
+  if ("surfaceId" in target) {
+    return document.surfaces.some((surface) => surface.id === target.surfaceId)
+      ? { kind: "surface", surfaceId: target.surfaceId }
+      : null;
+  }
+  return null;
+}
+
+function findLayerContext(document: EditorDocument, layerId: string) {
+  for (const surface of document.surfaces) {
+    const layer = surface.layers.find((item) => item.id === layerId);
+    if (layer) return { surface, layer };
+  }
+  return null;
+}
+
+function findObjectContext(document: EditorDocument, objectId: string) {
+  for (const surface of document.surfaces) {
+    for (const layer of surface.layers) {
+      const object = layer.objects?.find((item) => item.id === objectId);
+      if (object) return { surface, layer, object };
+    }
+  }
+  return null;
 }
 
 function applyBackgroundEffect(

@@ -13,6 +13,13 @@ import type { RenderObjectSpec } from "../render-spec";
 import { CANVAS_SERVICE } from "../tokens";
 
 const SCENE_RENDER_SCOPE = "core-scene";
+const DOCUMENT_OVERLAY_LAYER_STACK = 780;
+
+function resolveSceneLayerStack(layer: { metadata?: Record<string, unknown> }): number {
+  return layer.metadata?.documentLayerRole === "overlay"
+    ? DOCUMENT_OVERLAY_LAYER_STACK
+    : 0;
+}
 
 export class FabricSceneAdapter implements Service {
   private sceneService?: SceneService;
@@ -113,7 +120,7 @@ export class FabricSceneAdapter implements Service {
       layers.map(
         (layer): CanvasPassStackingMeta => ({
           id: layer.id,
-          stack: 0,
+          stack: resolveSceneLayerStack(layer),
           order: layer.order,
         }),
       ),

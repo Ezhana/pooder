@@ -19,6 +19,7 @@ import {
   CapabilityRegistryService,
   CommandService,
   ConfigurationService,
+  EffectApplicatorRegistryService,
   SceneService,
   ToolRegistryService,
   ToolSessionService,
@@ -33,6 +34,7 @@ export * from "./capability";
 export * from "./contribution";
 export * from "./scene";
 export * from "./render";
+export * from "./effect-applicator";
 export * from "./coordinate";
 export * from "./units";
 export * from "./dieline-shape";
@@ -131,6 +133,8 @@ export class Pooder {
   private readonly commandService = new CommandService();
   private readonly capabilityRegistryService = new CapabilityRegistryService();
   private readonly configurationService = new ConfigurationService();
+  private readonly effectApplicatorRegistryService =
+    new EffectApplicatorRegistryService();
   private readonly sceneService = new SceneService();
   private readonly toolRegistryService = new ToolRegistryService();
   private readonly workflowSessionService = new WorkflowSessionService();
@@ -162,6 +166,10 @@ export class Pooder {
     this.registerService(
       this.configurationService,
       CORE_SERVICE_TOKENS.CONFIGURATION,
+    );
+    this.registerService(
+      this.effectApplicatorRegistryService,
+      CORE_SERVICE_TOKENS.EFFECT_APPLICATOR_REGISTRY,
     );
     this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
     this.registerService(
@@ -197,6 +205,7 @@ export class Pooder {
       capabilityRegistry: this.capabilityRegistryService,
       configurationService: this.configurationService,
       commandService: this.commandService,
+      effectApplicatorRegistry: this.effectApplicatorRegistryService,
       toolRegistry: this.toolRegistryService,
     });
 

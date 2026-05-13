@@ -37,7 +37,7 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
 
 function testNormalizeDefaults() {
   const doc = normalizeEditorDocument({
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -48,11 +48,17 @@ function testNormalizeDefaults() {
             id: "artwork",
             objects: [
               {
-                id: "slot-1",
-                type: "slot",
-                accepts: ["image"],
+                id: "image-1",
+                type: "image",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
-                effects: [{ type: "image-placement" }],
+                effects: [
+                  {
+                    type: "image-placement",
+                    target: { objectId: " image-1 " },
+                    order: "20",
+                    phase: "interaction",
+                  },
+                ],
               },
             ],
           },
@@ -83,11 +89,26 @@ function testNormalizeDefaults() {
     "strict",
     "effect require should default",
   );
+  assertDeepEqual(
+    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.target,
+    { objectId: "image-1" },
+    "effect target should normalize",
+  );
+  assertEqual(
+    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.order,
+    20,
+    "effect order should normalize",
+  );
+  assertEqual(
+    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.phase,
+    "interaction",
+    "effect phase should normalize",
+  );
 }
 
-function testImagePlacementSlotDoesNotRequireSource() {
+function testV2ImagePlacementImageDoesNotRequireSource() {
   const diagnostics = validateKitEditorDocument({
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -97,9 +118,8 @@ function testImagePlacementSlotDoesNotRequireSource() {
             id: "image.user",
             objects: [
               {
-                id: "image-slot",
-                type: "slot",
-                accepts: ["image"],
+                id: "image-target",
+                type: "image",
                 frame: { x: 0, y: 0, width: 100, height: 120 },
                 effects: [{ type: "image-placement" }],
               },
@@ -112,13 +132,60 @@ function testImagePlacementSlotDoesNotRequireSource() {
 
   assert(
     !diagnostics.some((item) => item.code.includes("src")),
-    "image-placement slots should not require asset or src",
+    "image-placement image objects should not require asset or src",
+  );
+}
+
+function testV1DocumentIsRejected() {
+  const diagnostics = validateKitEditorDocument({
+    version: 1,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        layers: [],
+      },
+    ],
+  });
+
+  assert(
+    diagnostics.some((item) => item.code === "document-version-invalid"),
+    "v1 document should be rejected",
+  );
+}
+
+function testImageObjectRequiresFrame() {
+  const diagnostics = validateKitEditorDocument({
+    version: 2,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        layers: [
+          {
+            id: "layer",
+            objects: [
+              {
+                id: "image",
+                type: "image",
+                src: "/image.png",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert(
+    diagnostics.some((item) => item.code === "object-frame-required"),
+    "image object without frame should be invalid",
   );
 }
 
 function testValidationStructureAndReferences() {
   const diagnostics = validateKitEditorDocument({
-    version: 1,
+    version: 2,
     assets: [{ id: "template", type: "image", src: "/template.png" }],
     surfaces: [
       {
@@ -128,8 +195,12 @@ function testValidationStructureAndReferences() {
           {
             id: "layer",
             objects: [
-              { id: "tpl", type: "template", assetId: "template" },
-              { id: "img", type: "image", assetId: "missing" },
+              {
+                id: "img",
+                type: "image",
+                assetId: "missing",
+                frame: { x: 0, y: 0, width: 1, height: 1 },
+              },
             ],
           },
           { id: "layer" },
@@ -165,7 +236,7 @@ function testValidationStructureAndReferences() {
 
 function testCustomEffectRequiresCapabilityId() {
   const diagnostics = validateEditorDocument({
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -194,7 +265,7 @@ function testKitEffectCapabilityResolution() {
   );
 
   const diagnostics = validateKitEditorDocument({
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -208,7 +279,7 @@ function testKitEffectCapabilityResolution() {
 
 function testRequirePolicyDiagnostics() {
   const doc: EditorDocument = {
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -263,7 +334,9 @@ function testRequirePolicyDiagnostics() {
 
 function main() {
   testNormalizeDefaults();
-  testImagePlacementSlotDoesNotRequireSource();
+  testV2ImagePlacementImageDoesNotRequireSource();
+  testV1DocumentIsRejected();
+  testImageObjectRequiresFrame();
   testValidationStructureAndReferences();
   testCustomEffectRequiresCapabilityId();
   testKitEffectCapabilityResolution();

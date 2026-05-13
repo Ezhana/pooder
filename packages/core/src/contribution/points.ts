@@ -1,4 +1,5 @@
 import type { CapabilityDefinition } from "../capability";
+import type { EffectApplicatorContribution } from "../effect-applicator";
 
 export interface CommandContribution {
   id: string;
@@ -57,5 +58,6 @@ export interface ExtensionContributions {
   capabilities?: CapabilityDefinition[];
   configurations?: ConfigurationContribution[];
   commands?: CommandContribution[];
+  effectApplicators?: EffectApplicatorContribution[];
   tools?: ToolContribution[];
 }

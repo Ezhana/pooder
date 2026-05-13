@@ -76,9 +76,9 @@ export type {
   EditorDocumentDiagnostic,
   EditorDocumentRequirePolicy,
   EditorEffect,
+  EditorImageObject,
   EditorLayer,
   EditorObject,
-  EditorSlotImage,
   EditorSurface,
   EditorView,
 } from "./index";

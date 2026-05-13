@@ -2,6 +2,7 @@ import { createServiceToken } from "../service";
 import type CapabilityRegistryService from "./CapabilityRegistryService";
 import type CommandService from "./CommandService";
 import type ConfigurationService from "./ConfigurationService";
+import type EffectApplicatorRegistryService from "./EffectApplicatorRegistryService";
 import type SceneService from "./SceneService";
 import type ToolRegistryService from "./ToolRegistryService";
 import type ToolSessionService from "./ToolSessionService";
@@ -21,6 +22,10 @@ export const COMMAND_SERVICE = createServiceToken<CommandService>(
 export const CONFIGURATION_SERVICE = createServiceToken<ConfigurationService>(
   "ConfigurationService",
 );
+export const EFFECT_APPLICATOR_REGISTRY_SERVICE =
+  createServiceToken<EffectApplicatorRegistryService>(
+    "EffectApplicatorRegistryService",
+  );
 export const SCENE_SERVICE = createServiceToken<SceneService>("SceneService");
 export const CANVAS_SERVICE = createServiceToken<CanvasService>("CanvasService");
 export const SCENE_LAYOUT_SERVICE =
@@ -40,6 +45,7 @@ export const CORE_SERVICE_TOKENS = {
   CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
   COMMAND: COMMAND_SERVICE,
   CONFIGURATION: CONFIGURATION_SERVICE,
+  EFFECT_APPLICATOR_REGISTRY: EFFECT_APPLICATOR_REGISTRY_SERVICE,
   CANVAS: CANVAS_SERVICE,
   SCENE: SCENE_SERVICE,
   SCENE_LAYOUT: SCENE_LAYOUT_SERVICE,

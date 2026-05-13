@@ -1568,9 +1568,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
     props: Record<string, any>,
   ): Record<string, any> {
     const space: RenderCoordinateSpace = spec.space || "scene";
-    const next = this.resolveRenderPatternProps(
-      this.resolveLayoutProps(spec, props),
-    );
+    const next: Record<string, any> = {
+      selectable: false,
+      evented: false,
+      ...this.resolveRenderPatternProps(this.resolveLayoutProps(spec, props)),
+    };
     if (space === "screen") {
       return next;
     }

@@ -5,12 +5,14 @@ import {
   ExtensionContext,
   ExtensionContributions,
   ExtensionDefinition,
+  SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  SCENE_SERVICE,
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
+  type EffectApplicationContext,
+  type EffectApplicatorContribution,
   type RenderObjectSpec,
   type RenderPatternSpec,
   type SceneElement,
@@ -18,6 +20,14 @@ import {
   type SceneLayoutService,
   type SceneService,
 } from "@pooder/core";
+import type {
+  EditorAsset,
+  EditorDocument,
+  EditorEffect,
+  EditorImageObject,
+  EditorLayer,
+  EditorSurface,
+} from "@pooder/document/kit";
 import {
   createSourceSizeCache,
   getCoverScale as getCoverScaleFromRect,
@@ -76,6 +86,12 @@ interface ImagePlacementSourceTransform {
   scale: number;
   angle: number;
   opacity: number;
+}
+
+interface ImagePlacementEffectPayload {
+  accepts?: unknown;
+  fit?: unknown;
+  placeholder?: unknown;
 }
 
 export interface ImagePlacementPlaceholderStyle {
@@ -435,11 +451,18 @@ export class ImageTool implements ExtensionDefinition {
             objects: this.buildUploadSpecs(),
           },
           {
+            id: `${this.imageLayerId}.session`,
+            stack: IMAGE_OBJECT_STACK,
+            order: 1,
+            visibility: { op: "sessionActive", toolId: this.capabilityId },
+            objects: this.buildWorkingImageSpecs(),
+          },
+          {
             id: `${this.overlayLayerId}.session`,
             stack: IMAGE_OVERLAY_STACK,
             order: 1,
             visibility: { op: "sessionActive", toolId: this.capabilityId },
-            objects: this.buildSessionSpecs(),
+            objects: this.buildSessionOverlaySpecs(),
           },
         ],
       }),
@@ -490,6 +513,117 @@ export class ImageTool implements ExtensionDefinition {
           },
         }),
       ],
+      effectApplicators: [this.createEffectApplicator()],
+    };
+  }
+
+  private createEffectApplicator(): EffectApplicatorContribution<
+    EditorEffect<ImagePlacementEffectPayload>,
+    EditorDocument
+  > {
+    return {
+      capabilityId: this.capabilityId,
+      effectType: "image-placement",
+      apply: (context) => this.applyDocumentImagePlacementEffect(context),
+    };
+  }
+
+  private applyDocumentImagePlacementEffect(
+    context: EffectApplicationContext<
+      EditorEffect<ImagePlacementEffectPayload>,
+      EditorDocument
+    >,
+  ) {
+    if (context.target.kind !== "object" || !context.target.objectId) return;
+    const resolved = this.findDocumentImageObject(
+      context.document,
+      context.target.objectId,
+    );
+    if (!resolved) return;
+    const { object } = resolved;
+    if (!object.frame) return;
+
+    const sceneService = context.services.get<SceneService>(SCENE_SERVICE);
+    const element = sceneService?.getElement(context.target.objectId);
+    if (!sceneService || !element) return;
+
+    const data = isRecord(element.data) ? element.data : {};
+    const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+    const payload = isRecord(context.effect.payload) ? context.effect.payload : {};
+    const image = this.resolveDocumentImageState(context.document, object);
+
+    sceneService.updateElement(element.id, {
+      data: {
+        ...data,
+        id: object.id,
+        layerId: element.layerId,
+        slotId: object.id,
+        type: "image-placement-slot",
+        imagePlacement: {
+          ...placement,
+          enabled: true,
+          slotId: object.id,
+          frame: object.frame,
+          fit:
+            payload.fit === "contain" || payload.fit === "stretch"
+              ? payload.fit
+              : "cover",
+          image,
+          accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
+          ...(isRecord(payload.placeholder)
+            ? { placeholder: payload.placeholder }
+            : {}),
+        },
+      },
+    });
+    this.updateImages();
+  }
+
+  private findDocumentImageObject(document: EditorDocument, objectId: string):
+    | {
+        surface: EditorSurface;
+        layer: EditorLayer;
+        object: EditorImageObject;
+      }
+    | null {
+    for (const surface of document.surfaces) {
+      for (const layer of surface.layers) {
+        const object = layer.objects?.find((item) => item.id === objectId);
+        if (object?.type === "image") {
+          return { surface, layer, object };
+        }
+      }
+    }
+    return null;
+  }
+
+  private resolveDocumentImageState(
+    document: EditorDocument,
+    object: EditorImageObject,
+  ): ImagePlacementImageState | undefined {
+    const assetsById = new Map<string, EditorAsset>(
+      (document.assets ?? []).map((asset) => [asset.id, asset]),
+    );
+    const asset = object.assetId ? assetsById.get(object.assetId) : undefined;
+    const src = object.src || asset?.src;
+    const placementMetadata = isRecord(object.metadata?.imagePlacement)
+      ? object.metadata.imagePlacement
+      : undefined;
+    const transform = object.transform ?? {};
+    if (!src && !object.assetId) return undefined;
+    return {
+      ...(object.assetId ? { assetId: object.assetId } : {}),
+      ...(src ? { src } : {}),
+      left: finiteNumber(transform.left, 0.5),
+      top: finiteNumber(transform.top, 0.5),
+      scale:
+        Number.isFinite(transform.scaleX) &&
+        transform.scaleX === transform.scaleY
+          ? Math.max(0.05, Number(transform.scaleX))
+          : 1,
+      angle: finiteNumber(transform.angle, 0),
+      opacity: 1,
+      ...(placementMetadata ? { metadata: { ...placementMetadata } } : {}),
     };
   }
 
@@ -882,7 +1016,7 @@ export class ImageTool implements ExtensionDefinition {
       includeHidden: true,
       multiplier: 2,
       sourceElementIds: [`session-image:${slot.id}`],
-      sourceLayerIds: [`${this.overlayLayerId}.session`],
+      sourceLayerIds: [`${this.imageLayerId}.session`],
     });
     return {
       url: result.url,
@@ -1363,13 +1497,6 @@ export class ImageTool implements ExtensionDefinition {
       .filter((slot) => this.shouldRenderWorkingSlot(slot.id) && slot.image?.src)
       .map((slot) => this.buildImageSpec(slot, { committed: false }))
       .filter((spec): spec is RenderObjectSpec => Boolean(spec));
-  }
-
-  private buildSessionSpecs(): RenderObjectSpec[] {
-    return [
-      ...this.buildWorkingImageSpecs(),
-      ...this.buildSessionOverlaySpecs(),
-    ];
   }
 
   private shouldRenderWorkingSlot(slotId: string): boolean {

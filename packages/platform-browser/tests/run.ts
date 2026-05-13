@@ -92,6 +92,8 @@ class FakeFabricObject {
   scaleY = 1;
   angle = 0;
   excludeFromExport = false;
+  selectable = false;
+  evented = false;
 
   constructor(type: string, values: Record<string, any> = {}) {
     this.type = type;
@@ -791,6 +793,36 @@ async function testFabricSceneAdapterSyncsCoreSceneToScopedPasses() {
   await runtime.dispose();
 }
 
+async function testFabricSceneAdapterStacksDocumentOverlayAboveManagedImages() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const adapter = new FabricSceneAdapter();
+
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_SCENE_ADAPTER);
+  await adapter.flush();
+  canvasService.stackingCalls = [];
+
+  const scene = runtime.services.getOrThrow(SCENE_SERVICE);
+  scene.transaction(() => {
+    scene.addLayer({ id: "front.image.user", order: 10, metadata: { documentLayerRole: "content" } });
+    scene.addLayer({ id: "front.template-overlay", order: 20, metadata: { documentLayerRole: "overlay" } });
+  });
+
+  await adapter.flush();
+
+  assertDeepEqual(
+    canvasService.stackingCalls[canvasService.stackingCalls.length - 1],
+    [
+      { id: "front.image.user", stack: 0, order: 10 },
+      { id: "front.template-overlay", stack: 780, order: 20 },
+    ],
+    "document overlay layers should stack above image placement producer output",
+  );
+
+  await runtime.dispose();
+}
+
 async function testFabricSceneAdapterMapsSceneElementContracts() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
@@ -1031,6 +1063,50 @@ async function testRenderProducerVisibilityIsSourceScoped() {
   );
 }
 
+async function testRenderObjectsAreNonInteractiveByDefault() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+
+  await service.applyObjectSpecsToPass(
+    "app.artwork",
+    [
+      rectSpec("plain"),
+      rectSpec("interactive", {
+        evented: true,
+        selectable: true,
+      }),
+    ],
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+
+  const plain = canvas.objects.find((obj) => obj.data.id === "plain");
+  const interactive = canvas.objects.find(
+    (obj) => obj.data.id === "interactive",
+  );
+
+  assert(plain, "plain object should render");
+  assert(interactive, "interactive object should render");
+  assertEqual(
+    plain.selectable,
+    false,
+    "render objects should not be selectable by default",
+  );
+  assertEqual(
+    plain.evented,
+    false,
+    "render objects should not receive events by default",
+  );
+  assertEqual(
+    interactive.selectable,
+    true,
+    "capability-owned specs should be able to opt into selection",
+  );
+  assertEqual(
+    interactive.evented,
+    true,
+    "capability-owned specs should be able to opt into events",
+  );
+}
+
 function testVisibilityDslSupportsWorkflowAndContextPredicates() {
   const context = {
     contextValues: new Map<string, unknown>([
@@ -1221,9 +1297,11 @@ async function main() {
   await testBrowserSceneExportElementBoundsCrop();
   await testBrowserSceneExportFrameCrop();
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
+  await testFabricSceneAdapterStacksDocumentOverlayAboveManagedImages();
   await testFabricSceneAdapterMapsSceneElementContracts();
   await testRenderProducerTargetsCallerLayerWithoutReplacingSceneScope();
   await testRenderProducerVisibilityIsSourceScoped();
+  await testRenderObjectsAreNonInteractiveByDefault();
   testVisibilityDslSupportsWorkflowAndContextPredicates();
   await testRenderProducerVisibilityUsesContextValues();
   await testRenderProducerVisibilityUsesWorkflowSessions();

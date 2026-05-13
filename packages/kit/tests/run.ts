@@ -1210,7 +1210,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
 
 function testCreateKitCapabilitiesForDocument() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -1227,10 +1227,11 @@ function testCreateKitCapabilitiesForDocument() {
             objects: [
               {
                 id: "slot",
-                type: "slot",
-                accepts: ["image"],
+                type: "image",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
-                effects: [{ type: "image-placement" }],
+                effects: [
+                  { type: "image-placement", payload: { accepts: ["image"] } },
+                ],
               },
             ],
           },
@@ -1331,7 +1332,7 @@ async function testApplyKitEditorDocument() {
   await runtime.extensions.flushActivation();
 
   const result = await applyKitEditorDocument(runtime, {
-    version: 1,
+    version: 2,
     assets: [
       { id: "template", type: "image", src: "/template.png" },
       { id: "photo", type: "image", src: "/photo.png" },
@@ -1361,8 +1362,9 @@ async function testApplyKitEditorDocument() {
             objects: [
               {
                 id: "front-template-image",
-                type: "template",
+                type: "image",
                 assetId: "template",
+                frame: { x: 0, y: 0, width: 100, height: 120 },
                 effects: [{ type: "template-overlay" }],
               },
             ],
@@ -1380,11 +1382,12 @@ async function testApplyKitEditorDocument() {
             objects: [
               {
                 id: "front-slot",
-                type: "slot",
-                accepts: ["image"],
-                effects: [{ type: "image-placement" }],
+                type: "image",
+                assetId: "photo",
+                effects: [
+                  { type: "image-placement", payload: { accepts: ["image"] } },
+                ],
                 frame: { x: 10, y: 20, width: 30, height: 40 },
-                image: { assetId: "photo" },
               },
             ],
           },
@@ -1409,12 +1412,12 @@ async function testApplyKitEditorDocument() {
   assertEqual(
     scene.getElement("front-slot")?.type,
     "rect",
-    "slot should be projected as scene rect",
+    "image placement target should be projected as scene rect anchor",
   );
   assertEqual(
     scene.getElement("front-template-image")?.type,
     "image",
-    "template should be projected as scene image",
+    "template image should be projected as scene image",
   );
   assertEqual(
     runtime.config.get("dieline.shape"),
@@ -1435,7 +1438,7 @@ async function testApplyKitEditorDocument() {
     ((scene.getElement("front-slot")?.data as any)?.imagePlacement?.image as any)
       ?.src,
     "/photo.png",
-    "slot image placement should resolve image asset source",
+    "image placement target should resolve default image asset source",
   );
   assert(dielineCalls.length > 0, "dieline effect should refresh facade");
   assertEqual(
@@ -1455,7 +1458,7 @@ async function testApplyKitEditorDocument() {
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -1486,7 +1489,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 
   const optionalRuntime = new Pooder();
   const optionalResult = await applyKitEditorDocument(optionalRuntime, {
-    version: 1,
+    version: 2,
     surfaces: [
       {
         id: "front",
@@ -1700,6 +1703,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     IMAGE_PLACEMENT_CAPABILITY_ID,
   )) as any;
   const imagePass = render.passes.find((pass: any) => pass.id === "image.user");
+  const imageSessionPass = render.passes.find(
+    (pass: any) => pass.id === "image.user.session",
+  );
   const sessionPass = render.passes.find(
     (pass: any) => pass.id === "image-overlay.session",
   );
@@ -1707,7 +1713,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     !imagePass.objects.some((spec: any) => spec.id === "image:slot"),
     "committed image object should be hidden while its working session is active",
   );
-  const sessionImage = sessionPass.objects.find(
+  const sessionImage = imageSessionPass.objects.find(
     (spec: any) => spec.id === "session-image:slot",
   );
   assert(sessionImage, "image session should render a separate working object");
@@ -1812,7 +1818,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertDeepEqual(
     exportService.calls[0]?.sourceLayerIds,
-    ["image-overlay.session"],
+    ["image.user.session"],
     "complete session should export the working image from the session pass",
   );
 

@@ -1,6 +1,7 @@
 import CapabilityRegistryService from "./CapabilityRegistryService";
 import CommandService from "./CommandService";
 import ConfigurationService from "./ConfigurationService";
+import EffectApplicatorRegistryService from "./EffectApplicatorRegistryService";
 import SceneService from "./SceneService";
 import ToolRegistryService from "./ToolRegistryService";
 import ToolSessionService from "./ToolSessionService";
@@ -10,6 +11,7 @@ import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
+  EFFECT_APPLICATOR_REGISTRY_SERVICE,
   CORE_SERVICE_TOKENS,
   CANVAS_SERVICE,
   SCENE_EXPORT_SERVICE,
@@ -25,6 +27,7 @@ export {
   CapabilityRegistryService,
   CommandService,
   ConfigurationService,
+  EffectApplicatorRegistryService,
   SceneService,
   ToolRegistryService,
   ToolSessionService,
@@ -33,6 +36,7 @@ export {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
+  EFFECT_APPLICATOR_REGISTRY_SERVICE,
   CANVAS_SERVICE,
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
@@ -51,6 +55,14 @@ export type {
 } from "../render";
 
 export type { CapabilityRegistryChangeEvent } from "./CapabilityRegistryService";
+export type {
+  EffectApplicationContext,
+  EffectApplicationTarget,
+  EffectApplicationTargetKind,
+  EffectApplicatorContribution,
+  EffectApplicatorQuery,
+  RegisteredEffectApplicator,
+} from "./EffectApplicatorRegistryService";
 export type { SceneChangeEvent } from "./SceneService";
 export type {
   ConfigurationDefinitionsChangeEvent,

@@ -1,9 +1,20 @@
-export const EDITOR_DOCUMENT_VERSION = 1 as const;
+export const EDITOR_DOCUMENT_VERSION = 2 as const;
 
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
 export type EditorDocumentRequirePolicy = "strict" | "warn" | "ignore";
 export type EditorDocumentDiagnosticSeverity = "error" | "warning";
+export type EditorEffectPhase =
+  | "document"
+  | "layout"
+  | "render"
+  | "interaction"
+  | "export";
+export type EditorEffectTarget =
+  | "self"
+  | { objectId: string }
+  | { layerId: string }
+  | { surfaceId: string };
 export type EditorLayerRole =
   | "background"
   | "content"
@@ -11,10 +22,6 @@ export type EditorLayerRole =
   | "overlay"
   | "production"
   | string;
-export type EditorTemplateRole = "reference" | "mask" | "production";
-export type EditorSlotFit = "cover" | "contain" | "stretch";
-export type EditorSlotAccept = "image" | string;
-
 export interface EditorRect {
   x: number;
   y: number;
@@ -86,6 +93,7 @@ export interface EditorLayer {
 
 export interface EditorObjectBase {
   id: string;
+  frame?: EditorRect;
   order?: number;
   visible?: boolean;
   locked?: boolean;
@@ -102,32 +110,6 @@ export interface EditorImageObject extends EditorObjectBase {
   src?: string;
   width?: number;
   height?: number;
-}
-
-export interface EditorSlotObject extends EditorObjectBase {
-  type: "slot";
-  accepts: EditorSlotAccept[];
-  frame: EditorRect;
-  fit?: EditorSlotFit;
-  constraints?: Record<string, unknown>;
-  image?: EditorSlotImage;
-}
-
-export interface EditorSlotImage {
-  assetId?: string;
-  src?: string;
-  left?: number;
-  top?: number;
-  scale?: number;
-  angle?: number;
-  opacity?: number;
-  metadata?: Record<string, unknown>;
-}
-
-export interface EditorTemplateObject extends EditorObjectBase {
-  type: "template";
-  assetId: string;
-  role?: EditorTemplateRole;
 }
 
 export interface EditorPathObject extends EditorObjectBase {
@@ -148,8 +130,6 @@ export interface EditorTextObject extends EditorObjectBase {
 
 export type EditorObject =
   | EditorImageObject
-  | EditorSlotObject
-  | EditorTemplateObject
   | EditorPathObject
   | EditorRectObject
   | EditorTextObject;
@@ -159,6 +139,9 @@ export interface EditorEffect<TPayload = Record<string, unknown>> {
   type: string;
   capabilityId?: string;
   require?: EditorDocumentRequirePolicy;
+  order?: number;
+  phase?: EditorEffectPhase;
+  target?: EditorEffectTarget;
   payload?: TPayload;
   metadata?: Record<string, unknown>;
 }
@@ -269,25 +252,16 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
   return Object.keys(transform).length ? transform : undefined;
 }
 
-function normalizeSlotImage(value: unknown): EditorSlotImage | undefined {
+function normalizeEffectTarget(value: unknown): EditorEffectTarget | undefined {
+  if (value === undefined || value === "self") return "self";
   if (!isRecord(value)) return undefined;
-  const assetId = normalizeId(value.assetId);
-  const src = normalizeId(value.src);
-  const image: EditorSlotImage = {};
-  if (assetId) image.assetId = assetId;
-  if (src) image.src = src;
-  const left = normalizeFiniteNumber(value.left);
-  if (left !== undefined) image.left = left;
-  const top = normalizeFiniteNumber(value.top);
-  if (top !== undefined) image.top = top;
-  const scale = normalizePositiveNumber(value.scale);
-  if (scale !== undefined) image.scale = scale;
-  const angle = normalizeFiniteNumber(value.angle);
-  if (angle !== undefined) image.angle = angle;
-  const opacity = normalizeFiniteNumber(value.opacity);
-  if (opacity !== undefined) image.opacity = opacity;
-  if (isRecord(value.metadata)) image.metadata = cloneRecord(value.metadata);
-  return Object.keys(image).length ? image : undefined;
+  const objectId = normalizeId(value.objectId);
+  if (objectId) return { objectId };
+  const layerId = normalizeId(value.layerId);
+  if (layerId) return { layerId };
+  const surfaceId = normalizeId(value.surfaceId);
+  if (surfaceId) return { surfaceId };
+  return undefined;
 }
 
 function normalizeEffect(value: unknown): EditorEffect | null {
@@ -301,8 +275,21 @@ function normalizeEffect(value: unknown): EditorEffect | null {
       : "strict",
   };
   const id = normalizeId(value.id);
+  const order = normalizeFiniteNumber(value.order);
+  const target = normalizeEffectTarget(value.target);
   if (id) effect.id = id;
   if (capabilityId) effect.capabilityId = capabilityId;
+  if (order !== undefined) effect.order = order;
+  if (
+    value.phase === "document" ||
+    value.phase === "layout" ||
+    value.phase === "render" ||
+    value.phase === "interaction" ||
+    value.phase === "export"
+  ) {
+    effect.phase = value.phase;
+  }
+  if (target) effect.target = target;
   if (isRecord(value.payload)) effect.payload = cloneRecord(value.payload);
   if (isRecord(value.metadata)) effect.metadata = cloneRecord(value.metadata);
   return effect;
@@ -334,6 +321,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     style: isRecord(value.style) ? cloneRecord(value.style) : undefined,
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
     effects: normalizeEffects(value.effects),
+    frame: normalizeRect(value.frame),
   };
 
   switch (type) {
@@ -351,38 +339,6 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
         ...(normalizePositiveNumber(value.height) !== undefined
           ? { height: normalizePositiveNumber(value.height) }
           : {}),
-      };
-    }
-    case "slot": {
-      const accepts = Array.isArray(value.accepts)
-        ? value.accepts.map(normalizeId).filter(Boolean)
-        : [];
-      return {
-        ...base,
-        type,
-        accepts,
-        frame: normalizeRect(value.frame) ?? { x: 0, y: 0, width: 1, height: 1 },
-        fit:
-          value.fit === "contain" || value.fit === "stretch"
-            ? value.fit
-            : "cover",
-        constraints: isRecord(value.constraints)
-          ? cloneRecord(value.constraints)
-          : undefined,
-        image: normalizeSlotImage(value.image),
-      };
-    }
-    case "template": {
-      return {
-        ...base,
-        type,
-        assetId: normalizeId(value.assetId),
-        role:
-          value.role === "mask" || value.role === "production"
-            ? value.role
-            : "reference",
-        exportable:
-          typeof value.exportable === "boolean" ? value.exportable : false,
       };
     }
     case "path":
@@ -675,6 +631,14 @@ export function validateEditorDocument(
           `${objectPath}.id`,
           "object",
         );
+        if (!object.frame) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "object-frame-required",
+            message: `Object "${object.id}" requires frame.`,
+            path: `${objectPath}.frame`,
+          });
+        }
         if (
           object.type === "image" &&
           object.assetId &&
@@ -687,40 +651,20 @@ export function validateEditorDocument(
             path: `${objectPath}.assetId`,
           });
         }
-        if (object.type === "image" && !object.assetId && !object.src) {
+        const hasImagePlacementEffect = object.effects?.some(
+          (effect) => effect.type === "image-placement",
+        );
+        if (
+          object.type === "image" &&
+          !object.assetId &&
+          !object.src &&
+          !hasImagePlacementEffect
+        ) {
           addDiagnostic(diagnostics, {
             severity: "error",
             code: "image-source-required",
             message: `Image object "${object.id}" requires assetId or src.`,
             path: objectPath,
-          });
-        }
-        if (object.type === "template" && !assetIds.has(object.assetId)) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "template-asset-missing",
-            message: `Template object "${object.id}" references missing asset "${object.assetId}".`,
-            path: `${objectPath}.assetId`,
-          });
-        }
-        if (object.type === "slot" && !object.accepts.length) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "slot-accepts-required",
-            message: `Slot object "${object.id}" requires accepts.`,
-            path: `${objectPath}.accepts`,
-          });
-        }
-        if (
-          object.type === "slot" &&
-          object.image?.assetId &&
-          !assetIds.has(object.image.assetId)
-        ) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "slot-image-asset-missing",
-            message: `Slot object "${object.id}" references missing image asset "${object.image.assetId}".`,
-            path: `${objectPath}.image.assetId`,
           });
         }
         validateEffects(diagnostics, object.effects, objectPath, options);

@@ -6,6 +6,7 @@ import { Service, ServiceIdentifier, isServiceToken } from "./service";
 import CapabilityRegistryService from "./services/CapabilityRegistryService";
 import CommandService from "./services/CommandService";
 import ConfigurationService from "./services/ConfigurationService";
+import EffectApplicatorRegistryService from "./services/EffectApplicatorRegistryService";
 import ToolRegistryService from "./services/ToolRegistryService";
 
 export interface ExtensionActivationSpec {
@@ -51,6 +52,7 @@ interface NormalizedExtensionContributions {
   capabilities: NonNullable<ExtensionContributions["capabilities"]>;
   configurations: NonNullable<ExtensionContributions["configurations"]>;
   commands: NonNullable<ExtensionContributions["commands"]>;
+  effectApplicators: NonNullable<ExtensionContributions["effectApplicators"]>;
   tools: NonNullable<ExtensionContributions["tools"]>;
 }
 
@@ -69,6 +71,7 @@ interface ExtensionManagerDependencies {
   capabilityRegistry: CapabilityRegistryService;
   configurationService: ConfigurationService;
   commandService: CommandService;
+  effectApplicatorRegistry: EffectApplicatorRegistryService;
   toolRegistry: ToolRegistryService;
 }
 
@@ -78,6 +81,7 @@ class ExtensionManager {
   private readonly capabilityRegistry: CapabilityRegistryService;
   private readonly configurationService: ConfigurationService;
   private readonly commandService: CommandService;
+  private readonly effectApplicatorRegistry: EffectApplicatorRegistryService;
   private readonly toolRegistry: ToolRegistryService;
   private readonly records = new Map<string, ExtensionRecord>();
   private registrationOrder = 0;
@@ -91,6 +95,7 @@ class ExtensionManager {
     this.capabilityRegistry = dependencies.capabilityRegistry;
     this.configurationService = dependencies.configurationService;
     this.commandService = dependencies.commandService;
+    this.effectApplicatorRegistry = dependencies.effectApplicatorRegistry;
     this.toolRegistry = dependencies.toolRegistry;
   }
 
@@ -110,6 +115,7 @@ class ExtensionManager {
         capabilities: [],
         configurations: [],
         commands: [],
+        effectApplicators: [],
         tools: [],
       });
       this.records.set(extension.id, record);
@@ -238,6 +244,7 @@ class ExtensionManager {
       capabilities: [...(contributions?.capabilities ?? [])],
       configurations: [...(contributions?.configurations ?? [])],
       commands: [...(contributions?.commands ?? [])],
+      effectApplicators: [...(contributions?.effectApplicators ?? [])],
       tools: [...(contributions?.tools ?? [])],
     };
   }
@@ -323,6 +330,15 @@ class ExtensionManager {
             {
               title: command.title,
             },
+          ),
+        );
+      });
+
+      record.contributions.effectApplicators.forEach((applicator) => {
+        disposables.push(
+          this.effectApplicatorRegistry.registerApplicator(
+            record.definition.id,
+            applicator,
           ),
         );
       });
