@@ -1284,8 +1284,10 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
           objectType: "image",
         },
         visual: { type: "image", src: "/base.png" },
+        coordinateSpace: "screen",
         placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
         ordering: { layerId: "artwork" },
+        export: { keys: ["image.export"] },
         props: { selectable: true, evented: false },
         data: { locked: false },
         interaction: {
@@ -1311,6 +1313,16 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
       node?.data.locked,
       true,
       "interaction locked should override graph data",
+    );
+    assertEqual(
+      node?.coordinateSpace,
+      "screen",
+      "render intent coordinate space should become graph node state",
+    );
+    assertDeepEqual(
+      node?.exportKeys,
+      ["image", "image.export"],
+      "render intent export keys should include the render node id",
     );
   });
 }

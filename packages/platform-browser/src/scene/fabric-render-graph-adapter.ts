@@ -220,7 +220,6 @@ export class FabricRenderGraphAdapter implements Service {
     layer: RenderGraphLayer,
     node: RenderGraphNode,
   ): RenderObjectSpec | null {
-    const space = this.resolveCoordinateSpace(node);
     const commonProps = {
       ...node.props,
       ...this.resolvePlacementProps(node),
@@ -229,19 +228,11 @@ export class FabricRenderGraphAdapter implements Service {
     };
     const commonData = {
       ...node.data,
-      id: node.subjectId,
       layerId: layer.id,
+      renderLayerId: layer.id,
+      renderNodeId: node.id,
       subjectId: node.subjectId,
-      renderGraphLayerId: layer.id,
-      renderGraphNodeId: node.id,
-      sceneElementId:
-        typeof node.data.sceneElementId === "string"
-          ? node.data.sceneElementId
-          : node.subjectId,
-      sceneLayerId:
-        typeof node.data.sceneLayerId === "string"
-          ? node.data.sceneLayerId
-          : node.layerId,
+      exportKeys: node.exportKeys,
     };
 
     if (node.type === "image") {
@@ -251,7 +242,7 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "image",
         src,
-        space,
+        space: node.coordinateSpace,
         data: commonData,
         props: commonProps,
       };
@@ -261,7 +252,7 @@ export class FabricRenderGraphAdapter implements Service {
       return {
         id: node.id,
         type: "path",
-        space,
+        space: node.coordinateSpace,
         data: commonData,
         props: commonProps,
       };
@@ -271,7 +262,7 @@ export class FabricRenderGraphAdapter implements Service {
       return {
         id: node.id,
         type: "rect",
-        space,
+        space: node.coordinateSpace,
         data: commonData,
         props: commonProps,
       };
@@ -280,14 +271,10 @@ export class FabricRenderGraphAdapter implements Service {
     return {
       id: node.id,
       type: "text",
-      space,
+      space: node.coordinateSpace,
       data: commonData,
       props: commonProps,
     };
-  }
-
-  private resolveCoordinateSpace(node: RenderGraphNode): "scene" | "screen" {
-    return node.data.renderCoordinateSpace === "screen" ? "screen" : "scene";
   }
 
   private resolvePlacementProps(node: RenderGraphNode): Record<string, unknown> {

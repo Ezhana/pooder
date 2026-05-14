@@ -328,9 +328,9 @@ async function testFabricRenderGraphAdapterPreservesScreenSpace() {
         objectId: "screen-overlay",
       },
       visual: { type: "path" },
+      coordinateSpace: "screen",
       ordering: { layerId: "overlay", stack: 100, layerOrder: 0 },
       props: { pathData: "M 0 0 L 10 0 L 10 10 Z" },
-      data: { renderCoordinateSpace: "screen" },
     },
   ]);
 
@@ -481,9 +481,8 @@ async function testCanvasReconcileAppliesClipPath() {
 async function testSceneExportMatchesRenderGraphNodeIds() {
   const source = {
     data: {
-      id: "session-image:slot",
+      exportKeys: ["session-image:slot"],
       layerId: "image.user.session.image",
-      sceneElementId: "slot",
     },
     visible: true,
     scaleX: 1,

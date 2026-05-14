@@ -1897,6 +1897,7 @@ export class ImageTool implements ExtensionDefinition {
       getCoverScaleFromRect(slot.frame, source) * Math.max(0.05, image.scale ?? 1);
     return {
       id: options.committed ? `image:${slot.id}` : `session-image:${slot.id}`,
+      subjectId: slot.id,
       type: "image",
       src: image.src,
       space: "scene",
@@ -1998,6 +1999,7 @@ export class ImageTool implements ExtensionDefinition {
         const specs: RenderObjectSpec[] = [
           {
             id: `upload:${slot.id}`,
+            subjectId: slot.id,
             type: "rect",
             space: "scene",
             data: {
@@ -2033,6 +2035,7 @@ export class ImageTool implements ExtensionDefinition {
         if (label) {
           specs.push({
             id: `upload-label:${slot.id}`,
+            subjectId: slot.id,
             type: "text",
             space: "scene",
             data: {

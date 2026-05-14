@@ -76,18 +76,13 @@ function readLayerId(object: any): string {
 }
 
 function readElementId(object: any): string {
-  return readElementIds(object)[0] || "";
+  return readExportKeys(object)[0] || "";
 }
 
-function readElementIds(object: any): string[] {
-  const data = object?.data || {};
-  return Array.from(
-    new Set(
-      [data.id, data.renderGraphNodeId, data.sceneElementId, data.subjectId]
-        .map((value) => String(value || "").trim())
-        .filter((value) => value.length > 0),
-    ),
-  );
+function readExportKeys(object: any): string[] {
+  const keys = object?.data?.exportKeys;
+  if (!Array.isArray(keys)) return [];
+  return normalizeIds(keys);
 }
 
 function cloneRect(rect: BrowserSceneExportRect): BrowserSceneExportRect {
@@ -230,7 +225,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       }
       if (
         hasElementFilter &&
-        !readElementIds(object).some((id) => elementIdSet.has(id))
+        !readExportKeys(object).some((id) => elementIdSet.has(id))
       ) {
         return false;
       }
@@ -295,7 +290,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const elementIdSet = new Set(elementIds);
     const objects = elementIdSet.size
       ? sourceObjects.filter((object) =>
-          readElementIds(object).some((id) => elementIdSet.has(id)),
+          readExportKeys(object).some((id) => elementIdSet.has(id)),
         )
       : sourceObjects;
     const bounds = objects

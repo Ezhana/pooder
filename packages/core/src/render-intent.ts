@@ -2,6 +2,7 @@ import EventBus from "./event";
 import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type {
+  RenderCoordinateSpace,
   RenderEffectSpec,
   RenderObjectSpec,
   VisibilityEvalContext,
@@ -91,6 +92,7 @@ export interface RenderIntentInteractionAspect {
 
 export interface RenderIntentExportAspect {
   exportable?: boolean;
+  keys?: readonly string[];
   visible?: boolean;
   visibility?: VisibilityExpr;
 }
@@ -114,6 +116,7 @@ export interface RenderIntentDraft {
   clipping?: RenderIntentClippingAspect;
   interaction?: RenderIntentInteractionAspect;
   export?: RenderIntentExportAspect;
+  coordinateSpace?: RenderCoordinateSpace;
   ordering: RenderIntentOrderingAspect;
   props?: Record<string, unknown>;
   data?: Record<string, unknown>;
@@ -143,6 +146,8 @@ export interface RenderGraphNode {
   surfaceId: string;
   type: RenderObjectSpec["type"];
   visual?: RenderIntentSource;
+  coordinateSpace: RenderCoordinateSpace;
+  exportKeys: string[];
   frame?: RenderIntentFrame;
   transform?: RenderIntentTransform;
   props: Record<string, unknown>;
@@ -522,12 +527,15 @@ function createProjectionGraphNode(
     : sourceNode.props.opacity;
   const interactive = projection.interactive === true;
   const channel = draft.ordering.channel ?? "overlay";
+  const id = `projection:${draft.id}:${sourceNode.id}:${index}`;
 
   return {
     ...cloneRecord(sourceNode),
-    id: `projection:${draft.id}:${sourceNode.id}:${index}`,
+    id,
     layerId: draft.ordering.layerId,
     surfaceId: draft.subject.surfaceId || sourceNode.surfaceId,
+    coordinateSpace: draft.coordinateSpace || sourceNode.coordinateSpace,
+    exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
     props: {
       ...sourceNode.props,
       ...(resolvedOpacity !== undefined ? { opacity: resolvedOpacity } : {}),
@@ -609,6 +617,7 @@ function applyRuntimePatches(
           clipping: patch.clipping,
           interaction: patch.interaction,
           export: patch.export,
+          coordinateSpace: patch.coordinateSpace,
           props: patch.props,
           data: patch.data,
           extensions: patch.extensions,
@@ -650,13 +659,18 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   if (!type) return null;
 
   const channel = draft.ordering.channel ?? (source.kind === "replacement" ? "replacement" : source.kind === "fallback" ? "fallback" : "normal");
+  const id = source.kind === "replacement" ? `image:${draft.id}` : draft.id;
+  const subjectId =
+    draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.surfaceId;
   return {
-    id: source.kind === "replacement" ? `image:${draft.id}` : draft.id,
-    subjectId: draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.surfaceId,
+    id,
+    subjectId,
     layerId: draft.ordering.layerId,
     surfaceId: draft.subject.surfaceId,
     type,
     visual: source.source,
+    coordinateSpace: draft.coordinateSpace || "scene",
+    exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
     frame: draft.placement?.frame,
     transform: draft.placement?.transform,
     props: {

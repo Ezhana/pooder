@@ -34,7 +34,7 @@ export function patchRenderObjectSpecs(
         kind: "object",
         surfaceId,
         layerId: options.layerId,
-        objectId: readSubjectId(spec),
+        objectId: spec.subjectId || spec.id,
         objectType: spec.type,
       },
       visual: {
@@ -52,13 +52,14 @@ export function patchRenderObjectSpecs(
       data: {
         ...(spec.data || {}),
         layerId: options.layerId,
-        renderCoordinateSpace: spec.space || "scene",
       },
       export: {
+        keys: spec.exportKeys,
         visibility: spec.visibility ?? options.visibility,
         visible: spec.props?.visible !== false,
         exportable: spec.props?.excludeFromExport !== true,
       },
+      coordinateSpace: spec.space || "scene",
     });
   });
 }
@@ -68,9 +69,4 @@ export function clearRenderIntentSource(
   sourceId: string,
 ) {
   renderIntentService?.clearRuntimePatches(sourceId);
-}
-
-function readSubjectId(spec: RenderObjectSpec): string {
-  const data = spec.data || {};
-  return String(data.sceneElementId || data.slotId || data.id || spec.id);
 }

@@ -402,9 +402,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
         if (object?.data?.renderTarget !== GRAPH_RENDER_TARGET) return;
         if (
           targetLayerIds.has(String(object.data.layerId || "")) ||
-          targetSubjectIds.has(String(object.data.subjectId || "")) ||
-          targetSubjectIds.has(String(object.data.sceneElementId || "")) ||
-          targetSubjectIds.has(String(object.data.id || ""))
+          targetSubjectIds.has(String(object.data.subjectId || ""))
         ) {
           targetsByObject.set(object as FabricObject, effect);
         }

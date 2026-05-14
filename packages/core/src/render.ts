@@ -42,11 +42,13 @@ export interface RenderObjectLayoutSpec {
 
 export interface RenderObjectSpec {
   id: string;
+  subjectId?: string;
   type: RenderObjectType;
   props: RenderProps;
   data?: Record<string, any>;
   src?: string;
   space?: RenderCoordinateSpace;
+  exportKeys?: readonly string[];
   layout?: RenderObjectLayoutSpec;
   visibility?: VisibilityExpr;
 }
