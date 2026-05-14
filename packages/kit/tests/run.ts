@@ -183,8 +183,6 @@ function imagePlacementCommittedVisibility(slotId: string) {
 class FakeCanvasService {
   private activeObject: any = null;
   private readonly eventHandlers = new Map<string, Set<(event?: any) => void>>();
-  private readonly renderProducers = new Map<string, () => unknown>();
-  readonly visibilityContextValues = new Map<string, unknown>();
 
   canvas = {
     width: 800,
@@ -221,44 +219,7 @@ class FakeCanvasService {
     },
   };
 
-  registerRenderProducer(id?: string, producer?: () => unknown) {
-    if (id && producer) {
-      this.renderProducers.set(id, producer);
-    }
-
-    return {
-      dispose: () => {
-        if (id) {
-          this.renderProducers.delete(id);
-        }
-      },
-    };
-  }
-
-  async getRenderProducerResult(id: string) {
-    return await this.renderProducers.get(id)?.();
-  }
-
-  async flushRenderFromProducers() {}
-
-  requestRenderFromProducers() {}
-
   requestRenderAll() {}
-
-  setVisibilityContextValue(key: string, value: unknown) {
-    this.visibilityContextValues.set(key, value);
-    return true;
-  }
-
-  deleteVisibilityContextValue(key: string) {
-    return this.visibilityContextValues.delete(key);
-  }
-
-  clearVisibilityContextValues() {
-    const hadValues = this.visibilityContextValues.size > 0;
-    this.visibilityContextValues.clear();
-    return hadValues;
-  }
 
   getObjects(options: any = {}) {
     const objects = this.canvas.getObjects();
@@ -1605,19 +1566,18 @@ async function testApplyKitEditorDocument() {
     { enabled: true, source: { type: "dieline" } },
     "clip effect should write normalized object clip metadata",
   );
-  const clipProducerResult = (await canvasService.getRenderProducerResult(
-    CLIP_CAPABILITY_ID,
-  )) as any;
-  const clipEffect = clipProducerResult?.passes?.[0]?.effects?.[0];
+  const clipEffect = renderGraph.layers
+    .flatMap((layer) => layer.effects)
+    .find((effect) => effect.id === "clip.front-slot");
   assertDeepEqual(
-    clipEffect?.targetPassIds,
+    clipEffect?.targetLayerIds,
     ["front-artwork"],
-    "clip render producer should resolve the target pass from the scene element layer",
+    "clip render intent should resolve the target layer from the scene element layer",
   );
   assertDeepEqual(
-    clipEffect?.targetElementIds,
+    clipEffect?.targetSubjectIds,
     ["front-slot"],
-    "clip render producer should resolve object-level target ids",
+    "clip render intent should resolve object-level target ids",
   );
   assert(dielineCalls.length > 0, "dieline effect should refresh facade");
   assertEqual(
@@ -1877,6 +1837,26 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       },
     },
   });
+  const renderIntentService =
+    runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
+  renderIntentService.setDocumentIntents([
+    {
+      id: "front-template-overlay",
+      subject: {
+        kind: "object",
+        surfaceId: "legacy",
+        layerId: "front.template-overlay",
+        objectId: "front-template-overlay",
+      },
+      visual: { type: "rect" },
+      ordering: {
+        layerId: "front.template-overlay",
+        stack: 500,
+        layerOrder: 0,
+      },
+      props: { width: 10, height: 10 },
+    },
+  ]);
   const imageExtension = createImagePlacementCapability();
   runtime.extensions.register(imageExtension);
   await runtime.extensions.flushActivation();
@@ -1885,63 +1865,58 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
   await facade.beginSession("slot");
-  const render = (await canvasService.getRenderProducerResult(
-    IMAGE_PLACEMENT_CAPABILITY_ID,
-  )) as any;
-  const imagePass = render.passes.find(
-    (pass: any) => pass.targetLayerId === "artwork",
+  const renderGraph = renderIntentService.getGraph();
+  const imageLayer = renderGraph.layers.find((layer) => layer.id === "artwork");
+  const imageSessionLayer = renderGraph.layers.find(
+    (layer) => layer.id === "image.user.session.image",
   );
-  const imageSessionPass = render.passes.find(
-    (pass: any) => pass.id === "image.user.session.image",
+  const sessionLayer = renderGraph.layers.find(
+    (layer) => layer.id === "image-overlay.session.controls",
   );
-  const sessionPass = render.passes.find(
-    (pass: any) => pass.id === "image-overlay.session.controls",
+  const sessionOverlayLayer = renderGraph.layers.find(
+    (layer) => layer.id === "image.user.session.overlay",
   );
-  const sessionOverlayPass = render.passes.find(
-    (pass: any) => pass.id === "image.user.session.overlay",
+  const committedImageNode = imageLayer?.nodes.find(
+    (node: any) => node.id === "image:slot",
   );
-  assert(
-    !imagePass?.objects.some((spec: any) => spec.id === "image:slot"),
-    "committed image object should be hidden while its working session is active",
+  assertDeepEqual(
+    committedImageNode?.visibility,
+    imagePlacementCommittedVisibility("slot"),
+    "committed image object should carry graph visibility while its working session is active",
   );
   assertEqual(
-    imageSessionPass.stack,
+    imageSessionLayer?.stack,
     800,
     "image session working object should render above business document layers",
   );
-  const sessionImage = imageSessionPass.objects.find(
-    (spec: any) => spec.id === "session-image:slot",
+  const sessionImage = imageSessionLayer?.nodes.find(
+    (node: any) => node.id === "session-image:slot",
   );
   assert(sessionImage, "image session should render a separate working object");
+  const sessionImageNode = sessionImage!;
   assertEqual(
-    sessionImage.props.selectable,
+    sessionImageNode.props.selectable,
     true,
     "session image should be selectable",
   );
   assertEqual(
-    sessionImage.props.lockUniScaling,
+    sessionImageNode.props.lockUniScaling,
     true,
     "session image should keep aspect ratio while scaling",
   );
   assertEqual(
-    sessionImage.props.lockRotation,
+    sessionImageNode.props.lockRotation,
     false,
     "session image should support rotation",
   );
   assert(
-    sessionPass.objects.some((spec: any) => spec.id === "image.cropShapeHatch"),
+    sessionLayer?.nodes.some((node: any) => node.id === "image.cropShapeHatch"),
     "image session should render dieline hatch overlay",
   );
-  assertDeepEqual(
-    sessionOverlayPass.projections?.[0],
-    {
-      id: "slot.template-overlay",
-      sourceLayerIds: ["front.template-overlay"],
-      sourceElementIds: undefined,
-      opacity: undefined,
-      interactive: false,
-      hideSource: undefined,
-    },
+  assert(
+    sessionOverlayLayer?.nodes.some((node) =>
+      node.id.startsWith("projection:pooder.kit.image-placement.runtime.projection.above.slot.template-overlay"),
+    ),
     "image session should project declared business helpers above the working image",
   );
   const snapTarget = {
@@ -2030,12 +2005,6 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "complete session should export the working image from the session pass",
   );
 
-  const committedRender = (await canvasService.getRenderProducerResult(
-    IMAGE_PLACEMENT_CAPABILITY_ID,
-  )) as any;
-  const clearedImageSessionPass = committedRender.passes.find(
-    (pass: any) => pass.id === "image.user.session.image",
-  );
   const graph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
@@ -2093,10 +2062,10 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "completed slot should declaratively hide the graph-backed committed image while editing",
   );
   assert(
-    !clearedImageSessionPass?.objects.some(
-      (spec: any) => spec.id === "session-image:slot",
-    ),
-    "completed slot should clear the framework session image pass",
+    !graph.layers
+      .find((layer) => layer.id === "image.user.session.image")
+      ?.nodes.some((node: any) => node.id === "session-image:slot"),
+    "completed slot should clear the framework session image layer",
   );
   await facade.exportPlacementImage({ slotIds: ["slot"] });
   assertDeepEqual(
@@ -2267,6 +2236,8 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
+  const renderIntentService =
+    runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
 
   await facade.requestUpload("slot-a");
   await facade.setImageTransform("slot-a", { scale: 1.8 });
@@ -2285,34 +2256,28 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
     "resetting after upload should restore the upload baseline transform",
   );
   await facade.beginSession("slot-b");
-  let render = (await canvasService.getRenderProducerResult(
-    IMAGE_PLACEMENT_CAPABILITY_ID,
-  )) as any;
-  let imageSessionPass = render.passes.find(
-    (pass: any) => pass.id === "image.user.session.image",
-  );
+  let imageSessionLayer = renderIntentService
+    .getGraph()
+    .layers.find((layer) => layer.id === "image.user.session.image");
   assert(
-    imageSessionPass.objects.some((spec: any) => spec.id === "session-image:slot-a"),
+    imageSessionLayer?.nodes.some((node: any) => node.id === "session-image:slot-a"),
     "uploaded working image should remain visible after focusing another slot",
   );
 
   await facade.requestUpload("slot-b");
-  render = (await canvasService.getRenderProducerResult(
-    IMAGE_PLACEMENT_CAPABILITY_ID,
-  )) as any;
-  imageSessionPass = render.passes.find(
-    (pass: any) => pass.id === "image.user.session.image",
-  );
-  const workingObjectIds = imageSessionPass.objects.map((spec: any) => spec.id);
+  imageSessionLayer = renderIntentService
+    .getGraph()
+    .layers.find((layer) => layer.id === "image.user.session.image");
+  const workingObjectIds = imageSessionLayer?.nodes.map((node: any) => node.id) ?? [];
   assert(
     workingObjectIds.includes("session-image:slot-a") &&
       workingObjectIds.includes("session-image:slot-b"),
     "multiple uploaded working images should render together before commit",
   );
   assert(
-    canvasService.visibilityContextValues.has(
+    renderIntentService.getVisibilityContextValue(
       `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.slot-a`,
-    ),
+    ) === true,
     "slot-a committed visibility context should stay active while its working image exists",
   );
 
@@ -2333,9 +2298,9 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
     "resetting an edit session should discard uncommitted transform changes",
   );
   assert(
-    !canvasService.visibilityContextValues.has(
+    renderIntentService.getVisibilityContextValue(
       `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.committed-slot`,
-    ),
+    ) !== true,
     "resetting an edit session should reveal the committed image again",
   );
 
@@ -2372,13 +2337,14 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   await runtime.extensions.flushActivation();
   await Promise.resolve();
 
-  const producerResult = (await canvasService.getRenderProducerResult(
-    DIELINE_GEOMETRY_CAPABILITY_ID,
-  )) as any;
-  const pass = producerResult?.passes?.find(
-    (item: any) => item.id === "dieline-overlay",
+  const renderGraph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const dielineLayer = renderGraph.layers.find(
+    (item) => item.id === "dieline-overlay",
   );
-  assert(pass, "dieline render producer should expose the dieline overlay pass");
+  const dielineNode = dielineLayer?.nodes[0];
+  assert(dielineLayer, "dieline render intent should expose the dieline overlay layer");
 
   const sessions = runtime.services.getOrThrow(TOOL_SESSION_SERVICE);
   const context = {
@@ -2388,14 +2354,14 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   };
 
   assertEqual(
-    evaluateVisibilityExpr(pass.visibility, context),
+    evaluateVisibilityExpr(dielineNode?.visibility, context),
     true,
     "dieline overlay should be visible when no edit session is active",
   );
 
   await sessions.begin(IMAGE_PLACEMENT_CAPABILITY_ID);
   assertEqual(
-    evaluateVisibilityExpr(pass.visibility, context),
+    evaluateVisibilityExpr(dielineNode?.visibility, context),
     false,
     "dieline overlay should be hidden during image placement sessions",
   );
@@ -2403,7 +2369,7 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
 
   await sessions.begin(WHITE_INK_CAPABILITY_ID);
   assertEqual(
-    evaluateVisibilityExpr(pass.visibility, context),
+    evaluateVisibilityExpr(dielineNode?.visibility, context),
     false,
     "dieline overlay should be hidden during white ink sessions",
   );
@@ -2411,7 +2377,7 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
 
   await sessions.begin(DIELINE_GEOMETRY_CAPABILITY_ID);
   assertEqual(
-    evaluateVisibilityExpr(pass.visibility, context),
+    evaluateVisibilityExpr(dielineNode?.visibility, context),
     true,
     "dieline overlay should remain visible during dieline sessions",
   );
@@ -2419,12 +2385,12 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   sessions.deactivateSession(DIELINE_GEOMETRY_CAPABILITY_ID);
 
   assertEqual(
-    evaluateVisibilityExpr(pass.visibility, context),
+    evaluateVisibilityExpr(dielineNode?.visibility, context),
     true,
     "dieline overlay should be restored after edit sessions end",
   );
   assertDeepEqual(
-    pass.effects ?? [],
+    dielineLayer?.effects ?? [],
     [],
     "dieline overlay should not emit implicit clip effects",
   );

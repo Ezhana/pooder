@@ -6,7 +6,6 @@ import { SceneLayoutService } from "./scene-layout-service";
 import {
   CANVAS_SERVICE,
   FABRIC_RENDER_GRAPH_ADAPTER,
-  FABRIC_SCENE_ADAPTER,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
 } from "./tokens";
@@ -31,7 +30,6 @@ export interface BrowserHostAttachment {
   readonly browserSceneExportService: BrowserSceneExportService;
   readonly canvasService: CanvasService;
   readonly fabricRenderGraphAdapter: FabricRenderGraphAdapter;
-  readonly fabricSceneAdapter: FabricRenderGraphAdapter;
   readonly sceneLayoutService: SceneLayoutService;
   dispose(): void;
 }
@@ -50,7 +48,6 @@ export interface AttachBrowserHostOptions {
   ) => CanvasService;
   createBrowserSceneExportService?: () => BrowserSceneExportService;
   createFabricRenderGraphAdapter?: () => FabricRenderGraphAdapter;
-  createFabricSceneAdapter?: () => FabricRenderGraphAdapter;
   createResizeObserver?: (
     callback: ResizeObserverCallback,
   ) => ResizeObserverLike;
@@ -82,7 +79,6 @@ export function attachBrowserHost(
     options.createSceneLayoutService ?? (() => new SceneLayoutService());
   const createFabricRenderGraphAdapter =
     options.createFabricRenderGraphAdapter ??
-    options.createFabricSceneAdapter ??
     (() => new FabricRenderGraphAdapter());
   const createResizeObserver =
     options.createResizeObserver ??
@@ -144,7 +140,7 @@ export function attachBrowserHost(
     runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
     runtime.services.unregister(canvasService, CANVAS_SERVICE);
     throw new Error(
-      "[@pooder/platform-browser] Failed to register FabricSceneAdapter.",
+      "[@pooder/platform-browser] Failed to register FabricRenderGraphAdapter.",
     );
   }
 
@@ -162,13 +158,12 @@ export function attachBrowserHost(
     browserSceneExportService,
     canvasService,
     fabricRenderGraphAdapter,
-    fabricSceneAdapter: fabricRenderGraphAdapter,
     sceneLayoutService,
     dispose() {
       resizeObserver.disconnect();
       runtime.services.unregister(
         fabricRenderGraphAdapter,
-        FABRIC_SCENE_ADAPTER,
+        FABRIC_RENDER_GRAPH_ADAPTER,
       );
       runtime.services.unregister(
         browserSceneExportService,

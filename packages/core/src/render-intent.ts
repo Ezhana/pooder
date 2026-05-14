@@ -1,7 +1,12 @@
 import EventBus from "./event";
 import type Disposable from "./disposable";
 import type { Service } from "./service";
-import type { RenderEffectSpec, RenderObjectSpec, VisibilityExpr } from "./render";
+import type {
+  RenderEffectSpec,
+  RenderObjectSpec,
+  VisibilityEvalContext,
+  VisibilityExpr,
+} from "./render";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
 export type RenderIntentChannel =
@@ -68,6 +73,15 @@ export interface RenderIntentClippingAspect {
   effects?: RenderEffectSpec[];
 }
 
+export interface RenderIntentProjectionAspect {
+  sourceLayerIds?: readonly string[];
+  sourceSubjectIds?: readonly string[];
+  sourceIntentIds?: readonly string[];
+  opacity?: number;
+  interactive?: boolean;
+  suppressSource?: boolean;
+}
+
 export interface RenderIntentInteractionAspect {
   imagePlacement?: Record<string, unknown>;
   selectable?: boolean;
@@ -95,6 +109,7 @@ export interface RenderIntentDraft {
   subject: RenderIntentSubject;
   visual?: RenderIntentVisualAspect;
   placement?: RenderIntentPlacementAspect;
+  projection?: RenderIntentProjectionAspect;
   overlay?: RenderIntentOverlayAspect;
   clipping?: RenderIntentClippingAspect;
   interaction?: RenderIntentInteractionAspect;
@@ -133,6 +148,11 @@ export interface RenderGraphNode {
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
+  projection?: {
+    sourceNodeId: string;
+    sourceSubjectId: string;
+    suppressSource: boolean;
+  };
   visibility?: VisibilityExpr;
   visible: boolean;
   exportable: boolean;
@@ -267,6 +287,7 @@ export class RenderIntentService implements Service {
   private readonly eventBus = new EventBus();
   private baseIntents: RenderIntentDraft[] = [];
   private runtimePatches = new Map<string, Map<string, RenderIntentPatch>>();
+  private visibilityContextValues = new Map<string, unknown>();
   private graph: RenderGraph = createRenderGraph([], 0);
   private revision = 0;
 
@@ -283,6 +304,52 @@ export class RenderIntentService implements Service {
 
   getGraph(): RenderGraph {
     return cloneGraph(this.graph);
+  }
+
+  getVisibilityContextValue(key: string): unknown {
+    return this.visibilityContextValues.get(
+      normalizeId(key, "visibility context key"),
+    );
+  }
+
+  setVisibilityContextValue(key: string, value: unknown): boolean {
+    const normalizedKey = normalizeId(key, "visibility context key");
+    const previous = this.visibilityContextValues.get(normalizedKey);
+    if (Object.is(previous, value)) return false;
+    this.visibilityContextValues.set(normalizedKey, value);
+    this.emitChange();
+    return true;
+  }
+
+  deleteVisibilityContextValue(key: string): boolean {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) return false;
+    const removed = this.visibilityContextValues.delete(normalizedKey);
+    if (removed) this.emitChange();
+    return removed;
+  }
+
+  clearVisibilityContextValues(): boolean {
+    if (!this.visibilityContextValues.size) return false;
+    this.visibilityContextValues.clear();
+    this.emitChange();
+    return true;
+  }
+
+  createVisibilityEvalContext(
+    extra: Partial<VisibilityEvalContext> = {},
+  ): VisibilityEvalContext {
+    return {
+      ...extra,
+      getContextValue: (key: string) => {
+        const normalizedKey = String(key || "").trim();
+        if (!normalizedKey) return undefined;
+        const extraValue = extra.getContextValue?.(normalizedKey);
+        return extraValue !== undefined
+          ? extraValue
+          : this.visibilityContextValues.get(normalizedKey);
+      },
+    };
   }
 
   patchIntent(sourceId: string, patch: RenderIntentPatch): RenderGraph {
@@ -333,11 +400,15 @@ export class RenderIntentService implements Service {
     this.revision += 1;
     const patched = applyRuntimePatches(this.baseIntents, this.runtimePatches);
     this.graph = createRenderGraph(patched, this.revision);
+    this.emitChange();
+    return this.getGraph();
+  }
+
+  private emitChange(): void {
     this.eventBus.emit("render-intent:change", {
       graph: cloneGraph(this.graph),
       revision: this.revision,
     });
-    return this.getGraph();
   }
 }
 
@@ -359,8 +430,9 @@ export function createRenderGraph(
   const diagnostics: string[] = [];
   const layerMap = new Map<string, RenderGraphLayer>();
   const surfaceIds = new Set<string>();
+  const reducedDrafts = reduceRenderIntentDrafts(drafts);
 
-  reduceRenderIntentDrafts(drafts).forEach((draft) => {
+  reducedDrafts.forEach((draft) => {
     const layerId = draft.ordering.layerId;
     if (!layerId) {
       diagnostics.push(`RenderIntent "${draft.id}" is missing ordering.layerId.`);
@@ -372,10 +444,12 @@ export function createRenderGraph(
     if (node) {
       layer.nodes.push(node);
     }
-    if (draft.clipping?.effects?.length) {
+    if (draft.subject.kind === "layer" && draft.clipping?.effects?.length) {
       layer.effects.push(...draft.clipping.effects.map(cloneRecord));
     }
   });
+
+  appendProjectionNodes(reducedDrafts, layerMap);
 
   const layers = Array.from(layerMap.values())
     .map((layer) => ({
@@ -390,6 +464,114 @@ export function createRenderGraph(
     layers,
     diagnostics,
   };
+}
+
+function appendProjectionNodes(
+  drafts: readonly RenderIntentDraft[],
+  layerMap: Map<string, RenderGraphLayer>,
+) {
+  const sourceNodes = Array.from(layerMap.values()).flatMap((layer) => layer.nodes);
+
+  drafts.forEach((draft) => {
+    const projection = draft.projection;
+    if (!projection) return;
+    const targetLayerId = draft.ordering.layerId;
+    if (!targetLayerId) return;
+    const targetLayer = layerMap.get(targetLayerId) || getOrCreateGraphLayer(layerMap, draft);
+    const sources = findProjectionSourceNodes(sourceNodes, projection);
+
+    sources.forEach((sourceNode, index) => {
+      targetLayer.nodes.push(createProjectionGraphNode(draft, sourceNode, index));
+      if (projection.suppressSource !== false) {
+        sourceNode.visible = false;
+      }
+    });
+  });
+}
+
+function findProjectionSourceNodes(
+  nodes: readonly RenderGraphNode[],
+  projection: RenderIntentProjectionAspect,
+): RenderGraphNode[] {
+  const layerIds = new Set(normalizeIdList(projection.sourceLayerIds));
+  const subjectIds = new Set(normalizeIdList(projection.sourceSubjectIds));
+  const intentIds = new Set(normalizeIdList(projection.sourceIntentIds));
+  if (!layerIds.size && !subjectIds.size && !intentIds.size) return [];
+
+  return nodes.filter((node) => {
+    if (node.projection) return false;
+    return (
+      layerIds.has(node.layerId) ||
+      subjectIds.has(node.subjectId) ||
+      intentIds.has(String(node.data.renderIntentId || ""))
+    );
+  });
+}
+
+function createProjectionGraphNode(
+  draft: RenderIntentDraft,
+  sourceNode: RenderGraphNode,
+  index: number,
+): RenderGraphNode {
+  const projection = draft.projection || {};
+  const opacity = Number(projection.opacity);
+  const sourceOpacity = Number(sourceNode.props.opacity);
+  const resolvedOpacity = Number.isFinite(opacity)
+    ? Math.max(0, Math.min(1, opacity)) *
+      (Number.isFinite(sourceOpacity) ? sourceOpacity : 1)
+    : sourceNode.props.opacity;
+  const interactive = projection.interactive === true;
+  const channel = draft.ordering.channel ?? "overlay";
+
+  return {
+    ...cloneRecord(sourceNode),
+    id: `projection:${draft.id}:${sourceNode.id}:${index}`,
+    layerId: draft.ordering.layerId,
+    surfaceId: draft.subject.surfaceId || sourceNode.surfaceId,
+    props: {
+      ...sourceNode.props,
+      ...(resolvedOpacity !== undefined ? { opacity: resolvedOpacity } : {}),
+      selectable: interactive,
+      evented: interactive,
+      hasControls: interactive,
+      hasBorders: interactive,
+    },
+    data: {
+      ...sourceNode.data,
+      renderIntentId: draft.id,
+      projectionIntentId: draft.id,
+      projectionSourceNodeId: sourceNode.id,
+      projectionSourceSubjectId: sourceNode.subjectId,
+      source: "projection",
+      type: "session-projection",
+    },
+    projection: {
+      sourceNodeId: sourceNode.id,
+      sourceSubjectId: sourceNode.subjectId,
+      suppressSource: projection.suppressSource !== false,
+    },
+    visible: draft.export?.visible !== false,
+    visibility: cloneRecord(draft.export?.visibility),
+    exportable: draft.export?.exportable !== false,
+    sortKey: {
+      layerOrder: draft.ordering.layerOrder ?? 0,
+      objectOrder: draft.ordering.objectOrder ?? 0,
+      channel,
+      channelOrder: CHANNEL_ORDER[channel],
+      subOrder: draft.ordering.subOrder ?? 0,
+    },
+  };
+}
+
+function normalizeIdList(values: readonly string[] | undefined): string[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value || "").trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
 }
 
 function applyRuntimePatches(
@@ -422,6 +604,7 @@ function applyRuntimePatches(
           },
           visual: patch.visual,
           placement: patch.placement,
+          projection: patch.projection,
           overlay: patch.overlay,
           clipping: patch.clipping,
           interaction: patch.interaction,
@@ -551,6 +734,7 @@ function mergeDraft(
     subject: { ...base.subject, ...patch.subject },
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
+    projection: mergeOptionalRecord(base.projection, patch.projection),
     overlay: mergeOptionalRecord(base.overlay, patch.overlay),
     clipping: mergeOptionalRecord(base.clipping, patch.clipping),
     interaction: mergeOptionalRecord(base.interaction, patch.interaction),
@@ -571,6 +755,7 @@ function mergePatch(
     subject: { ...base.subject, ...(patch.subject ?? {}) },
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
+    projection: mergeOptionalRecord(base.projection, patch.projection),
     overlay: mergeOptionalRecord(base.overlay, patch.overlay),
     clipping: mergeOptionalRecord(base.clipping, patch.clipping),
     interaction: mergeOptionalRecord(base.interaction, patch.interaction),

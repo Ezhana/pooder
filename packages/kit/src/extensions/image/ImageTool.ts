@@ -15,9 +15,7 @@ import {
   type EffectApplicationContext,
   type EffectApplicatorContribution,
   type RenderObjectSpec,
-  type RenderPassSpec,
   type RenderPatternSpec,
-  type RenderProjectionSpec,
   type RenderGraphNode,
   type RenderIntentTransform,
   type RenderIntentService,
@@ -60,6 +58,10 @@ import {
 } from "./imageOperations";
 import { validateImagePlacement } from "./imagePlacement";
 import { buildImageSessionOverlaySpecs } from "./sessionOverlay";
+import {
+  clearRenderIntentSource,
+  patchRenderObjectSpecs,
+} from "../../shared/runtime/renderIntentPatches";
 import {
   DIELINE_GEOMETRY_CAPABILITY_ID,
   type DielineGeometryCapabilityApi,
@@ -189,6 +191,7 @@ const DEFAULT_OVERLAY_LAYER_ID = KIT_LEGACY_LAYER_PRESET.imageOverlay;
 const IMAGE_OBJECT_STACK = 660;
 const IMAGE_OVERLAY_STACK = 800;
 const IMAGE_RENDER_SCOPE = "pooder.kit.image-placement";
+const IMAGE_RUNTIME_RENDER_SCOPE = "pooder.kit.image-placement.runtime";
 const IMAGE_ACTIVE_SLOT_CONTEXT_PREFIX = "image-placement.active-slot";
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
 
@@ -473,8 +476,6 @@ export class ImageTool implements ExtensionDefinition {
   private exportService?: SceneExportService;
   private context?: ExtensionContext;
   private sceneSubscription?: { dispose(): void };
-  private graphSubscription?: { dispose(): void };
-  private renderProducerDisposable?: { dispose(): void };
   private readonly subscriptions = new SubscriptionBag();
   private readonly capabilityId: string;
   private readonly imageLayerId: string;
@@ -533,59 +534,8 @@ export class ImageTool implements ExtensionDefinition {
       SCENE_EXPORT_SERVICE,
     );
 
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: [
-          {
-            id: this.overlayLayerId,
-            stack: IMAGE_OVERLAY_STACK,
-            order: 0,
-            objects: this.buildUploadSpecs(),
-          },
-          {
-            id: `${this.imageLayerId}.session.underlay`,
-            stack: IMAGE_OVERLAY_STACK,
-            order: 0,
-            visibility: { op: "sessionActive", toolId: this.capabilityId },
-            projections: this.buildSessionProjectionSpecs("below"),
-            objects: [],
-          },
-          {
-            id: `${this.imageLayerId}.session.image`,
-            stack: IMAGE_OVERLAY_STACK,
-            order: 1,
-            visibility: { op: "sessionActive", toolId: this.capabilityId },
-            objects: this.buildWorkingImageSpecs(),
-          },
-          {
-            id: `${this.imageLayerId}.session.overlay`,
-            stack: IMAGE_OVERLAY_STACK,
-            order: 2,
-            visibility: { op: "sessionActive", toolId: this.capabilityId },
-            projections: this.buildSessionProjectionSpecs("above"),
-            objects: [],
-          },
-          {
-            id: `${this.overlayLayerId}.session.controls`,
-            stack: IMAGE_OVERLAY_STACK,
-            order: 3,
-            visibility: { op: "sessionActive", toolId: this.capabilityId },
-            projections: this.buildSessionProjectionSpecs("controls"),
-            objects: this.buildSessionOverlaySpecs(),
-          },
-        ],
-      }),
-      { priority: 300 },
-    );
-
     this.sceneSubscription?.dispose();
     this.sceneSubscription = this.sceneService?.onDidChange(() => this.updateImages());
-    this.graphSubscription?.dispose();
-    this.graphSubscription = this.renderIntentService.onDidChange(() => {
-      this.updateImages();
-    });
     this.subscriptions.on(context.eventBus, "selection:created", this.onSelectionChanged);
     this.subscriptions.on(context.eventBus, "selection:updated", this.onSelectionChanged);
     this.subscriptions.on(context.eventBus, "selection:cleared", this.onSelectionCleared);
@@ -601,10 +551,7 @@ export class ImageTool implements ExtensionDefinition {
     this.subscriptions.disposeAll();
     this.sceneSubscription?.dispose();
     this.sceneSubscription = undefined;
-    this.graphSubscription?.dispose();
-    this.graphSubscription = undefined;
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
+    clearRenderIntentSource(this.renderIntentService, IMAGE_RUNTIME_RENDER_SCOPE);
     this.workingImages.clear();
     this.retainedWorkingImageBaselines.clear();
     this.activeSlotId = null;
@@ -1432,27 +1379,25 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private syncWorkingSlotVisibilityContext() {
-    if (!this.canvasService) return;
+    if (!this.renderIntentService) return;
     const nextKeys = new Set<string>();
     this.workingImages.forEach((_image, slotId) => {
       nextKeys.add(this.getWorkingSlotVisibilityContextKey(slotId));
     });
 
     nextKeys.forEach((key) => {
-      this.canvasService?.setVisibilityContextValue(key, true, {
-        render: false,
-      });
+      this.renderIntentService?.setVisibilityContextValue(key, true);
     });
     this.visibleWorkingSlotContextKeys.forEach((key) => {
       if (nextKeys.has(key)) return;
-      this.canvasService?.deleteVisibilityContextValue(key, { render: false });
+      this.renderIntentService?.deleteVisibilityContextValue(key);
     });
     this.visibleWorkingSlotContextKeys = nextKeys;
   }
 
   private clearWorkingSlotVisibilityContext() {
     this.visibleWorkingSlotContextKeys.forEach((key) => {
-      this.canvasService?.deleteVisibilityContextValue(key, { render: false });
+      this.renderIntentService?.deleteVisibilityContextValue(key);
     });
     this.visibleWorkingSlotContextKeys.clear();
   }
@@ -1903,30 +1848,6 @@ export class ImageTool implements ExtensionDefinition {
     });
   };
 
-  private buildCommittedImagePasses(): RenderPassSpec[] {
-    const specsByLayerId = new Map<string, RenderObjectSpec[]>();
-
-    this.getCommittedSlotStates()
-      .filter((slot) => !this.workingImages.has(slot.id))
-      .filter((slot) => slot.image?.src)
-      .forEach((slot) => {
-        const spec = this.buildImageSpec(slot, { committed: true });
-        if (!spec) return;
-        const layerId = slot.layerId || this.imageLayerId;
-        const specs = specsByLayerId.get(layerId) || [];
-        specs.push(spec);
-        specsByLayerId.set(layerId, specs);
-      });
-
-    return Array.from(specsByLayerId.entries()).map(([layerId, objects]) => ({
-      id: `${this.imageLayerId}:${layerId}`,
-      targetLayerId: layerId,
-      stack: IMAGE_OBJECT_STACK,
-      order: 0,
-      objects,
-    }));
-  }
-
   private buildWorkingImageSpecs(): RenderObjectSpec[] {
     return this.getSlotStates()
       .filter((slot) => this.shouldRenderWorkingImageSlot(slot.id) && slot.image?.src)
@@ -1936,7 +1857,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private buildSessionProjectionSpecs(
     placement: ImageSessionProjectionPlacement,
-  ): RenderProjectionSpec[] {
+  ) {
     return this.getSlotStates()
       .filter((slot) => this.shouldRenderWorkingSlot(slot.id))
       .flatMap((slot) =>
@@ -1945,10 +1866,10 @@ export class ImageTool implements ExtensionDefinition {
           .map((projection) => ({
             id: `${slot.id}.${projection.id}`,
             sourceLayerIds: projection.sourceLayerIds,
-            sourceElementIds: projection.sourceElementIds,
+            sourceSubjectIds: projection.sourceElementIds,
             opacity: projection.opacity,
             interactive: projection.interactive,
-            hideSource: projection.hideSource,
+            suppressSource: projection.hideSource,
           })),
       );
   }
@@ -2153,8 +2074,68 @@ export class ImageTool implements ExtensionDefinition {
       Array.from(imageSources).map((src) => this.ensureSourceSize(src)),
     );
     if (seq !== this.renderSeq) return;
-    await this.canvasService.flushRenderFromProducers();
+    this.publishRuntimeRenderIntents();
     this.emitStateChange();
+  }
+
+  private publishRuntimeRenderIntents() {
+    const renderIntentService = this.renderIntentService;
+    if (!renderIntentService) return;
+    clearRenderIntentSource(renderIntentService, IMAGE_RUNTIME_RENDER_SCOPE);
+
+    patchRenderObjectSpecs(renderIntentService, this.buildUploadSpecs(), {
+      sourceId: IMAGE_RUNTIME_RENDER_SCOPE,
+      layerId: this.overlayLayerId,
+      stack: IMAGE_OVERLAY_STACK,
+      layerOrder: 0,
+      channel: "overlay",
+    });
+    patchRenderObjectSpecs(renderIntentService, this.buildWorkingImageSpecs(), {
+      sourceId: IMAGE_RUNTIME_RENDER_SCOPE,
+      layerId: `${this.imageLayerId}.session.image`,
+      stack: IMAGE_OVERLAY_STACK,
+      layerOrder: 1,
+      channel: "overlay",
+      visibility: { op: "sessionActive", toolId: this.capabilityId },
+    });
+    patchRenderObjectSpecs(renderIntentService, this.buildSessionOverlaySpecs(), {
+      sourceId: IMAGE_RUNTIME_RENDER_SCOPE,
+      layerId: `${this.overlayLayerId}.session.controls`,
+      stack: IMAGE_OVERLAY_STACK,
+      layerOrder: 3,
+      channel: "overlay",
+      visibility: { op: "sessionActive", toolId: this.capabilityId },
+    });
+
+    (
+      [
+        ["below", `${this.imageLayerId}.session.underlay`, 0],
+        ["above", `${this.imageLayerId}.session.overlay`, 2],
+        ["controls", `${this.overlayLayerId}.session.controls`, 3],
+      ] as const
+    ).forEach(([placement, layerId, order]) => {
+      this.buildSessionProjectionSpecs(placement).forEach((projection, index) => {
+        renderIntentService.patchIntent(IMAGE_RUNTIME_RENDER_SCOPE, {
+          id: `${IMAGE_RUNTIME_RENDER_SCOPE}.projection.${placement}.${projection.id}`,
+          subject: {
+            kind: "layer",
+            surfaceId: "legacy",
+            layerId,
+          },
+          ordering: {
+            layerId,
+            stack: IMAGE_OVERLAY_STACK,
+            layerOrder: order,
+            objectOrder: index,
+            channel: "overlay",
+          },
+          projection,
+          export: {
+            visibility: { op: "sessionActive", toolId: this.capabilityId },
+          },
+        });
+      });
+    });
   }
 
   private getSurfaceFrameRect(): FrameRect {

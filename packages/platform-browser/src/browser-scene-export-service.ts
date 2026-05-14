@@ -10,7 +10,13 @@ import type {
   ServiceContext,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, type FabricObject, Point } from "fabric";
-import { CANVAS_SERVICE, SCENE_EXPORT_SERVICE, SCENE_LAYOUT_SERVICE } from "./tokens";
+import {
+  CANVAS_SERVICE,
+  FABRIC_RENDER_GRAPH_ADAPTER,
+  SCENE_EXPORT_SERVICE,
+  SCENE_LAYOUT_SERVICE,
+} from "./tokens";
+import type { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
 
 export type BrowserSceneExportFormat = SceneExportFormat;
 export type BrowserSceneExportFrame = "cut" | "trim" | "bleed";
@@ -70,7 +76,18 @@ function readLayerId(object: any): string {
 }
 
 function readElementId(object: any): string {
-  return String(object?.data?.sceneElementId || object?.data?.id || "").trim();
+  return readElementIds(object)[0] || "";
+}
+
+function readElementIds(object: any): string[] {
+  const data = object?.data || {};
+  return Array.from(
+    new Set(
+      [data.id, data.renderGraphNodeId, data.sceneElementId, data.subjectId]
+        .map((value) => String(value || "").trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
 }
 
 function cloneRect(rect: BrowserSceneExportRect): BrowserSceneExportRect {
@@ -87,10 +104,12 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
+  private renderGraphAdapter?: FabricRenderGraphAdapter;
 
   init(context: ServiceContext) {
     this.canvasService = context.get(CANVAS_SERVICE);
     this.sceneLayoutService = context.get(SCENE_LAYOUT_SERVICE);
+    this.renderGraphAdapter = context.get(FABRIC_RENDER_GRAPH_ADAPTER);
 
     if (!this.canvasService || !this.sceneLayoutService) {
       throw new Error(
@@ -102,13 +121,14 @@ export class BrowserSceneExportService implements Service, SceneExportService {
   dispose() {
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
+    this.renderGraphAdapter = undefined;
   }
 
   async exportImage(
     options: BrowserSceneExportOptions = {},
   ): Promise<BrowserSceneExportResult> {
     const canvasService = this.requireCanvasService();
-    await canvasService.flushRenderFromProducers();
+    await this.renderGraphAdapter?.flush();
 
     const format = normalizeFormat(options.format);
     const multiplier = normalizeMultiplier(options.multiplier);
@@ -208,7 +228,10 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       if (hasLayerFilter && !layerIdSet.has(readLayerId(object))) {
         return false;
       }
-      if (hasElementFilter && !elementIdSet.has(readElementId(object))) {
+      if (
+        hasElementFilter &&
+        !readElementIds(object).some((id) => elementIdSet.has(id))
+      ) {
         return false;
       }
       return true;
@@ -272,7 +295,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const elementIdSet = new Set(elementIds);
     const objects = elementIdSet.size
       ? sourceObjects.filter((object) =>
-          elementIdSet.has(readElementId(object)),
+          readElementIds(object).some((id) => elementIdSet.has(id)),
         )
       : sourceObjects;
     const bounds = objects

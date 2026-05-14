@@ -11,9 +11,7 @@ export type {
   RenderObjectLayoutSpec,
   RenderObjectSpec,
   RenderObjectType,
-  RenderPassSpec,
   RenderPatternSpec,
-  RenderProjectionSpec,
   RenderProps,
   VisibilityExpr,
 } from "@pooder/core";

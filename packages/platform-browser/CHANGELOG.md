@@ -4,12 +4,11 @@
 
 ### Added
 
-- Added `FabricSceneAdapter` and browser host registration so core
-  `SceneService` layers and elements sync into scoped Fabric render passes
-  without replacing existing render producer output.
-- Added layer-targeted render producer passes so capabilities can render into
-  caller-created layers through scoped sources while preserving scene layer
-  stacking and compatibility pass ids.
+- Added `FabricRenderGraphAdapter` and browser host registration so core
+  render graph layers and nodes sync into a reconciled Fabric draw list.
+- Added graph-targeted runtime rendering so capabilities can render into
+  caller-created layers through render intent patches while preserving graph
+  stacking.
 - Added tool-free render visibility predicates for caller-owned context values
   and workflow sessions while preserving legacy tool predicates.
 - Added `BrowserSceneExportService` for platform-owned browser export of

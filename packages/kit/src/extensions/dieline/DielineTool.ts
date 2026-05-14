@@ -12,6 +12,8 @@ import {
 import {
   CANVAS_SERVICE,
   CanvasService,
+  RENDER_INTENT_SERVICE,
+  RenderIntentService,
   RenderObjectSpec,
 } from "@pooder/core";
 import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
@@ -46,6 +48,10 @@ import {
 } from "./model";
 import { buildDielineGuideRenderSpecs } from "./renderBuilder";
 import { detectImageEdge, type DetectEdgeOptions } from "../edge-detection";
+import {
+  clearRenderIntentSource,
+  patchRenderObjectSpecs,
+} from "../../shared/runtime/renderIntentPatches";
 
 const IMAGE_SESSION_TOOL_ID = "pooder.kit.image-placement";
 const LEGACY_IMAGE_TOOL_ID = "pooder.kit.image";
@@ -71,16 +77,16 @@ export class DielineTool implements ExtensionDefinition {
     name: "DielineTool",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
   };
 
   private state: DielineState = createDefaultDielineState();
 
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private context?: ExtensionContext;
   private specs: RenderObjectSpec[] = [];
   private renderSeq = 0;
-  private renderProducerDisposable?: { dispose: () => void };
   private readonly capabilityId: string;
   private readonly configNamespace: string;
   private readonly targetLayerId: string;
@@ -149,23 +155,8 @@ export class DielineTool implements ExtensionDefinition {
     this.context = context;
     this.canvasService =
       context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: [
-          {
-            id: DIELINE_LAYER_ID,
-            targetLayerId: this.targetLayerId,
-            stack: 700,
-            order: 0,
-            replace: true,
-            visibility: this.resolveDielinePassVisibility(),
-            objects: this.specs,
-          },
-        ],
-      }),
-      { priority: 250 },
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
     );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
@@ -198,12 +189,9 @@ export class DielineTool implements ExtensionDefinition {
     context.eventBus.off("canvas:resized", this.onCanvasResized);
     this.renderSeq += 1;
     this.specs = [];
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
-    if (this.canvasService) {
-      void this.canvasService.flushRenderFromProducers();
-    }
+    clearRenderIntentSource(this.renderIntentService, this.id);
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.context = undefined;
   }
 
@@ -355,14 +343,21 @@ export class DielineTool implements ExtensionDefinition {
     if (!sceneLayout) {
       if (seq !== this.renderSeq) return;
       this.specs = [];
-      await this.canvasService.flushRenderFromProducers();
+      clearRenderIntentSource(this.renderIntentService, this.id);
       return;
     }
 
     const nextSpecs = this.buildDielineSpecs(sceneLayout);
     if (seq !== this.renderSeq) return;
     this.specs = nextSpecs;
-    await this.canvasService.flushRenderFromProducers();
+    patchRenderObjectSpecs(this.renderIntentService, this.specs, {
+      sourceId: this.id,
+      layerId: this.targetLayerId,
+      stack: 700,
+      layerOrder: 0,
+      channel: "overlay",
+      visibility: this.resolveDielinePassVisibility(),
+    });
     if (seq !== this.renderSeq) return;
     this.canvasService.requestRenderAll();
   }

@@ -1,30 +1,64 @@
 import {
   RENDER_INTENT_SERVICE,
-  type CanvasPassStackingMeta,
+  TOOL_SESSION_SERVICE,
+  WORKBENCH_SERVICE,
+  WORKFLOW_SESSION_SERVICE,
+  evaluateVisibilityExpr,
   type CanvasService,
+  type RenderEffectSpec,
+  type RenderGraph,
   type RenderGraphLayer,
   type RenderGraphNode,
-  type RenderIntentService,
   type RenderObjectSpec,
   type Service,
   type ServiceContext,
+  type ToolSessionService,
+  type VisibilityLayerState,
+  type WorkbenchService,
+  type WorkflowSessionService,
+  type RenderIntentService,
 } from "@pooder/core";
+import type {
+  FabricRenderTargetClipEffect,
+  FabricRenderTargetItem,
+} from "../canvas-service";
 import { CANVAS_SERVICE } from "../tokens";
 
 export const RENDER_GRAPH_RENDER_SCOPE = "core-render-graph";
 
+type FabricRenderTargetCanvasService = CanvasService & {
+  reconcileRenderGraphDrawList(
+    items: FabricRenderTargetItem[],
+    effects?: FabricRenderTargetClipEffect[],
+    options?: { render?: boolean },
+  ): Promise<void>;
+};
+
 export class FabricRenderGraphAdapter implements Service {
   private renderIntentService?: RenderIntentService;
-  private canvasService?: CanvasService;
+  private canvasService?: FabricRenderTargetCanvasService;
+  private workbenchService?: WorkbenchService;
+  private toolSessionService?: ToolSessionService;
+  private workflowSessionService?: WorkflowSessionService;
+  private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
-  private renderedPassIds = new Set<string>();
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
+
+  private readonly onRuntimeVisibilityChange = () => {
+    this.requestSync();
+  };
 
   init(context: ServiceContext) {
     this.graphSubscription?.dispose();
     this.renderIntentService = context.get(RENDER_INTENT_SERVICE);
-    this.canvasService = context.get(CANVAS_SERVICE);
+    this.canvasService = context.get(CANVAS_SERVICE) as
+      | FabricRenderTargetCanvasService
+      | undefined;
+    this.workbenchService = context.get(WORKBENCH_SERVICE);
+    this.toolSessionService = context.get(TOOL_SESSION_SERVICE);
+    this.workflowSessionService = context.get(WORKFLOW_SESSION_SERVICE);
+    this.eventBus = context.eventBus;
 
     if (!this.renderIntentService || !this.canvasService) {
       throw new Error(
@@ -35,15 +69,20 @@ export class FabricRenderGraphAdapter implements Service {
     this.graphSubscription = this.renderIntentService.onDidChange(() => {
       this.requestSync();
     });
+    this.attachRuntimeVisibilityEvents();
     this.requestSync();
   }
 
   dispose() {
+    this.detachRuntimeVisibilityEvents();
     this.graphSubscription?.dispose();
     this.graphSubscription = undefined;
     this.renderIntentService = undefined;
     this.canvasService = undefined;
-    this.renderedPassIds.clear();
+    this.workbenchService = undefined;
+    this.toolSessionService = undefined;
+    this.workflowSessionService = undefined;
+    this.eventBus = undefined;
     this.syncRequested = false;
     this.syncPromise = null;
   }
@@ -70,6 +109,22 @@ export class FabricRenderGraphAdapter implements Service {
     await this.requestSync();
   }
 
+  private attachRuntimeVisibilityEvents() {
+    const eventBus = this.eventBus;
+    if (!eventBus) return;
+    eventBus.on("tool:activated", this.onRuntimeVisibilityChange);
+    eventBus.on("tool:session:change", this.onRuntimeVisibilityChange);
+    eventBus.on("workflow:session:change", this.onRuntimeVisibilityChange);
+  }
+
+  private detachRuntimeVisibilityEvents() {
+    const eventBus = this.eventBus;
+    if (!eventBus) return;
+    eventBus.off("tool:activated", this.onRuntimeVisibilityChange);
+    eventBus.off("tool:session:change", this.onRuntimeVisibilityChange);
+    eventBus.off("workflow:session:change", this.onRuntimeVisibilityChange);
+  }
+
   private async runSyncLoop() {
     while (this.syncRequested) {
       this.syncRequested = false;
@@ -80,51 +135,92 @@ export class FabricRenderGraphAdapter implements Service {
   private async syncGraph() {
     const graph = this.requireRenderIntentService().getGraph();
     const canvas = this.requireCanvasService();
-    const nextPassIds = new Set(graph.layers.map((layer) => layer.id));
+    const visibility = this.buildVisibilityContext(graph);
+    const items: FabricRenderTargetItem[] = [];
+    const effects: FabricRenderTargetClipEffect[] = [];
 
-    for (const passId of this.renderedPassIds) {
-      if (nextPassIds.has(passId)) continue;
-      await canvas.applyObjectSpecsToPass(passId, [], {
-        render: false,
-        replace: true,
-        scope: RENDER_GRAPH_RENDER_SCOPE,
+    graph.layers.forEach((layer, layerIndex) => {
+      const layerVisible =
+        layer.visible !== false &&
+        evaluateVisibilityExpr(undefined, visibility);
+      layer.effects.forEach((effect, index) => {
+        const normalized = this.toClipEffect(effect, `layer:${layer.id}:${index}`, visibility);
+        if (normalized) effects.push(normalized);
       });
-    }
 
-    for (const layer of graph.layers) {
-      await canvas.applyPassSpec(
-        {
-          id: layer.id,
-          stack: layer.stack,
-          order: layer.order,
-          replace: true,
-          effects: layer.effects,
-          objects: layer.nodes
-            .filter((node) => layer.visible && node.visible)
-            .map((node) => this.toRenderObjectSpec(layer, node))
-            .filter((spec): spec is RenderObjectSpec => Boolean(spec)),
-        },
-        { render: false },
-      );
-    }
+      layer.nodes.forEach((node, nodeIndex) => {
+        node.effects.forEach((effect, index) => {
+          const normalized = this.toClipEffect(
+            effect,
+            `node:${node.id}:${index}`,
+            visibility,
+          );
+          if (normalized) effects.push(normalized);
+        });
 
-    canvas.syncPassStacking(
-      graph.layers.map(
-        (layer): CanvasPassStackingMeta => ({
-          id: layer.id,
-          stack: layer.stack,
-          order: layer.order,
-        }),
-      ),
-    );
+        if (!layerVisible || !node.visible) return;
+        if (!evaluateVisibilityExpr(node.visibility, visibility)) return;
+        const spec = this.toRenderObjectSpec(layer, node);
+        if (!spec) return;
+        items.push({
+          key: node.id,
+          layerId: layer.id,
+          order: layerIndex * 1_000_000 + nodeIndex,
+          spec,
+        });
+      });
+    });
+
+    await canvas.reconcileRenderGraphDrawList(items, effects, { render: false });
     canvas.requestRenderAll();
-    this.renderedPassIds = nextPassIds;
+  }
+
+  private buildVisibilityContext(graph: RenderGraph) {
+    const layers = new Map<string, VisibilityLayerState>();
+    graph.layers.forEach((layer) => {
+      const visibleNodes = layer.nodes.filter((node) => node.visible !== false);
+      layers.set(layer.id, {
+        exists: true,
+        objectCount: layer.nodes.length,
+        visibleObjectCount: visibleNodes.length,
+      });
+    });
+
+    return this.requireRenderIntentService().createVisibilityEvalContext({
+      activeToolId: this.workbenchService?.activeToolId ?? null,
+      getLayerState: (layerId: string) => layers.get(layerId),
+      isWorkflowSessionActive: (workflowId: string) =>
+        this.workflowSessionService?.hasActiveSession(workflowId) ?? false,
+      hasAnyActiveWorkflowSession: () =>
+        this.workflowSessionService?.hasAnyActiveSession() ?? false,
+      isSessionActive: (toolId: string) =>
+        this.toolSessionService?.getState(toolId).status === "active",
+      hasAnyActiveSession: () =>
+        this.toolSessionService?.hasAnyActiveSession() ?? false,
+    });
+  }
+
+  private toClipEffect(
+    effect: RenderEffectSpec,
+    fallbackKey: string,
+    visibility: ReturnType<FabricRenderGraphAdapter["buildVisibilityContext"]>,
+  ): FabricRenderTargetClipEffect | null {
+    if (effect.type !== "clipPath") return null;
+    if (!evaluateVisibilityExpr(effect.visibility, visibility)) return null;
+    const key = String(effect.id || fallbackKey).trim();
+    return {
+      key,
+      source: effect.source,
+      targetLayerIds: normalizeIds(effect.targetLayerIds),
+      targetSubjectIds: normalizeIds(effect.targetSubjectIds),
+    };
   }
 
   private toRenderObjectSpec(
     layer: RenderGraphLayer,
     node: RenderGraphNode,
   ): RenderObjectSpec | null {
+    const space = this.resolveCoordinateSpace(node);
     const commonProps = {
       ...node.props,
       ...this.resolvePlacementProps(node),
@@ -133,6 +229,9 @@ export class FabricRenderGraphAdapter implements Service {
     };
     const commonData = {
       ...node.data,
+      id: node.subjectId,
+      layerId: layer.id,
+      subjectId: node.subjectId,
       renderGraphLayerId: layer.id,
       renderGraphNodeId: node.id,
       sceneElementId:
@@ -152,10 +251,9 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "image",
         src,
-        space: "scene",
+        space,
         data: commonData,
         props: commonProps,
-        visibility: node.visibility,
       };
     }
 
@@ -163,10 +261,9 @@ export class FabricRenderGraphAdapter implements Service {
       return {
         id: node.id,
         type: "path",
-        space: "scene",
+        space,
         data: commonData,
         props: commonProps,
-        visibility: node.visibility,
       };
     }
 
@@ -174,21 +271,23 @@ export class FabricRenderGraphAdapter implements Service {
       return {
         id: node.id,
         type: "rect",
-        space: "scene",
+        space,
         data: commonData,
         props: commonProps,
-        visibility: node.visibility,
       };
     }
 
     return {
       id: node.id,
       type: "text",
-      space: "scene",
+      space,
       data: commonData,
       props: commonProps,
-      visibility: node.visibility,
     };
+  }
+
+  private resolveCoordinateSpace(node: RenderGraphNode): "scene" | "screen" {
+    return node.data.renderCoordinateSpace === "screen" ? "screen" : "scene";
   }
 
   private resolvePlacementProps(node: RenderGraphNode): Record<string, unknown> {
@@ -237,7 +336,7 @@ export class FabricRenderGraphAdapter implements Service {
     return this.renderIntentService;
   }
 
-  private requireCanvasService(): CanvasService {
+  private requireCanvasService(): FabricRenderTargetCanvasService {
     if (!this.canvasService) {
       throw new Error("[FabricRenderGraphAdapter] CanvasService is not initialized.");
     }
@@ -248,4 +347,15 @@ export class FabricRenderGraphAdapter implements Service {
 function finitePositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeIds(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
 }

@@ -8,6 +8,8 @@ import {
 import {
   CANVAS_SERVICE,
   CanvasService,
+  RENDER_INTENT_SERVICE,
+  RenderIntentService,
   RenderObjectSpec,
 } from "@pooder/core";
 import { FILM_LAYER_ID } from "../../shared/constants/layers";
@@ -17,6 +19,10 @@ import {
   type SourceSize,
 } from "../../shared/imaging/sourceSizeCache";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import {
+  clearRenderIntentSource,
+  patchRenderObjectSpecs,
+} from "../../shared/runtime/renderIntentPatches";
 
 const FILM_IMAGE_ID = "film-image";
 const DEFAULT_WIDTH = 800;
@@ -29,15 +35,15 @@ export class FilmTool implements ExtensionDefinition {
     name: "FilmTool",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
   };
 
   private url: string = "";
   private opacity: number = 0.5;
 
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private specs: RenderObjectSpec[] = [];
-  private renderProducerDisposable?: { dispose: () => void };
   private renderSeq = 0;
   private renderImageUrl = "";
   private sourceSizeCache = createSourceSizeCache((src) =>
@@ -64,21 +70,8 @@ export class FilmTool implements ExtensionDefinition {
     this.canvasService = context.services.getOrThrow<CanvasService>(
       CANVAS_SERVICE,
     );
-
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: [
-          {
-            id: FILM_LAYER_ID,
-            stack: 1000,
-            order: 0,
-            objects: this.specs,
-          },
-        ],
-      }),
-      { priority: 500 },
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
     );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
@@ -111,12 +104,10 @@ export class FilmTool implements ExtensionDefinition {
     this.specs = [];
     this.renderImageUrl = "";
     this.sourceSizeCache.clear();
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
-    if (!this.canvasService) return;
-    void this.canvasService.flushRenderFromProducers();
-    this.canvasService.requestRenderAll();
+    clearRenderIntentSource(this.renderIntentService, this.id);
+    this.canvasService?.requestRenderAll();
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
   }
 
   contribute(): ExtensionContributions {
@@ -238,7 +229,13 @@ export class FilmTool implements ExtensionDefinition {
     }
 
     this.specs = this.buildFilmSpecs(this.renderImageUrl, this.opacity);
-    await this.canvasService.flushRenderFromProducers();
+    patchRenderObjectSpecs(this.renderIntentService, this.specs, {
+      sourceId: this.id,
+      layerId: FILM_LAYER_ID,
+      stack: 1000,
+      layerOrder: 0,
+      channel: "overlay",
+    });
     if (seq !== this.renderSeq) return;
     this.canvasService.requestRenderAll();
   }

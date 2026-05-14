@@ -1,6 +1,7 @@
 import {
   CANVAS_SERVICE,
   CONFIGURATION_SERVICE,
+  RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   type CanvasService,
   type ConfigurationService,
@@ -11,6 +12,7 @@ import {
   type ExtensionDefinition,
   type RenderEffectSpec,
   type RenderObjectSpec,
+  type RenderIntentService,
   type SceneElement,
   type SceneService,
 } from "@pooder/core";
@@ -34,6 +36,7 @@ import {
   type ClipSource,
 } from "./capability";
 import { ClipTargetResolver } from "./ClipTargetResolver";
+import { clearRenderIntentSource } from "../../shared/runtime/renderIntentPatches";
 
 const CLIP_METADATA_KEY = "clip";
 
@@ -41,15 +44,20 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   id: string;
   metadata = { name: "ClipCapability" };
   activation = {
-    requiresServices: [CANVAS_SERVICE, SCENE_SERVICE, CONFIGURATION_SERVICE],
+    requiresServices: [
+      CANVAS_SERVICE,
+      SCENE_SERVICE,
+      CONFIGURATION_SERVICE,
+      RENDER_INTENT_SERVICE,
+    ],
   };
 
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private sceneService?: SceneService;
   private configService?: ConfigurationService;
   private readonly capabilityId: string;
   private readonly targetResolver = new ClipTargetResolver();
-  private renderProducerDisposable?: { dispose(): void };
   private sceneSubscription?: { dispose(): void };
   private configSubscription?: { dispose(): void };
 
@@ -62,26 +70,12 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     this.canvasService = context.services.getOrThrow<CanvasService>(
       CANVAS_SERVICE,
     );
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
     this.sceneService = context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
-    );
-
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: [
-          {
-            id: `${this.id}.effects`,
-            targetLayerId: `${this.id}.effects`,
-            replace: true,
-            objects: [],
-            effects: this.buildClipEffects(),
-          },
-        ],
-      }),
-      { priority: 275 },
     );
 
     this.sceneSubscription?.dispose();
@@ -92,16 +86,13 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   }
 
   deactivate() {
-    this.renderProducerDisposable?.dispose();
     this.sceneSubscription?.dispose();
     this.configSubscription?.dispose();
-    this.renderProducerDisposable = undefined;
     this.sceneSubscription = undefined;
     this.configSubscription = undefined;
-    if (this.canvasService) {
-      void this.canvasService.flushRenderFromProducers();
-    }
+    clearRenderIntentSource(this.renderIntentService, this.id);
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.sceneService = undefined;
     this.configService = undefined;
   }
@@ -162,8 +153,26 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   }
 
   private refresh() {
-    if (!this.canvasService) return;
-    void this.canvasService.flushRenderFromProducers();
+    if (!this.renderIntentService) return;
+    const effects = this.buildClipEffects();
+    if (!effects.length) {
+      clearRenderIntentSource(this.renderIntentService, this.id);
+      return;
+    }
+    this.renderIntentService.patchIntent(this.id, {
+      id: `${this.id}.effects`,
+      subject: {
+        kind: "layer",
+        surfaceId: "legacy",
+        layerId: `${this.id}.effects`,
+      },
+      ordering: {
+        layerId: `${this.id}.effects`,
+        stack: 0,
+        layerOrder: 0,
+      },
+      clipping: { enabled: true, effects },
+    });
   }
 
   private buildClipEffects(): RenderEffectSpec[] {
@@ -191,8 +200,8 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
       type: "clipPath",
       id: `clip.${element.id}`,
       source,
-      targetPassIds: target.targetPassIds,
-      targetElementIds: target.targetElementIds,
+      targetLayerIds: target.targetLayerIds,
+      targetSubjectIds: target.targetSubjectIds,
     };
   }
 

@@ -8,6 +8,8 @@ import {
 import {
   CANVAS_SERVICE,
   CanvasService,
+  RENDER_INTENT_SERVICE,
+  RenderIntentService,
   RenderObjectSpec,
 } from "@pooder/core";
 import {
@@ -28,6 +30,10 @@ import {
   type RulerCapabilityOptions,
   type RulerTheme,
 } from "./capability";
+import {
+  clearRenderIntentSource,
+  patchRenderObjectSpecs,
+} from "../../shared/runtime/renderIntentPatches";
 const EXTENSION_LINE_LENGTH = 5;
 const MIN_ARROW_SIZE = 4;
 const THICKNESS_TO_STROKE_WIDTH_RATIO = 20;
@@ -65,7 +71,7 @@ export class RulerTool implements ExtensionDefinition {
     name: "RulerTool",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
   };
 
   private thickness = DEFAULT_THICKNESS;
@@ -78,9 +84,9 @@ export class RulerTool implements ExtensionDefinition {
   private renderSeq = 0;
   private readonly numericProps = new Set(["thickness", "gap", "fontSize"]);
   private specs: RenderObjectSpec[] = [];
-  private renderProducerDisposable?: { dispose: () => void };
 
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private context?: ExtensionContext;
   private readonly capabilityId: string;
   private readonly configNamespace: string;
@@ -124,23 +130,8 @@ export class RulerTool implements ExtensionDefinition {
     this.context = context;
     this.canvasService =
       context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: [
-          {
-            id: RULER_LAYER_ID,
-            targetLayerId: this.rulerLayerId,
-            stack: 950,
-            order: 0,
-            replace: true,
-            visibility: this.visibility,
-            objects: this.specs,
-          },
-        ],
-      }),
-      { priority: 400 },
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
     );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
@@ -191,12 +182,9 @@ export class RulerTool implements ExtensionDefinition {
   deactivate(context: ExtensionContext) {
     context.eventBus.off("canvas:resized", this.onCanvasResized);
     this.specs = [];
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
-    if (this.canvasService) {
-      void this.canvasService.flushRenderFromProducers();
-    }
+    clearRenderIntentSource(this.renderIntentService, this.id);
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.context = undefined;
     this.renderSeq = 0;
   }
@@ -715,7 +703,7 @@ export class RulerTool implements ExtensionDefinition {
       if (seq !== this.renderSeq) return;
       this.log("render:skip", { seq, reason: "invalid-layout" });
       this.specs = [];
-      await this.canvasService.flushRenderFromProducers();
+      clearRenderIntentSource(this.renderIntentService, this.id);
       return;
     }
 
@@ -764,7 +752,14 @@ export class RulerTool implements ExtensionDefinition {
     if (seq !== this.renderSeq) return;
 
     this.specs = specs;
-    await this.canvasService.flushRenderFromProducers();
+    patchRenderObjectSpecs(this.renderIntentService, this.specs, {
+      sourceId: this.id,
+      layerId: this.rulerLayerId,
+      stack: 950,
+      layerOrder: 0,
+      channel: "overlay",
+      visibility: this.visibility,
+    });
     if (seq !== this.renderSeq) return;
     this.canvasService.requestRenderAll();
     this.log("render:done", { seq });

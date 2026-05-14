@@ -743,8 +743,7 @@ function createClipPathEffect(
         excludeFromExport: true,
       },
     },
-    targetPassIds: [],
-    targetElementIds: [objectId],
+    targetSubjectIds: [objectId],
   };
 }
 

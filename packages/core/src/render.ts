@@ -51,15 +51,6 @@ export interface RenderObjectSpec {
   visibility?: VisibilityExpr;
 }
 
-export interface RenderProjectionSpec {
-  id: string;
-  sourceLayerIds?: readonly string[];
-  sourceElementIds?: readonly string[];
-  opacity?: number;
-  interactive?: boolean;
-  hideSource?: boolean;
-}
-
 export interface RenderPatternSpec {
   type: "pattern";
   kind: "diagonalHatch";
@@ -95,23 +86,11 @@ export interface RenderClipPathEffectSpec {
   id?: string;
   visibility?: VisibilityExpr;
   source: RenderObjectSpec;
-  targetPassIds: string[];
-  targetElementIds?: string[];
+  targetLayerIds?: string[];
+  targetSubjectIds?: string[];
 }
 
 export type RenderEffectSpec = RenderClipPathEffectSpec;
-
-export interface RenderPassSpec {
-  id: string;
-  targetLayerId?: string;
-  stack?: number;
-  order?: number;
-  replace?: boolean;
-  visibility?: VisibilityExpr;
-  effects?: RenderEffectSpec[];
-  projections?: RenderProjectionSpec[];
-  objects: RenderObjectSpec[];
-}
 
 export interface VisibilityLayerState {
   exists: boolean;
@@ -245,28 +224,8 @@ export interface CanvasObjectLike {
   [key: string]: any;
 }
 
-export interface CanvasPassStackingMeta {
-  id: string;
-  stack?: number;
-  order?: number;
-}
-
-export interface RenderProducerResult {
-  passes?: RenderPassSpec[];
-}
-
-export type RenderProducer = () =>
-  | RenderProducerResult
-  | undefined
-  | Promise<RenderProducerResult | undefined>;
-
-export interface RegisterRenderProducerOptions {
-  priority?: number;
-}
-
 export interface CanvasObjectQuery {
   layerId?: string;
-  passId?: string;
   id?: string;
   type?: string;
   includeHidden?: boolean;
@@ -274,14 +233,6 @@ export interface CanvasObjectQuery {
 }
 
 export interface CanvasService extends Service {
-  registerRenderProducer(
-    id: string,
-    producer: RenderProducer,
-    options?: RegisterRenderProducerOptions,
-  ): { dispose: () => void };
-  unregisterRenderProducer(id: string): boolean;
-  requestRenderFromProducers(): void;
-  flushRenderFromProducers(): Promise<void>;
   requestRenderAll(): void;
   resize(width: number, height: number): void;
   getViewportSize(): CanvasSize;
@@ -293,9 +244,7 @@ export interface CanvasService extends Service {
     heightMm: number;
   }): CanvasViewportLayout | null;
   getObjects(query?: CanvasObjectQuery): CanvasObjectLike[];
-  getPassObjects(passId: string): CanvasObjectLike[];
-  getRootLayerObjects(layerId: string): CanvasObjectLike[];
-  getObject(id: string, passId?: string): CanvasObjectLike | undefined;
+  getObject(id: string, layerId?: string): CanvasObjectLike | undefined;
   getActiveObject(): CanvasObjectLike | undefined;
   setActiveObject(object: CanvasObjectLike): boolean;
   discardActiveObject(): boolean;
@@ -314,37 +263,6 @@ export interface CanvasService extends Service {
   toSceneRect(rect: CanvasRect): CanvasRect;
   getSceneViewportRect(): CanvasRect;
   getScreenViewportRect(): CanvasRect;
-  setLayerVisibility(layerId: string, visible: boolean): boolean;
-  setPassVisibility(passId: string, visible: boolean): boolean;
-  bringLayerToFront(layerId: string): void;
-  bringPassToFront(passId: string): void;
-  applyPassSpec(spec: RenderPassSpec, options?: { render?: boolean }): Promise<void>;
-  applyObjectSpecsToRootLayer(
-    passId: string,
-    specs: RenderObjectSpec[],
-    options?: { render?: boolean },
-  ): Promise<void>;
-  applyObjectSpecsToPass(
-    passId: string,
-    specs: RenderObjectSpec[],
-    options?: {
-      render?: boolean;
-      replace?: boolean;
-      scope?: string;
-      orderOffset?: number;
-    },
-  ): Promise<void>;
-  setVisibilityContextValue(
-    key: string,
-    value: unknown,
-    options?: { render?: boolean },
-  ): void;
-  deleteVisibilityContextValue(
-    key: string,
-    options?: { render?: boolean },
-  ): boolean;
-  clearVisibilityContextValues(options?: { render?: boolean }): boolean;
-  syncPassStacking(passes: CanvasPassStackingMeta[]): void;
   loadImageSize(src: string): Promise<CanvasSize | null>;
 }
 

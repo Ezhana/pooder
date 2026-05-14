@@ -1,18 +1,18 @@
 import type { SceneElement } from "@pooder/core";
 
 export interface ClipTargetResolution {
-  targetPassIds: string[];
-  targetElementIds: string[];
+  targetLayerIds: string[];
+  targetSubjectIds: string[];
 }
 
 export class ClipTargetResolver {
   resolve(element: SceneElement): ClipTargetResolution | null {
-    const targetPassId = String(element.layerId || "").trim();
-    const targetElementId = String(element.id || "").trim();
-    if (!targetPassId || !targetElementId) return null;
+    const targetLayerId = String(element.layerId || "").trim();
+    const targetSubjectId = String(element.id || "").trim();
+    if (!targetLayerId || !targetSubjectId) return null;
     return {
-      targetPassIds: [targetPassId],
-      targetElementIds: [targetElementId],
+      targetLayerIds: [targetLayerId],
+      targetSubjectIds: [targetSubjectId],
     };
   }
 }

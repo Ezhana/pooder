@@ -12,9 +12,10 @@ import {
 import {
   CANVAS_SERVICE,
   CanvasService,
+  RENDER_INTENT_SERVICE,
+  RenderIntentService,
   RenderEffectSpec,
   RenderObjectSpec,
-  RenderPassSpec,
 } from "@pooder/core";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
@@ -35,6 +36,10 @@ import {
   KIT_LEGACY_LAYER_PRESET,
 } from "../../shared/constants/layers";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import {
+  clearRenderIntentSource,
+  patchRenderObjectSpecs,
+} from "../../shared/runtime/renderIntentPatches";
 import { cloneWithJson } from "../../shared/runtime/sessionState";
 import { buildDielineRenderBundle } from "../dieline/renderBuilder";
 import { readDielineState } from "../dieline/model";
@@ -107,6 +112,7 @@ export class FeatureTool implements ExtensionDefinition {
 
   private workingFeatures: ConstraintFeature[] = [];
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isToolActive = false;
@@ -114,7 +120,6 @@ export class FeatureTool implements ExtensionDefinition {
   private sessionOriginalFeatures: ConstraintFeature[] | null = null;
   private hasWorkingChanges = false;
   private dirtyTrackerDisposable?: { dispose(): void };
-  private renderProducerDisposable?: { dispose: () => void };
   private markerSpecs: RenderObjectSpec[] = [];
   private sessionDielineSpecs: RenderObjectSpec[] = [];
   private sessionDielineEffects: RenderEffectSpec[] = [];
@@ -168,7 +173,7 @@ export class FeatureTool implements ExtensionDefinition {
     const requireDielineExtension = options.requireDielineExtension ?? false;
     this.activation = {
       requiresExtensions: requireDielineExtension ? ["pooder.kit.dieline"] : [],
-      requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+      requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
     };
   }
 
@@ -178,46 +183,8 @@ export class FeatureTool implements ExtensionDefinition {
     this.canvasService = context.services.getOrThrow<CanvasService>(
       CANVAS_SERVICE,
     );
-
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => {
-        const passes: RenderPassSpec[] = [
-          {
-            id: FEATURE_OVERLAY_LAYER_ID,
-            targetLayerId: this.markerLayerId,
-            stack: 880,
-            order: 0,
-            replace: true,
-            objects: this.markerSpecs,
-          },
-        ];
-        if (this.isSessionVisible()) {
-          passes.push(
-            {
-              id: DIELINE_LAYER_ID,
-              targetLayerId: this.baseDielineLayerId,
-              stack: 700,
-              order: 0,
-              replace: false,
-              visibility: { op: "const", value: false },
-              objects: [],
-            },
-            {
-              id: FEATURE_DIELINE_LAYER_ID,
-              targetLayerId: this.sessionDielineLayerId,
-              stack: 705,
-              order: 0,
-              replace: true,
-              effects: this.sessionDielineEffects,
-              objects: this.sessionDielineSpecs,
-            },
-          );
-        }
-        return { passes };
-      },
-      { priority: 350 },
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
     );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
@@ -271,6 +238,7 @@ export class FeatureTool implements ExtensionDefinition {
     this.dirtyTrackerDisposable = undefined;
     this.teardown();
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.context = undefined;
   }
 
@@ -803,9 +771,7 @@ export class FeatureTool implements ExtensionDefinition {
     this.markerSpecs = [];
     this.sessionDielineSpecs = [];
     this.sessionDielineEffects = [];
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
-    void this.canvasService.flushRenderFromProducers();
+    clearRenderIntentSource(this.renderIntentService, this.id);
   }
 
   private createHatchPattern(
@@ -977,11 +943,47 @@ export class FeatureTool implements ExtensionDefinition {
     this.sessionDielineEffects = sessionRender.effects;
     if (seq !== this.renderSeq) return;
 
-    await this.canvasService.flushRenderFromProducers();
+    this.publishRenderIntents();
     if (seq !== this.renderSeq) return;
     if (options.enforceConstraints) {
       this.enforceConstraints();
     }
+  }
+
+  private publishRenderIntents() {
+    clearRenderIntentSource(this.renderIntentService, this.id);
+    patchRenderObjectSpecs(this.renderIntentService, this.markerSpecs, {
+      sourceId: this.id,
+      layerId: this.markerLayerId,
+      stack: 880,
+      layerOrder: 0,
+      channel: "overlay",
+    });
+    if (!this.isSessionVisible()) return;
+    patchRenderObjectSpecs(this.renderIntentService, this.sessionDielineSpecs, {
+      sourceId: this.id,
+      layerId: this.sessionDielineLayerId,
+      stack: 705,
+      layerOrder: 0,
+      channel: "overlay",
+    });
+    this.sessionDielineEffects.forEach((effect, index) => {
+      this.renderIntentService?.patchIntent(this.id, {
+        id: `${this.id}.effect.${index}`,
+        subject: {
+          kind: "layer",
+          surfaceId: "legacy",
+          layerId: this.sessionDielineLayerId,
+        },
+        ordering: {
+          layerId: this.sessionDielineLayerId,
+          stack: 705,
+          layerOrder: 0,
+          objectOrder: 10_000 + index,
+        },
+        clipping: { enabled: true, effects: [effect] },
+      });
+    });
   }
 
   private buildSessionDielineRender(): {
@@ -1014,7 +1016,7 @@ export class FeatureTool implements ExtensionDefinition {
         sceneLayout.canvasHeight || this.canvasService.getViewportSize().height || 600,
       hasImages: this.hasImageItems(),
       createHatchPattern: (color) => this.createHatchPattern(color),
-      clipTargetPassIds: this.imageClipLayerIds,
+      clipTargetLayerIds: this.imageClipLayerIds,
       clipVisibility: { op: "const", value: true },
       ids: {
         inside: "feature.session.dieline.inside",

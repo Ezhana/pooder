@@ -30,7 +30,7 @@ but new public APIs should not copy the legacy `*Tool` pattern.
 - Public scene contracts use `Scene*` names: `SceneService`, `SceneLayer`,
   `SceneElement`, `SceneTransaction`.
 - Browser/Fabric implementations use adapter names, not core names:
-  `FabricSceneAdapter`, `BrowserSceneHost`, or similar.
+  `FabricRenderGraphAdapter`, `BrowserSceneHost`, or similar.
 - Existing layout helpers such as `SceneLayoutSnapshot` may remain while the
   migration is in progress, but new APIs should distinguish layout snapshots
   from mutable scene graph contracts.

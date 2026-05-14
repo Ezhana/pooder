@@ -11,6 +11,8 @@ import {
 import {
   CANVAS_SERVICE,
   CanvasService,
+  RENDER_INTENT_SERVICE,
+  RenderIntentService,
   RenderLayoutRect,
   RenderObjectSpec,
 } from "@pooder/core";
@@ -25,6 +27,10 @@ import {
   type SourceSize,
 } from "../../shared/imaging/sourceSizeCache";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import {
+  clearRenderIntentSource,
+  patchRenderObjectSpecs,
+} from "../../shared/runtime/renderIntentPatches";
 import {
   applyCommittedSnapshot,
   runDeferredConfigUpdate,
@@ -161,6 +167,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     new Map();
 
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isToolActive = false;
@@ -171,7 +178,6 @@ export class WhiteInkTool implements ExtensionDefinition {
   private whiteSpecs: RenderObjectSpec[] = [];
   private coverSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
-  private renderProducerDisposable?: { dispose: () => void };
   private readonly subscriptions = new SubscriptionBag();
   private readonly capabilityId: string;
   private readonly configNamespace: string;
@@ -209,7 +215,7 @@ export class WhiteInkTool implements ExtensionDefinition {
     const requireImageExtension = options.requireImageExtension ?? false;
     this.activation = {
       requiresExtensions: requireImageExtension ? ["pooder.kit.image"] : [],
-      requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+      requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
     };
   }
 
@@ -218,35 +224,8 @@ export class WhiteInkTool implements ExtensionDefinition {
     this.context = context;
     this.canvasService =
       context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: [
-          {
-            id: WHITE_INK_COVER_LAYER_ID,
-            targetLayerId: this.coverLayerId,
-            stack: 220,
-            order: 0,
-            objects: this.coverSpecs,
-          },
-          {
-            id: WHITE_INK_OBJECT_LAYER_ID,
-            targetLayerId: this.whiteLayerId,
-            stack: 221,
-            order: 0,
-            objects: this.whiteSpecs,
-          },
-          {
-            id: WHITE_INK_OVERLAY_LAYER_ID,
-            targetLayerId: this.overlayLayerId,
-            stack: 790,
-            order: 0,
-            objects: this.overlaySpecs,
-          },
-        ],
-      }),
-      { priority: 260 },
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
     );
 
     this.subscriptions.on(
@@ -336,13 +315,10 @@ export class WhiteInkTool implements ExtensionDefinition {
     this.dirtyTrackerDisposable = undefined;
     this.sourceSizeCache.clear();
     this.clearRenderedWhiteInks();
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
-    if (this.canvasService) {
-      void this.canvasService.flushRenderFromProducers();
-    }
+    clearRenderIntentSource(this.renderIntentService, this.id);
 
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.context = undefined;
   }
 
@@ -1217,11 +1193,10 @@ export class WhiteInkTool implements ExtensionDefinition {
   }
 
   private clearRenderedWhiteInks() {
-    if (!this.canvasService) return;
     this.whiteSpecs = [];
     this.coverSpecs = [];
     this.overlaySpecs = [];
-    this.canvasService.requestRenderFromProducers();
+    clearRenderIntentSource(this.renderIntentService, this.id);
   }
 
   private purgeSourceCaches(item?: WhiteInkItem) {
@@ -1320,10 +1295,35 @@ export class WhiteInkTool implements ExtensionDefinition {
     if (seq !== this.renderSeq) return;
 
     this.overlaySpecs = frameSpecs;
-    await this.canvasService.flushRenderFromProducers();
+    this.publishRenderIntents();
     if (seq !== this.renderSeq) return;
     if (!this.canvasService) return;
     this.canvasService.requestRenderAll();
+  }
+
+  private publishRenderIntents() {
+    clearRenderIntentSource(this.renderIntentService, this.id);
+    patchRenderObjectSpecs(this.renderIntentService, this.coverSpecs, {
+      sourceId: this.id,
+      layerId: this.coverLayerId,
+      stack: 220,
+      layerOrder: 0,
+      channel: "overlay",
+    });
+    patchRenderObjectSpecs(this.renderIntentService, this.whiteSpecs, {
+      sourceId: this.id,
+      layerId: this.whiteLayerId,
+      stack: 221,
+      layerOrder: 0,
+      channel: "overlay",
+    });
+    patchRenderObjectSpecs(this.renderIntentService, this.overlaySpecs, {
+      sourceId: this.id,
+      layerId: this.overlayLayerId,
+      stack: 790,
+      layerOrder: 0,
+      channel: "overlay",
+    });
   }
 
   private getMaskCacheKey(sourceUrl: string, tint: MaskTint): string {

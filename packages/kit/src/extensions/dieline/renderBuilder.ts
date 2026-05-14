@@ -36,7 +36,7 @@ export interface DielineRenderOptions {
   ids?: Partial<DielineRenderIds>;
   createHatchPattern?: (color: string) => RenderPatternSpec | undefined;
   includeImageClipEffect?: boolean;
-  clipTargetPassIds?: string[];
+  clipTargetLayerIds?: string[];
   clipVisibility?: VisibilityExpr;
 }
 
@@ -69,7 +69,7 @@ export function buildDielineRenderBundle(
     hasImages,
     createHatchPattern,
     includeImageClipEffect = true,
-    clipTargetPassIds = [IMAGE_OBJECT_LAYER_ID],
+    clipTargetLayerIds = [IMAGE_OBJECT_LAYER_ID],
     clipVisibility,
   } = options;
   const { shape, shapeStyle, radius, mainLine, offsetLine, insideColor } =
@@ -284,7 +284,7 @@ export function buildDielineRenderBundle(
         type: "clipPath",
         id: ids.clip,
         visibility: clipVisibility,
-        targetPassIds: clipTargetPassIds,
+        targetLayerIds: clipTargetLayerIds,
         source: clipSource,
       },
     ],

@@ -9,4 +9,3 @@ export {
 
 export const FABRIC_RENDER_GRAPH_ADAPTER =
   createServiceToken<FabricRenderGraphAdapter>("FabricRenderGraphAdapter");
-export const FABRIC_SCENE_ADAPTER = FABRIC_RENDER_GRAPH_ADAPTER;

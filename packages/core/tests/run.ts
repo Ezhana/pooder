@@ -42,14 +42,6 @@ class FakeLayoutCanvasService implements CanvasService {
     this.height = height;
   }
 
-  registerRenderProducer() {
-    return { dispose: () => {} };
-  }
-  unregisterRenderProducer() {
-    return false;
-  }
-  requestRenderFromProducers() {}
-  async flushRenderFromProducers() {}
   requestRenderAll() {}
   resize() {}
   getViewportSize() {
@@ -79,12 +71,6 @@ class FakeLayoutCanvasService implements CanvasService {
     };
   }
   getObjects() {
-    return [];
-  }
-  getPassObjects() {
-    return [];
-  }
-  getRootLayerObjects() {
     return [];
   }
   getObject() {
@@ -136,25 +122,6 @@ class FakeLayoutCanvasService implements CanvasService {
   getScreenViewportRect() {
     return { left: 0, top: 0, width: this.width, height: this.height };
   }
-  setLayerVisibility() {
-    return false;
-  }
-  setPassVisibility() {
-    return false;
-  }
-  bringLayerToFront() {}
-  bringPassToFront() {}
-  async applyPassSpec() {}
-  async applyObjectSpecsToRootLayer() {}
-  async applyObjectSpecsToPass() {}
-  setVisibilityContextValue() {}
-  deleteVisibilityContextValue() {
-    return false;
-  }
-  clearVisibilityContextValues() {
-    return false;
-  }
-  syncPassStacking() {}
   async loadImageSize() {
     return null;
   }
@@ -1348,6 +1315,140 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
   });
 }
 
+async function testRenderIntentProjectionAndVisibilityContext() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    let changeCount = 0;
+    const subscription = intents.onDidChange(() => {
+      changeCount += 1;
+    });
+
+    intents.setDocumentIntents([
+      {
+        id: "source",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "artwork",
+          objectId: "source-subject",
+        },
+        visual: { type: "rect" },
+        ordering: { layerId: "artwork", objectOrder: 0 },
+        props: { width: 100, height: 80, opacity: 0.5 },
+      },
+      {
+        id: "projection",
+        subject: {
+          kind: "layer",
+          surfaceId: "front",
+          layerId: "overlay",
+        },
+        projection: {
+          sourceSubjectIds: ["source-subject"],
+          opacity: 0.4,
+          interactive: true,
+          suppressSource: true,
+        },
+        ordering: { layerId: "overlay", stack: 1, objectOrder: 0 },
+        export: { visibility: { op: "contextTruthy", key: "show.overlay" } },
+      },
+    ]);
+
+    const graph = intents.getGraph();
+    const sourceNode = graph.layers
+      .find((layer) => layer.id === "artwork")
+      ?.nodes.find((node) => node.id === "source");
+    const projectionNode = graph.layers
+      .find((layer) => layer.id === "overlay")
+      ?.nodes.find((node) => node.id.startsWith("projection:projection:source"));
+
+    assertEqual(sourceNode?.visible, false, "projection should suppress source in graph");
+    assertEqual(
+      projectionNode?.projection?.sourceSubjectId,
+      "source-subject",
+      "projection node should reference its source subject",
+    );
+    assertEqual(
+      projectionNode?.props.opacity,
+      0.2,
+      "projection opacity should compose with source opacity",
+    );
+    assertEqual(
+      projectionNode?.props.selectable,
+      true,
+      "interactive projections should become selectable draw nodes",
+    );
+    assertEqual(
+      intents.setVisibilityContextValue("show.overlay", true),
+      true,
+      "visibility context updates should report changes",
+    );
+    assertEqual(
+      intents.getVisibilityContextValue("show.overlay"),
+      true,
+      "visibility context should be stored on RenderIntentService",
+    );
+    assert(
+      changeCount >= 2,
+      "visibility context updates should notify graph subscribers",
+    );
+
+    subscription.dispose();
+  });
+}
+
+async function testRenderIntentClipTargetsLayerAndSubject() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    intents.setDocumentIntents([
+      {
+        id: "clip-target",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "artwork",
+          objectId: "target",
+        },
+        visual: { type: "rect" },
+        ordering: { layerId: "artwork" },
+        props: { width: 10, height: 10 },
+        clipping: {
+          effects: [
+            {
+              type: "clipPath",
+              id: "clip.target",
+              source: {
+                id: "clip-source",
+                type: "rect",
+                props: { width: 5, height: 5 },
+              },
+              targetLayerIds: ["artwork"],
+              targetSubjectIds: ["target"],
+            },
+          ],
+        },
+      },
+    ]);
+
+    const effect = intents.getGraph().layers[0]?.nodes[0]?.effects[0];
+    assertDeepEqual(
+      {
+        targetLayerIds: effect?.targetLayerIds,
+        targetSubjectIds: effect?.targetSubjectIds,
+      },
+      {
+        targetLayerIds: ["artwork"],
+        targetSubjectIds: ["target"],
+      },
+      "clip effects should target graph layer and subject ids",
+    );
+  });
+}
+
 async function testSceneLayoutModelDefaultsAndPadding() {
   const config = {
     get: <T>(_key: string, defaultValue?: T) => defaultValue,
@@ -1534,6 +1635,14 @@ async function main() {
     [
       "writes render intent interaction onto graph props and data",
       testRenderIntentInteractionAspectWritesGraphPropsAndData,
+    ],
+    [
+      "builds render intent projection nodes and visibility context",
+      testRenderIntentProjectionAndVisibilityContext,
+    ],
+    [
+      "keeps render intent clip targets graph-scoped",
+      testRenderIntentClipTargetsLayerAndSubject,
     ],
     [
       "resolves scene layout defaults and responsive padding",

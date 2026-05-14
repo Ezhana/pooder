@@ -8,6 +8,8 @@ import {
 import {
   CANVAS_SERVICE,
   CanvasService,
+  RENDER_INTENT_SERVICE,
+  RenderIntentService,
   RenderObjectSpec,
 } from "@pooder/core";
 import {
@@ -21,6 +23,10 @@ import {
   type SourceSize,
 } from "../../shared/imaging/sourceSizeCache";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
+import {
+  clearRenderIntentSource,
+  patchRenderObjectSpecs,
+} from "../../shared/runtime/renderIntentPatches";
 import {
   BACKGROUND_CAPABILITY_ID,
   createBackgroundCapabilityDefinition,
@@ -393,16 +399,16 @@ export class BackgroundTool implements ExtensionDefinition {
     name: "BackgroundTool",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
   };
 
   private config: BackgroundConfig = cloneConfig(DEFAULT_BACKGROUND_CONFIG);
 
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private configService?: ConfigurationService;
 
   private specs: RenderObjectSpec[] = [];
-  private renderProducerDisposable?: { dispose: () => void };
   private readonly subscriptions = new SubscriptionBag();
 
   private renderSeq = 0;
@@ -464,6 +470,9 @@ export class BackgroundTool implements ExtensionDefinition {
     this.subscriptions.disposeAll();
     this.canvasService =
       context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
 
     this.configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
@@ -487,23 +496,6 @@ export class BackgroundTool implements ExtensionDefinition {
       },
     );
 
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: [
-          {
-            id: BACKGROUND_LAYER_ID,
-            targetLayerId: this.backgroundLayerId,
-            stack: 0,
-            order: 0,
-            objects: this.specs,
-          },
-        ],
-      }),
-      { priority: 0 },
-    );
-
     this.subscriptions.on(
       context.eventBus,
       "canvas:resized",
@@ -525,15 +517,11 @@ export class BackgroundTool implements ExtensionDefinition {
     this.latestSceneLayout = null;
     this.sourceSizeCache.clear();
 
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
-
-    if (!this.canvasService) return;
-
-    void this.canvasService.flushRenderFromProducers();
-    this.canvasService.requestRenderAll();
+    clearRenderIntentSource(this.renderIntentService, this.id);
+    this.canvasService?.requestRenderAll();
 
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.configService = undefined;
   }
 
@@ -1040,7 +1028,13 @@ export class BackgroundTool implements ExtensionDefinition {
 
     this.specs = this.buildBackgroundSpecs(currentConfig);
 
-    await this.canvasService.flushRenderFromProducers();
+    patchRenderObjectSpecs(this.renderIntentService, this.specs, {
+      sourceId: this.id,
+      layerId: this.backgroundLayerId,
+      stack: 0,
+      layerOrder: 0,
+      channel: "background",
+    });
     if (seq !== this.renderSeq) return;
 
     this.canvasService.requestRenderAll();
