@@ -651,8 +651,13 @@ export default class CanvasService implements Service, CanvasServiceContract {
   private refreshManagedVisibility(
     options: { render?: boolean } = {},
   ): boolean {
-    const changed = this.applyManagedPassVisibility(options);
+    const changed =
+      this.applyManagedPassVisibility({ render: false }) ||
+      this.applyObjectVisibility({ render: false });
     void this.applyManagedPassEffects(undefined, { render: options.render });
+    if (changed && options.render !== false) {
+      this.requestRenderAll();
+    }
     return changed;
   }
 
@@ -724,6 +729,38 @@ export default class CanvasService implements Service, CanvasServiceContract {
         this.setPassVisibility(meta.targetLayerId, visible, {
           scope: meta.scope,
         }) || changed;
+    });
+
+    if (changed && options.render !== false) {
+      this.requestRenderAll();
+    }
+    return changed;
+  }
+
+  private resolveSpecVisible(spec: RenderObjectSpec, props: Record<string, any>) {
+    const baseVisible = props.visible !== false;
+    if (!baseVisible) return false;
+    return evaluateVisibilityExpr(
+      spec.visibility,
+      this.buildVisibilityEvalContext(this.getPassRuntimeState()),
+    );
+  }
+
+  private applyObjectVisibility(
+    options: { render?: boolean } = {},
+  ): boolean {
+    const context = this.buildVisibilityEvalContext(this.getPassRuntimeState());
+    let changed = false;
+
+    this.canvas.getObjects().forEach((object: any) => {
+      const visibility = object?.data?.__renderVisibility;
+      if (!visibility) return;
+      const baseVisible = object?.data?.__renderBaseVisible !== false;
+      const visible = baseVisible && evaluateVisibilityExpr(visibility, context);
+      if (object.visible === visible) return;
+      object.set?.({ visible });
+      object.setCoords?.();
+      changed = true;
     });
 
     if (changed && options.render !== false) {
@@ -1722,6 +1759,12 @@ export default class CanvasService implements Service, CanvasServiceContract {
       id: spec.id,
     };
     nextData.__renderSourceKey = this.getSpecRenderSourceKey(spec);
+    nextData.__renderBaseVisible = spec.props?.visible !== false;
+    if (spec.visibility) {
+      nextData.__renderVisibility = spec.visibility;
+    } else {
+      delete nextData.__renderVisibility;
+    }
     const props = this.resolveFabricProps(spec, spec.props || {});
     obj.set({ ...props, data: nextData });
     obj.setCoords();
@@ -1788,6 +1831,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       evented: false,
       ...this.resolveRenderPatternProps(this.resolveLayoutProps(spec, props)),
     };
+    next.visible = this.resolveSpecVisible(spec, next);
     if (space === "screen") {
       return next;
     }

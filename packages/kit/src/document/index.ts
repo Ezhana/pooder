@@ -1,9 +1,16 @@
 import {
   EFFECT_APPLICATOR_REGISTRY_SERVICE,
+  RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+  RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   type EffectApplicationTarget,
   type EffectApplicatorRegistryService,
   type ExtensionDefinition,
+  type RenderEffectSpec,
+  type RenderIntentCompilerRegistryService,
+  type RenderIntentDraft,
+  type RenderIntentPatch,
+  type RenderIntentService,
   type SceneElementInput,
   type SceneService,
   type Service,
@@ -176,13 +183,75 @@ export async function applyKitEditorDocument(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  const sceneService = runtime.services.getOrThrow<SceneService>(
-    SCENE_SERVICE,
-    "SceneService is required to apply an EditorDocument.",
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+    "RenderIntentService is required to apply an EditorDocument.",
   );
+  const sceneService = getOptionalSceneService(runtime);
   const assetsById = new Map((document.assets ?? []).map((asset) => [asset.id, asset]));
   applySurfaceSizeConfig(runtime, document);
 
+  const intentDrafts = createBaseRenderIntentDrafts(document, assetsById);
+  if (sceneService) {
+    syncDocumentToScene(sceneService, document, assetsById);
+  }
+
+  const effectEntries = collectEffectEntries(document).sort(compareEffectEntries);
+  for (const entry of effectEntries) {
+    const capabilityId = resolveKitEditorDocumentEffectCapabilityId(entry.effect);
+    if (!capabilityId || !runtime.capabilities.has(capabilityId)) {
+      continue;
+    }
+    const patches = await compileRenderIntentPatches(
+      runtime,
+      document,
+      capabilityId,
+      entry.effect,
+      entry.context,
+      assetsById,
+    );
+    intentDrafts.push(
+      ...patches.map((patch) => mergeRenderIntentPatch(intentDrafts, patch)),
+    );
+    const appliedByLegacyApplicator = sceneService
+      ? await applyKitEffectApplicators(
+          runtime,
+          document,
+          capabilityId,
+          entry.effect,
+          entry.context,
+        )
+      : false;
+    if (!appliedByLegacyApplicator && patches.length === 0) {
+      await applyKitEffect(runtime, capabilityId, entry.effect, entry.context, assetsById);
+    }
+  }
+
+  renderIntentService.setDocumentIntents(intentDrafts);
+
+  return createResult(
+    true,
+    document,
+    allDiagnostics,
+    document.surfaces.map((surface) => surface.id),
+  );
+}
+
+function getOptionalSceneService(
+  runtime: KitEditorDocumentRuntime,
+): SceneService | undefined {
+  try {
+    return runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  } catch {
+    return undefined;
+  }
+}
+
+function syncDocumentToScene(
+  sceneService: SceneService,
+  document: EditorDocument,
+  assetsById: Map<string, EditorAsset>,
+) {
   sceneService.transaction(() => {
     document.surfaces.forEach((surface) => {
       surface.layers.forEach((layer) => {
@@ -199,31 +268,6 @@ export async function applyKitEditorDocument(
       });
     });
   });
-
-  const effectEntries = collectEffectEntries(document).sort(compareEffectEntries);
-  for (const entry of effectEntries) {
-    const capabilityId = resolveKitEditorDocumentEffectCapabilityId(entry.effect);
-    if (!capabilityId || !runtime.capabilities.has(capabilityId)) {
-      continue;
-    }
-    const appliedByApplicator = await applyKitEffectApplicators(
-      runtime,
-      document,
-      capabilityId,
-      entry.effect,
-      entry.context,
-    );
-    if (!appliedByApplicator) {
-      await applyKitEffect(runtime, capabilityId, entry.effect, entry.context, assetsById);
-    }
-  }
-
-  return createResult(
-    true,
-    document,
-    allDiagnostics,
-    document.surfaces.map((surface) => surface.id),
-  );
 }
 
 function createResult(
@@ -259,6 +303,438 @@ function collectAvailableCapabilityIds(
         .filter((id) => runtime.capabilities.has(id)),
     ),
   );
+}
+
+function createBaseRenderIntentDrafts(
+  document: EditorDocument,
+  assetsById: Map<string, EditorAsset>,
+): RenderIntentDraft[] {
+  const drafts: RenderIntentDraft[] = [];
+  document.surfaces.forEach((surface) => {
+    surface.layers.forEach((layer) => {
+      layer.objects?.forEach((object, index) => {
+        const draft = createObjectRenderIntentDraft(
+          surface,
+          layer,
+          object,
+          index,
+          assetsById,
+        );
+        if (draft) drafts.push(draft);
+      });
+    });
+  });
+  return drafts;
+}
+
+function createObjectRenderIntentDraft(
+  surface: EditorSurface,
+  layer: EditorLayer,
+  object: EditorObject,
+  index: number,
+  assetsById: Map<string, EditorAsset>,
+): RenderIntentDraft | null {
+  if (!object.frame) return null;
+  const objectOrder = object.order ?? index;
+  const layerOrder = layer.order ?? 0;
+  const imagePlacementEffect = findImagePlacementEffect(object.effects);
+  const templateOverlayEffect = findEffectByCapability(
+    object.effects,
+    TEMPLATE_OVERLAY_CAPABILITY_ID,
+  );
+  const isImagePlacementSlot = object.type === "image" && Boolean(imagePlacementEffect);
+  const isComposableSlot = isImagePlacementSlot && Boolean(templateOverlayEffect);
+  const base = {
+    id: object.id,
+    subject: {
+      kind: "object" as const,
+      surfaceId: surface.id,
+      layerId: layer.id,
+      objectId: object.id,
+      objectType: object.type,
+    },
+    placement: {
+      frame: object.frame,
+      transform: normalizeRenderIntentTransform(object),
+      width: object.type === "image" || object.type === "rect"
+        ? object.width ?? object.frame.width
+        : object.frame.width,
+      height: object.type === "image" || object.type === "rect"
+        ? object.height ?? object.frame.height
+        : object.frame.height,
+      ...(isImagePlacementSlot
+        ? { fit: readImagePlacementFit(imagePlacementEffect) }
+        : {}),
+    },
+    ordering: {
+      layerId: layer.id,
+      layerOrder,
+      objectOrder,
+      channel: "normal" as const,
+      subOrder: 0,
+      stack: resolveLayerStack(layer),
+    },
+    export: {
+      visible: (layer.visible ?? true) && (object.visible ?? true),
+      exportable: (layer.exportable ?? true) && (object.exportable ?? true),
+    },
+    props: {
+      ...(object.style ?? {}),
+      selectable: object.locked !== true,
+      evented: object.locked !== true,
+      ...(object.transform ?? {}),
+    },
+    data: {
+      id: object.id,
+      layerId: layer.id,
+      documentSurfaceId: surface.id,
+      documentObjectType: object.type,
+      documentLayerRole: layer.role,
+      locked: object.locked,
+      exportable: object.exportable,
+    },
+  } satisfies Omit<RenderIntentDraft, "visual">;
+
+  if (object.type === "image") {
+    const source = resolveImageObjectSource(object, assetsById);
+    const committed = resolveCommittedImagePlacementSource(object, assetsById);
+    const metadata = isRecord(object.metadata?.imagePlacement)
+      ? object.metadata.imagePlacement
+      : undefined;
+    return {
+      ...base,
+      visual: {
+        type: "image",
+        ...(isComposableSlot
+          ? {}
+          : {
+              ...(object.assetId ? { assetId: object.assetId } : {}),
+              ...(source ? { src: source } : {}),
+            }),
+        ...(isComposableSlot
+          ? {
+              fallback: {
+                ...(object.assetId ? { assetId: object.assetId } : {}),
+                ...(source ? { src: source } : {}),
+              },
+            }
+          : {}),
+        ...(committed
+          ? {
+              replacement: committed,
+            }
+          : {}),
+      },
+      interaction: isImagePlacementSlot
+        ? {
+            imagePlacement: createRenderIntentImagePlacementData(
+              object,
+              imagePlacementEffect,
+              assetsById,
+              isComposableSlot,
+            ),
+          }
+        : undefined,
+      overlay: templateOverlayEffect
+        ? { enabled: true, role: readTemplateOverlayRole(templateOverlayEffect) }
+        : undefined,
+      data: {
+        ...base.data,
+        ...(metadata ? { imagePlacementMetadata: metadata } : {}),
+      },
+    };
+  }
+
+  if (object.type === "path") {
+    return {
+      ...base,
+      visual: { type: "path" },
+      props: { ...base.props, path: object.path },
+    };
+  }
+
+  if (object.type === "rect") {
+    return {
+      ...base,
+      visual: { type: "rect" },
+      props: {
+        ...base.props,
+        width: object.width ?? object.frame.width,
+        height: object.height ?? object.frame.height,
+      },
+    };
+  }
+
+  return {
+    ...base,
+    visual: { type: "text" },
+    props: { ...base.props, text: object.text },
+  };
+}
+
+function findEffectByCapability(
+  effects: readonly EditorEffect[] | undefined,
+  capabilityId: string,
+): EditorEffect | undefined {
+  return effects?.find(
+    (effect) => resolveKitEditorDocumentEffectCapabilityId(effect) === capabilityId,
+  );
+}
+
+function readImagePlacementFit(effect: EditorEffect | undefined) {
+  const payload = readImagePlacementPayload(effect);
+  return payload.fit === "contain" || payload.fit === "stretch"
+    ? payload.fit
+    : "cover";
+}
+
+function readTemplateOverlayRole(effect: EditorEffect | undefined): string {
+  const payload = getPayload(effect ?? { type: "template-overlay" });
+  return typeof payload.role === "string" && payload.role.trim()
+    ? payload.role.trim()
+    : "default-artwork";
+}
+
+function normalizeRenderIntentTransform(object: EditorObject) {
+  return {
+    ...(object.transform ?? {}),
+    left: object.transform?.left ?? object.frame?.x ?? 0,
+    top: object.transform?.top ?? object.frame?.y ?? 0,
+    originX: object.transform?.originX ?? "left",
+    originY: object.transform?.originY ?? "top",
+  };
+}
+
+function resolveCommittedImagePlacementSource(
+  object: EditorImageObject,
+  assetsById: Map<string, EditorAsset>,
+) {
+  const metadata = isRecord(object.metadata?.imagePlacement)
+    ? object.metadata.imagePlacement
+    : {};
+  const committedAssetId =
+    typeof metadata.committedAssetId === "string"
+      ? metadata.committedAssetId
+      : undefined;
+  const committedAsset = committedAssetId
+    ? assetsById.get(committedAssetId)
+    : undefined;
+  const committedSrc =
+    (typeof metadata.committedSrc === "string" && metadata.committedSrc) ||
+    committedAsset?.src;
+  if (!committedSrc && !committedAssetId) return undefined;
+  return {
+    ...(committedAssetId ? { assetId: committedAssetId } : {}),
+    ...(committedSrc ? { src: committedSrc } : {}),
+    metadata: { ...metadata },
+  };
+}
+
+function createRenderIntentImagePlacementData(
+  object: EditorImageObject,
+  imagePlacementEffect: EditorEffect | undefined,
+  assetsById: Map<string, EditorAsset>,
+  isComposableSlot: boolean,
+) {
+  const payload = readImagePlacementPayload(imagePlacementEffect);
+  const committed = resolveCommittedImagePlacementSource(object, assetsById);
+  const legacyImage = normalizeImagePlacementImageState(object, assetsById);
+  return {
+    enabled: true,
+    slotId: object.id,
+    frame: object.frame,
+    fit: readImagePlacementFit(imagePlacementEffect),
+    image: committed ?? (isComposableSlot ? undefined : legacyImage),
+    accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
+    ...(isRecord(payload.placeholder) ? { placeholder: payload.placeholder } : {}),
+    sessionProjections: normalizeImageSessionProjections(
+      payload.sessionProjections,
+    ),
+  };
+}
+
+function resolveLayerStack(layer: EditorLayer): number {
+  return layer.role === "overlay" ? 780 : 0;
+}
+
+async function compileRenderIntentPatches(
+  runtime: KitEditorDocumentRuntime,
+  document: EditorDocument,
+  capabilityId: string,
+  effect: EditorEffect,
+  context: EffectContext,
+  _assetsById: Map<string, EditorAsset>,
+): Promise<RenderIntentPatch[]> {
+  const patches: RenderIntentPatch[] = [];
+  const target = resolveRenderIntentTarget(effect, context, document);
+  if (!target) return patches;
+
+  try {
+    const registry =
+      runtime.services.getOrThrow<RenderIntentCompilerRegistryService>(
+        RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+        "RenderIntentCompilerRegistryService is required to apply render intent compilers.",
+      );
+    const compilers = registry.getCompilers({
+      capabilityId,
+      effectType: effect.type,
+    });
+    for (const compiler of compilers) {
+      const compiled = await compiler.compile({
+        document,
+        effect,
+        services: runtime.services as any,
+        target,
+      });
+      patches.push(...normalizeRenderIntentPatches(compiled));
+    }
+  } catch {
+    // Missing compiler registry is tolerated for compatibility runtimes.
+  }
+
+  patches.push(...compileBuiltinRenderIntentPatches(capabilityId, effect, target));
+  return patches;
+}
+
+function normalizeRenderIntentPatches(
+  value: RenderIntentPatch[] | RenderIntentPatch | void,
+): RenderIntentPatch[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function compileBuiltinRenderIntentPatches(
+  capabilityId: string,
+  effect: EditorEffect,
+  target: RenderIntentDraft["subject"],
+): RenderIntentPatch[] {
+  if (!target.objectId) return [];
+  const payload = getPayload(effect);
+
+  if (capabilityId === TEMPLATE_OVERLAY_CAPABILITY_ID) {
+    return [
+      {
+        id: target.objectId,
+        overlay: {
+          enabled: true,
+          role:
+            typeof payload.role === "string" && payload.role.trim()
+              ? payload.role.trim()
+              : "default-artwork",
+        },
+      },
+    ];
+  }
+
+  if (capabilityId === IMAGE_PLACEMENT_CAPABILITY_ID) {
+    return [
+      {
+        id: target.objectId,
+        placement: { fit: readImagePlacementFit(effect) },
+      },
+    ];
+  }
+
+  if (capabilityId === CLIP_CAPABILITY_ID) {
+    const clipEffect = createClipPathEffect(target.objectId, payload);
+    return clipEffect
+      ? [{ id: target.objectId, clipping: { enabled: true, effects: [clipEffect] } }]
+      : [];
+  }
+
+  return [];
+}
+
+function createClipPathEffect(
+  objectId: string,
+  payload: Record<string, unknown>,
+): RenderEffectSpec | null {
+  const source = isRecord(payload.source) ? payload.source : {};
+  if (source.type !== "path") return null;
+  const pathData = typeof source.pathData === "string" ? source.pathData : "";
+  if (!pathData.trim()) return null;
+  return {
+    type: "clipPath",
+    id: `clip.${objectId}`,
+    source: {
+      id: `clip.${objectId}.path-source`,
+      type: "path",
+      space: source.space === "screen" ? "screen" : "scene",
+      data: {
+        id: `clip.${objectId}.path-source`,
+        type: "clip-effect",
+        effect: "clipPath",
+      },
+      props: {
+        pathData,
+        fill: "#000000",
+        stroke: null,
+        originX: "left",
+        originY: "top",
+        selectable: false,
+        evented: false,
+        excludeFromExport: true,
+      },
+    },
+    targetPassIds: [],
+    targetElementIds: [objectId],
+  };
+}
+
+function resolveRenderIntentTarget(
+  effect: EditorEffect,
+  context: EffectContext,
+  document: EditorDocument,
+): RenderIntentDraft["subject"] | null {
+  const legacyTarget = resolveEffectTarget(effect, context, document);
+  if (!legacyTarget) return null;
+  return {
+    kind: legacyTarget.kind,
+    surfaceId: legacyTarget.surfaceId,
+    layerId: legacyTarget.layerId,
+    objectId: legacyTarget.objectId,
+    objectType: legacyTarget.objectType,
+  };
+}
+
+function mergeRenderIntentPatch(
+  drafts: RenderIntentDraft[],
+  patch: RenderIntentPatch,
+): RenderIntentDraft {
+  const base = drafts.find((draft) => draft.id === patch.id);
+  if (!base) {
+    const subject = patch.subject ?? {};
+    const ordering = patch.ordering ?? {};
+    return {
+      ...patch,
+      id: patch.id,
+      subject: {
+        kind: subject.kind ?? "object",
+        surfaceId: subject.surfaceId ?? "unknown",
+        layerId: subject.layerId,
+        objectId: subject.objectId ?? patch.id,
+        objectType: subject.objectType,
+      },
+      ordering: {
+        ...ordering,
+        layerId: ordering.layerId ?? subject.layerId ?? "unknown",
+      },
+    };
+  }
+  return {
+    ...base,
+    subject: { ...base.subject, ...(patch.subject ?? {}) },
+    visual: { ...(base.visual ?? {}), ...(patch.visual ?? {}) },
+    placement: { ...(base.placement ?? {}), ...(patch.placement ?? {}) },
+    overlay: { ...(base.overlay ?? {}), ...(patch.overlay ?? {}) },
+    clipping: { ...(base.clipping ?? {}), ...(patch.clipping ?? {}) },
+    interaction: { ...(base.interaction ?? {}), ...(patch.interaction ?? {}) },
+    export: { ...(base.export ?? {}), ...(patch.export ?? {}) },
+    ordering: { ...base.ordering, ...(patch.ordering ?? {}) },
+    props: { ...(base.props ?? {}), ...(patch.props ?? {}) },
+    data: { ...(base.data ?? {}), ...(patch.data ?? {}) },
+    extensions: { ...(base.extensions ?? {}), ...(patch.extensions ?? {}) },
+  };
 }
 
 function upsertSceneLayer(

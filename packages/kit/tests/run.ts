@@ -117,6 +117,7 @@ import {
 import {
   SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
+  RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   evaluateVisibilityExpr,
 } from "@pooder/core";
@@ -133,6 +134,7 @@ import {
   type CommandService,
   type ExtensionDefinition,
   Pooder,
+  type RenderIntentService,
   type SceneService,
   ToolRegistryService,
 } from "@pooder/core";
@@ -161,10 +163,27 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
+function imagePlacementCommittedVisibility(slotId: string) {
+  return {
+    op: "not",
+    expr: {
+      op: "all",
+      exprs: [
+        { op: "sessionActive", toolId: IMAGE_PLACEMENT_CAPABILITY_ID },
+        {
+          op: "contextTruthy",
+          key: `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.${slotId}`,
+        },
+      ],
+    },
+  };
+}
+
 class FakeCanvasService {
   private activeObject: any = null;
   private readonly eventHandlers = new Map<string, Set<(event?: any) => void>>();
   private readonly renderProducers = new Map<string, () => unknown>();
+  readonly visibilityContextValues = new Map<string, unknown>();
 
   canvas = {
     width: 800,
@@ -225,6 +244,21 @@ class FakeCanvasService {
 
   requestRenderAll() {}
 
+  setVisibilityContextValue(key: string, value: unknown) {
+    this.visibilityContextValues.set(key, value);
+    return true;
+  }
+
+  deleteVisibilityContextValue(key: string) {
+    return this.visibilityContextValues.delete(key);
+  }
+
+  clearVisibilityContextValues() {
+    const hadValues = this.visibilityContextValues.size > 0;
+    this.visibilityContextValues.clear();
+    return hadValues;
+  }
+
   getObjects(options: any = {}) {
     const objects = this.canvas.getObjects();
     return objects.filter((object: any) => {
@@ -232,6 +266,14 @@ class FakeCanvasService {
       if (options.type && object.type !== options.type) return false;
       if (options.predicate && !options.predicate(object)) return false;
       return true;
+    });
+  }
+
+  getObject(id: string, passId?: string) {
+    return this.canvas.getObjects().find((object: any) => {
+      if (object?.data?.id !== id) return false;
+      if (!passId) return true;
+      return object?.data?.passId === passId || object?.data?.layerId === passId;
     });
   }
 
@@ -1786,7 +1828,6 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
   await facade.beginSession("slot");
-
   const render = (await canvasService.getRenderProducerResult(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   )) as any;
@@ -1935,20 +1976,29 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const committedRender = (await canvasService.getRenderProducerResult(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   )) as any;
-  const committedImagePass = committedRender.passes.find(
-    (pass: any) => pass.targetLayerId === "artwork",
-  );
   const clearedImageSessionPass = committedRender.passes.find(
     (pass: any) => pass.id === "image.user.session.image",
   );
+  const graph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const artworkGraphLayer = graph.layers.find((layer) => layer.id === "artwork");
+  const committedGraphNode = artworkGraphLayer?.nodes.find(
+    (node) => node.id === "image:slot",
+  );
   assertEqual(
-    committedImagePass?.targetLayerId,
+    artworkGraphLayer?.id,
     "artwork",
-    "completed slot should render through the slot business layer",
+    "completed slot should render through the graph anchored business layer",
   );
   assert(
-    committedImagePass?.objects.some((spec: any) => spec.id === "image:slot"),
-    "completed slot should render the processed production image object",
+    committedGraphNode?.visual?.src === "data:image/png;base64,cropped-slot",
+    "completed slot should write the processed production image node",
+  );
+  assertDeepEqual(
+    committedGraphNode?.visibility,
+    imagePlacementCommittedVisibility("slot"),
+    "completed slot should declaratively hide the graph-backed committed image while editing",
   );
   assert(
     !clearedImageSessionPass?.objects.some(
@@ -1981,6 +2031,17 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "reopened image session should restore the source transform",
   );
   facade.resetSession("slot");
+  const resetGraph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const resetGraphNode = resetGraph.layers
+    .find((layer) => layer.id === "artwork")
+    ?.nodes.find((node) => node.id === "image:slot");
+  assertEqual(
+    resetGraphNode?.visual?.src,
+    "data:image/png;base64,cropped-slot",
+    "resetting a reopened image session should keep the committed production image",
+  );
 
   await facade.beginSession("slot");
   await facade.setImageSource("slot", {
@@ -2007,6 +2068,148 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     (strictResult as any).ok,
     false,
     "strict image placement policy should block outside-frame completion",
+  );
+
+  await runtime.dispose();
+}
+
+async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "artwork" });
+  scene.addElement({
+    id: "slot-a",
+    layerId: "artwork",
+    type: "rect",
+    width: 100,
+    height: 100,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 0, y: 0, width: 100, height: 100 },
+      },
+    },
+  });
+  scene.addElement({
+    id: "slot-b",
+    layerId: "artwork",
+    type: "rect",
+    width: 100,
+    height: 100,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 120, y: 0, width: 100, height: 100 },
+      },
+    },
+  });
+  scene.addElement({
+    id: "committed-slot",
+    layerId: "artwork",
+    type: "rect",
+    width: 100,
+    height: 100,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 240, y: 0, width: 100, height: 100 },
+        image: {
+          src: "/committed.png",
+          metadata: { width: 100, height: 100 },
+          left: 0.5,
+          top: 0.5,
+          scale: 1,
+          angle: 0,
+        },
+      },
+    },
+  });
+
+  runtime.extensions.register(
+    createImagePlacementCapability({
+      requestUpload: async (slot) => ({
+        src: `/upload-${slot.id}.png`,
+        metadata: { width: 100, height: 100 },
+      }),
+    }),
+  );
+  await runtime.extensions.flushActivation();
+  const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
+
+  await facade.requestUpload("slot-a");
+  await facade.setImageTransform("slot-a", { scale: 1.8 });
+  facade.resetSession("slot-a");
+  const resetUploadedSlot = facade
+    .getViewState()
+    .slots.find((slot) => slot.id === "slot-a");
+  assertEqual(
+    resetUploadedSlot?.image?.src,
+    "/upload-slot-a.png",
+    "resetting after upload should keep the uploaded draft image",
+  );
+  assertEqual(
+    resetUploadedSlot?.image?.scale,
+    1,
+    "resetting after upload should restore the upload baseline transform",
+  );
+  await facade.beginSession("slot-b");
+  let render = (await canvasService.getRenderProducerResult(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  )) as any;
+  let imageSessionPass = render.passes.find(
+    (pass: any) => pass.id === "image.user.session.image",
+  );
+  assert(
+    imageSessionPass.objects.some((spec: any) => spec.id === "session-image:slot-a"),
+    "uploaded working image should remain visible after focusing another slot",
+  );
+
+  await facade.requestUpload("slot-b");
+  render = (await canvasService.getRenderProducerResult(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  )) as any;
+  imageSessionPass = render.passes.find(
+    (pass: any) => pass.id === "image.user.session.image",
+  );
+  const workingObjectIds = imageSessionPass.objects.map((spec: any) => spec.id);
+  assert(
+    workingObjectIds.includes("session-image:slot-a") &&
+      workingObjectIds.includes("session-image:slot-b"),
+    "multiple uploaded working images should render together before commit",
+  );
+  assert(
+    canvasService.visibilityContextValues.has(
+      `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.slot-a`,
+    ),
+    "slot-a committed visibility context should stay active while its working image exists",
+  );
+
+  await facade.beginSession("committed-slot");
+  await facade.setImageTransform("committed-slot", { scale: 1.5, left: 0.2 });
+  facade.resetSession("committed-slot");
+  const restoredSlot = facade
+    .getViewState()
+    .slots.find((slot) => slot.id === "committed-slot");
+  assertEqual(
+    restoredSlot?.image?.src,
+    "/committed.png",
+    "resetting an edit session should restore the committed image source",
+  );
+  assertEqual(
+    restoredSlot?.image?.scale,
+    1,
+    "resetting an edit session should discard uncommitted transform changes",
+  );
+  assert(
+    !canvasService.visibilityContextValues.has(
+      `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.committed-slot`,
+    ),
+    "resetting an edit session should reveal the committed image again",
   );
 
   await runtime.dispose();
@@ -2882,6 +3085,7 @@ async function main() {
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();
+  await testImagePlacementKeepsWorkingImagesAcrossSlotSwitches();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayVisibilityFollowsEditingSessions();
   testImageSessionShapeOverlayUsesDielineGeometry();

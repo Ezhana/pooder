@@ -2,6 +2,10 @@ import CapabilityRegistryService from "./CapabilityRegistryService";
 import CommandService from "./CommandService";
 import ConfigurationService from "./ConfigurationService";
 import EffectApplicatorRegistryService from "./EffectApplicatorRegistryService";
+import {
+  RenderIntentCompilerRegistryService,
+  RenderIntentService,
+} from "../render-intent";
 import SceneService from "./SceneService";
 import ToolRegistryService from "./ToolRegistryService";
 import ToolSessionService from "./ToolSessionService";
@@ -12,6 +16,8 @@ import {
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
   EFFECT_APPLICATOR_REGISTRY_SERVICE,
+  RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+  RENDER_INTENT_SERVICE,
   CORE_SERVICE_TOKENS,
   CANVAS_SERVICE,
   SCENE_EXPORT_SERVICE,
@@ -28,6 +34,8 @@ export {
   CommandService,
   ConfigurationService,
   EffectApplicatorRegistryService,
+  RenderIntentCompilerRegistryService,
+  RenderIntentService,
   SceneService,
   ToolRegistryService,
   ToolSessionService,
@@ -37,6 +45,8 @@ export {
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
   EFFECT_APPLICATOR_REGISTRY_SERVICE,
+  RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+  RENDER_INTENT_SERVICE,
   CANVAS_SERVICE,
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
@@ -63,6 +73,19 @@ export type {
   EffectApplicatorQuery,
   RegisteredEffectApplicator,
 } from "./EffectApplicatorRegistryService";
+export type {
+  RegisteredRenderIntentCompiler,
+  RenderGraph,
+  RenderGraphLayer,
+  RenderGraphNode,
+  RenderIntentChangeEvent,
+  RenderIntentCompilerContext,
+  RenderIntentCompilerContribution,
+  RenderIntentCompilerQuery,
+  RenderIntentDraft,
+  RenderIntentPatch,
+  RenderIntentSubject,
+} from "../render-intent";
 export type { SceneChangeEvent } from "./SceneService";
 export type {
   ConfigurationDefinitionsChangeEvent,

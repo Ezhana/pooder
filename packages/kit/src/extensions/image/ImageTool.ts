@@ -5,6 +5,7 @@ import {
   ExtensionContext,
   ExtensionContributions,
   ExtensionDefinition,
+  RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
@@ -17,10 +18,13 @@ import {
   type RenderPassSpec,
   type RenderPatternSpec,
   type RenderProjectionSpec,
+  type RenderGraphNode,
+  type RenderIntentService,
   type SceneElement,
   type SceneExportService,
   type SceneLayoutService,
   type SceneService,
+  type VisibilityExpr,
 } from "@pooder/core";
 import type {
   EditorAsset,
@@ -184,6 +188,7 @@ const DEFAULT_OVERLAY_LAYER_ID = KIT_LEGACY_LAYER_PRESET.imageOverlay;
 const IMAGE_OBJECT_STACK = 660;
 const IMAGE_OVERLAY_STACK = 800;
 const IMAGE_RENDER_SCOPE = "pooder.kit.image-placement";
+const IMAGE_ACTIVE_SLOT_CONTEXT_PREFIX = "image-placement.active-slot";
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -203,6 +208,16 @@ function cloneImageMetadata(
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   return isRecord(metadata) ? { ...metadata } : undefined;
+}
+
+function cloneImageState(
+  image: ImagePlacementImageState | null | undefined,
+): ImagePlacementImageState | null {
+  if (!image) return null;
+  return {
+    ...image,
+    ...(image.metadata ? { metadata: cloneImageMetadata(image.metadata) } : {}),
+  };
 }
 
 function readMetadataSourceSrc(
@@ -425,15 +440,17 @@ export class ImageTool implements ExtensionDefinition {
     name: "ImagePlacementCapability",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, SCENE_SERVICE],
+    requiresServices: [CANVAS_SERVICE, RENDER_INTENT_SERVICE],
   };
 
   private canvasService?: CanvasService;
+  private renderIntentService?: RenderIntentService;
   private sceneService?: SceneService;
   private sceneLayoutService?: SceneLayoutService;
   private exportService?: SceneExportService;
   private context?: ExtensionContext;
   private sceneSubscription?: { dispose(): void };
+  private graphSubscription?: { dispose(): void };
   private renderProducerDisposable?: { dispose(): void };
   private readonly subscriptions = new SubscriptionBag();
   private readonly capabilityId: string;
@@ -444,6 +461,11 @@ export class ImageTool implements ExtensionDefinition {
     this.loadImageSize(src),
   );
   private workingImages = new Map<string, ImagePlacementImageState | null>();
+  private retainedWorkingImageBaselines = new Map<
+    string,
+    ImagePlacementImageState | null
+  >();
+  private visibleWorkingSlotContextKeys = new Set<string>();
   private pendingUploadSlotIds = new Set<string>();
   private activeSlotId: string | null = null;
   private sessionNotice: ImagePlacementSessionNotice | null = null;
@@ -477,7 +499,10 @@ export class ImageTool implements ExtensionDefinition {
     this.canvasService = context.services.getOrThrow<CanvasService>(
       CANVAS_SERVICE,
     );
-    this.sceneService = context.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    this.sceneService = context.services.get<SceneService>(SCENE_SERVICE);
     this.sceneLayoutService = context.services.get<SceneLayoutService>(
       SCENE_LAYOUT_SERVICE,
     );
@@ -490,7 +515,6 @@ export class ImageTool implements ExtensionDefinition {
       this.id,
       () => ({
         passes: [
-          ...this.buildCommittedImagePasses(),
           {
             id: this.overlayLayerId,
             stack: IMAGE_OVERLAY_STACK,
@@ -534,7 +558,11 @@ export class ImageTool implements ExtensionDefinition {
     );
 
     this.sceneSubscription?.dispose();
-    this.sceneSubscription = this.sceneService.onDidChange(() => this.updateImages());
+    this.sceneSubscription = this.sceneService?.onDidChange(() => this.updateImages());
+    this.graphSubscription?.dispose();
+    this.graphSubscription = this.renderIntentService.onDidChange(() => {
+      this.updateImages();
+    });
     this.subscriptions.on(context.eventBus, "selection:created", this.onSelectionChanged);
     this.subscriptions.on(context.eventBus, "selection:updated", this.onSelectionChanged);
     this.subscriptions.on(context.eventBus, "selection:cleared", this.onSelectionCleared);
@@ -550,15 +578,20 @@ export class ImageTool implements ExtensionDefinition {
     this.subscriptions.disposeAll();
     this.sceneSubscription?.dispose();
     this.sceneSubscription = undefined;
+    this.graphSubscription?.dispose();
+    this.graphSubscription = undefined;
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
     this.workingImages.clear();
+    this.retainedWorkingImageBaselines.clear();
     this.activeSlotId = null;
+    this.clearWorkingSlotVisibilityContext();
     this.sourceSizeCache.clear();
     this.endMoveSnapInteraction();
     this.unbindCanvasInteractionHandlers();
     this.canvasService?.requestRenderAll();
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.sceneService = undefined;
     this.sceneLayoutService = undefined;
     this.exportService = undefined;
@@ -577,7 +610,6 @@ export class ImageTool implements ExtensionDefinition {
           },
         }),
       ],
-      effectApplicators: [this.createEffectApplicator()],
     };
   }
 
@@ -641,7 +673,7 @@ export class ImageTool implements ExtensionDefinition {
             payload.sessionProjections,
           ),
         },
-      },
+      }
     });
     this.updateImages();
   }
@@ -714,11 +746,60 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private getSlotElements(): SceneElement[] {
-    if (!this.sceneService) return [];
-    return this.sceneService
-      .listElements()
+    const graphSlots = this.getGraphSlotElements();
+    const sceneSlots = (this.sceneService?.listElements() ?? [])
       .filter((element) => getImagePlacementData(element).enabled === true)
       .sort((a, b) => a.order - b.order);
+    if (graphSlots.length === 0) return sceneSlots;
+
+    const graphSlotIds = new Set(graphSlots.map((slot) => slot.id));
+    return [
+      ...graphSlots,
+      ...sceneSlots.filter((slot) => !graphSlotIds.has(slot.id)),
+    ].sort((a, b) => a.order - b.order);
+  }
+
+  private getGraphSlotElements(): SceneElement[] {
+    const graph = this.renderIntentService?.getGraph();
+    if (!graph) return [];
+    return graph.layers
+      .flatMap((layer) =>
+        layer.nodes.map((node) => this.graphNodeToSlotElement(node)),
+      )
+      .filter((element): element is SceneElement => Boolean(element))
+      .sort((a, b) => a.order - b.order);
+  }
+
+  private graphNodeToSlotElement(node: RenderGraphNode): SceneElement | null {
+    const imagePlacement = isRecord(node.data.imagePlacement)
+      ? node.data.imagePlacement
+      : undefined;
+    if (!imagePlacement || imagePlacement.enabled !== true) return null;
+    const frame = node.frame;
+    return {
+      id: node.subjectId,
+      layerId: node.layerId,
+      type: "rect",
+      order: node.sortKey.objectOrder,
+      visible: node.visible,
+      metadata: isRecord(node.data) ? { ...node.data } : undefined,
+      data: {
+        id: node.subjectId,
+        layerId: node.layerId,
+        slotId: node.subjectId,
+        type: "image-placement-slot",
+        imagePlacement,
+      },
+      style: node.props,
+      transform: {
+        left: frame?.x ?? 0,
+        top: frame?.y ?? 0,
+        originX: "left",
+        originY: "top",
+      },
+      width: frame?.width ?? 1,
+      height: frame?.height ?? 1,
+    };
   }
 
   private getSlotElement(slotId: string): SceneElement | undefined {
@@ -811,12 +892,14 @@ export class ImageTool implements ExtensionDefinition {
     const slot = this.getSlotElement(slotId);
     if (!slot) return { ok: false, reason: "slot-not-found" };
     this.activeSlotId = slotId;
+    this.patchCommittedImageVisibilityForSlots();
     if (!this.workingImages.has(slotId)) {
       this.workingImages.set(
         slotId,
         createEditableWorkingImage(this.getCommittedImage(slot)),
       );
     }
+    this.syncWorkingSlotVisibilityContext();
     this.setSessionNotice(null);
     await this.updateImagesAsync();
     return { ok: true };
@@ -838,6 +921,7 @@ export class ImageTool implements ExtensionDefinition {
       if (!source?.src) return { ok: false, reason: "upload-cancelled" };
       await this.setImageSource(slotId, source);
       await this.applyImageOperation(slotId, { type: slot.fit === "contain" ? "contain" : "cover" });
+      this.retainWorkingImageBaseline(slotId);
       this.focusSlot(slotId);
       return { ok: true };
     } finally {
@@ -867,7 +951,11 @@ export class ImageTool implements ExtensionDefinition {
       angle: current.angle ?? 0,
       opacity: current.opacity ?? 1,
     });
+    this.syncWorkingSlotVisibilityContext();
     this.rememberSourceSizeFromMetadata(src, source.metadata);
+    if (!this.retainedWorkingImageBaselines.has(slotId)) {
+      this.retainWorkingImageBaseline(slotId);
+    }
     await this.updateImagesAsync();
     this.emitStateChange();
     return { ok: true };
@@ -900,6 +988,7 @@ export class ImageTool implements ExtensionDefinition {
       next.opacity = Number(updates.opacity);
     }
     this.workingImages.set(slotId, next);
+    this.syncWorkingSlotVisibilityContext();
     this.updateImages();
     this.emitStateChange();
     return { ok: true };
@@ -930,6 +1019,7 @@ export class ImageTool implements ExtensionDefinition {
     const slot = this.getSlotElement(slotId);
     if (!slot) return { ok: false, reason: "slot-not-found" };
     this.workingImages.set(slotId, null);
+    this.syncWorkingSlotVisibilityContext();
     this.updateImages();
     this.emitStateChange();
     return { ok: true };
@@ -937,12 +1027,15 @@ export class ImageTool implements ExtensionDefinition {
 
   private resetSession(slotId?: string) {
     if (slotId) {
-      this.workingImages.delete(slotId);
+      this.restoreOrDeleteWorkingImage(slotId);
       if (this.activeSlotId === slotId) this.activeSlotId = null;
     } else {
-      this.workingImages.clear();
+      Array.from(this.workingImages.keys()).forEach((id) =>
+        this.restoreOrDeleteWorkingImage(id),
+      );
       this.activeSlotId = null;
     }
+    this.syncWorkingSlotVisibilityContext();
     this.setSessionNotice(null);
     this.updateImages();
   }
@@ -1007,6 +1100,7 @@ export class ImageTool implements ExtensionDefinition {
       const commitResult = await this.commitWorkingImagesAsCropped(targetIds);
       if (!commitResult.ok) return commitResult;
       if (!slotId || this.activeSlotId === slotId) this.activeSlotId = null;
+      this.syncWorkingSlotVisibilityContext();
       await this.updateImagesAsync();
       this.emitStateChange();
       return { ok: true };
@@ -1102,21 +1196,194 @@ export class ImageTool implements ExtensionDefinition {
     slotId: string,
     image: ImagePlacementImageState | null,
   ) {
-    if (!this.sceneService) return;
-    const slot = this.sceneService.getElement(slotId);
-    if (!slot) return;
+    const slot = this.getSlotElement(slotId);
+    if (this.renderIntentService && slot) {
+      const data = isRecord(slot.data) ? slot.data : {};
+      const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+      this.renderIntentService.patchIntent({
+        id: slotId,
+        subject: {
+          kind: "object",
+          surfaceId:
+            typeof slot.metadata?.documentSurfaceId === "string"
+              ? slot.metadata.documentSurfaceId
+              : "legacy",
+          layerId: slot.layerId,
+          objectId: slotId,
+          objectType: "image",
+        },
+        visual: {
+          type: "image",
+          replacement: image
+            ? {
+                ...(image.assetId ? { assetId: image.assetId } : {}),
+                ...(image.src ? { src: image.src } : {}),
+                ...(image.metadata ? { metadata: image.metadata } : {}),
+              }
+            : {},
+        },
+        placement: {
+          frame: {
+            x: getSlotFrame(slot)?.left ?? 0,
+            y: getSlotFrame(slot)?.top ?? 0,
+            width: getSlotFrame(slot)?.width ?? 1,
+            height: getSlotFrame(slot)?.height ?? 1,
+          },
+        },
+        ordering: {
+          layerId: slot.layerId,
+          objectOrder: slot.order,
+        },
+        export: {
+          visibility: this.getCommittedImageVisibility(slotId),
+        },
+        interaction: {
+          imagePlacement: {
+            ...placement,
+            image: image ?? undefined,
+          },
+        },
+      });
+    }
+    if (this.sceneService) {
+      const sceneSlot = this.sceneService.getElement(slotId);
+      if (sceneSlot) {
+        const data = isRecord(sceneSlot.data) ? sceneSlot.data : {};
+        const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+        this.sceneService.updateElement(slotId, {
+          data: {
+            ...data,
+            imagePlacement: {
+              ...placement,
+              image: image ?? undefined,
+            },
+          },
+        });
+      }
+    }
+    this.workingImages.delete(slotId);
+    this.retainedWorkingImageBaselines.delete(slotId);
+    this.syncWorkingSlotVisibilityContext();
+  }
+
+  private retainWorkingImageBaseline(slotId: string) {
+    if (!this.workingImages.has(slotId)) return;
+    this.retainedWorkingImageBaselines.set(
+      slotId,
+      cloneImageState(this.workingImages.get(slotId)),
+    );
+  }
+
+  private restoreOrDeleteWorkingImage(slotId: string) {
+    if (!this.retainedWorkingImageBaselines.has(slotId)) {
+      this.workingImages.delete(slotId);
+      return;
+    }
+    const baseline = cloneImageState(this.retainedWorkingImageBaselines.get(slotId));
+    if (baseline) {
+      this.workingImages.set(slotId, baseline);
+    } else {
+      this.workingImages.delete(slotId);
+    }
+  }
+
+  private getCommittedImageVisibility(slotId: string): VisibilityExpr {
+    return {
+      op: "not",
+      expr: {
+        op: "all",
+        exprs: [
+          { op: "sessionActive", toolId: this.capabilityId },
+          {
+            op: "contextTruthy",
+            key: this.getWorkingSlotVisibilityContextKey(slotId),
+          },
+        ],
+      },
+    };
+  }
+
+  private patchCommittedImageVisibilityForSlots(slotIds?: string[]) {
+    const targetIds =
+      slotIds ??
+      this.getCommittedSlotStates()
+        .filter((slot) => slot.hasImage)
+        .map((slot) => slot.id);
+    targetIds.forEach((slotId) => this.patchCommittedImageVisibility(slotId));
+  }
+
+  private patchCommittedImageVisibility(slotId: string) {
+    const slot = this.getSlotElement(slotId);
+    if (!slot || !this.renderIntentService) return;
     const data = isRecord(slot.data) ? slot.data : {};
     const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
-    this.sceneService.updateElement(slotId, {
-      data: {
-        ...data,
+    const image = this.getCommittedImage(slot);
+    this.renderIntentService.patchIntent({
+      id: slotId,
+      subject: {
+        kind: "object",
+        surfaceId:
+          typeof slot.metadata?.documentSurfaceId === "string"
+            ? slot.metadata.documentSurfaceId
+            : "legacy",
+        layerId: slot.layerId,
+        objectId: slotId,
+        objectType: "image",
+      },
+      ordering: {
+        layerId: slot.layerId,
+        objectOrder: slot.order,
+      },
+      export: {
+        visibility: this.getCommittedImageVisibility(slotId),
+      },
+      visual: image
+        ? {
+            type: "image",
+            replacement: {
+              ...(image.assetId ? { assetId: image.assetId } : {}),
+              ...(image.src ? { src: image.src } : {}),
+              ...(image.metadata ? { metadata: image.metadata } : {}),
+            },
+          }
+        : undefined,
+      interaction: {
         imagePlacement: {
           ...placement,
           image: image ?? undefined,
         },
       },
     });
-    this.workingImages.delete(slotId);
+  }
+
+  private getWorkingSlotVisibilityContextKey(slotId: string): string {
+    return `${this.capabilityId}.${IMAGE_ACTIVE_SLOT_CONTEXT_PREFIX}.${slotId}`;
+  }
+
+  private syncWorkingSlotVisibilityContext() {
+    if (!this.canvasService) return;
+    const nextKeys = new Set<string>();
+    this.workingImages.forEach((_image, slotId) => {
+      nextKeys.add(this.getWorkingSlotVisibilityContextKey(slotId));
+    });
+
+    nextKeys.forEach((key) => {
+      this.canvasService?.setVisibilityContextValue(key, true, {
+        render: false,
+      });
+    });
+    this.visibleWorkingSlotContextKeys.forEach((key) => {
+      if (nextKeys.has(key)) return;
+      this.canvasService?.deleteVisibilityContextValue(key, { render: false });
+    });
+    this.visibleWorkingSlotContextKeys = nextKeys;
+  }
+
+  private clearWorkingSlotVisibilityContext() {
+    this.visibleWorkingSlotContextKeys.forEach((key) => {
+      this.canvasService?.deleteVisibilityContextValue(key, { render: false });
+    });
+    this.visibleWorkingSlotContextKeys.clear();
   }
 
   private focusSlot(
@@ -1128,6 +1395,7 @@ export class ImageTool implements ExtensionDefinition {
       return { ok: false, reason: "slot-not-found" as const };
     }
     this.activeSlotId = slotId;
+    this.syncWorkingSlotVisibilityContext();
     if (options.syncCanvasSelection !== false && this.canvasService) {
       if (!slotId) {
         this.canvasService.discardActiveObject();
@@ -1590,7 +1858,7 @@ export class ImageTool implements ExtensionDefinition {
 
   private buildWorkingImageSpecs(): RenderObjectSpec[] {
     return this.getSlotStates()
-      .filter((slot) => this.shouldRenderWorkingSlot(slot.id) && slot.image?.src)
+      .filter((slot) => this.shouldRenderWorkingImageSlot(slot.id) && slot.image?.src)
       .map((slot) => this.buildImageSpec(slot, { committed: false }))
       .filter((spec): spec is RenderObjectSpec => Boolean(spec));
   }
@@ -1617,6 +1885,10 @@ export class ImageTool implements ExtensionDefinition {
   private shouldRenderWorkingSlot(slotId: string): boolean {
     if (!this.workingImages.has(slotId)) return false;
     return !this.activeSlotId || this.activeSlotId === slotId;
+  }
+
+  private shouldRenderWorkingImageSlot(slotId: string): boolean {
+    return this.workingImages.has(slotId);
   }
 
   private buildImageSpec(

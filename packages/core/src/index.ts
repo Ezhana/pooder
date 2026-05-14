@@ -20,6 +20,8 @@ import {
   CommandService,
   ConfigurationService,
   EffectApplicatorRegistryService,
+  RenderIntentCompilerRegistryService,
+  RenderIntentService,
   SceneService,
   ToolRegistryService,
   ToolSessionService,
@@ -34,6 +36,7 @@ export * from "./capability";
 export * from "./contribution";
 export * from "./scene";
 export * from "./render";
+export * from "./render-intent";
 export * from "./effect-applicator";
 export * from "./coordinate";
 export * from "./units";
@@ -135,6 +138,9 @@ export class Pooder {
   private readonly configurationService = new ConfigurationService();
   private readonly effectApplicatorRegistryService =
     new EffectApplicatorRegistryService();
+  private readonly renderIntentService = new RenderIntentService();
+  private readonly renderIntentCompilerRegistryService =
+    new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
   private readonly toolRegistryService = new ToolRegistryService();
   private readonly workflowSessionService = new WorkflowSessionService();
@@ -171,6 +177,14 @@ export class Pooder {
       this.effectApplicatorRegistryService,
       CORE_SERVICE_TOKENS.EFFECT_APPLICATOR_REGISTRY,
     );
+    this.registerService(
+      this.renderIntentService,
+      CORE_SERVICE_TOKENS.RENDER_INTENT,
+    );
+    this.registerService(
+      this.renderIntentCompilerRegistryService,
+      CORE_SERVICE_TOKENS.RENDER_INTENT_COMPILER_REGISTRY,
+    );
     this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
     this.registerService(
       this.workflowSessionService,
@@ -206,6 +220,7 @@ export class Pooder {
       configurationService: this.configurationService,
       commandService: this.commandService,
       effectApplicatorRegistry: this.effectApplicatorRegistryService,
+      renderIntentCompilerRegistry: this.renderIntentCompilerRegistryService,
       toolRegistry: this.toolRegistryService,
     });
 

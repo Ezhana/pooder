@@ -3,6 +3,10 @@ import type CapabilityRegistryService from "./CapabilityRegistryService";
 import type CommandService from "./CommandService";
 import type ConfigurationService from "./ConfigurationService";
 import type EffectApplicatorRegistryService from "./EffectApplicatorRegistryService";
+import type {
+  RenderIntentCompilerRegistryService,
+  RenderIntentService,
+} from "../render-intent";
 import type SceneService from "./SceneService";
 import type ToolRegistryService from "./ToolRegistryService";
 import type ToolSessionService from "./ToolSessionService";
@@ -26,6 +30,12 @@ export const EFFECT_APPLICATOR_REGISTRY_SERVICE =
   createServiceToken<EffectApplicatorRegistryService>(
     "EffectApplicatorRegistryService",
   );
+export const RENDER_INTENT_SERVICE =
+  createServiceToken<RenderIntentService>("RenderIntentService");
+export const RENDER_INTENT_COMPILER_REGISTRY_SERVICE =
+  createServiceToken<RenderIntentCompilerRegistryService>(
+    "RenderIntentCompilerRegistryService",
+  );
 export const SCENE_SERVICE = createServiceToken<SceneService>("SceneService");
 export const CANVAS_SERVICE = createServiceToken<CanvasService>("CanvasService");
 export const SCENE_LAYOUT_SERVICE =
@@ -46,6 +56,8 @@ export const CORE_SERVICE_TOKENS = {
   COMMAND: COMMAND_SERVICE,
   CONFIGURATION: CONFIGURATION_SERVICE,
   EFFECT_APPLICATOR_REGISTRY: EFFECT_APPLICATOR_REGISTRY_SERVICE,
+  RENDER_INTENT: RENDER_INTENT_SERVICE,
+  RENDER_INTENT_COMPILER_REGISTRY: RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   CANVAS: CANVAS_SERVICE,
   SCENE: SCENE_SERVICE,
   SCENE_LAYOUT: SCENE_LAYOUT_SERVICE,

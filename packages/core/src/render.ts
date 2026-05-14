@@ -48,6 +48,7 @@ export interface RenderObjectSpec {
   src?: string;
   space?: RenderCoordinateSpace;
   layout?: RenderObjectLayoutSpec;
+  visibility?: VisibilityExpr;
 }
 
 export interface RenderProjectionSpec {

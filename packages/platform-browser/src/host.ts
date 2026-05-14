@@ -1,10 +1,11 @@
 import type { EventBus, Service, ServiceIdentifier } from "@pooder/core";
 import { BrowserSceneExportService } from "./browser-scene-export-service";
 import CanvasService from "./canvas-service";
-import { FabricSceneAdapter } from "./scene/fabric-scene-adapter";
+import { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
 import { SceneLayoutService } from "./scene-layout-service";
 import {
   CANVAS_SERVICE,
+  FABRIC_RENDER_GRAPH_ADAPTER,
   FABRIC_SCENE_ADAPTER,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
@@ -29,7 +30,8 @@ export interface BrowserHostRuntime {
 export interface BrowserHostAttachment {
   readonly browserSceneExportService: BrowserSceneExportService;
   readonly canvasService: CanvasService;
-  readonly fabricSceneAdapter: FabricSceneAdapter;
+  readonly fabricRenderGraphAdapter: FabricRenderGraphAdapter;
+  readonly fabricSceneAdapter: FabricRenderGraphAdapter;
   readonly sceneLayoutService: SceneLayoutService;
   dispose(): void;
 }
@@ -47,7 +49,8 @@ export interface AttachBrowserHostOptions {
     runtime: BrowserHostRuntime,
   ) => CanvasService;
   createBrowserSceneExportService?: () => BrowserSceneExportService;
-  createFabricSceneAdapter?: () => FabricSceneAdapter;
+  createFabricRenderGraphAdapter?: () => FabricRenderGraphAdapter;
+  createFabricSceneAdapter?: () => FabricRenderGraphAdapter;
   createResizeObserver?: (
     callback: ResizeObserverCallback,
   ) => ResizeObserverLike;
@@ -77,8 +80,10 @@ export function attachBrowserHost(
     (() => new BrowserSceneExportService());
   const createSceneLayoutService =
     options.createSceneLayoutService ?? (() => new SceneLayoutService());
-  const createFabricSceneAdapter =
-    options.createFabricSceneAdapter ?? (() => new FabricSceneAdapter());
+  const createFabricRenderGraphAdapter =
+    options.createFabricRenderGraphAdapter ??
+    options.createFabricSceneAdapter ??
+    (() => new FabricRenderGraphAdapter());
   const createResizeObserver =
     options.createResizeObserver ??
     ((callback) => new ResizeObserver(callback));
@@ -92,7 +97,7 @@ export function attachBrowserHost(
   const canvasService = createCanvasService(canvas, runtime);
   const sceneLayoutService = createSceneLayoutService();
   const browserSceneExportService = createBrowserSceneExportService();
-  const fabricSceneAdapter = createFabricSceneAdapter();
+  const fabricRenderGraphAdapter = createFabricRenderGraphAdapter();
 
   const registeredCanvas = runtime.services.register(
     canvasService,
@@ -128,8 +133,8 @@ export function attachBrowserHost(
   }
 
   const registeredSceneAdapter = runtime.services.register(
-    fabricSceneAdapter,
-    FABRIC_SCENE_ADAPTER,
+    fabricRenderGraphAdapter,
+    FABRIC_RENDER_GRAPH_ADAPTER,
   );
   if (!registeredSceneAdapter) {
     runtime.services.unregister(
@@ -156,11 +161,15 @@ export function attachBrowserHost(
   return {
     browserSceneExportService,
     canvasService,
-    fabricSceneAdapter,
+    fabricRenderGraphAdapter,
+    fabricSceneAdapter: fabricRenderGraphAdapter,
     sceneLayoutService,
     dispose() {
       resizeObserver.disconnect();
-      runtime.services.unregister(fabricSceneAdapter, FABRIC_SCENE_ADAPTER);
+      runtime.services.unregister(
+        fabricRenderGraphAdapter,
+        FABRIC_SCENE_ADAPTER,
+      );
       runtime.services.unregister(
         browserSceneExportService,
         SCENE_EXPORT_SERVICE,

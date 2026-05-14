@@ -1,5 +1,5 @@
 import type { Service } from "@pooder/core";
-import { Pooder, SCENE_SERVICE } from "@pooder/core";
+import { Pooder, RENDER_INTENT_SERVICE, SCENE_SERVICE } from "@pooder/core";
 import {
   attachBrowserHost,
   SCENE_EXPORT_SERVICE,
@@ -8,6 +8,7 @@ import {
   CanvasService,
   evaluateVisibilityExpr,
   FABRIC_SCENE_ADAPTER,
+  FabricRenderGraphAdapter,
   FabricSceneAdapter,
   resolveViewPaddingPx,
   SCENE_RENDER_SCOPE,
@@ -17,6 +18,7 @@ import type {
   CanvasPassStackingMeta,
   RenderObjectSpec,
   RenderPassSpec,
+  VisibilityExpr,
 } from "../src";
 
 declare const process: {
@@ -45,6 +47,22 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
+function imagePlacementCommittedVisibility(slotId: string): VisibilityExpr {
+  return {
+    op: "not",
+    expr: {
+      op: "all",
+      exprs: [
+        { op: "sessionActive", toolId: "pooder.kit.image-placement" },
+        {
+          op: "contextTruthy",
+          key: `pooder.kit.image-placement.image-placement.active-slot.${slotId}`,
+        },
+      ],
+    },
+  };
+}
+
 class FakeCanvasService {
   resizeCalls: Array<{ height: number; width: number }> = [];
   passCalls: Array<{
@@ -65,6 +83,21 @@ class FakeCanvasService {
     options: { render?: boolean; replace?: boolean; scope?: string } = {},
   ) {
     this.passCalls.push({ passId, specs, options });
+  }
+
+  async applyPassSpec(
+    pass: {
+      id: string;
+      objects: RenderObjectSpec[];
+      replace?: boolean;
+    },
+    options: { render?: boolean } = {},
+  ) {
+    this.passCalls.push({
+      passId: pass.id,
+      specs: pass.objects,
+      options: { render: options.render, replace: pass.replace },
+    });
   }
 
   syncPassStacking(passes: CanvasPassStackingMeta[]) {
@@ -693,6 +726,159 @@ async function testBrowserSceneExportFrameCrop() {
   );
   assertEqual(result.width, 60, "frame crop width should be exported");
   assertEqual(result.height, 40, "frame crop height should be exported");
+}
+
+async function testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(adapter);
+  await adapter.flush();
+  canvasService.passCalls = [];
+
+  const renderIntentService = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  renderIntentService.setDocumentIntents([
+    {
+      id: "slot",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "artwork",
+        objectId: "slot",
+        objectType: "image",
+      },
+      visual: {
+        type: "image",
+        replacement: {
+          src: "data:image/png;base64,cropped-slot",
+          metadata: {
+            width: 400,
+            height: 320,
+            sourceSrc: "/photo.png",
+            sourceTransform: {
+              left: 0.6,
+              top: 0.4,
+              scale: 1.3,
+              angle: 22,
+              opacity: 1,
+            },
+          },
+        },
+      },
+      placement: {
+        frame: { x: 100, y: 120, width: 200, height: 160 },
+      },
+      props: {
+        originX: "center",
+        originY: "center",
+      },
+      ordering: {
+        layerId: "artwork",
+        objectOrder: 10,
+      },
+      export: {
+        visibility: imagePlacementCommittedVisibility("slot"),
+      },
+      interaction: {
+        imagePlacement: {
+          enabled: true,
+          slotId: "slot",
+          image: {
+            src: "data:image/png;base64,cropped-slot",
+            left: 0.5,
+            top: 0.5,
+            scale: 1,
+            angle: 0,
+            metadata: {
+              sourceSrc: "/photo.png",
+              sourceTransform: {
+                left: 0.6,
+                top: 0.4,
+                scale: 1.3,
+                angle: 22,
+                opacity: 1,
+              },
+            },
+          },
+        },
+      },
+    },
+  ]);
+  await adapter.flush();
+
+  const artworkPass = canvasService.passCalls.find(
+    (call) => call.passId === "artwork",
+  );
+  assert(artworkPass, "render graph layer should sync to a canvas pass");
+
+  const imageSpec = artworkPass.specs.find((spec) => spec.id === "image:slot");
+  assert(imageSpec, "committed replacement image should render as image:slot");
+  assertEqual(
+    imageSpec.props.left,
+    200,
+    "committed image should be centered in the slot frame, not use editable source x",
+  );
+  assertEqual(
+    imageSpec.props.top,
+    200,
+    "committed image should be centered in the slot frame, not use editable source y",
+  );
+  assertEqual(
+    imageSpec.props.originX,
+    "center",
+    "committed image should render from its center",
+  );
+  assertEqual(
+    imageSpec.props.originY,
+    "center",
+    "committed image should render from its center",
+  );
+  assertEqual(
+    imageSpec.props.scaleX,
+    0.5,
+    "committed image should scale cropped bitmap width into the slot frame",
+  );
+  assertEqual(
+    imageSpec.props.scaleY,
+    0.5,
+    "committed image should scale cropped bitmap height into the slot frame",
+  );
+  assert(
+    imageSpec.props.angle === undefined,
+    "committed image should not reuse editable source rotation",
+  );
+  assertEqual(
+    imageSpec.props.selectable,
+    false,
+    "committed image should not remain directly editable after session commit",
+  );
+  assertEqual(
+    imageSpec.props.evented,
+    true,
+    "committed image should still receive clicks for reopening the image session",
+  );
+  assertDeepEqual(
+    imageSpec.visibility,
+    imagePlacementCommittedVisibility("slot"),
+    "committed image should carry its declarative session visibility",
+  );
+  assertDeepEqual(
+    {
+      slotId: imageSpec.data?.slotId,
+      source: imageSpec.data?.source,
+      type: imageSpec.data?.type,
+    },
+    {
+      slotId: "slot",
+      source: "committed",
+      type: "image-placement-image",
+    },
+    "committed image should preserve the image-placement interaction contract",
+  );
+
+  await runtime.dispose();
 }
 
 async function testFabricSceneAdapterSyncsCoreSceneToScopedPasses() {
@@ -1324,6 +1510,93 @@ async function testRenderObjectsAreNonInteractiveByDefault() {
   );
 }
 
+async function testRenderObjectVisibilityUsesSessionExpressions() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+  let activeSessionId: string | null = null;
+  (service as any).toolSessionService = {
+    getState: (toolId: string) => ({
+      id: toolId,
+      status: toolId === activeSessionId ? "active" : "idle",
+      dirty: false,
+    }),
+    hasAnyActiveSession: () => activeSessionId !== null,
+  };
+
+  await service.applyObjectSpecsToPass(
+    "app.artwork",
+    [
+      rectSpec("committed-image", {}, {
+        slotId: "slot",
+      }),
+      rectSpec("other-committed-image", {}, {
+        slotId: "other-slot",
+      }),
+    ].map((spec) => ({
+      ...spec,
+      visibility: {
+        op: "not" as const,
+        expr: {
+          op: "all" as const,
+          exprs: [
+            { op: "sessionActive" as const, toolId: "pooder.kit.image" },
+            {
+              op: "contextTruthy" as const,
+              key: `pooder.kit.image.active-slot.${(spec.data as any).slotId}`,
+            },
+          ],
+        },
+      },
+    })),
+    { render: false, replace: true, scope: SCENE_RENDER_SCOPE },
+  );
+
+  const object = canvas.objects.find((obj) => obj.data.id === "committed-image");
+  const otherObject = canvas.objects.find(
+    (obj) => obj.data.id === "other-committed-image",
+  );
+  assert(object, "visibility-gated object should render");
+  assert(otherObject, "other visibility-gated object should render");
+  assertEqual(
+    object.visible,
+    true,
+    "committed image should be visible outside the image session",
+  );
+
+  activeSessionId = "pooder.kit.image";
+  service.setVisibilityContextValue("pooder.kit.image.active-slot.slot", true, {
+    render: false,
+  });
+  (service as any).refreshManagedVisibility({ render: false });
+  assertEqual(
+    object.visible,
+    false,
+    "committed image should hide while its image session slot is active",
+  );
+  assertEqual(
+    otherObject.visible,
+    true,
+    "other committed images should remain visible while another slot is active",
+  );
+
+  service.deleteVisibilityContextValue("pooder.kit.image.active-slot.slot", {
+    render: false,
+  });
+  (service as any).refreshManagedVisibility({ render: false });
+  assertEqual(
+    object.visible,
+    true,
+    "committed image should stay visible when the image session belongs to another slot",
+  );
+
+  activeSessionId = null;
+  (service as any).refreshManagedVisibility({ render: false });
+  assertEqual(
+    object.visible,
+    true,
+    "committed image should reappear after the image session ends",
+  );
+}
+
 function testVisibilityDslSupportsWorkflowAndContextPredicates() {
   const context = {
     contextValues: new Map<string, unknown>([
@@ -1583,6 +1856,7 @@ async function main() {
   await testBrowserSceneExportSelectedLayerWithSceneCrop();
   await testBrowserSceneExportElementBoundsCrop();
   await testBrowserSceneExportFrameCrop();
+  await testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages();
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
   await testFabricSceneAdapterStacksDocumentOverlayAboveManagedImages();
   await testFabricSceneAdapterMapsSceneElementContracts();
@@ -1592,6 +1866,7 @@ async function main() {
   await testRenderProducerProjectionClonesBusinessObjects();
   await testSessionProjectionAboveStacksOverSessionImage();
   await testRenderObjectsAreNonInteractiveByDefault();
+  await testRenderObjectVisibilityUsesSessionExpressions();
   testVisibilityDslSupportsWorkflowAndContextPredicates();
   await testRenderProducerVisibilityUsesContextValues();
   await testRenderProducerVisibilityUsesWorkflowSessions();
