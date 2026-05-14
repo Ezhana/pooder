@@ -25,6 +25,7 @@ import {
 } from "@pooder/document/kit";
 import {
   createBackgroundCapability,
+  createClipCapability,
   createDielineGeometryCapability,
   createFeatureCapability,
   createImagePlacementCapability,
@@ -33,6 +34,7 @@ import {
 } from "../factories";
 import { BACKGROUND_CAPABILITY_ID } from "../extensions/background";
 import type { BackgroundCapabilityApi } from "../extensions/background";
+import { CLIP_CAPABILITY_ID } from "../extensions/clip";
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import type { DielineGeometryCapabilityApi } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
@@ -90,6 +92,7 @@ const EFFECT_PHASE_ORDER = {
 
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [BACKGROUND_CAPABILITY_ID]: () => createBackgroundCapability(),
+  [CLIP_CAPABILITY_ID]: () => createClipCapability(),
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
   [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),
   [IMAGE_PLACEMENT_CAPABILITY_ID]: () => createImagePlacementCapability(),
@@ -105,34 +108,19 @@ function layerHasEffect(layer: EditorLayer, capabilityId: string): boolean {
   );
 }
 
-function layerHasObjectEffect(layer: EditorLayer, capabilityId: string): boolean {
-  return Boolean(
-    layer.objects?.some((object) =>
-      object.effects?.some(
-        (effect) => resolveKitEditorDocumentEffectCapabilityId(effect) === capabilityId,
-      ),
-    ),
-  );
-}
-
 function inferDielineCapabilityLayers(document: EditorDocument) {
   let targetLayerId: string | undefined;
-  const imageClipLayerIds: string[] = [];
 
   document.surfaces.forEach((surface) => {
     surface.layers.forEach((layer) => {
       if (!targetLayerId && layerHasEffect(layer, DIELINE_GEOMETRY_CAPABILITY_ID)) {
         targetLayerId = layer.id;
       }
-      if (layerHasObjectEffect(layer, IMAGE_PLACEMENT_CAPABILITY_ID)) {
-        imageClipLayerIds.push(layer.id);
-      }
     });
   });
 
   return {
     targetLayerId,
-    imageClipLayerIds: Array.from(new Set(imageClipLayerIds)),
   };
 }
 
@@ -158,9 +146,6 @@ export function createKitCapabilitiesForDocument(
         layers: {
           ...(dielineLayers.targetLayerId
             ? { targetLayerId: dielineLayers.targetLayerId }
-            : {}),
-          ...(dielineLayers.imageClipLayerIds.length
-            ? { imageClipLayerIds: dielineLayers.imageClipLayerIds }
             : {}),
         },
       });

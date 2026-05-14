@@ -95,6 +95,7 @@ export interface RenderClipPathEffectSpec {
   visibility?: VisibilityExpr;
   source: RenderObjectSpec;
   targetPassIds: string[];
+  targetElementIds?: string[];
 }
 
 export type RenderEffectSpec = RenderClipPathEffectSpec;

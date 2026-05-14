@@ -1,4 +1,5 @@
 import { BackgroundCapabilityExtension } from "./extensions/background";
+import { ClipCapabilityExtension } from "./extensions/clip";
 import { DesignExportCapabilityExtension } from "./extensions/design-export";
 import { DielineGeometryCapabilityExtension } from "./extensions/dieline";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
@@ -12,6 +13,10 @@ import { WhiteInkCapabilityExtension } from "./extensions/white-ink";
 export const createBackgroundCapability = (
   options?: ConstructorParameters<typeof BackgroundCapabilityExtension>[0],
 ) => new BackgroundCapabilityExtension(options);
+
+export const createClipCapability = (
+  options?: ConstructorParameters<typeof ClipCapabilityExtension>[0],
+) => new ClipCapabilityExtension(options);
 
 export const createDesignExportCapability = (
   options?: ConstructorParameters<typeof DesignExportCapabilityExtension>[0],

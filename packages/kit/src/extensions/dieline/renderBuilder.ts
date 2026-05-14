@@ -40,6 +40,14 @@ export interface DielineRenderOptions {
   clipVisibility?: VisibilityExpr;
 }
 
+export interface DielineClipSourceOptions {
+  state: DielineState;
+  sceneLayout: SceneLayoutSnapshot;
+  canvasWidth: number;
+  canvasHeight: number;
+  id?: string;
+}
+
 const DEFAULT_IDS: DielineRenderIds = {
   inside: "dieline.inside",
   bleedZone: "dieline.bleed-zone",
@@ -257,17 +265,15 @@ export function buildDielineRenderBundle(
     return { specs, effects: [] };
   }
 
-  const clipPathData = generateDielinePath({
-    ...common,
-    width: cutW,
-    height: cutH,
-    radius: cutR,
-    x: cx,
-    y: cy,
-    features: cutFeatures,
+  const clipSource = buildDielineClipSourceSpec({
+    state,
+    sceneLayout,
+    canvasWidth,
+    canvasHeight,
+    id: ids.clipSource,
   });
 
-  if (!clipPathData) {
+  if (!clipSource) {
     return { specs, effects: [] };
   }
 
@@ -279,27 +285,97 @@ export function buildDielineRenderBundle(
         id: ids.clip,
         visibility: clipVisibility,
         targetPassIds: clipTargetPassIds,
-        source: {
-          id: ids.clipSource,
-          type: "path",
-          space: "screen",
-          data: {
-            id: ids.clipSource,
-            type: "dieline-effect",
-            effect: "clipPath",
-          },
-          props: {
-            pathData: clipPathData,
-            fill: "#000000",
-            stroke: null,
-            originX: "left",
-            originY: "top",
-            selectable: false,
-            evented: false,
-            excludeFromExport: true,
-          },
-        },
+        source: clipSource,
       },
     ],
+  };
+}
+
+export function buildDielineGuideRenderSpecs(
+  options: DielineRenderOptions,
+): RenderObjectSpec[] {
+  return buildDielineRenderBundle({
+    ...options,
+    includeImageClipEffect: false,
+  }).specs;
+}
+
+export function buildDielineClipSourceSpec(
+  options: DielineClipSourceOptions,
+): RenderObjectSpec | null {
+  const { state, sceneLayout, canvasWidth, canvasHeight } = options;
+  const scale = sceneLayout.scale;
+  const cx = sceneLayout.trimRect.centerX;
+  const cy = sceneLayout.trimRect.centerY;
+  const visualWidth = sceneLayout.trimRect.width;
+  const visualHeight = sceneLayout.trimRect.height;
+  const visualRadius = state.radius * scale;
+  const cutW = sceneLayout.cutRect.width;
+  const cutH = sceneLayout.cutRect.height;
+  const visualOffset = (cutW - visualWidth) / 2;
+  const cutR =
+    visualRadius === 0 ? 0 : Math.max(0, visualRadius + visualOffset);
+  const placements = resolveFeaturePlacements(state.features || [], {
+    shape: state.shape,
+    shapeStyle: state.shapeStyle,
+    pathData: state.pathData,
+    customSourceWidthPx: state.customSourceWidthPx,
+    customSourceHeightPx: state.customSourceHeightPx,
+    canvasWidth,
+    canvasHeight,
+    x: cx,
+    y: cy,
+    width: visualWidth,
+    height: visualHeight,
+    radius: visualRadius,
+    scale,
+  });
+  const cutFeatures = projectPlacedFeatures(
+    placements.filter((placement) => !placement.feature.skipCut),
+    {
+      x: cx,
+      y: cy,
+      width: cutW,
+      height: cutH,
+    },
+    scale,
+  );
+  const clipPathData = generateDielinePath({
+    shape: state.shape,
+    shapeStyle: state.shapeStyle,
+    pathData: state.pathData,
+    customSourceWidthPx: state.customSourceWidthPx,
+    customSourceHeightPx: state.customSourceHeightPx,
+    canvasWidth,
+    canvasHeight,
+    width: cutW,
+    height: cutH,
+    radius: cutR,
+    x: cx,
+    y: cy,
+    features: cutFeatures,
+  });
+  if (!clipPathData) return null;
+
+  const id = String(options.id || DEFAULT_IDS.clipSource).trim();
+  return {
+    id: id || DEFAULT_IDS.clipSource,
+    type: "path",
+    space: "screen",
+    data: {
+      id: id || DEFAULT_IDS.clipSource,
+      type: "dieline-effect",
+      effect: "clipPath",
+    },
+    props: {
+      pathData: clipPathData,
+      fill: "#000000",
+      stroke: null,
+      originX: "left",
+      originY: "top",
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+    },
   };
 }

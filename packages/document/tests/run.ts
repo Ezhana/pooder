@@ -259,6 +259,11 @@ function testKitEffectCapabilityResolution() {
     "dieline should resolve to kit capability",
   );
   assertEqual(
+    resolveKitEditorDocumentEffectCapabilityId({ type: "clip" }),
+    "pooder.kit.clip",
+    "clip should resolve to kit capability",
+  );
+  assertEqual(
     resolveKitEditorDocumentEffectCapabilityId({ type: "feature" }),
     "pooder.kit.feature",
     "feature should resolve to kit capability",
@@ -270,7 +275,22 @@ function testKitEffectCapabilityResolution() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
-        layers: [{ id: "layer", effects: [{ type: "dieline" }, { type: "feature" }] }],
+        layers: [
+          {
+            id: "layer",
+            effects: [{ type: "dieline" }, { type: "feature" }],
+            objects: [
+              {
+                id: "image",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 1, height: 1 },
+                width: 1,
+                height: 1,
+                effects: [{ type: "clip" }],
+              },
+            ],
+          },
+        ],
       },
     ],
   });

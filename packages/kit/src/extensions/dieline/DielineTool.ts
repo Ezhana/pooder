@@ -12,7 +12,6 @@ import {
 import {
   CANVAS_SERVICE,
   CanvasService,
-  RenderEffectSpec,
   RenderObjectSpec,
 } from "@pooder/core";
 import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
@@ -45,7 +44,7 @@ import {
   normalizeDielineConfigNamespace,
   readDielineState,
 } from "./model";
-import { buildDielineRenderBundle } from "./renderBuilder";
+import { buildDielineGuideRenderSpecs } from "./renderBuilder";
 import { detectImageEdge, type DetectEdgeOptions } from "../edge-detection";
 
 const IMAGE_SESSION_TOOL_ID = "pooder.kit.image-placement";
@@ -80,7 +79,6 @@ export class DielineTool implements ExtensionDefinition {
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
   private specs: RenderObjectSpec[] = [];
-  private effects: RenderEffectSpec[] = [];
   private renderSeq = 0;
   private renderProducerDisposable?: { dispose: () => void };
   private readonly capabilityId: string;
@@ -163,7 +161,6 @@ export class DielineTool implements ExtensionDefinition {
             order: 0,
             replace: true,
             visibility: this.resolveDielinePassVisibility(),
-            effects: this.effects,
             objects: this.specs,
           },
         ],
@@ -201,7 +198,6 @@ export class DielineTool implements ExtensionDefinition {
     context.eventBus.off("canvas:resized", this.onCanvasResized);
     this.renderSeq += 1;
     this.specs = [];
-    this.effects = [];
     this.renderProducerDisposable?.dispose();
     this.renderProducerDisposable = undefined;
     if (this.canvasService) {
@@ -326,7 +322,7 @@ export class DielineTool implements ExtensionDefinition {
     sceneLayout: NonNullable<ReturnType<typeof computeSceneLayout>>,
   ): RenderObjectSpec[] {
     const hasImages = this.hasImageItems();
-    return buildDielineRenderBundle({
+    return buildDielineGuideRenderSpecs({
       state: this.state,
       sceneLayout,
       canvasWidth:
@@ -335,28 +331,7 @@ export class DielineTool implements ExtensionDefinition {
         sceneLayout.canvasHeight || this.canvasService?.getViewportSize().height || 600,
       hasImages,
       createHatchPattern: (color) => this.createHatchPattern(color),
-      includeImageClipEffect: false,
-    }).specs;
-  }
-
-  private buildImageClipEffects(
-    sceneLayout: NonNullable<ReturnType<typeof computeSceneLayout>>,
-  ): RenderEffectSpec[] {
-    return buildDielineRenderBundle({
-      state: this.state,
-      sceneLayout,
-      canvasWidth:
-        sceneLayout.canvasWidth || this.canvasService?.getViewportSize().width || 800,
-      canvasHeight:
-        sceneLayout.canvasHeight || this.canvasService?.getViewportSize().height || 600,
-      hasImages: this.hasImageItems(),
-      includeImageClipEffect: true,
-      clipTargetPassIds: this.imageClipLayerIds,
-      clipVisibility: {
-        op: "not",
-        expr: { op: "anySessionActive" },
-      },
-    }).effects;
+    });
   }
 
   public updateDieline(_emitEvent: boolean = true) {
@@ -380,16 +355,13 @@ export class DielineTool implements ExtensionDefinition {
     if (!sceneLayout) {
       if (seq !== this.renderSeq) return;
       this.specs = [];
-      this.effects = [];
       await this.canvasService.flushRenderFromProducers();
       return;
     }
 
     const nextSpecs = this.buildDielineSpecs(sceneLayout);
-    const nextEffects = this.buildImageClipEffects(sceneLayout);
     if (seq !== this.renderSeq) return;
     this.specs = nextSpecs;
-    this.effects = nextEffects;
     await this.canvasService.flushRenderFromProducers();
     if (seq !== this.renderSeq) return;
     this.canvasService.requestRenderAll();

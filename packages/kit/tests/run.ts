@@ -63,6 +63,10 @@ import {
   type BackgroundCapabilityApi,
 } from "../src/extensions/background";
 import {
+  CLIP_CAPABILITY_ID,
+  ClipCapabilityExtension,
+} from "../src/extensions/clip";
+import {
   RULER_CAPABILITY_ID,
   RulerCapabilityExtension,
   createRulerCapabilityDefinition,
@@ -100,6 +104,7 @@ import {
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
 import {
   createDielineGeometryCapability,
+  createClipCapability,
   createFeatureCapability,
   createImagePlacementCapability,
   createSizeCapability,
@@ -1162,6 +1167,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createImagePlacementCapability());
   runtime.extensions.register(createWhiteInkCapability());
   runtime.extensions.register(createDielineGeometryCapability());
+  runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
   runtime.extensions.register(createSizeCapability());
   await runtime.extensions.flushActivation();
@@ -1181,6 +1187,10 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     "dieline geometry capability factory should activate",
   );
   assert(
+    runtime.extensions.getState(CLIP_CAPABILITY_ID)?.state === "active",
+    "clip capability factory should activate",
+  );
+  assert(
     runtime.extensions.getState(FEATURE_CAPABILITY_ID)?.state === "active",
     "feature capability factory should activate",
   );
@@ -1196,6 +1206,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     IMAGE_PLACEMENT_CAPABILITY_ID,
     WHITE_INK_CAPABILITY_ID,
     DIELINE_GEOMETRY_CAPABILITY_ID,
+    CLIP_CAPABILITY_ID,
     FEATURE_CAPABILITY_ID,
     SIZE_CAPABILITY_ID,
   ]) {
@@ -1231,6 +1242,7 @@ function testCreateKitCapabilitiesForDocument() {
                 frame: { x: 0, y: 0, width: 20, height: 20 },
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
+                  { type: "clip", payload: { source: { type: "dieline" } } },
                 ],
               },
             ],
@@ -1244,6 +1256,7 @@ function testCreateKitCapabilitiesForDocument() {
     capabilities.map((item) => item.id).sort(),
     [
       DIELINE_GEOMETRY_CAPABILITY_ID,
+      CLIP_CAPABILITY_ID,
       FEATURE_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
       TEMPLATE_OVERLAY_CAPABILITY_ID,
@@ -1291,8 +1304,8 @@ function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
   );
   assertDeepEqual(
     dieline.imageClipLayerIds,
-    ["front.image.user"],
-    "document helper should clip the document image placement layer",
+    ["image.user"],
+    "document helper should not infer document clip layers from dieline",
   );
 }
 
@@ -1309,6 +1322,8 @@ function createFakeCapabilityExtension(
 
 async function testApplyKitEditorDocument() {
   const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
   const templateCalls: any[] = [];
   const dielineCalls: any[] = [];
   const featureCalls: any[] = [];
@@ -1373,6 +1388,7 @@ async function testApplyKitEditorDocument() {
       } satisfies FeatureCapabilityApi,
     }),
   );
+  runtime.extensions.register(new ClipCapabilityExtension());
   await runtime.extensions.flushActivation();
 
   const result = await applyKitEditorDocument(runtime, {
@@ -1430,6 +1446,7 @@ async function testApplyKitEditorDocument() {
                 assetId: "photo",
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
+                  { type: "clip", payload: { source: { type: "dieline" } } },
                 ],
                 frame: { x: 10, y: 20, width: 30, height: 40 },
               },
@@ -1483,6 +1500,25 @@ async function testApplyKitEditorDocument() {
       ?.src,
     "/photo.png",
     "image placement target should resolve default image asset source",
+  );
+  assertDeepEqual(
+    (scene.getElement("front-slot")?.data as any)?.clip,
+    { enabled: true, source: { type: "dieline" } },
+    "clip effect should write normalized object clip metadata",
+  );
+  const clipProducerResult = (await canvasService.getRenderProducerResult(
+    CLIP_CAPABILITY_ID,
+  )) as any;
+  const clipEffect = clipProducerResult?.passes?.[0]?.effects?.[0];
+  assertDeepEqual(
+    clipEffect?.targetPassIds,
+    ["front-artwork"],
+    "clip render producer should resolve the target pass from the scene element layer",
+  );
+  assertDeepEqual(
+    clipEffect?.targetElementIds,
+    ["front-slot"],
+    "clip render producer should resolve object-level target ids",
   );
   assert(dielineCalls.length > 0, "dieline effect should refresh facade");
   assertEqual(
@@ -2050,15 +2086,6 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
     "dieline overlay should remain visible during dieline sessions",
   );
 
-  const clipEffect = pass.effects?.find(
-    (effect: any) => effect.type === "clipPath",
-  );
-  assert(clipEffect?.visibility, "dieline clip effect should expose visibility");
-  assertEqual(
-    evaluateVisibilityExpr(clipEffect.visibility, context),
-    false,
-    "dieline clip should be disabled while a session is active",
-  );
   sessions.deactivateSession(DIELINE_GEOMETRY_CAPABILITY_ID);
 
   assertEqual(
@@ -2066,10 +2093,10 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
     true,
     "dieline overlay should be restored after edit sessions end",
   );
-  assertEqual(
-    evaluateVisibilityExpr(clipEffect.visibility, context),
-    true,
-    "dieline clip should be restored after edit sessions end",
+  assertDeepEqual(
+    pass.effects ?? [],
+    [],
+    "dieline overlay should not emit implicit clip effects",
   );
 
   await runtime.dispose();

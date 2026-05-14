@@ -75,6 +75,7 @@ interface ResolvedClipPathEffectSpec {
   visibility?: RenderPassSpec["visibility"];
   source: RenderObjectSpec;
   targetPassIds: string[];
+  targetElementIds?: string[];
 }
 
 interface ManagedPassMeta {
@@ -375,6 +376,15 @@ export default class CanvasService implements Service, CanvasServiceContract {
           .filter((item) => item.length > 0)
       : [];
     if (!targetPassIds.length) return null;
+    const targetElementIds = Array.isArray(effect.targetElementIds)
+      ? Array.from(
+          new Set(
+            effect.targetElementIds
+              .map((item) => String(item || "").trim())
+              .filter((item) => item.length > 0),
+          ),
+        )
+      : [];
 
     const customId = String((effect as any).id || "").trim();
     const key = customId || `${pass.sourceKey}.effect.clipPath.${index}`;
@@ -388,6 +398,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
         id: sourceId,
       },
       targetPassIds,
+      ...(targetElementIds.length ? { targetElementIds } : {}),
     };
   }
 
@@ -882,8 +893,17 @@ export default class CanvasService implements Service, CanvasServiceContract {
       if (!evaluateVisibilityExpr(effect.visibility, visibilityContext)) {
         continue;
       }
+      const targetElementIds = effect.targetElementIds?.length
+        ? new Set(effect.targetElementIds)
+        : null;
       effect.targetPassIds.forEach((targetPassId) => {
         this.getPassCanvasObjects(targetPassId).forEach((obj) => {
+          if (
+            targetElementIds &&
+            !this.fabricObjectMatchesClipTargetElement(obj, targetElementIds)
+          ) {
+            return;
+          }
           effectTargetMap.set(obj, effect);
         });
       });
@@ -1385,6 +1405,17 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   private readProjectionElementId(object: any): string {
     return String(object?.data?.sceneElementId || object?.data?.id || "").trim();
+  }
+
+  private fabricObjectMatchesClipTargetElement(
+    object: any,
+    targetElementIds: Set<string>,
+  ): boolean {
+    const data = object?.data || {};
+    return [data.sceneElementId, data.slotId, data.id].some((value) => {
+      const normalized = String(value || "").trim();
+      return normalized.length > 0 && targetElementIds.has(normalized);
+    });
   }
 
   private getProjectionSourceObjects(

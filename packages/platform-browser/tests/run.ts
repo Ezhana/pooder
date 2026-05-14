@@ -1483,6 +1483,76 @@ async function testRenderProducerTargetLayerUsesStoredLayerOrder() {
   );
 }
 
+async function testClipPathEffectTargetsMatchingElementsOnly() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+
+  service.registerRenderProducer("pooder.kit.test", () => ({
+    passes: [
+      {
+        id: "artwork.render",
+        targetLayerId: "app.artwork",
+        objects: [
+          rectSpec("first", {}, { sceneElementId: "scene-a" }),
+          rectSpec("second", {}, { sceneElementId: "scene-b" }),
+        ],
+        effects: [
+          {
+            type: "clipPath",
+            source: {
+              id: "clip-source",
+              type: "path",
+              space: "scene",
+              props: { pathData: "M 0 0 L 10 0 L 10 10 Z" },
+            },
+            targetPassIds: ["app.artwork"],
+            targetElementIds: ["scene-a"],
+          },
+        ],
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  const first = canvas.objects.find((object) => object.data.id === "first") as any;
+  const second = canvas.objects.find((object) => object.data.id === "second") as any;
+
+  assert(first?.clipPath, "matching scene element should receive a clipPath");
+  assert(!second?.clipPath, "non-matching scene element should not be clipped");
+}
+
+async function testClipPathEffectKeepsLegacyPassLevelBehavior() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+
+  service.registerRenderProducer("pooder.kit.test", () => ({
+    passes: [
+      {
+        id: "artwork.render",
+        targetLayerId: "app.artwork",
+        objects: [rectSpec("first"), rectSpec("second")],
+        effects: [
+          {
+            type: "clipPath",
+            source: {
+              id: "clip-source",
+              type: "path",
+              space: "scene",
+              props: { pathData: "M 0 0 L 10 0 L 10 10 Z" },
+            },
+            targetPassIds: ["app.artwork"],
+          },
+        ],
+      },
+    ],
+  }));
+  await service.flushRenderFromProducers();
+
+  const first = canvas.objects.find((object) => object.data.id === "first") as any;
+  const second = canvas.objects.find((object) => object.data.id === "second") as any;
+
+  assert(first?.clipPath, "legacy pass-level clip should apply to first object");
+  assert(second?.clipPath, "legacy pass-level clip should apply to second object");
+}
+
 function testViewPaddingResolvesResponsively() {
   assertEqual(
     resolveViewPaddingPx("10%", 320, 480),
@@ -1526,6 +1596,8 @@ async function main() {
   await testRenderProducerVisibilityUsesContextValues();
   await testRenderProducerVisibilityUsesWorkflowSessions();
   await testRenderProducerTargetLayerUsesStoredLayerOrder();
+  await testClipPathEffectTargetsMatchingElementsOnly();
+  await testClipPathEffectKeepsLegacyPassLevelBehavior();
   testViewPaddingResolvesResponsively();
 }
 
