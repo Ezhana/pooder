@@ -6,9 +6,13 @@ import {
   ExtensionContext,
   ConfigurationService,
   SceneService,
+  type RenderIntentCompilerContribution,
+  type RenderIntentCompilerContext,
+  type RenderIntentPatch,
   type RenderPatternSpec,
   type VisibilityExpr,
 } from "@pooder/core";
+import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
 import {
   CANVAS_SERVICE,
   CanvasService,
@@ -207,6 +211,7 @@ export class DielineTool implements ExtensionDefinition {
           },
         }),
       ],
+      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
 
     if (this.contributeConfigDefinitions) {
@@ -221,6 +226,73 @@ export class DielineTool implements ExtensionDefinition {
     }
 
     return contributions;
+  }
+
+  private createRenderIntentCompiler(): RenderIntentCompilerContribution<
+    EditorEffect,
+    EditorDocument
+  > {
+    return {
+      capabilityId: this.capabilityId,
+      effectType: "dieline",
+      compile: (context) => this.compileDocumentDielineEffect(context),
+    };
+  }
+
+  private compileDocumentDielineEffect(
+    context: RenderIntentCompilerContext<EditorEffect, EditorDocument>,
+  ): RenderIntentPatch {
+    const payload =
+      context.effect.payload && typeof context.effect.payload === "object"
+        ? context.effect.payload
+        : {};
+    const layerId = context.target.layerId || this.targetLayerId;
+    const id =
+      typeof payload.id === "string" && payload.id.trim()
+        ? payload.id.trim()
+        : `${layerId}.dieline`;
+    const pathData =
+      typeof payload.pathData === "string" && payload.pathData.trim()
+        ? payload.pathData.trim()
+        : undefined;
+    return {
+      id,
+      subject: {
+        kind: pathData ? "object" : "layer",
+        surfaceId: context.target.surfaceId,
+        layerId,
+        objectId: pathData ? id : undefined,
+        objectType: pathData ? "path" : undefined,
+      },
+      ordering: {
+        layerId,
+        layerOrder: 0,
+        objectOrder: 0,
+        channel: "overlay",
+        stack: 700,
+      },
+      ...(pathData
+        ? {
+            visual: { type: "path" as const },
+            props: {
+              pathData,
+              stroke: typeof payload.stroke === "string" ? payload.stroke : "#ff00ff",
+              fill: null,
+              selectable: false,
+              evented: false,
+            },
+          }
+        : {}),
+      export: {
+        visible: true,
+        exportable: false,
+        visibility: this.resolveDielinePassVisibility(),
+      },
+      data: {
+        type: "dieline",
+        dieline: { ...payload },
+      },
+    };
   }
 
   private createHatchPattern(

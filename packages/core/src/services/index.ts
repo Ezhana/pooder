@@ -1,7 +1,6 @@
 import CapabilityRegistryService from "./CapabilityRegistryService";
 import CommandService from "./CommandService";
 import ConfigurationService from "./ConfigurationService";
-import EffectApplicatorRegistryService from "./EffectApplicatorRegistryService";
 import {
   RenderIntentCompilerRegistryService,
   RenderIntentService,
@@ -15,7 +14,6 @@ import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
-  EFFECT_APPLICATOR_REGISTRY_SERVICE,
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
   CORE_SERVICE_TOKENS,
@@ -33,7 +31,6 @@ export {
   CapabilityRegistryService,
   CommandService,
   ConfigurationService,
-  EffectApplicatorRegistryService,
   RenderIntentCompilerRegistryService,
   RenderIntentService,
   SceneService,
@@ -44,7 +41,6 @@ export {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
-  EFFECT_APPLICATOR_REGISTRY_SERVICE,
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
   CANVAS_SERVICE,
@@ -65,14 +61,6 @@ export type {
 } from "../render";
 
 export type { CapabilityRegistryChangeEvent } from "./CapabilityRegistryService";
-export type {
-  EffectApplicationContext,
-  EffectApplicationTarget,
-  EffectApplicationTargetKind,
-  EffectApplicatorContribution,
-  EffectApplicatorQuery,
-  RegisteredEffectApplicator,
-} from "./EffectApplicatorRegistryService";
 export type {
   RegisteredRenderIntentCompiler,
   RenderGraph,

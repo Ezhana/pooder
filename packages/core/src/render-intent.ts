@@ -215,6 +215,17 @@ export interface RenderIntentChangeEvent {
   revision: number;
 }
 
+export interface RenderIntentPatchMergeDiagnostic {
+  code: "render-intent-patch-base-missing";
+  message: string;
+  patchId: string;
+}
+
+export interface RenderIntentPatchMergeResult {
+  draft?: RenderIntentDraft;
+  diagnostics: RenderIntentPatchMergeDiagnostic[];
+}
+
 const CHANNEL_ORDER: Record<RenderIntentChannel, number> = {
   background: 0,
   normal: 10,
@@ -428,6 +439,56 @@ export function reduceRenderIntentDrafts(
   return Array.from(byId.values());
 }
 
+export function mergeRenderIntentPatchDraft(
+  drafts: readonly RenderIntentDraft[],
+  patch: RenderIntentPatch,
+): RenderIntentPatchMergeResult {
+  const base = findLastRenderIntentDraft(drafts, patch.id);
+  if (base) {
+    return {
+      draft: mergePatch(base, patch),
+      diagnostics: [],
+    };
+  }
+
+  const subject = patch.subject;
+  const ordering = patch.ordering;
+  const surfaceId = subject?.surfaceId;
+  const layerId = ordering?.layerId;
+  if (!surfaceId || !layerId) {
+    return {
+      diagnostics: [
+        {
+          code: "render-intent-patch-base-missing",
+          patchId: patch.id,
+          message:
+            `RenderIntentPatch "${patch.id}" has no base intent and must ` +
+            "provide subject.surfaceId and ordering.layerId.",
+        },
+      ],
+    };
+  }
+
+  return {
+    draft: createDraftFromPatch(
+      patch,
+      { ...subject, surfaceId },
+      { ...ordering, layerId },
+    ),
+    diagnostics: [],
+  };
+}
+
+function findLastRenderIntentDraft(
+  drafts: readonly RenderIntentDraft[],
+  id: string,
+): RenderIntentDraft | undefined {
+  for (let index = drafts.length - 1; index >= 0; index -= 1) {
+    if (drafts[index]?.id === id) return drafts[index];
+  }
+  return undefined;
+}
+
 export function createRenderGraph(
   drafts: readonly RenderIntentDraft[],
   revision = 0,
@@ -592,40 +653,58 @@ function applyRuntimePatches(
       const index = result.findIndex((draft) => draft.id === patch.id);
       if (index >= 0) {
         result[index] = mergePatch(result[index], patch);
-      } else if (patch.subject?.surfaceId && patch.ordering?.layerId) {
-        result.push({
-          id: patch.id,
-          subject: {
-            kind: patch.subject.kind ?? "object",
-            surfaceId: patch.subject.surfaceId,
-            layerId: patch.subject.layerId,
-            objectId: patch.subject.objectId,
-            objectType: patch.subject.objectType,
-          },
-          ordering: {
-            layerId: patch.ordering.layerId,
-            layerOrder: patch.ordering.layerOrder,
-            objectOrder: patch.ordering.objectOrder,
-            channel: patch.ordering.channel,
-            subOrder: patch.ordering.subOrder,
-            stack: patch.ordering.stack,
-          },
-          visual: patch.visual,
-          placement: patch.placement,
-          projection: patch.projection,
-          overlay: patch.overlay,
-          clipping: patch.clipping,
-          interaction: patch.interaction,
-          export: patch.export,
-          coordinateSpace: patch.coordinateSpace,
-          props: patch.props,
-          data: patch.data,
-          extensions: patch.extensions,
-        });
+      } else {
+        const surfaceId = patch.subject?.surfaceId;
+        const layerId = patch.ordering?.layerId;
+        if (surfaceId && layerId) {
+          result.push(
+            createDraftFromPatch(
+              patch,
+              { ...patch.subject, surfaceId },
+              { ...patch.ordering, layerId },
+            ),
+          );
+        }
       }
     });
   });
   return result;
+}
+
+function createDraftFromPatch(
+  patch: RenderIntentPatch,
+  subject: Partial<RenderIntentSubject> & { surfaceId: string },
+  ordering: Partial<RenderIntentOrderingAspect> & { layerId: string },
+): RenderIntentDraft {
+  return {
+    id: patch.id,
+    subject: {
+      kind: subject.kind ?? "object",
+      surfaceId: subject.surfaceId,
+      layerId: subject.layerId,
+      objectId: subject.objectId,
+      objectType: subject.objectType,
+    },
+    ordering: {
+      layerId: ordering.layerId,
+      layerOrder: ordering.layerOrder,
+      objectOrder: ordering.objectOrder,
+      channel: ordering.channel,
+      subOrder: ordering.subOrder,
+      stack: ordering.stack,
+    },
+    visual: patch.visual,
+    placement: patch.placement,
+    projection: patch.projection,
+    overlay: patch.overlay,
+    clipping: patch.clipping,
+    interaction: patch.interaction,
+    export: patch.export,
+    coordinateSpace: patch.coordinateSpace,
+    props: patch.props,
+    data: patch.data,
+    extensions: patch.extensions,
+  };
 }
 
 function getOrCreateGraphLayer(

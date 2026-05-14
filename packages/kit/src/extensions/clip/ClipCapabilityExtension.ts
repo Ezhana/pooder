@@ -5,13 +5,14 @@ import {
   SCENE_SERVICE,
   type CanvasService,
   type ConfigurationService,
-  type EffectApplicationContext,
-  type EffectApplicatorContribution,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
   type RenderEffectSpec,
   type RenderObjectSpec,
+  type RenderIntentCompilerContribution,
+  type RenderIntentCompilerContext,
+  type RenderIntentPatch,
   type RenderIntentService,
   type SceneElement,
   type SceneService,
@@ -104,7 +105,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
           capabilityId: this.capabilityId,
         }),
       ],
-      effectApplicators: [this.createEffectApplicator()],
+      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
   }
 
@@ -114,23 +115,23 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     };
   }
 
-  private createEffectApplicator(): EffectApplicatorContribution<
+  private createRenderIntentCompiler(): RenderIntentCompilerContribution<
     EditorEffect<ClipEffectPayload>,
     EditorDocument
   > {
     return {
       capabilityId: this.capabilityId,
       effectType: "clip",
-      apply: (context) => this.applyDocumentClipEffect(context),
+      compile: (context) => this.compileDocumentClipEffect(context),
     };
   }
 
-  private applyDocumentClipEffect(
-    context: EffectApplicationContext<
+  private compileDocumentClipEffect(
+    context: RenderIntentCompilerContext<
       EditorEffect<ClipEffectPayload>,
       EditorDocument
     >,
-  ) {
+  ): RenderIntentPatch | void {
     if (context.target.kind !== "object" || !context.target.objectId) {
       console.warn("[ClipCapability] Ignoring non-object clip effect.", {
         target: context.target,
@@ -138,18 +139,38 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
       return;
     }
 
-    const sceneService = context.services.get<SceneService>(SCENE_SERVICE);
-    const element = sceneService?.getElement(context.target.objectId);
-    if (!sceneService || !element) return;
-
-    const data = isRecord(element.data) ? element.data : {};
-    sceneService.updateElement(element.id, {
-      data: {
-        ...data,
-        [CLIP_METADATA_KEY]: normalizeClipEffectPayload(context.effect.payload),
+    const clip = normalizeClipEffectPayload(context.effect.payload);
+    if (!clip.enabled || !context.target.layerId) return;
+    const source = this.buildSourceSpec(
+      {
+        id: context.target.objectId,
+        layerId: context.target.layerId,
+        type: "rect",
+        order: 0,
+        visible: true,
+        data: {},
+      } as SceneElement,
+      clip.source,
+    );
+    if (!source) return;
+    return {
+      id: context.target.objectId,
+      clipping: {
+        enabled: true,
+        effects: [
+          {
+            type: "clipPath",
+            id: `clip.${context.target.objectId}`,
+            source,
+            targetLayerIds: [context.target.layerId],
+            targetSubjectIds: [context.target.objectId],
+          },
+        ],
       },
-    });
-    this.refresh();
+      data: {
+        [CLIP_METADATA_KEY]: clip,
+      },
+    };
   }
 
   private refresh() {

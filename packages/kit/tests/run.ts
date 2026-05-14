@@ -1303,8 +1303,8 @@ function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
   assert(dieline, "document helper should create the dieline capability");
   assertEqual(
     dieline.targetLayerId,
-    "front.dieline-overlay",
-    "document helper should target the document dieline layer",
+    "dieline-overlay",
+    "document helper should leave dieline target layer ownership to the capability",
   );
   assertDeepEqual(
     dieline.imageClipLayerIds,
@@ -1328,74 +1328,7 @@ async function testApplyKitEditorDocument() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
-  const templateCalls: any[] = [];
-  const dielineCalls: any[] = [];
-  const featureCalls: any[] = [];
-  runtime.extensions.register(
-    createFakeCapabilityExtension({
-      [TEMPLATE_OVERLAY_CAPABILITY_ID]: {
-        getConfig: () => ({ version: 1, slots: {} }),
-        patchConfig: async (patch: any) => {
-          templateCalls.push(patch);
-          return { version: 1, slots: patch.slots ?? {} };
-        },
-        replaceConfig: async (config: any) => config,
-        clearConfig: async () => ({ version: 1, slots: {} }),
-        refresh: () => {},
-      } satisfies TemplateOverlayCapabilityApi,
-      [IMAGE_PLACEMENT_CAPABILITY_ID]: {
-        beginSession: async () => ({ ok: true }),
-        requestUpload: async () => ({ ok: true }),
-        setImageSource: async () => ({ ok: true }),
-        setImageTransform: async () => ({ ok: true }),
-        applyImageOperation: async () => ({ ok: true }),
-        clearImage: async () => ({ ok: true }),
-        focusSlot: () => ({ ok: true }),
-        getViewState: () => ({}) as any,
-        resetSession: () => {},
-        validateSession: async () => ({ ok: true }),
-        completeSession: async () => ({ ok: true }),
-        exportPlacementImage: async () => ({}) as any,
-      } satisfies ImagePlacementCapabilityApi,
-      [DIELINE_GEOMETRY_CAPABILITY_ID]: {
-        getState: () => ({}) as any,
-        getGeometry: () => null,
-        updateFeaturePosition: () => {},
-        applyDetectedPath: () => {},
-        refresh: () => {
-          dielineCalls.push({ type: "refresh" });
-        },
-        upsertPathElement: (options: any) => {
-          dielineCalls.push(options);
-          return null;
-        },
-      } satisfies DielineGeometryCapabilityApi,
-      [FEATURE_CAPABILITY_ID]: {
-        addDoubleLayerHole: () => false,
-        addFeature: () => false,
-        beginSession: async () => ({ ok: true }),
-        clearFeatures: () => true,
-        completeSession: () => ({ ok: true }),
-        getFeatures: () => [],
-        getMarkerRenderSpecs: () => [],
-        getWorkingFeatures: () => [],
-        projectPlacements: () => [],
-        refresh: () => {},
-        replaceFeatures: (features: any[], options: any) => {
-          featureCalls.push({ features, options });
-          return { ok: true };
-        },
-        resetSession: async () => ({ ok: true }),
-        resolvePlacements: () => [],
-        rollbackSession: async () => ({ ok: true }),
-        updateWorkingGroupPosition: () => ({ ok: true }),
-      } satisfies FeatureCapabilityApi,
-    }),
-  );
-  runtime.extensions.register(new ClipCapabilityExtension());
-  await runtime.extensions.flushActivation();
-
-  const result = await applyKitEditorDocument(runtime, {
+  const document = {
     version: 2,
     assets: [
       { id: "template", type: "image", src: "/template.png" },
@@ -1412,15 +1345,8 @@ async function testApplyKitEditorDocument() {
             role: "background",
             effects: [
               {
-                type: "template-overlay",
-                payload: {
-                  slots: {
-                    normal: {
-                      enabled: true,
-                      src: "/layer-template.png",
-                    },
-                  },
-                },
+                type: "background",
+                payload: { id: "front-bg", color: "#eeeeee" },
               },
             ],
             objects: [
@@ -1465,9 +1391,16 @@ async function testApplyKitEditorDocument() {
                 },
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
-                  { type: "clip", payload: { source: { type: "dieline" } } },
+                  { type: "clip", payload: { source: { type: "path", pathData: "M0 0L1 0L1 1Z" } } },
                 ],
                 frame: { x: 10, y: 20, width: 30, height: 40 },
+              },
+              {
+                id: "white-source",
+                type: "image",
+                assetId: "photo",
+                effects: [{ type: "white-ink", payload: { src: "/white.png" } }],
+                frame: { x: 0, y: 0, width: 10, height: 10 },
               },
             ],
           },
@@ -1479,46 +1412,29 @@ async function testApplyKitEditorDocument() {
         layers: [{ id: "back-artwork" }],
       },
     ],
-  });
+  };
+  runtime.extensions.registerMany(createKitCapabilitiesForDocument(document));
+  await runtime.extensions.flushActivation();
+  const initialDielineShape = runtime.config.get("dieline.shape");
+
+  const result = await applyKitEditorDocument(runtime, document);
 
   assert(result.ok, "document apply should succeed");
   assertDeepEqual(
     result.appliedSurfaceIds,
-    ["front", "back"],
-    "apply result should report surfaces",
+    ["front"],
+    "apply result should report surfaces represented by RenderIntent drafts",
   );
   const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
-  assert(!!scene.getLayer("front-artwork"), "front layer should be added");
   assertEqual(
-    scene.getElement("front-slot")?.type,
-    "rect",
-    "image placement target should be projected as scene rect anchor",
+    scene.getLayer("front-artwork"),
+    undefined,
+    "document apply should not write SceneService layers",
   );
   assertEqual(
-    scene.getElement("front-template-image")?.type,
-    "image",
-    "template image should be projected as scene image",
-  );
-  assertEqual(
-    runtime.config.get("dieline.shape"),
-    "circle",
-    "dieline payload should update config",
-  );
-  assertEqual(
-    templateCalls.length,
-    1,
-    "only explicit layer template overlay effects should call facade",
-  );
-  assertEqual(
-    templateCalls[0]?.slots?.normal?.src,
-    "/layer-template.png",
-    "template overlay should use explicit layer payload",
-  );
-  assertEqual(
-    ((scene.getElement("front-slot")?.data as any)?.imagePlacement?.image as any)
-      ?.src,
-    "/photo.png",
-    "image placement target should resolve default image asset source",
+    scene.getElement("front-slot"),
+    undefined,
+    "document apply should not write SceneService elements",
   );
   const renderGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
@@ -1562,33 +1478,40 @@ async function testApplyKitEditorDocument() {
     "document apply should expose committed image interaction data generically",
   );
   assertDeepEqual(
-    (scene.getElement("front-slot")?.data as any)?.clip,
-    { enabled: true, source: { type: "dieline" } },
-    "clip effect should write normalized object clip metadata",
+    committedGraphNode?.data.clip,
+    { enabled: true, source: { type: "path", pathData: "M0 0L1 0L1 1Z", space: "scene" } },
+    "clip effect should write normalized clip metadata into RenderIntent data",
   );
-  const clipEffect = renderGraph.layers
-    .flatMap((layer) => layer.effects)
-    .find((effect) => effect.id === "clip.front-slot");
+  const clipEffect = committedGraphNode?.effects.find(
+    (effect) => effect.id === "clip.front-slot",
+  );
   assertDeepEqual(
     clipEffect?.targetLayerIds,
     ["front-artwork"],
-    "clip render intent should resolve the target layer from the scene element layer",
+    "clip render intent should resolve the target layer from effect context",
   );
   assertDeepEqual(
     clipEffect?.targetSubjectIds,
     ["front-slot"],
     "clip render intent should resolve object-level target ids",
   );
-  assert(dielineCalls.length > 0, "dieline effect should refresh facade");
   assertEqual(
-    featureCalls[0]?.features?.[0]?.id,
+    (renderGraph.layers
+      .flatMap((layer) => layer.nodes)
+      .find((node) => node.data.type === "feature")?.data.feature as any)?.id,
     "hole",
-    "feature effect should replace features",
+    "feature effect should compile to declarative render graph data",
   );
   assertEqual(
-    runtime.config.get("size.actualWidthMm"),
-    100,
-    "document surface should seed size width config",
+    runtime.config.get("dieline.shape"),
+    initialDielineShape,
+    "document apply should not write runtime config",
+  );
+  assert(
+    renderGraph.layers.flatMap((layer) => layer.nodes).some(
+      (node) => node.data.type === "white-ink" && node.visual?.src === "/white.png",
+    ),
+    "white ink effect should compile to a RenderIntent graph node",
   );
 
   await runtime.dispose();
@@ -1645,7 +1568,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
       },
     ],
   });
-  assert(optionalResult.ok, "optional missing capabilities should apply scene");
+  assert(optionalResult.ok, "optional missing capabilities should apply document");
   assert(
     optionalResult.diagnostics.some(
       (item) =>
@@ -1661,12 +1584,114 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
     "ignore missing capability should not diagnose",
   );
   assert(
-    !!optionalRuntime.services
+    !optionalRuntime.services
       .getOrThrow<SceneService>(SCENE_SERVICE)
       .getLayer("front-artwork"),
-    "optional missing capabilities should still write scene",
+    "optional missing capabilities should not write scene",
   );
   await optionalRuntime.dispose();
+
+  const missingCompilerRuntime = new Pooder();
+  missingCompilerRuntime.extensions.register(
+    createFakeCapabilityExtension({
+      [TEMPLATE_OVERLAY_CAPABILITY_ID]: {
+        getConfig: () => ({ version: 1, slots: {} }),
+        patchConfig: async () => ({ version: 1, slots: {} }),
+        replaceConfig: async (config: any) => config,
+        clearConfig: async () => ({ version: 1, slots: {} }),
+        refresh: () => {},
+      } satisfies TemplateOverlayCapabilityApi,
+    }),
+  );
+  await missingCompilerRuntime.extensions.flushActivation();
+  const missingCompilerResult = await applyKitEditorDocument(
+    missingCompilerRuntime,
+    {
+      version: 2,
+      surfaces: [
+        {
+          id: "front",
+          size: { width: 1, height: 1, unit: "px" },
+          layers: [
+            {
+              id: "front-artwork",
+              objects: [
+                {
+                  id: "template",
+                  type: "image",
+                  src: "/template.png",
+                  frame: { x: 0, y: 0, width: 1, height: 1 },
+                  effects: [{ type: "template-overlay", require: "strict" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  );
+  assert(!missingCompilerResult.ok, "strict missing compiler should fail");
+  assert(
+    missingCompilerResult.diagnostics.some(
+      (item) =>
+        item.code === "compiler-missing" &&
+        item.capabilityId === TEMPLATE_OVERLAY_CAPABILITY_ID,
+    ),
+    "strict missing compiler should return compiler diagnostic",
+  );
+  await missingCompilerRuntime.dispose();
+
+  const throwRuntime = new Pooder();
+  throwRuntime.extensions.register({
+    id: "test.throwing-render-compiler",
+    contribute: () => ({
+      capabilities: [{ id: TEMPLATE_OVERLAY_CAPABILITY_ID, facade: {} }],
+      renderIntentCompilers: [
+        {
+          capabilityId: TEMPLATE_OVERLAY_CAPABILITY_ID,
+          effectType: "template-overlay",
+          compile: () => {
+            throw new Error("boom");
+          },
+        },
+      ],
+    }),
+    activate() {},
+  });
+  await throwRuntime.extensions.flushActivation();
+  const throwResult = await applyKitEditorDocument(throwRuntime, {
+    version: 2,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        layers: [
+          {
+            id: "front-artwork",
+            objects: [
+              {
+                id: "template",
+                type: "image",
+                src: "/template.png",
+                frame: { x: 0, y: 0, width: 1, height: 1 },
+                effects: [{ type: "template-overlay", require: "warn" }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assert(throwResult.ok, "warn compiler failures should not fail apply");
+  assert(
+    throwResult.diagnostics.some(
+      (item) =>
+        item.code === "effect-compile-failed" &&
+        item.severity === "warning",
+    ),
+    "warn compiler failures should return warning diagnostics",
+  );
+  await throwRuntime.dispose();
 }
 
 async function testImagePlacementCapabilityExtension() {
@@ -2909,12 +2934,12 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
   );
   assertDeepEqual(
     source?.frame,
-    { x: 350, y: 260, width: 100, height: 40 },
+    { x: 275, y: 100, width: 250, height: 200 },
     "template overlay config should patch original object frame",
   );
   assertDeepEqual(
     source?.transform,
-    { left: 350, top: 260, originX: "left", originY: "top" },
+    { left: 275, top: 100, originX: "left", originY: "top" },
     "template overlay config should patch original object transform",
   );
   assertEqual(source?.props.opacity, 1, "template opacity should default to 1");

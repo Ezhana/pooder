@@ -9,6 +9,7 @@ import {
   WORKFLOW_SESSION_SERVICE,
   buildSceneGeometry,
   computeSceneLayout,
+  mergeRenderIntentPatchDraft,
   readSizeState,
   resolveViewPaddingPx,
   createServiceToken,
@@ -1461,6 +1462,62 @@ async function testRenderIntentClipTargetsLayerAndSubject() {
   });
 }
 
+async function testRenderIntentPatchMergeHelper() {
+  const base = {
+    id: "object",
+    subject: {
+      kind: "object" as const,
+      surfaceId: "front",
+      layerId: "artwork",
+      objectId: "object",
+    },
+    visual: { type: "image" as const, src: "/base.png" },
+    placement: { frame: { x: 0, y: 0, width: 10, height: 20 } },
+    projection: { sourceLayerIds: ["base-layer"] },
+    coordinateSpace: "scene" as const,
+    ordering: { layerId: "artwork", layerOrder: 1, objectOrder: 2 },
+    props: { opacity: 0.5 },
+  };
+
+  const basePatch = mergeRenderIntentPatchDraft([base], {
+    id: "object",
+    visual: { replacement: { src: "/replacement.png" } },
+    projection: { sourceSubjectIds: ["subject"] },
+    props: { selectable: false },
+  });
+  assertEqual(basePatch.diagnostics.length, 0);
+  assertEqual(basePatch.draft?.visual?.src, "/base.png");
+  assertEqual(basePatch.draft?.visual?.replacement?.src, "/replacement.png");
+  assertDeepEqual(basePatch.draft?.projection?.sourceLayerIds, ["base-layer"]);
+  assertDeepEqual(basePatch.draft?.projection?.sourceSubjectIds, ["subject"]);
+  assertEqual(basePatch.draft?.coordinateSpace, "scene");
+
+  const newIntentPatch = mergeRenderIntentPatchDraft([], {
+    id: "overlay",
+    subject: {
+      kind: "object",
+      surfaceId: "front",
+      layerId: "overlay-layer",
+      objectId: "overlay",
+    },
+    ordering: { layerId: "overlay-layer", channel: "overlay" },
+    visual: { type: "rect" },
+  });
+  assertEqual(newIntentPatch.diagnostics.length, 0);
+  assertEqual(newIntentPatch.draft?.subject.surfaceId, "front");
+  assertEqual(newIntentPatch.draft?.ordering.layerId, "overlay-layer");
+
+  const missingBasePatch = mergeRenderIntentPatchDraft([], {
+    id: "broken",
+    visual: { type: "rect" },
+  });
+  assertEqual(missingBasePatch.draft, undefined);
+  assertEqual(
+    missingBasePatch.diagnostics[0]?.code,
+    "render-intent-patch-base-missing",
+  );
+}
+
 async function testSceneLayoutModelDefaultsAndPadding() {
   const config = {
     get: <T>(_key: string, defaultValue?: T) => defaultValue,
@@ -1655,6 +1712,10 @@ async function main() {
     [
       "keeps render intent clip targets graph-scoped",
       testRenderIntentClipTargetsLayerAndSubject,
+    ],
+    [
+      "merges render intent patches with diagnostics",
+      testRenderIntentPatchMergeHelper,
     ],
     [
       "resolves scene layout defaults and responsive padding",

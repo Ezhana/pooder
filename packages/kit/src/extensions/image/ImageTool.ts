@@ -12,8 +12,9 @@ import {
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
-  type EffectApplicationContext,
-  type EffectApplicatorContribution,
+  type RenderIntentCompilerContribution,
+  type RenderIntentCompilerContext,
+  type RenderIntentPatch,
   type RenderObjectSpec,
   type RenderPatternSpec,
   type RenderGraphNode,
@@ -580,26 +581,27 @@ export class ImageTool implements ExtensionDefinition {
           },
         }),
       ],
+      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
   }
 
-  private createEffectApplicator(): EffectApplicatorContribution<
+  private createRenderIntentCompiler(): RenderIntentCompilerContribution<
     EditorEffect<ImagePlacementEffectPayload>,
     EditorDocument
   > {
     return {
       capabilityId: this.capabilityId,
       effectType: "image-placement",
-      apply: (context) => this.applyDocumentImagePlacementEffect(context),
+      compile: (context) => this.compileDocumentImagePlacementEffect(context),
     };
   }
 
-  private applyDocumentImagePlacementEffect(
-    context: EffectApplicationContext<
+  private compileDocumentImagePlacementEffect(
+    context: RenderIntentCompilerContext<
       EditorEffect<ImagePlacementEffectPayload>,
       EditorDocument
     >,
-  ) {
+  ): RenderIntentPatch | void {
     if (context.target.kind !== "object" || !context.target.objectId) return;
     const resolved = this.findDocumentImageObject(
       context.document,
@@ -609,24 +611,48 @@ export class ImageTool implements ExtensionDefinition {
     const { object } = resolved;
     if (!object.frame) return;
 
-    const sceneService = context.services.get<SceneService>(SCENE_SERVICE);
-    const element = sceneService?.getElement(context.target.objectId);
-    if (!sceneService || !element) return;
-
-    const data = isRecord(element.data) ? element.data : {};
-    const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
     const payload = isRecord(context.effect.payload) ? context.effect.payload : {};
     const image = this.resolveDocumentImageState(context.document, object);
-
-    sceneService.updateElement(element.id, {
-      data: {
-        ...data,
-        id: object.id,
-        layerId: element.layerId,
-        slotId: object.id,
-        type: "image-placement-slot",
+    const committed = this.resolveDocumentCommittedImage(context.document, object);
+    return {
+      id: object.id,
+      ...(committed
+        ? {
+            visual: { type: "image", replacement: committed },
+            placement: {
+              transform: createCommittedImagePlacementTransform(
+                {
+                  left: object.frame.x,
+                  top: object.frame.y,
+                  width: object.frame.width,
+                  height: object.frame.height,
+                },
+                committed.metadata,
+              ),
+            },
+          }
+        : {}),
+      placement: {
+        ...(committed
+          ? {
+              transform: createCommittedImagePlacementTransform(
+                {
+                  left: object.frame.x,
+                  top: object.frame.y,
+                  width: object.frame.width,
+                  height: object.frame.height,
+                },
+                committed.metadata,
+              ),
+            }
+          : {}),
+        fit:
+          payload.fit === "contain" || payload.fit === "stretch"
+            ? payload.fit
+            : "cover",
+      },
+      interaction: {
         imagePlacement: {
-          ...placement,
           enabled: true,
           slotId: object.id,
           frame: object.frame,
@@ -634,7 +660,7 @@ export class ImageTool implements ExtensionDefinition {
             payload.fit === "contain" || payload.fit === "stretch"
               ? payload.fit
               : "cover",
-          image,
+          image: committed ?? image,
           accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
           ...(isRecord(payload.placeholder)
             ? { placeholder: payload.placeholder }
@@ -643,9 +669,21 @@ export class ImageTool implements ExtensionDefinition {
             payload.sessionProjections,
           ),
         },
-      }
-    });
-    this.updateImages();
+        ...(committed
+          ? {
+              selectable: false,
+              evented: true,
+            }
+          : {}),
+      },
+      data: {
+        id: object.id,
+        layerId: resolved.layer.id,
+        slotId: object.id,
+        type: committed ? "image-placement-image" : "image-placement-slot",
+        ...(committed ? { source: "committed" } : {}),
+      },
+    };
   }
 
   private findDocumentImageObject(document: EditorDocument, objectId: string):
@@ -693,6 +731,34 @@ export class ImageTool implements ExtensionDefinition {
       angle: finiteNumber(transform.angle, 0),
       opacity: 1,
       ...(placementMetadata ? { metadata: { ...placementMetadata } } : {}),
+    };
+  }
+
+  private resolveDocumentCommittedImage(
+    document: EditorDocument,
+    object: EditorImageObject,
+  ): ImagePlacementImageState | undefined {
+    const assetsById = new Map<string, EditorAsset>(
+      (document.assets ?? []).map((asset) => [asset.id, asset]),
+    );
+    const metadata = isRecord(object.metadata?.imagePlacement)
+      ? object.metadata.imagePlacement
+      : {};
+    const committedAssetId =
+      typeof metadata.committedAssetId === "string"
+        ? metadata.committedAssetId
+        : undefined;
+    const committedAsset = committedAssetId
+      ? assetsById.get(committedAssetId)
+      : undefined;
+    const committedSrc =
+      (typeof metadata.committedSrc === "string" && metadata.committedSrc) ||
+      committedAsset?.src;
+    if (!committedSrc && !committedAssetId) return undefined;
+    return {
+      ...(committedAssetId ? { assetId: committedAssetId } : {}),
+      ...(committedSrc ? { src: committedSrc } : {}),
+      metadata: { ...metadata },
     };
   }
 

@@ -7,6 +7,9 @@ import {
   ExtensionDefinition,
   ConfigurationService,
   type ExtensionActivationSpec,
+  type RenderIntentCompilerContribution,
+  type RenderIntentCompilerContext,
+  type RenderIntentPatch,
   type RenderPatternSpec,
 } from "@pooder/core";
 import {
@@ -17,6 +20,7 @@ import {
   RenderEffectSpec,
   RenderObjectSpec,
 } from "@pooder/core";
+import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
 import {
@@ -272,6 +276,7 @@ export class FeatureTool implements ExtensionDefinition {
           },
         }),
       ],
+      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
 
     if (this.contributeLegacyCommands) {
@@ -347,6 +352,74 @@ export class FeatureTool implements ExtensionDefinition {
     }
 
     return contributions;
+  }
+
+  private createRenderIntentCompiler(): RenderIntentCompilerContribution<
+    EditorEffect,
+    EditorDocument
+  > {
+    return {
+      capabilityId: this.capabilityId,
+      effectType: "feature",
+      compile: (context) => this.compileDocumentFeatureEffect(context),
+    };
+  }
+
+  private compileDocumentFeatureEffect(
+    context: RenderIntentCompilerContext<EditorEffect, EditorDocument>,
+  ): RenderIntentPatch[] | void {
+    const payload =
+      context.effect.payload && typeof context.effect.payload === "object"
+        ? context.effect.payload
+        : {};
+    if (!Array.isArray((payload as Record<string, unknown>).features)) return;
+    const features = (payload as Record<string, unknown>).features as Array<
+      Record<string, unknown>
+    >;
+    const layerId = context.target.layerId || this.markerLayerId;
+    return features.map((feature, index) => {
+      const id =
+        typeof feature.id === "string" && feature.id.trim()
+          ? feature.id.trim()
+          : `feature-${index + 1}`;
+      return {
+        id: `${layerId}.${id}`,
+        subject: {
+          kind: "object",
+          surfaceId: context.target.surfaceId,
+          layerId,
+          objectId: `${layerId}.${id}`,
+          objectType: "rect",
+        },
+        ordering: {
+          layerId,
+          layerOrder: 0,
+          objectOrder: index,
+          channel: "overlay",
+          stack: 760,
+        },
+        visual: { type: "rect" },
+        placement: {
+          width: DEFAULT_RECT_SIZE,
+          height: DEFAULT_RECT_SIZE,
+        },
+        props: {
+          fill: "rgba(255,255,255,0.85)",
+          stroke: "#111827",
+          strokeWidth: FEATURE_STROKE_WIDTH,
+          selectable: false,
+          evented: false,
+        },
+        export: {
+          visible: true,
+          exportable: false,
+        },
+        data: {
+          type: "feature",
+          feature,
+        },
+      };
+    });
   }
 
   private cloneFeatures(features: ConstraintFeature[]): ConstraintFeature[] {

@@ -1,5 +1,4 @@
 import type { CapabilityDefinition } from "../capability";
-import type { EffectApplicatorContribution } from "../effect-applicator";
 import type { RenderIntentCompilerContribution } from "../render-intent";
 
 export interface CommandContribution {
@@ -59,7 +58,6 @@ export interface ExtensionContributions {
   capabilities?: CapabilityDefinition[];
   configurations?: ConfigurationContribution[];
   commands?: CommandContribution[];
-  effectApplicators?: EffectApplicatorContribution[];
   renderIntentCompilers?: RenderIntentCompilerContribution[];
   tools?: ToolContribution[];
 }

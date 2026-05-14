@@ -7,6 +7,9 @@ import {
   WORKBENCH_SERVICE,
   WorkbenchService,
   type ExtensionActivationSpec,
+  type RenderIntentCompilerContribution,
+  type RenderIntentCompilerContext,
+  type RenderIntentPatch,
 } from "@pooder/core";
 import {
   CANVAS_SERVICE,
@@ -16,6 +19,7 @@ import {
   RenderLayoutRect,
   RenderObjectSpec,
 } from "@pooder/core";
+import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
 import {
   type FrameRect,
   resolveSurfaceFrameRect,
@@ -336,6 +340,7 @@ export class WhiteInkTool implements ExtensionDefinition {
           },
         }),
       ],
+      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
 
     if (this.contributeConfigDefinitions) {
@@ -349,6 +354,79 @@ export class WhiteInkTool implements ExtensionDefinition {
     }
 
     return contributions;
+  }
+
+  private createRenderIntentCompiler(): RenderIntentCompilerContribution<
+    EditorEffect,
+    EditorDocument
+  > {
+    return {
+      capabilityId: this.capabilityId,
+      effectType: "white-ink",
+      compile: (context) => this.compileDocumentWhiteInkEffect(context),
+    };
+  }
+
+  private compileDocumentWhiteInkEffect(
+    context: RenderIntentCompilerContext<EditorEffect, EditorDocument>,
+  ): RenderIntentPatch {
+    const payload =
+      context.effect.payload && typeof context.effect.payload === "object"
+        ? context.effect.payload
+        : {};
+    const assetId =
+      typeof (payload as Record<string, unknown>).assetId === "string"
+        ? ((payload as Record<string, unknown>).assetId as string)
+        : undefined;
+    const asset = assetId
+      ? context.document.assets?.find((item) => item.id === assetId)
+      : undefined;
+    const src =
+      (typeof (payload as Record<string, unknown>).src === "string" &&
+        ((payload as Record<string, unknown>).src as string)) ||
+      (typeof (payload as Record<string, unknown>).sourceUrl === "string" &&
+        ((payload as Record<string, unknown>).sourceUrl as string)) ||
+      asset?.src;
+    const id =
+      (typeof (payload as Record<string, unknown>).id === "string" &&
+        ((payload as Record<string, unknown>).id as string).trim()) ||
+      `${this.whiteLayerId}.${context.target.objectId ?? context.target.layerId ?? "mask"}`;
+    return {
+      id,
+      subject: {
+        kind: "object",
+        surfaceId: context.target.surfaceId,
+        layerId: this.whiteLayerId,
+        objectId: id,
+        objectType: src ? "image" : "rect",
+      },
+      ordering: {
+        layerId: this.whiteLayerId,
+        layerOrder: 0,
+        objectOrder: 0,
+        channel: "effect",
+        stack: 720,
+      },
+      visual: {
+        type: src ? "image" : "rect",
+        ...(assetId ? { assetId } : {}),
+        ...(src ? { src } : {}),
+      },
+      props: {
+        opacity:
+          typeof (payload as Record<string, unknown>).opacity === "number"
+            ? (payload as Record<string, unknown>).opacity
+            : WHITE_INK_DEFAULT_OPACITY,
+      },
+      export: {
+        visible: (payload as Record<string, unknown>).printEnabled !== false,
+        exportable: true,
+      },
+      data: {
+        type: "white-ink",
+        whiteInk: { ...(payload as Record<string, unknown>) },
+      },
+    };
   }
 
   private onToolActivated = (event: {

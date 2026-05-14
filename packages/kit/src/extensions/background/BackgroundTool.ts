@@ -9,9 +9,13 @@ import {
   CANVAS_SERVICE,
   CanvasService,
   RENDER_INTENT_SERVICE,
+  type RenderIntentCompilerContribution,
+  type RenderIntentCompilerContext,
+  type RenderIntentPatch,
   RenderIntentService,
   RenderObjectSpec,
 } from "@pooder/core";
+import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
 import {
   computeSceneLayout,
   readSizeState,
@@ -328,6 +332,10 @@ function normalizeLayer(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function normalizeConfig(raw: unknown): BackgroundConfig {
   if (!raw || typeof raw !== "object") {
     return cloneConfig(DEFAULT_BACKGROUND_CONFIG);
@@ -536,6 +544,7 @@ export class BackgroundTool implements ExtensionDefinition {
           },
         }),
       ],
+      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
 
     if (this.contributeConfigDefinitions) {
@@ -593,6 +602,71 @@ export class BackgroundTool implements ExtensionDefinition {
     }
 
     return contributions;
+  }
+
+  private createRenderIntentCompiler(): RenderIntentCompilerContribution<
+    EditorEffect,
+    EditorDocument
+  > {
+    return {
+      capabilityId: this.capabilityId,
+      effectType: "background",
+      compile: (context) => this.compileDocumentBackgroundEffect(context),
+    };
+  }
+
+  private compileDocumentBackgroundEffect(
+    context: RenderIntentCompilerContext<EditorEffect, EditorDocument>,
+  ): RenderIntentPatch {
+    const payload = isRecord(context.effect.payload) ? context.effect.payload : {};
+    const assetId = typeof payload.assetId === "string" ? payload.assetId : undefined;
+    const asset = assetId
+      ? context.document.assets?.find((item) => item.id === assetId)
+      : undefined;
+    const src = typeof payload.src === "string" ? payload.src : asset?.src;
+    const id =
+      (typeof payload.id === "string" && payload.id.trim()) ||
+      `${context.target.surfaceId}.background`;
+    const layerId = context.target.layerId || this.backgroundLayerId;
+    return {
+      id,
+      subject: {
+        kind: "object",
+        surfaceId: context.target.surfaceId,
+        layerId,
+        objectId: id,
+        objectType: src ? "image" : "rect",
+      },
+      ordering: {
+        layerId,
+        layerOrder: 0,
+        objectOrder: typeof payload.order === "number" ? payload.order : 0,
+        channel: "background",
+        stack: -100,
+      },
+      visual: {
+        type: src ? "image" : "rect",
+        ...(assetId ? { assetId } : {}),
+        ...(src ? { src } : {}),
+      },
+      props: {
+        ...(typeof payload.color === "string" ? { fill: payload.color } : {}),
+        opacity: typeof payload.opacity === "number" ? payload.opacity : 1,
+      },
+      placement: {
+        fit:
+          payload.fit === "contain" || payload.fit === "stretch"
+            ? payload.fit
+            : "cover",
+      },
+      export: {
+        exportable: true,
+        visible: true,
+      },
+      data: {
+        type: "background",
+      },
+    };
   }
 
   getConfig(): BackgroundConfig {
