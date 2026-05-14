@@ -175,6 +175,9 @@ class FakeRenderableCanvas {
   width = 100;
   objects: FakeFabricObject[] = [];
   renderCalls = 0;
+  preserveObjectStacking = false;
+  activeObject: FakeFabricObject | null = null;
+  _objectsToRender: FakeFabricObject[] | undefined;
 
   add(obj: FakeFabricObject) {
     this.objects.push(obj);
@@ -211,9 +214,17 @@ class FakeRenderableCanvas {
     this.renderCalls += 1;
   }
 
+  setActiveObject(obj: FakeFabricObject) {
+    this.activeObject = obj;
+  }
+
   setDimensions(size: { height: number; width: number }) {
     this.height = size.height;
     this.width = size.width;
+  }
+
+  _onStackOrderChanged() {
+    this._objectsToRender = undefined;
   }
 }
 
@@ -1466,6 +1477,38 @@ async function testSessionProjectionAboveStacksOverSessionImage() {
   );
 }
 
+async function testActiveSelectionPreservesProjectionStacking() {
+  const { canvas, service } = createCanvasServiceForRenderTests();
+  const image = new FakeFabricObject("rect", {
+    data: {
+      id: "session-image",
+      passId: "image.user.session.image",
+    },
+  });
+
+  canvas.add(image);
+  canvas.preserveObjectStacking = false;
+  canvas._objectsToRender = [image];
+
+  service.setActiveObject(image as any);
+
+  assertEqual(
+    canvas.preserveObjectStacking,
+    true,
+    "active session image selection should preserve projection stacking",
+  );
+  assertEqual(
+    canvas.activeObject,
+    image,
+    "active object should still be selected",
+  );
+  assertEqual(
+    canvas._objectsToRender,
+    undefined,
+    "stale active-object render order should be cleared",
+  );
+}
+
 async function testRenderObjectsAreNonInteractiveByDefault() {
   const { canvas, service } = createCanvasServiceForRenderTests();
 
@@ -1865,6 +1908,7 @@ async function main() {
   await testSceneStackingKeepsSessionPassAboveBusinessLayers();
   await testRenderProducerProjectionClonesBusinessObjects();
   await testSessionProjectionAboveStacksOverSessionImage();
+  await testActiveSelectionPreservesProjectionStacking();
   await testRenderObjectsAreNonInteractiveByDefault();
   await testRenderObjectVisibilityUsesSessionExpressions();
   testVisibilityDslSupportsWorkflowAndContextPredicates();

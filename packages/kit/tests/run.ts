@@ -108,6 +108,7 @@ import {
   createFeatureCapability,
   createImagePlacementCapability,
   createSizeCapability,
+  createTemplateOverlayCapability,
   createWhiteInkCapability,
 } from "../src/factories";
 import {
@@ -2678,7 +2679,6 @@ async function testTemplateOverlayCapabilityExtension() {
       configNamespace: "storefrontTemplate",
       layers: {
         clipTargetLayerIds: ["app.image"],
-        normalLayerId: "app.template.normal",
       },
     }),
   );
@@ -2721,38 +2721,48 @@ async function testTemplateOverlayCapabilityExtension() {
   await runtime.dispose();
 }
 
-async function testTemplateOverlayConfigSyncsSceneProjectionSources() {
+async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
   const runtime = new Pooder();
 
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.config.update("size.actualWidthMm", 200);
-  runtime.config.update("size.actualHeightMm", 100);
-  runtime.config.update("size.cutMode", "trim");
-  runtime.config.update("size.cutMarginMm", 0);
-
-  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
-  scene.addLayer({ id: "front.template-overlay" });
-  scene.addElement({
-    id: "front.template.normal",
-    layerId: "front.template-overlay",
-    type: "image",
-    src: "/old-template.png",
-    width: 200,
-    height: 100,
-    metadata: {
-      templateOverlay: {
-        targetOverlaySlot: "normal",
-      },
-    },
-    transform: {
-      left: 0,
-      top: 0,
-      originX: "left",
-      originY: "top",
-    },
-  });
-  runtime.extensions.register(new TemplateOverlayCapabilityExtension());
+  runtime.extensions.register(createTemplateOverlayCapability());
   await runtime.extensions.flushActivation();
+
+  await applyKitEditorDocument(runtime, {
+    version: 2,
+    assets: [{ id: "template", type: "image", src: "/old-template.png" }],
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 200, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "front.template-overlay",
+            objects: [
+              {
+                id: "front.template.normal",
+                type: "image",
+                assetId: "template",
+                frame: { x: 0, y: 0, width: 200, height: 100 },
+                effects: [
+                  { type: "template-overlay", payload: { slot: "normal" } },
+                ],
+              },
+              {
+                id: "front.template.normal.copy",
+                type: "image",
+                assetId: "template",
+                frame: { x: 0, y: 0, width: 200, height: 100 },
+                effects: [
+                  { type: "template-overlay", payload: { slot: "normal" } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
 
   const facade = runtime.capabilities.get<TemplateOverlayCapabilityApi>(
     TEMPLATE_OVERLAY_CAPABILITY_ID,
@@ -2778,31 +2788,107 @@ async function testTemplateOverlayConfigSyncsSceneProjectionSources() {
     },
   });
 
-  const source = scene.getElement("front.template.normal") as any;
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
+  const graph = renderIntentService.getGraph();
+  const nodes = graph.layers.flatMap((layer) => layer.nodes);
+  const source = nodes.find(
+    (node) => node.subjectId === "front.template.normal",
+  );
+  const sourceCopy = nodes.find(
+    (node) => node.subjectId === "front.template.normal.copy",
+  );
+  assert(source, "template overlay should keep the original object in graph");
+  assert(sourceCopy, "all objects bound to a slot should be patched");
   assertEqual(
-    source.src,
+    source?.visual?.src,
     "/new-template.png",
-    "template overlay config should update scene projection source src",
+    "template overlay config should patch original object replacement src",
   );
   assertEqual(
-    source.width,
-    100,
-    "template overlay config should update scene projection source width",
+    sourceCopy?.visual?.src,
+    "/new-template.png",
+    "template overlay config should patch every target for the slot",
+  );
+  assert(
+    !nodes.some((node) => node.id === "template-overlay.normal"),
+    "template overlay should not create replacement render graph objects",
+  );
+  assertDeepEqual(
+    source?.frame,
+    { x: 350, y: 260, width: 100, height: 40 },
+    "template overlay config should patch original object frame",
+  );
+  assertEqual(source?.props.opacity, 1, "template opacity should default to 1");
+
+  renderIntentService.patchIntent("pooder.kit.image-placement", {
+    id: "front.template.normal",
+    export: { visibility: { op: "const", value: false } },
+  });
+  await facade.replaceConfig({
+    version: 1,
+    slots: {
+      normal: {
+        enabled: true,
+        opacity: 0.3,
+        src: "/newer-template.png",
+      },
+    },
+  });
+  const updated = renderIntentService
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.template.normal");
+  assertEqual(
+    updated?.visual?.src,
+    "/newer-template.png",
+    "template overlay patch should update without clearing other source patches",
   );
   assertEqual(
-    source.height,
-    40,
-    "template overlay config should update scene projection source height",
+    updated?.visibility?.op,
+    "const",
+    "image placement runtime patch should survive template overlay config updates",
+  );
+
+  await facade.replaceConfig({
+    version: 1,
+    slots: {
+      normal: {
+        enabled: false,
+        src: "/disabled-template.png",
+      },
+    },
+  });
+  const disabled = renderIntentService
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.template.normal");
+  assertEqual(
+    disabled?.visible,
+    false,
+    "disabled template overlay slot should hide the original target object",
+  );
+
+  await facade.clearConfig();
+  const cleared = renderIntentService
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.template.normal");
+  assertEqual(
+    cleared?.visual?.src,
+    "/old-template.png",
+    "clearing template overlay config should restore original source",
+  );
+  assertDeepEqual(
+    cleared?.frame,
+    { x: 0, y: 0, width: 200, height: 100 },
+    "clearing template overlay config should restore original frame",
   );
   assertEqual(
-    source.transform.left,
-    350,
-    "template overlay config should update scene projection source x",
-  );
-  assertEqual(
-    source.transform.top,
-    260,
-    "template overlay config should update scene projection source y",
+    cleared?.visibility?.op,
+    "const",
+    "clearing template overlay patches should not clear other source patches",
   );
 
   await runtime.dispose();
@@ -3093,7 +3179,7 @@ async function main() {
   await testWhiteInkCapabilityExtension();
   await testBackgroundCapabilityExtension();
   await testTemplateOverlayCapabilityExtension();
-  await testTemplateOverlayConfigSyncsSceneProjectionSources();
+  await testTemplateOverlayConfigPatchesOriginalRenderIntents();
   await testSizeCapabilityExtension();
   await testRulerCapabilityExtension();
   await testFeatureCapabilityDefinition();

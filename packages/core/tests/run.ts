@@ -2,6 +2,7 @@ import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   Pooder,
+  RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
@@ -13,6 +14,7 @@ import {
   createServiceToken,
   type CanvasService,
   type ExtensionDefinition,
+  type RenderIntentService,
   type SceneChangeEvent,
   type SceneService,
   type Service,
@@ -1220,6 +1222,85 @@ async function testLegacyToolSessionUsesWorkflowSessionState() {
   });
 }
 
+async function testRenderIntentRuntimePatchesAreSourceScoped() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    intents.setDocumentIntents([
+      {
+        id: "image",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "artwork",
+          objectId: "image",
+          objectType: "image",
+        },
+        visual: { type: "image", src: "/base.png" },
+        placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
+        ordering: { layerId: "artwork" },
+      },
+    ]);
+
+    intents.patchIntent("source-a", {
+      id: "image",
+      visual: { replacement: { src: "/source-a.png" } },
+    });
+    intents.patchIntent("source-b", {
+      id: "image",
+      placement: { frame: { x: 10, y: 20, width: 30, height: 40 } },
+      props: { opacity: 0.5 },
+    });
+
+    let node = intents.getGraph().layers[0]?.nodes[0];
+    assertEqual(
+      node?.visual?.src,
+      "/source-a.png",
+      "runtime patches from one source should keep visual replacement",
+    );
+    assertDeepEqual(
+      node?.frame,
+      { x: 10, y: 20, width: 30, height: 40 },
+      "runtime patches from another source should keep placement",
+    );
+    assertEqual(
+      node?.props.opacity,
+      0.5,
+      "runtime patches from another source should keep props",
+    );
+
+    assertEqual(
+      intents.clearRuntimePatches("source-b"),
+      true,
+      "clearing one runtime patch source should report a change",
+    );
+    node = intents.getGraph().layers[0]?.nodes[0];
+    assertEqual(
+      node?.visual?.src,
+      "/source-a.png",
+      "clearing one source should not remove another source's visual patch",
+    );
+    assertDeepEqual(
+      node?.frame,
+      { x: 0, y: 0, width: 100, height: 100 },
+      "clearing one source should remove only that source's placement patch",
+    );
+
+    assertEqual(
+      intents.clearRuntimePatch("source-a", "image"),
+      true,
+      "clearing one intent patch should report a change",
+    );
+    node = intents.getGraph().layers[0]?.nodes[0];
+    assertEqual(
+      node?.visual?.src,
+      "/base.png",
+      "clearing the remaining source patch should restore the base source",
+    );
+  });
+}
+
 async function testSceneLayoutModelDefaultsAndPadding() {
   const config = {
     get: <T>(_key: string, defaultValue?: T) => defaultValue,
@@ -1398,6 +1479,10 @@ async function main() {
     [
       "legacy tool sessions use workflow session state",
       testLegacyToolSessionUsesWorkflowSessionState,
+    ],
+    [
+      "keeps render intent runtime patches source scoped",
+      testRenderIntentRuntimePatchesAreSourceScoped,
     ],
     [
       "resolves scene layout defaults and responsive padding",

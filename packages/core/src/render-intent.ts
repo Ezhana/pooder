@@ -266,7 +266,7 @@ export class RenderIntentCompilerRegistryService implements Service {
 export class RenderIntentService implements Service {
   private readonly eventBus = new EventBus();
   private baseIntents: RenderIntentDraft[] = [];
-  private runtimePatches = new Map<string, RenderIntentPatch>();
+  private runtimePatches = new Map<string, Map<string, RenderIntentPatch>>();
   private graph: RenderGraph = createRenderGraph([], 0);
   private revision = 0;
 
@@ -285,21 +285,39 @@ export class RenderIntentService implements Service {
     return cloneGraph(this.graph);
   }
 
-  patchIntent(patch: RenderIntentPatch): RenderGraph {
+  patchIntent(sourceId: string, patch: RenderIntentPatch): RenderGraph {
+    const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
     const id = normalizeId(patch.id, "RenderIntentPatch.id");
-    this.runtimePatches.set(id, clonePatch({ ...patch, id }));
+    let sourcePatches = this.runtimePatches.get(source);
+    if (!sourcePatches) {
+      sourcePatches = new Map();
+      this.runtimePatches.set(source, sourcePatches);
+    }
+    sourcePatches.set(id, clonePatch({ ...patch, id }));
     return this.recompile();
   }
 
-  clearRuntimePatch(id: string): boolean {
-    if (!this.runtimePatches.delete(id)) return false;
+  clearRuntimePatch(sourceId: string, intentId: string): boolean {
+    const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
+    const id = normalizeId(intentId, "RenderIntentPatch.id");
+    const sourcePatches = this.runtimePatches.get(source);
+    if (!sourcePatches?.delete(id)) return false;
+    if (sourcePatches.size === 0) {
+      this.runtimePatches.delete(source);
+    }
     this.recompile();
     return true;
   }
 
-  clearRuntimePatches(): boolean {
-    if (this.runtimePatches.size === 0) return false;
-    this.runtimePatches.clear();
+  clearRuntimePatches(sourceId?: string): boolean {
+    if (sourceId === undefined) {
+      if (this.runtimePatches.size === 0) return false;
+      this.runtimePatches.clear();
+      this.recompile();
+      return true;
+    }
+    const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
+    if (!this.runtimePatches.delete(source)) return false;
     this.recompile();
     return true;
   }
@@ -376,42 +394,44 @@ export function createRenderGraph(
 
 function applyRuntimePatches(
   drafts: readonly RenderIntentDraft[],
-  patches: Map<string, RenderIntentPatch>,
+  patchesBySource: Map<string, Map<string, RenderIntentPatch>>,
 ): RenderIntentDraft[] {
   const result = reduceRenderIntentDrafts(drafts);
-  patches.forEach((patch) => {
-    const index = result.findIndex((draft) => draft.id === patch.id);
-    if (index >= 0) {
-      result[index] = mergePatch(result[index], patch);
-    } else if (patch.subject?.surfaceId && patch.ordering?.layerId) {
-      result.push({
-        id: patch.id,
-        subject: {
-          kind: patch.subject.kind ?? "object",
-          surfaceId: patch.subject.surfaceId,
-          layerId: patch.subject.layerId,
-          objectId: patch.subject.objectId,
-          objectType: patch.subject.objectType,
-        },
-        ordering: {
-          layerId: patch.ordering.layerId,
-          layerOrder: patch.ordering.layerOrder,
-          objectOrder: patch.ordering.objectOrder,
-          channel: patch.ordering.channel,
-          subOrder: patch.ordering.subOrder,
-          stack: patch.ordering.stack,
-        },
-        visual: patch.visual,
-        placement: patch.placement,
-        overlay: patch.overlay,
-        clipping: patch.clipping,
-        interaction: patch.interaction,
-        export: patch.export,
-        props: patch.props,
-        data: patch.data,
-        extensions: patch.extensions,
-      });
-    }
+  patchesBySource.forEach((patches) => {
+    patches.forEach((patch) => {
+      const index = result.findIndex((draft) => draft.id === patch.id);
+      if (index >= 0) {
+        result[index] = mergePatch(result[index], patch);
+      } else if (patch.subject?.surfaceId && patch.ordering?.layerId) {
+        result.push({
+          id: patch.id,
+          subject: {
+            kind: patch.subject.kind ?? "object",
+            surfaceId: patch.subject.surfaceId,
+            layerId: patch.subject.layerId,
+            objectId: patch.subject.objectId,
+            objectType: patch.subject.objectType,
+          },
+          ordering: {
+            layerId: patch.ordering.layerId,
+            layerOrder: patch.ordering.layerOrder,
+            objectOrder: patch.ordering.objectOrder,
+            channel: patch.ordering.channel,
+            subOrder: patch.ordering.subOrder,
+            stack: patch.ordering.stack,
+          },
+          visual: patch.visual,
+          placement: patch.placement,
+          overlay: patch.overlay,
+          clipping: patch.clipping,
+          interaction: patch.interaction,
+          export: patch.export,
+          props: patch.props,
+          data: patch.data,
+          extensions: patch.extensions,
+        });
+      }
+    });
   });
   return result;
 }

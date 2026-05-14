@@ -7,11 +7,6 @@ import type {
 export const TEMPLATE_OVERLAY_CAPABILITY_ID = "pooder.kit.template-overlay";
 
 export interface TemplateOverlayLayerOptions {
-  normalLayerId?: string;
-  frameLayerId?: string;
-  prodLayerId?: string;
-  smallLayerId?: string;
-  renderLayerId?: string;
   clipTargetLayerIds?: string[];
 }
 

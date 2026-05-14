@@ -1200,7 +1200,7 @@ export class ImageTool implements ExtensionDefinition {
     if (this.renderIntentService && slot) {
       const data = isRecord(slot.data) ? slot.data : {};
       const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
-      this.renderIntentService.patchIntent({
+      this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
         id: slotId,
         subject: {
           kind: "object",
@@ -1318,7 +1318,7 @@ export class ImageTool implements ExtensionDefinition {
     const data = isRecord(slot.data) ? slot.data : {};
     const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
     const image = this.getCommittedImage(slot);
-    this.renderIntentService.patchIntent({
+    this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
       id: slotId,
       subject: {
         kind: "object",

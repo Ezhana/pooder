@@ -158,10 +158,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
       this.canvas = el;
     } else {
       this.canvas = new Canvas(el, {
-        preserveObjectStacking: true,
         ...options,
+        preserveObjectStacking: true,
       });
     }
+    this.ensureCanvasPreservesObjectStacking();
 
     this.viewport = new ViewportSystem();
     if (this.canvas.width !== undefined && this.canvas.height !== undefined) {
@@ -1001,6 +1002,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   setActiveObject(object: CanvasObjectLike): boolean {
     if (!object) return false;
+    this.ensureCanvasPreservesObjectStacking();
     this.canvas.setActiveObject(object as any);
     return true;
   }
@@ -1470,6 +1472,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const sources: FabricObject[] = [];
     this.canvas.getObjects().forEach((object: any) => {
       if (object?.visible === false) return;
+      if (object?.data?.type === "session-projection") return;
       if (this.isManagedPassObject(object as FabricObject)) return;
       const layerId = this.readProjectionLayerId(object);
       const elementId = this.readProjectionElementId(object);
@@ -1916,6 +1919,18 @@ export default class CanvasService implements Service, CanvasServiceContract {
     list.splice(target, 0, obj);
     if (typeof (this.canvas as any)._onStackOrderChanged === "function") {
       (this.canvas as any)._onStackOrderChanged();
+    }
+  }
+
+  private ensureCanvasPreservesObjectStacking() {
+    const canvas = this.canvas as any;
+    if (!canvas) return;
+    if (canvas.preserveObjectStacking === true) return;
+    canvas.preserveObjectStacking = true;
+    if (typeof canvas._onStackOrderChanged === "function") {
+      canvas._onStackOrderChanged();
+    } else if ("_objectsToRender" in canvas) {
+      canvas._objectsToRender = undefined;
     }
   }
 

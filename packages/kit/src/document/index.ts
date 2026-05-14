@@ -89,6 +89,10 @@ type KitEffectHandler = (
   assetsById: Map<string, EditorAsset>,
 ) => void | Promise<void>;
 
+type TemplateOverlayRuntimeApi = TemplateOverlayCapabilityApi & {
+  resetRuntimeTargets?: () => void;
+};
+
 const EFFECT_PHASE_ORDER = {
   document: 0,
   layout: 1,
@@ -157,7 +161,6 @@ export function createKitCapabilitiesForDocument(
         },
       });
     }
-
     return KIT_EFFECT_FACTORIES[id]();
   });
 }
@@ -190,6 +193,7 @@ export async function applyKitEditorDocument(
   const sceneService = getOptionalSceneService(runtime);
   const assetsById = new Map((document.assets ?? []).map((asset) => [asset.id, asset]));
   applySurfaceSizeConfig(runtime, document);
+  resetTemplateOverlayRuntime(runtime, renderIntentService);
 
   const intentDrafts = createBaseRenderIntentDrafts(document, assetsById);
   if (sceneService) {
@@ -228,6 +232,7 @@ export async function applyKitEditorDocument(
   }
 
   renderIntentService.setDocumentIntents(intentDrafts);
+  refreshTemplateOverlayRuntime(runtime);
 
   return createResult(
     true,
@@ -245,6 +250,26 @@ function getOptionalSceneService(
   } catch {
     return undefined;
   }
+}
+
+function getTemplateOverlayRuntime(
+  runtime: KitEditorDocumentRuntime,
+): TemplateOverlayRuntimeApi | undefined {
+  return runtime.capabilities.get<TemplateOverlayRuntimeApi>(
+    TEMPLATE_OVERLAY_CAPABILITY_ID,
+  );
+}
+
+function resetTemplateOverlayRuntime(
+  runtime: KitEditorDocumentRuntime,
+  renderIntentService: RenderIntentService,
+) {
+  renderIntentService.clearRuntimePatches(TEMPLATE_OVERLAY_CAPABILITY_ID);
+  getTemplateOverlayRuntime(runtime)?.resetRuntimeTargets?.();
+}
+
+function refreshTemplateOverlayRuntime(runtime: KitEditorDocumentRuntime) {
+  getTemplateOverlayRuntime(runtime)?.refresh();
 }
 
 function syncDocumentToScene(

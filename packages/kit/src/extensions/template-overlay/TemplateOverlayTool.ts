@@ -1,20 +1,20 @@
 import {
+  CANVAS_SERVICE,
   CONFIGURATION_SERVICE,
+  RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
+  type CanvasService,
   type ConfigurationService,
   type EffectApplicationContext,
   type EffectApplicatorContribution,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
+  type RenderIntentCompilerContribution,
+  type RenderIntentCompilerContext,
+  type RenderIntentPatch,
+  type RenderIntentService,
   type SceneService,
-} from "@pooder/core";
-import {
-  CANVAS_SERVICE,
-  type CanvasService,
-  type RenderEffectSpec,
-  type RenderObjectSpec,
-  type RenderPassSpec,
 } from "@pooder/core";
 import type {
   EditorDocument,
@@ -27,19 +27,8 @@ import {
   type FrameRect,
   resolveSurfaceFrameRect,
 } from "../../shared/scene/frame";
-import {
-  createSourceSizeCache,
-  type SourceSize,
-} from "../../shared/imaging/sourceSizeCache";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
-import {
-  TEMPLATE_OVERLAY_FRAME_LAYER_ID,
-  TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
-  TEMPLATE_OVERLAY_PROD_LAYER_ID,
-  TEMPLATE_OVERLAY_RENDER_LAYER_ID,
-  TEMPLATE_OVERLAY_SMALL_LAYER_ID,
-  IMAGE_OBJECT_LAYER_ID,
-} from "../../shared/constants/layers";
+import { IMAGE_OBJECT_LAYER_ID } from "../../shared/constants/layers";
 import { createTemplateOverlayCommands } from "./commands";
 import { createTemplateOverlayConfigurations } from "./config";
 import {
@@ -62,9 +51,8 @@ import {
   type TemplateOverlaySlotName,
 } from "./model";
 
-const TEMPLATE_OVERLAY_UNDERLAY_STACK = 770;
-const TEMPLATE_OVERLAY_OVERLAY_STACK = 780;
 const DEFAULT_CLIP_TARGET_LAYER_IDS = [IMAGE_OBJECT_LAYER_ID];
+const TEMPLATE_OVERLAY_RENDER_SCOPE = "pooder.kit.template-overlay";
 
 export interface TemplateOverlayToolOptions extends TemplateOverlayCapabilityOptions {
   id?: string;
@@ -74,11 +62,22 @@ export interface TemplateOverlayToolOptions extends TemplateOverlayCapabilityOpt
 
 interface TemplateOverlayEffectPayload {
   role?: unknown;
+  slot?: unknown;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+interface TemplateOverlayTarget {
+  intentId: string;
+  layerId: string;
+  objectId: string;
+  objectOrder?: number;
+  objectType?: string;
+  slot: TemplateOverlaySlotName;
+  surfaceId: string;
 }
+
+type TemplateOverlayRuntimeFacade = TemplateOverlayCapabilityApi & {
+  resetRuntimeTargets(): void;
+};
 
 function readTemplateOverlaySlot(value: unknown): TemplateOverlaySlotName | null {
   const slot = String(value || "").trim();
@@ -95,37 +94,30 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   };
 
   activation = {
-    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE],
+    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
   };
 
   private config: TemplateOverlayConfig = createEmptyTemplateOverlayConfig();
   private canvasService?: CanvasService;
   private context?: ExtensionContext;
-  private renderSeq = 0;
+  private renderIntentService?: RenderIntentService;
   private isUpdatingConfig = false;
-  private normalSpecs: RenderObjectSpec[] = [];
-  private overlaySpecsByLayerId: Record<string, RenderObjectSpec[]> = {};
-  private renderProducerDisposable?: { dispose: () => void };
   private readonly subscriptions = new SubscriptionBag();
-  private readonly sourceSizeCache = createSourceSizeCache((src) =>
-    this.loadImageSize(src),
-  );
+  private readonly targetsBySlot = new Map<
+    TemplateOverlaySlotName,
+    Map<string, TemplateOverlayTarget>
+  >();
   private readonly capabilityId: string;
   private readonly configNamespace: string;
   private readonly configKey: string;
-  private readonly normalLayerId: string;
-  private readonly frameLayerId: string;
-  private readonly prodLayerId: string;
-  private readonly smallLayerId: string;
-  private readonly renderLayerId: string;
   private readonly clipTargetLayerIds: string[];
   private readonly contributeLegacyCommands: boolean;
   private readonly contributeConfigDefinitions: boolean;
 
   constructor(options: TemplateOverlayToolOptions = {}) {
     this.id =
-      String(options.id || "pooder.kit.template-overlay").trim() ||
-      "pooder.kit.template-overlay";
+      String(options.id || TEMPLATE_OVERLAY_RENDER_SCOPE).trim() ||
+      TEMPLATE_OVERLAY_RENDER_SCOPE;
     this.capabilityId = options.capabilityId || TEMPLATE_OVERLAY_CAPABILITY_ID;
     this.configNamespace = normalizeTemplateOverlayConfigNamespace(
       options.configNamespace,
@@ -133,26 +125,6 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     this.configKey = getTemplateOverlayConfigKey(
       this.configNamespace,
       "config",
-    );
-    this.normalLayerId = normalizeTemplateOverlayLayerId(
-      options.layers?.normalLayerId,
-      TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
-    );
-    this.frameLayerId = normalizeTemplateOverlayLayerId(
-      options.layers?.frameLayerId,
-      TEMPLATE_OVERLAY_FRAME_LAYER_ID,
-    );
-    this.prodLayerId = normalizeTemplateOverlayLayerId(
-      options.layers?.prodLayerId,
-      TEMPLATE_OVERLAY_PROD_LAYER_ID,
-    );
-    this.smallLayerId = normalizeTemplateOverlayLayerId(
-      options.layers?.smallLayerId,
-      TEMPLATE_OVERLAY_SMALL_LAYER_ID,
-    );
-    this.renderLayerId = normalizeTemplateOverlayLayerId(
-      options.layers?.renderLayerId,
-      TEMPLATE_OVERLAY_RENDER_LAYER_ID,
     );
     this.clipTargetLayerIds =
       options.layers?.clipTargetLayerIds?.map((id) =>
@@ -168,13 +140,8 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     this.context = context;
     this.canvasService =
       context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = this.canvasService.registerRenderProducer(
-      this.id,
-      () => ({
-        passes: this.buildRenderPasses(),
-      }),
-      { priority: 240 },
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
     );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
@@ -190,10 +157,9 @@ export class TemplateOverlayTool implements ExtensionDefinition {
         if (this.isUpdatingConfig) return;
         if (event.key === this.configKey) {
           this.config = normalizeTemplateOverlayConfig(event.value);
-          this.syncSceneTemplateOverlayElements();
-          this.updateOverlays();
+          this.refresh();
         } else if (event.key.startsWith("size.")) {
-          this.updateOverlays();
+          this.refresh();
         }
       },
     );
@@ -208,22 +174,16 @@ export class TemplateOverlayTool implements ExtensionDefinition {
       this.onSceneLayoutChanged,
     );
 
-    this.updateOverlays();
+    this.refresh();
   }
 
   deactivate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     context.eventBus.off("scene:layout:change", this.onSceneLayoutChanged);
     context.eventBus.off("canvas:resized", this.onSceneLayoutChanged);
-    this.renderSeq += 1;
-    this.normalSpecs = [];
-    this.overlaySpecsByLayerId = {};
-    this.renderProducerDisposable?.dispose();
-    this.renderProducerDisposable = undefined;
-    if (this.canvasService) {
-      void this.canvasService.flushRenderFromProducers();
-    }
+    this.resetRuntimeTargets();
     this.canvasService = undefined;
+    this.renderIntentService = undefined;
     this.context = undefined;
   }
 
@@ -235,15 +195,11 @@ export class TemplateOverlayTool implements ExtensionDefinition {
           configNamespace: this.configNamespace,
           layers: {
             clipTargetLayerIds: this.clipTargetLayerIds,
-            frameLayerId: this.frameLayerId,
-            normalLayerId: this.normalLayerId,
-            prodLayerId: this.prodLayerId,
-            renderLayerId: this.renderLayerId,
-            smallLayerId: this.smallLayerId,
           },
         }),
       ],
       effectApplicators: [this.createEffectApplicator()],
+      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
 
     if (this.contributeConfigDefinitions) {
@@ -270,6 +226,17 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     };
   }
 
+  private createRenderIntentCompiler(): RenderIntentCompilerContribution<
+    EditorEffect<TemplateOverlayEffectPayload>,
+    EditorDocument
+  > {
+    return {
+      capabilityId: this.capabilityId,
+      effectType: "template-overlay",
+      compile: (context) => this.compileDocumentTemplateOverlayEffect(context),
+    };
+  }
+
   private applyDocumentTemplateOverlayEffect(
     context: EffectApplicationContext<
       EditorEffect<TemplateOverlayEffectPayload>,
@@ -287,19 +254,14 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     const element = sceneService?.getElement(context.target.objectId);
     if (!sceneService || !element) return;
 
+    const { role, slot } = this.readTemplateOverlayPayload(context.effect);
+    this.registerDocumentTarget(resolved, slot);
     const data = element.data && typeof element.data === "object"
       ? element.data
       : {};
     const metadata = element.metadata && typeof element.metadata === "object"
       ? element.metadata
       : {};
-    const payload =
-      context.effect.payload && typeof context.effect.payload === "object"
-        ? context.effect.payload
-        : {};
-    const role = typeof payload.role === "string" && payload.role.trim()
-      ? payload.role.trim()
-      : "default-artwork";
 
     sceneService.updateElement(element.id, {
       metadata: {
@@ -309,7 +271,10 @@ export class TemplateOverlayTool implements ExtensionDefinition {
           typeof metadata.templateOverlay === "object"
             ? metadata.templateOverlay
             : {}),
+          enabled: true,
           role,
+          slot,
+          targetOverlaySlot: slot,
         },
       },
       data: {
@@ -318,13 +283,48 @@ export class TemplateOverlayTool implements ExtensionDefinition {
           ...(data.templateOverlay && typeof data.templateOverlay === "object"
             ? data.templateOverlay
             : {}),
+          defaultArtwork: true,
           enabled: true,
           role,
-          defaultArtwork: true,
+          slot,
+          targetOverlaySlot: slot,
         },
       },
     });
-    this.updateOverlays();
+    this.refresh();
+  }
+
+  private compileDocumentTemplateOverlayEffect(
+    context: RenderIntentCompilerContext<
+      EditorEffect<TemplateOverlayEffectPayload>,
+      EditorDocument
+    >,
+  ): RenderIntentPatch | void {
+    if (context.target.kind !== "object" || !context.target.objectId) return;
+    const resolved = this.findDocumentImageObject(
+      context.document,
+      context.target.objectId,
+    );
+    if (!resolved) return;
+
+    const { role, slot } = this.readTemplateOverlayPayload(context.effect);
+    this.registerDocumentTarget(resolved, slot);
+    return {
+      id: resolved.object.id,
+      overlay: {
+        enabled: true,
+        role,
+        slot,
+      },
+      data: {
+        templateOverlay: {
+          enabled: true,
+          role,
+          slot,
+          targetOverlaySlot: slot,
+        },
+      },
+    };
   }
 
   private findDocumentImageObject(document: EditorDocument, objectId: string):
@@ -370,33 +370,39 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   }
 
   refresh(): void {
-    this.updateOverlays();
+    this.applyRuntimePatches();
+  }
+
+  resetRuntimeTargets(): void {
+    this.targetsBySlot.clear();
+    this.renderIntentService?.clearRuntimePatches(TEMPLATE_OVERLAY_RENDER_SCOPE);
   }
 
   private getTemplateFacade(): TemplateOverlayCapabilityApi {
-    return {
+    const facade: TemplateOverlayRuntimeFacade = {
       clearConfig: () => this.clearConfig(),
       getConfig: () => this.getConfig(),
       patchConfig: (patch) => this.patchConfig(patch),
       refresh: () => this.refresh(),
       replaceConfig: (config) => this.replaceConfig(config),
+      resetRuntimeTargets: () => this.resetRuntimeTargets(),
     };
+    return facade;
   }
 
   private onSceneLayoutChanged = () => {
-    this.updateOverlays();
+    this.refresh();
   };
 
   private async writeConfig(next: TemplateOverlayConfig) {
     this.config = normalizeTemplateOverlayConfig(next);
-    this.syncSceneTemplateOverlayElements();
     this.isUpdatingConfig = true;
     try {
       this.getConfigService()?.update(this.configKey, this.config);
     } finally {
       this.isUpdatingConfig = false;
     }
-    await this.updateOverlaysAsync();
+    this.refresh();
   }
 
   private getConfigService(): ConfigurationService | undefined {
@@ -409,213 +415,97 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     return resolveSurfaceFrameRect(this.canvasService, this.getConfigService());
   }
 
-  private getSceneService(): SceneService | undefined {
-    return this.context?.services.get<SceneService>(SCENE_SERVICE);
-  }
-
-  private readElementTemplateOverlaySlot(element: {
-    data?: Record<string, unknown>;
-    metadata?: Record<string, unknown>;
-  }): TemplateOverlaySlotName | null {
-    const data = isRecord(element.data?.templateOverlay)
-      ? element.data.templateOverlay
-      : {};
-    const metadata = isRecord(element.metadata?.templateOverlay)
-      ? element.metadata.templateOverlay
-      : {};
-
-    return (
-      readTemplateOverlaySlot(data.targetOverlaySlot) ||
-      readTemplateOverlaySlot(data.slot) ||
-      readTemplateOverlaySlot(metadata.targetOverlaySlot) ||
-      readTemplateOverlaySlot(metadata.slot)
-    );
-  }
-
-  private syncSceneTemplateOverlayElements() {
-    const sceneService = this.getSceneService();
-    if (!sceneService) return;
-
-    const surfaceFrame = this.getSurfaceFrameRect();
-    if (surfaceFrame.width <= 0 || surfaceFrame.height <= 0) return;
-
-    sceneService.transaction(() => {
-      sceneService.listElements({ type: "image" }).forEach((element) => {
-        const slot = this.readElementTemplateOverlaySlot(element);
-        if (!slot) return;
-
-        const slotConfig = this.config.slots[slot];
-        if (!slotConfig) return;
-
-        const slotFrame = this.resolveSlotFrame(
-          surfaceFrame,
-          slotConfig.placement,
-        );
-        const src = slotConfig.src.trim();
-
-        sceneService.updateElement(element.id, {
-          ...(src ? { src } : {}),
-          visible: slotConfig.enabled !== false && Boolean(src),
-          width: slotFrame.width,
-          height: slotFrame.height,
-          transform: {
-            ...(element.transform ?? {}),
-            left: slotFrame.left,
-            top: slotFrame.top,
-            originX: element.transform?.originX ?? "left",
-            originY: element.transform?.originY ?? "top",
-          },
-        });
-      });
+  private registerDocumentTarget(
+    resolved: {
+      surface: EditorSurface;
+      layer: EditorLayer;
+      object: EditorImageObject;
+    },
+    slot: TemplateOverlaySlotName,
+  ): void {
+    let targets = this.targetsBySlot.get(slot);
+    if (!targets) {
+      targets = new Map();
+      this.targetsBySlot.set(slot, targets);
+    }
+    targets.set(resolved.object.id, {
+      intentId: resolved.object.id,
+      layerId: resolved.layer.id,
+      objectId: resolved.object.id,
+      objectOrder: resolved.object.order,
+      objectType: resolved.object.type,
+      slot,
+      surfaceId: resolved.surface.id,
     });
   }
 
-  private buildRenderPasses(): RenderPassSpec[] {
-    const clipEffects = this.buildClipEffects();
-
-    return [
-      {
-        id: this.normalLayerId,
-        stack: TEMPLATE_OVERLAY_UNDERLAY_STACK,
-        order: 0,
-        effects: clipEffects,
-        objects: this.normalSpecs,
-      },
-      ...this.getRenderedOverlaySlots().map(({ layerId, order }) => ({
-        id: layerId,
-        stack: TEMPLATE_OVERLAY_OVERLAY_STACK,
-        order,
-        objects: this.overlaySpecsByLayerId[layerId] || [],
-      })),
-    ];
-  }
-
-  private buildClipEffects(): RenderEffectSpec[] {
-    const clip = this.config.clip;
-    if (!this.canvasService || !clip || clip.enabled === false) {
-      return [];
-    }
-
+  private applyRuntimePatches(): void {
+    const renderIntentService = this.renderIntentService;
+    if (!renderIntentService) return;
     const frame = this.getSurfaceFrameRect();
-    if (frame.width <= 0 || frame.height <= 0) {
-      return [];
-    }
-
-    const clipFrame = this.canvasService.toScreenRect(
-      this.resolveSlotFrame(frame, clip.placement),
-    );
-    if (clipFrame.width <= 0 || clipFrame.height <= 0) {
-      return [];
-    }
-
-    const targetPassIds =
-      Array.isArray(clip.targetLayerIds) && clip.targetLayerIds.length > 0
-        ? clip.targetLayerIds
-        : this.clipTargetLayerIds;
-
-    return [
-      {
-        id: "template-overlay.clip.user-surface",
-        type: "clipPath",
-        source: {
-          id: "template-overlay.clip.user-surface.source",
-          type: "path",
-          space: "screen",
-          layout: {
-            reference: "custom",
-            referenceRect: {
-              left: clipFrame.left,
-              top: clipFrame.top,
-              width: clipFrame.width,
-              height: clipFrame.height,
-              space: "screen",
-            },
-            alignX: "start",
-            alignY: "start",
+    this.targetsBySlot.forEach((targets, slot) => {
+      targets.forEach((target) => {
+        const slotConfig = this.config.slots[slot];
+        if (!slotConfig) {
+          renderIntentService.clearRuntimePatch(
+            TEMPLATE_OVERLAY_RENDER_SCOPE,
+            target.intentId,
+          );
+          return;
+        }
+        const src = slotConfig.src.trim();
+        const slotFrame = this.resolveSlotFrame(frame, slotConfig.placement);
+        const visible = slotConfig.enabled !== false && Boolean(src);
+        renderIntentService.patchIntent(TEMPLATE_OVERLAY_RENDER_SCOPE, {
+          id: target.intentId,
+          subject: {
+            kind: "object",
+            surfaceId: target.surfaceId,
+            layerId: target.layerId,
+            objectId: target.objectId,
+            objectType: target.objectType,
           },
-          data: {
-            id: "template-overlay.clip.user-surface.source",
-            type: "template-overlay-clip",
+          visual: visible
+            ? {
+                type: "image",
+                replacement: {
+                  src,
+                  metadata: {
+                    templateOverlay: {
+                      slot,
+                      source: TEMPLATE_OVERLAY_RENDER_SCOPE,
+                    },
+                  },
+                },
+              }
+            : { type: "image" },
+          placement: {
+            frame: {
+              x: slotFrame.left,
+              y: slotFrame.top,
+              width: slotFrame.width,
+              height: slotFrame.height,
+            },
+          },
+          overlay: {
+            enabled: true,
+            slot,
+          },
+          export: {
+            visible,
+          },
+          ordering: {
+            layerId: target.layerId,
+            ...(target.objectOrder !== undefined
+              ? { objectOrder: target.objectOrder }
+              : {}),
           },
           props: {
-            fill: "#000000",
-            pathData: `M 0 0 H ${clipFrame.width} V ${clipFrame.height} H 0 Z`,
-            originX: "left",
-            originY: "top",
-            selectable: false,
-            evented: false,
-            stroke: null,
+            opacity:
+              typeof slotConfig.opacity === "number" ? slotConfig.opacity : 1,
           },
-        },
-        targetPassIds,
-      },
-    ];
-  }
-
-  private updateOverlays() {
-    void this.updateOverlaysAsync();
-  }
-
-  private async updateOverlaysAsync() {
-    if (!this.canvasService) return;
-    const seq = ++this.renderSeq;
-    const frame = this.getSurfaceFrameRect();
-    if (frame.width <= 0 || frame.height <= 0) {
-      this.normalSpecs = [];
-      this.overlaySpecsByLayerId = {};
-      await this.canvasService.flushRenderFromProducers();
-      return;
-    }
-
-    const normalSpec = await this.buildSlotSpec(
-      "normal",
-      this.normalLayerId,
-      frame,
-    );
-    const overlayEntries = await Promise.all(
-      this.getRenderedOverlaySlots().map(async ({ layerId, slot }) => ({
-        layerId,
-        spec: await this.buildSlotSpec(slot, layerId, frame),
-      })),
-    );
-    if (seq !== this.renderSeq) return;
-
-    this.normalSpecs = normalSpec ? [normalSpec] : [];
-    this.overlaySpecsByLayerId = Object.fromEntries(
-      overlayEntries.map(({ layerId, spec }) => [layerId, spec ? [spec] : []]),
-    );
-    await this.canvasService.flushRenderFromProducers();
-    if (seq !== this.renderSeq) return;
-    this.canvasService.requestRenderAll();
-  }
-
-  private async buildSlotSpec(
-    slot: TemplateOverlaySlotName,
-    layerId: string,
-    frame: FrameRect,
-  ): Promise<RenderObjectSpec | null> {
-    const slotConfig = this.config.slots[slot];
-    if (!slotConfig || slotConfig.enabled === false) return null;
-
-    const src = slotConfig.src.trim();
-    if (!src) return null;
-
-    const size = await this.sourceSizeCache.ensureImageSize(src);
-    if (!size) {
-      console.error("[TemplateOverlayTool] Overlay image failed to load.", {
-        slot,
-        src,
+        });
       });
-      return null;
-    }
-
-    return this.createStretchImageSpec({
-      frame: this.resolveSlotFrame(frame, slotConfig.placement),
-      layerId,
-      opacity: typeof slotConfig.opacity === "number" ? slotConfig.opacity : 1,
-      size,
-      slot,
-      src,
     });
   }
 
@@ -635,58 +525,17 @@ export class TemplateOverlayTool implements ExtensionDefinition {
     };
   }
 
-  private getRenderedOverlaySlots(): Array<{
-    layerId: string;
-    order: number;
-    slot: Exclude<TemplateOverlaySlotName, "back" | "normal">;
-  }> {
-    return [
-      { layerId: this.frameLayerId, order: 0, slot: "frame" },
-      { layerId: this.prodLayerId, order: 1, slot: "prod" },
-      { layerId: this.smallLayerId, order: 2, slot: "small" },
-      { layerId: this.renderLayerId, order: 3, slot: "render" },
-    ];
-  }
-
-  private createStretchImageSpec(options: {
-    frame: FrameRect;
-    layerId: string;
-    opacity: number;
-    size: SourceSize;
-    slot: TemplateOverlaySlotName;
-    src: string;
-  }): RenderObjectSpec {
-    const { frame, layerId, opacity, size, slot, src } = options;
-    const width = Math.max(1, Number(size.width) || 1);
-    const height = Math.max(1, Number(size.height) || 1);
+  private readTemplateOverlayPayload(
+    effect: EditorEffect<TemplateOverlayEffectPayload>,
+  ): { role: string; slot: TemplateOverlaySlotName } {
+    const payload =
+      effect.payload && typeof effect.payload === "object" ? effect.payload : {};
+    const role = typeof payload.role === "string" && payload.role.trim()
+      ? payload.role.trim()
+      : "default-artwork";
     return {
-      id: `template-overlay.${slot}`,
-      type: "image",
-      src,
-      data: {
-        id: `template-overlay.${slot}`,
-        layerId,
-        slot,
-        type: "template-overlay",
-      },
-      props: {
-        left: frame.left,
-        top: frame.top,
-        originX: "left",
-        originY: "top",
-        scaleX: frame.width / width,
-        scaleY: frame.height / height,
-        opacity: Math.max(0, Math.min(1, opacity)),
-        selectable: false,
-        evented: false,
-        hasControls: false,
-        hasBorders: false,
-        excludeFromExport: true,
-      },
+      role,
+      slot: readTemplateOverlaySlot(payload.slot) ?? "normal",
     };
-  }
-
-  private async loadImageSize(src: string): Promise<SourceSize | null> {
-    return this.canvasService?.loadImageSize(src) ?? null;
   }
 }
