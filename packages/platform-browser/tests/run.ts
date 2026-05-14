@@ -892,6 +892,64 @@ async function testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterPreservesReplacementSubjectIds() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(adapter);
+  await adapter.flush();
+  canvasService.passCalls = [];
+
+  const renderIntentService = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  renderIntentService.setDocumentIntents([
+    {
+      id: "front.template.normal",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "front.template-overlay",
+        objectId: "front.template.normal",
+        objectType: "image",
+      },
+      visual: {
+        type: "image",
+        replacement: { src: "/new-template.png" },
+      },
+      placement: {
+        frame: { x: 20, y: 30, width: 100, height: 80 },
+        transform: { left: 20, top: 30, originX: "left", originY: "top" },
+      },
+      ordering: {
+        layerId: "front.template-overlay",
+        objectOrder: 1,
+      },
+    },
+  ]);
+  await adapter.flush();
+
+  const templatePass = canvasService.passCalls.find(
+    (call) => call.passId === "front.template-overlay",
+  );
+  const imageSpec = templatePass?.specs.find(
+    (spec) => spec.id === "image:front.template.normal",
+  );
+  assert(imageSpec, "replacement image should render with its graph node id");
+  assertEqual(
+    imageSpec.data?.sceneElementId,
+    "front.template.normal",
+    "replacement image should preserve the original subject id for projections",
+  );
+  assertEqual(
+    imageSpec.data?.sceneLayerId,
+    "front.template-overlay",
+    "replacement image should preserve the original layer id for projections",
+  );
+
+  await runtime.dispose();
+}
+
 async function testFabricSceneAdapterSyncsCoreSceneToScopedPasses() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
@@ -1900,6 +1958,7 @@ async function main() {
   await testBrowserSceneExportElementBoundsCrop();
   await testBrowserSceneExportFrameCrop();
   await testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages();
+  await testFabricRenderGraphAdapterPreservesReplacementSubjectIds();
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
   await testFabricSceneAdapterStacksDocumentOverlayAboveManagedImages();
   await testFabricSceneAdapterMapsSceneElementContracts();

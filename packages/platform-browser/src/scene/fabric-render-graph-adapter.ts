@@ -139,6 +139,14 @@ export class FabricRenderGraphAdapter implements Service {
       ...imagePlacementData,
       renderGraphLayerId: layer.id,
       renderGraphNodeId: node.id,
+      sceneElementId:
+        typeof node.data.sceneElementId === "string"
+          ? node.data.sceneElementId
+          : node.subjectId,
+      sceneLayerId:
+        typeof node.data.sceneLayerId === "string"
+          ? node.data.sceneLayerId
+          : node.layerId,
     };
 
     if (node.type === "image") {

@@ -2820,6 +2820,11 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
     { x: 350, y: 260, width: 100, height: 40 },
     "template overlay config should patch original object frame",
   );
+  assertDeepEqual(
+    source?.transform,
+    { left: 350, top: 260, originX: "left", originY: "top" },
+    "template overlay config should patch original object transform",
+  );
   assertEqual(source?.props.opacity, 1, "template opacity should default to 1");
 
   renderIntentService.patchIntent("pooder.kit.image-placement", {

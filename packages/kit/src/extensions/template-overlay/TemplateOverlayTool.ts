@@ -486,6 +486,12 @@ export class TemplateOverlayTool implements ExtensionDefinition {
               width: slotFrame.width,
               height: slotFrame.height,
             },
+            transform: {
+              left: slotFrame.left,
+              top: slotFrame.top,
+              originX: "left",
+              originY: "top",
+            },
           },
           overlay: {
             enabled: true,
