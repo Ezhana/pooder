@@ -19,6 +19,7 @@ import {
   type RenderPatternSpec,
   type RenderProjectionSpec,
   type RenderGraphNode,
+  type RenderIntentTransform,
   type RenderIntentService,
   type SceneElement,
   type SceneExportService,
@@ -200,6 +201,11 @@ function finiteNumber(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function finitePositiveNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function clampNormalized(value: number): number {
   return Math.max(-1, Math.min(2, value));
 }
@@ -227,6 +233,23 @@ function readMetadataSourceSrc(
     ? metadata.sourceSrc.trim()
     : "";
   return sourceSrc;
+}
+
+function createCommittedImagePlacementTransform(
+  frame: FrameRect | null | undefined,
+  metadata: Record<string, unknown> | undefined,
+): RenderIntentTransform | undefined {
+  if (!frame) return undefined;
+  const imageWidth = finitePositiveNumber(metadata?.width);
+  const imageHeight = finitePositiveNumber(metadata?.height);
+  return {
+    left: frame.left + frame.width / 2,
+    top: frame.top + frame.height / 2,
+    originX: "center",
+    originY: "center",
+    ...(imageWidth ? { scaleX: frame.width / imageWidth } : {}),
+    ...(imageHeight ? { scaleY: frame.height / imageHeight } : {}),
+  };
 }
 
 function resolveImageTransformSnapshot(
@@ -1200,6 +1223,10 @@ export class ImageTool implements ExtensionDefinition {
     if (this.renderIntentService && slot) {
       const data = isRecord(slot.data) ? slot.data : {};
       const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+      const frame = getSlotFrame(slot);
+      const committedTransform = image
+        ? createCommittedImagePlacementTransform(frame, image.metadata)
+        : undefined;
       this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
         id: slotId,
         subject: {
@@ -1224,11 +1251,12 @@ export class ImageTool implements ExtensionDefinition {
         },
         placement: {
           frame: {
-            x: getSlotFrame(slot)?.left ?? 0,
-            y: getSlotFrame(slot)?.top ?? 0,
-            width: getSlotFrame(slot)?.width ?? 1,
-            height: getSlotFrame(slot)?.height ?? 1,
+            x: frame?.left ?? 0,
+            y: frame?.top ?? 0,
+            width: frame?.width ?? 1,
+            height: frame?.height ?? 1,
           },
+          ...(committedTransform ? { transform: committedTransform } : {}),
         },
         ordering: {
           layerId: slot.layerId,
@@ -1242,7 +1270,22 @@ export class ImageTool implements ExtensionDefinition {
             ...placement,
             image: image ?? undefined,
           },
+          ...(image
+            ? {
+                selectable: false,
+                evented: true,
+              }
+            : {}),
         },
+        ...(image
+          ? {
+              data: {
+                slotId,
+                source: "committed",
+                type: "image-placement-image",
+              },
+            }
+          : {}),
       });
     }
     if (this.sceneService) {
@@ -1318,6 +1361,10 @@ export class ImageTool implements ExtensionDefinition {
     const data = isRecord(slot.data) ? slot.data : {};
     const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
     const image = this.getCommittedImage(slot);
+    const frame = getSlotFrame(slot);
+    const committedTransform = image
+      ? createCommittedImagePlacementTransform(frame, image.metadata)
+      : undefined;
     this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
       id: slotId,
       subject: {
@@ -1333,6 +1380,15 @@ export class ImageTool implements ExtensionDefinition {
       ordering: {
         layerId: slot.layerId,
         objectOrder: slot.order,
+      },
+      placement: {
+        frame: {
+          x: frame?.left ?? 0,
+          y: frame?.top ?? 0,
+          width: frame?.width ?? 1,
+          height: frame?.height ?? 1,
+        },
+        ...(committedTransform ? { transform: committedTransform } : {}),
       },
       export: {
         visibility: this.getCommittedImageVisibility(slotId),
@@ -1352,7 +1408,22 @@ export class ImageTool implements ExtensionDefinition {
           ...placement,
           image: image ?? undefined,
         },
+        ...(image
+          ? {
+              selectable: false,
+              evented: true,
+            }
+          : {}),
       },
+      ...(image
+        ? {
+            data: {
+              slotId,
+              source: "committed",
+              type: "image-placement-image",
+            },
+          }
+        : {}),
     });
   }
 

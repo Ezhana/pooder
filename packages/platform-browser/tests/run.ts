@@ -739,7 +739,7 @@ async function testBrowserSceneExportFrameCrop() {
   assertEqual(result.height, 40, "frame crop height should be exported");
 }
 
-async function testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages() {
+async function testFabricRenderGraphAdapterUsesGraphPropsForReplacementImages() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -780,10 +780,25 @@ async function testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages() {
       },
       placement: {
         frame: { x: 100, y: 120, width: 200, height: 160 },
+        transform: {
+          left: 200,
+          top: 200,
+          originX: "center",
+          originY: "center",
+          scaleX: 0.5,
+          scaleY: 0.5,
+        },
       },
       props: {
-        originX: "center",
-        originY: "center",
+        selectable: false,
+        evented: true,
+        hasControls: false,
+        hasBorders: false,
+      },
+      data: {
+        slotId: "slot",
+        source: "committed",
+        type: "image-placement-image",
       },
       ordering: {
         layerId: "artwork",
@@ -791,29 +806,6 @@ async function testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages() {
       },
       export: {
         visibility: imagePlacementCommittedVisibility("slot"),
-      },
-      interaction: {
-        imagePlacement: {
-          enabled: true,
-          slotId: "slot",
-          image: {
-            src: "data:image/png;base64,cropped-slot",
-            left: 0.5,
-            top: 0.5,
-            scale: 1,
-            angle: 0,
-            metadata: {
-              sourceSrc: "/photo.png",
-              sourceTransform: {
-                left: 0.6,
-                top: 0.4,
-                scale: 1.3,
-                angle: 22,
-                opacity: 1,
-              },
-            },
-          },
-        },
       },
     },
   ]);
@@ -829,46 +821,46 @@ async function testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages() {
   assertEqual(
     imageSpec.props.left,
     200,
-    "committed image should be centered in the slot frame, not use editable source x",
+    "adapter should use the graph node transform left",
   );
   assertEqual(
     imageSpec.props.top,
     200,
-    "committed image should be centered in the slot frame, not use editable source y",
+    "adapter should use the graph node transform top",
   );
   assertEqual(
     imageSpec.props.originX,
     "center",
-    "committed image should render from its center",
+    "adapter should use the graph node originX",
   );
   assertEqual(
     imageSpec.props.originY,
     "center",
-    "committed image should render from its center",
+    "adapter should use the graph node originY",
   );
   assertEqual(
     imageSpec.props.scaleX,
     0.5,
-    "committed image should scale cropped bitmap width into the slot frame",
+    "adapter should use the graph node scaleX",
   );
   assertEqual(
     imageSpec.props.scaleY,
     0.5,
-    "committed image should scale cropped bitmap height into the slot frame",
+    "adapter should use the graph node scaleY",
   );
   assert(
     imageSpec.props.angle === undefined,
-    "committed image should not reuse editable source rotation",
+    "adapter should not synthesize image-placement rotation",
   );
   assertEqual(
     imageSpec.props.selectable,
     false,
-    "committed image should not remain directly editable after session commit",
+    "adapter should preserve graph node selectable",
   );
   assertEqual(
     imageSpec.props.evented,
     true,
-    "committed image should still receive clicks for reopening the image session",
+    "adapter should preserve graph node evented",
   );
   assertDeepEqual(
     imageSpec.visibility,
@@ -886,7 +878,7 @@ async function testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages() {
       source: "committed",
       type: "image-placement-image",
     },
-    "committed image should preserve the image-placement interaction contract",
+    "adapter should preserve graph node data without image-placement inference",
   );
 
   await runtime.dispose();
@@ -1957,7 +1949,7 @@ async function main() {
   await testBrowserSceneExportSelectedLayerWithSceneCrop();
   await testBrowserSceneExportElementBoundsCrop();
   await testBrowserSceneExportFrameCrop();
-  await testFabricRenderGraphAdapterUsesSlotFrameForCommittedImages();
+  await testFabricRenderGraphAdapterUsesGraphPropsForReplacementImages();
   await testFabricRenderGraphAdapterPreservesReplacementSubjectIds();
   await testFabricSceneAdapterSyncsCoreSceneToScopedPasses();
   await testFabricSceneAdapterStacksDocumentOverlayAboveManagedImages();

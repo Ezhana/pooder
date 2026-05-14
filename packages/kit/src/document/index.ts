@@ -423,11 +423,18 @@ function createObjectRenderIntentDraft(
   if (object.type === "image") {
     const source = resolveImageObjectSource(object, assetsById);
     const committed = resolveCommittedImagePlacementSource(object, assetsById);
+    const committedTransform = committed
+      ? createCommittedImagePlacementTransform(object, committed.metadata)
+      : undefined;
     const metadata = isRecord(object.metadata?.imagePlacement)
       ? object.metadata.imagePlacement
       : undefined;
     return {
       ...base,
+      placement: {
+        ...base.placement,
+        ...(committedTransform ? { transform: committedTransform } : {}),
+      },
       visual: {
         type: "image",
         ...(isComposableSlot
@@ -458,6 +465,12 @@ function createObjectRenderIntentDraft(
               assetsById,
               isComposableSlot,
             ),
+            ...(committed
+              ? {
+                  selectable: false,
+                  evented: true,
+                }
+              : {}),
           }
         : undefined,
       overlay: templateOverlayEffect
@@ -466,6 +479,13 @@ function createObjectRenderIntentDraft(
       data: {
         ...base.data,
         ...(metadata ? { imagePlacementMetadata: metadata } : {}),
+        ...(committed
+          ? {
+              slotId: object.id,
+              source: "committed",
+              type: "image-placement-image",
+            }
+          : {}),
       },
     };
   }
@@ -553,6 +573,28 @@ function resolveCommittedImagePlacementSource(
     ...(committedSrc ? { src: committedSrc } : {}),
     metadata: { ...metadata },
   };
+}
+
+function createCommittedImagePlacementTransform(
+  object: EditorImageObject,
+  metadata: Record<string, unknown> | undefined,
+) {
+  if (!object.frame) return undefined;
+  const imageWidth = finitePositiveNumber(metadata?.width);
+  const imageHeight = finitePositiveNumber(metadata?.height);
+  return {
+    left: object.frame.x + object.frame.width / 2,
+    top: object.frame.y + object.frame.height / 2,
+    originX: "center" as const,
+    originY: "center" as const,
+    ...(imageWidth ? { scaleX: object.frame.width / imageWidth } : {}),
+    ...(imageHeight ? { scaleY: object.frame.height / imageHeight } : {}),
+  };
+}
+
+function finitePositiveNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function createRenderIntentImagePlacementData(

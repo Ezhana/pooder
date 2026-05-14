@@ -1301,6 +1301,53 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
   });
 }
 
+async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    intents.setDocumentIntents([
+      {
+        id: "image",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "artwork",
+          objectId: "image",
+          objectType: "image",
+        },
+        visual: { type: "image", src: "/base.png" },
+        placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
+        ordering: { layerId: "artwork" },
+        props: { selectable: true, evented: false },
+        data: { locked: false },
+        interaction: {
+          selectable: false,
+          evented: true,
+          locked: true,
+        },
+      },
+    ]);
+
+    const node = intents.getGraph().layers[0]?.nodes[0];
+    assertEqual(
+      node?.props.selectable,
+      false,
+      "interaction selectable should override graph props",
+    );
+    assertEqual(
+      node?.props.evented,
+      true,
+      "interaction evented should override graph props",
+    );
+    assertEqual(
+      node?.data.locked,
+      true,
+      "interaction locked should override graph data",
+    );
+  });
+}
+
 async function testSceneLayoutModelDefaultsAndPadding() {
   const config = {
     get: <T>(_key: string, defaultValue?: T) => defaultValue,
@@ -1483,6 +1530,10 @@ async function main() {
     [
       "keeps render intent runtime patches source scoped",
       testRenderIntentRuntimePatchesAreSourceScoped,
+    ],
+    [
+      "writes render intent interaction onto graph props and data",
+      testRenderIntentInteractionAspectWritesGraphPropsAndData,
     ],
     [
       "resolves scene layout defaults and responsive padding",

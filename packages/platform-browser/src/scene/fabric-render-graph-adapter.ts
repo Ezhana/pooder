@@ -125,18 +125,14 @@ export class FabricRenderGraphAdapter implements Service {
     layer: RenderGraphLayer,
     node: RenderGraphNode,
   ): RenderObjectSpec | null {
-    const imagePlacementProps = this.resolveImagePlacementImageProps(node);
-    const imagePlacementData = this.resolveImagePlacementImageData(node);
     const commonProps = {
       ...node.props,
       ...this.resolvePlacementProps(node),
-      ...imagePlacementProps,
       visible: layer.visible && node.visible,
       excludeFromExport: !node.exportable,
     };
     const commonData = {
       ...node.data,
-      ...imagePlacementData,
       renderGraphLayerId: layer.id,
       renderGraphNodeId: node.id,
       sceneElementId:
@@ -193,48 +189,6 @@ export class FabricRenderGraphAdapter implements Service {
       props: commonProps,
       visibility: node.visibility,
     };
-  }
-
-  private resolveImagePlacementImageProps(
-    node: RenderGraphNode,
-  ): Record<string, unknown> {
-    if (!this.isImagePlacementReplacementNode(node)) return {};
-    return {
-      selectable: false,
-      evented: true,
-      hasControls: false,
-      hasBorders: false,
-      lockMovementX: true,
-      lockMovementY: true,
-      lockRotation: true,
-      lockScalingFlip: true,
-      lockScalingX: true,
-      lockScalingY: true,
-    };
-  }
-
-  private resolveImagePlacementImageData(
-    node: RenderGraphNode,
-  ): Record<string, unknown> {
-    if (!this.isImagePlacementReplacementNode(node)) return {};
-    const placement = node.data.imagePlacement as Record<string, unknown>;
-    const slotId =
-      typeof placement.slotId === "string" && placement.slotId.trim()
-        ? placement.slotId
-        : node.subjectId;
-    return {
-      slotId,
-      source: "committed",
-      type: "image-placement-image",
-    };
-  }
-
-  private isImagePlacementReplacementNode(node: RenderGraphNode): boolean {
-    return (
-      node.type === "image" &&
-      node.id === `image:${node.subjectId}` &&
-      isRecord(node.data.imagePlacement)
-    );
   }
 
   private resolvePlacementProps(node: RenderGraphNode): Record<string, unknown> {
@@ -294,8 +248,4 @@ export class FabricRenderGraphAdapter implements Service {
 function finitePositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

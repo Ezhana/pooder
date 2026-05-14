@@ -1487,6 +1487,21 @@ async function testApplyKitEditorDocument() {
                 id: "front-slot",
                 type: "image",
                 assetId: "photo",
+                metadata: {
+                  imagePlacement: {
+                    committedSrc: "data:image/png;base64,cropped-front-slot",
+                    sourceSrc: "/photo.png",
+                    sourceTransform: {
+                      left: 0.6,
+                      top: 0.4,
+                      scale: 1.3,
+                      angle: 22,
+                      opacity: 1,
+                    },
+                    width: 400,
+                    height: 320,
+                  },
+                },
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
                   { type: "clip", payload: { source: { type: "dieline" } } },
@@ -1543,6 +1558,47 @@ async function testApplyKitEditorDocument() {
       ?.src,
     "/photo.png",
     "image placement target should resolve default image asset source",
+  );
+  const renderGraph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const committedGraphNode = renderGraph.layers
+    .find((layer) => layer.id === "front-artwork")
+    ?.nodes.find((node) => node.id === "image:front-slot");
+  assertDeepEqual(
+    committedGraphNode?.transform,
+    {
+      left: 25,
+      top: 40,
+      originX: "center",
+      originY: "center",
+      scaleX: 0.075,
+      scaleY: 0.125,
+    },
+    "document apply should compile committed image replacement to the slot-centered graph transform",
+  );
+  assertEqual(
+    committedGraphNode?.props.selectable,
+    false,
+    "document apply should make committed images non-selectable through graph props",
+  );
+  assertEqual(
+    committedGraphNode?.props.evented,
+    true,
+    "document apply should keep committed images clickable through graph props",
+  );
+  assertDeepEqual(
+    {
+      slotId: committedGraphNode?.data.slotId,
+      source: committedGraphNode?.data.source,
+      type: committedGraphNode?.data.type,
+    },
+    {
+      slotId: "front-slot",
+      source: "committed",
+      type: "image-placement-image",
+    },
+    "document apply should expose committed image interaction data generically",
   );
   assertDeepEqual(
     (scene.getElement("front-slot")?.data as any)?.clip,
@@ -1997,6 +2053,41 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "completed slot should write the processed production image node",
   );
   assertDeepEqual(
+    committedGraphNode?.transform,
+    {
+      left: 200,
+      top: 200,
+      originX: "center",
+      originY: "center",
+      scaleX: 0.5,
+      scaleY: 0.5,
+    },
+    "completed slot should compile the committed bitmap into a slot-centered graph transform",
+  );
+  assertEqual(
+    committedGraphNode?.props.selectable,
+    false,
+    "completed slot committed image should be non-selectable through graph props",
+  );
+  assertEqual(
+    committedGraphNode?.props.evented,
+    true,
+    "completed slot committed image should remain clickable through graph props",
+  );
+  assertDeepEqual(
+    {
+      slotId: committedGraphNode?.data.slotId,
+      source: committedGraphNode?.data.source,
+      type: committedGraphNode?.data.type,
+    },
+    {
+      slotId: "slot",
+      source: "committed",
+      type: "image-placement-image",
+    },
+    "completed slot should expose generic committed image interaction data",
+  );
+  assertDeepEqual(
     committedGraphNode?.visibility,
     imagePlacementCommittedVisibility("slot"),
     "completed slot should declaratively hide the graph-backed committed image while editing",
@@ -2042,6 +2133,41 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     resetGraphNode?.visual?.src,
     "data:image/png;base64,cropped-slot",
     "resetting a reopened image session should keep the committed production image",
+  );
+  assertDeepEqual(
+    resetGraphNode?.transform,
+    {
+      left: 200,
+      top: 200,
+      originX: "center",
+      originY: "center",
+      scaleX: 0.5,
+      scaleY: 0.5,
+    },
+    "resetting a reopened image session should keep the committed graph transform",
+  );
+  assertEqual(
+    resetGraphNode?.props.selectable,
+    false,
+    "resetting a reopened image session should keep committed images non-selectable",
+  );
+  assertEqual(
+    resetGraphNode?.props.evented,
+    true,
+    "resetting a reopened image session should keep committed images clickable",
+  );
+  assertDeepEqual(
+    {
+      slotId: resetGraphNode?.data.slotId,
+      source: resetGraphNode?.data.source,
+      type: resetGraphNode?.data.type,
+    },
+    {
+      slotId: "slot",
+      source: "committed",
+      type: "image-placement-image",
+    },
+    "resetting a reopened image session should keep committed click target data",
   );
 
   await facade.beginSession("slot");

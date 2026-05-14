@@ -476,12 +476,23 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     visual: source.source,
     frame: draft.placement?.frame,
     transform: draft.placement?.transform,
-    props: cloneRecord(draft.props ?? {}),
+    props: {
+      ...(draft.props ?? {}),
+      ...(typeof draft.interaction?.selectable === "boolean"
+        ? { selectable: draft.interaction.selectable }
+        : {}),
+      ...(typeof draft.interaction?.evented === "boolean"
+        ? { evented: draft.interaction.evented }
+        : {}),
+    },
     data: {
       ...(draft.data ?? {}),
       renderIntentId: draft.id,
       subject: draft.subject,
       ...(draft.overlay ? { templateOverlay: draft.overlay } : {}),
+      ...(typeof draft.interaction?.locked === "boolean"
+        ? { locked: draft.interaction.locked }
+        : {}),
       ...(draft.interaction?.imagePlacement
         ? { imagePlacement: draft.interaction.imagePlacement }
         : {}),
