@@ -27,7 +27,6 @@ import {
   type VisibilityExpr,
 } from "@pooder/core";
 import type {
-  EditorAsset,
   EditorDocument,
   EditorEffect,
   EditorImageObject,
@@ -70,7 +69,6 @@ import {
 
 export interface ImagePlacementImageState {
   src?: string;
-  assetId?: string;
   left?: number;
   top?: number;
   scale?: number;
@@ -326,10 +324,8 @@ function stripDerivedImageMetadata(
 function normalizeImage(value: unknown): ImagePlacementImageState | null {
   if (!isRecord(value)) return null;
   const src = typeof value.src === "string" ? value.src.trim() : "";
-  const assetId = typeof value.assetId === "string" ? value.assetId.trim() : "";
   const image: ImagePlacementImageState = {
     ...(src ? { src } : {}),
-    ...(assetId ? { assetId } : {}),
     left: clampNormalized(finiteNumber(value.left, 0.5)),
     top: clampNormalized(finiteNumber(value.top, 0.5)),
     scale: Math.max(0.05, finiteNumber(value.scale, 1)),
@@ -337,11 +333,11 @@ function normalizeImage(value: unknown): ImagePlacementImageState | null {
     opacity: finiteNumber(value.opacity, 1),
     ...(isRecord(value.metadata) ? { metadata: { ...value.metadata } } : {}),
   };
-  return image.src || image.assetId ? image : image;
+  return image;
 }
 
 function hasImageSource(image: ImagePlacementImageState | null): boolean {
-  return Boolean(image?.src || image?.assetId);
+  return Boolean(image?.src);
 }
 
 function normalizeColor(value: unknown): string | undefined {
@@ -705,22 +701,17 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private resolveDocumentImageState(
-    document: EditorDocument,
+    _document: EditorDocument,
     object: EditorImageObject,
   ): ImagePlacementImageState | undefined {
-    const assetsById = new Map<string, EditorAsset>(
-      (document.assets ?? []).map((asset) => [asset.id, asset]),
-    );
-    const asset = object.assetId ? assetsById.get(object.assetId) : undefined;
-    const src = object.src || asset?.src;
+    const src = object.src;
     const placementMetadata = isRecord(object.metadata?.imagePlacement)
       ? object.metadata.imagePlacement
       : undefined;
     const transform = object.transform ?? {};
-    if (!src && !object.assetId) return undefined;
+    if (!src) return undefined;
     return {
-      ...(object.assetId ? { assetId: object.assetId } : {}),
-      ...(src ? { src } : {}),
+      src,
       left: finiteNumber(transform.left, 0.5),
       top: finiteNumber(transform.top, 0.5),
       scale:
@@ -735,29 +726,18 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private resolveDocumentCommittedImage(
-    document: EditorDocument,
+    _document: EditorDocument,
     object: EditorImageObject,
   ): ImagePlacementImageState | undefined {
-    const assetsById = new Map<string, EditorAsset>(
-      (document.assets ?? []).map((asset) => [asset.id, asset]),
-    );
     const metadata = isRecord(object.metadata?.imagePlacement)
       ? object.metadata.imagePlacement
       : {};
-    const committedAssetId =
-      typeof metadata.committedAssetId === "string"
-        ? metadata.committedAssetId
-        : undefined;
-    const committedAsset = committedAssetId
-      ? assetsById.get(committedAssetId)
-      : undefined;
     const committedSrc =
       (typeof metadata.committedSrc === "string" && metadata.committedSrc) ||
-      committedAsset?.src;
-    if (!committedSrc && !committedAssetId) return undefined;
+      "";
+    if (!committedSrc) return undefined;
     return {
-      ...(committedAssetId ? { assetId: committedAssetId } : {}),
-      ...(committedSrc ? { src: committedSrc } : {}),
+      src: committedSrc,
       metadata: { ...metadata },
     };
   }
@@ -1256,7 +1236,6 @@ export class ImageTool implements ExtensionDefinition {
           type: "image",
           replacement: image
             ? {
-                ...(image.assetId ? { assetId: image.assetId } : {}),
                 ...(image.src ? { src: image.src } : {}),
                 ...(image.metadata ? { metadata: image.metadata } : {}),
               }
@@ -1410,7 +1389,6 @@ export class ImageTool implements ExtensionDefinition {
         ? {
             type: "image",
             replacement: {
-              ...(image.assetId ? { assetId: image.assetId } : {}),
               ...(image.src ? { src: image.src } : {}),
               ...(image.metadata ? { metadata: image.metadata } : {}),
             },

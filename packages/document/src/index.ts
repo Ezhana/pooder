@@ -106,7 +106,6 @@ export interface EditorObjectBase {
 
 export interface EditorImageObject extends EditorObjectBase {
   type: "image";
-  assetId?: string;
   src?: string;
   width?: number;
   height?: number;
@@ -157,6 +156,7 @@ export interface EditorDocumentDiagnostic {
 
 export interface EditorDocumentValidationOptions {
   resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
+  validators?: readonly EditorDocumentValidator[];
 }
 
 export interface EditorDocumentCapabilityCollectionOptions
@@ -168,6 +168,23 @@ export interface EditorDocumentCapabilityCollectionOptions
 export type EditorDocumentEffectCapabilityResolver = (
   effect: EditorEffect,
 ) => string | undefined;
+
+export type EditorDocumentValidatorDiagnostic =
+  Omit<EditorDocumentDiagnostic, "path"> & { path?: string };
+
+export interface EditorDocumentValidatorContext {
+  document: EditorDocument;
+  path: string;
+  surface?: EditorSurface;
+  layer?: EditorLayer;
+  object?: EditorObject;
+  effect?: EditorEffect;
+  addDiagnostic(diagnostic: EditorDocumentValidatorDiagnostic): void;
+}
+
+export type EditorDocumentValidator = (
+  context: EditorDocumentValidatorContext,
+) => void;
 
 export interface EditorDocumentCapabilityRequirement {
   capabilityId: string;
@@ -326,12 +343,10 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
 
   switch (type) {
     case "image": {
-      const assetId = normalizeId(value.assetId);
       const src = normalizeId(value.src);
       return {
         ...base,
         type,
-        ...(assetId ? { assetId } : {}),
         ...(src ? { src } : {}),
         ...(normalizePositiveNumber(value.width) !== undefined
           ? { width: normalizePositiveNumber(value.width) }
@@ -550,6 +565,23 @@ function validateEffects(
   );
 }
 
+function runValidators(
+  diagnostics: EditorDocumentDiagnostic[],
+  validators: readonly EditorDocumentValidator[] | undefined,
+  context: Omit<EditorDocumentValidatorContext, "addDiagnostic">,
+) {
+  validators?.forEach((validator) => {
+    validator({
+      ...context,
+      addDiagnostic: (diagnostic) =>
+        addDiagnostic(diagnostics, {
+          ...diagnostic,
+          path: diagnostic.path ?? context.path,
+        }),
+    });
+  });
+}
+
 export function validateEditorDocument(
   value: unknown,
   options: EditorDocumentValidationOptions = {},
@@ -566,22 +598,25 @@ export function validateEditorDocument(
   }
 
   const document = normalizeEditorDocument(value);
-  const assetIds = new Set<string>();
+  const assetIdentifiers = new Set<string>();
   const surfaceIds = new Set<string>();
   const layerIds = new Set<string>();
   const objectIds = new Set<string>();
   const viewIds = new Set<string>();
 
+  runValidators(diagnostics, options.validators, {
+    document,
+    path: "",
+  });
+
   document.assets?.forEach((asset, index) => {
-    validateUniqueId(diagnostics, assetIds, asset.id, `assets[${index}].id`, "asset");
-    if (asset.type === "image" && !asset.src) {
-      addDiagnostic(diagnostics, {
-        severity: "error",
-        code: "asset-image-src-required",
-        message: `Image asset "${asset.id}" requires src.`,
-        path: `assets[${index}].src`,
-      });
-    }
+    validateUniqueId(
+      diagnostics,
+      assetIdentifiers,
+      asset.id,
+      `assets[${index}].id`,
+      "asset",
+    );
   });
 
   if (!document.surfaces.length) {
@@ -611,6 +646,19 @@ export function validateEditorDocument(
       });
     }
     validateEffects(diagnostics, surface.effects, surfacePath, options);
+    runValidators(diagnostics, options.validators, {
+      document,
+      path: surfacePath,
+      surface,
+    });
+    surface.effects?.forEach((effect, effectIndex) =>
+      runValidators(diagnostics, options.validators, {
+        document,
+        path: `${surfacePath}.effects[${effectIndex}]`,
+        surface,
+        effect,
+      }),
+    );
 
     surface.layers.forEach((layer, layerIndex) => {
       const layerPath = `${surfacePath}.layers[${layerIndex}]`;
@@ -622,6 +670,21 @@ export function validateEditorDocument(
         "layer",
       );
       validateEffects(diagnostics, layer.effects, layerPath, options);
+      runValidators(diagnostics, options.validators, {
+        document,
+        path: layerPath,
+        surface,
+        layer,
+      });
+      layer.effects?.forEach((effect, effectIndex) =>
+        runValidators(diagnostics, options.validators, {
+          document,
+          path: `${layerPath}.effects[${effectIndex}]`,
+          surface,
+          layer,
+          effect,
+        }),
+      );
       layer.objects?.forEach((object, objectIndex) => {
         const objectPath = `${layerPath}.objects[${objectIndex}]`;
         validateUniqueId(
@@ -639,35 +702,24 @@ export function validateEditorDocument(
             path: `${objectPath}.frame`,
           });
         }
-        if (
-          object.type === "image" &&
-          object.assetId &&
-          !assetIds.has(object.assetId)
-        ) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "object-asset-missing",
-            message: `Image object "${object.id}" references missing asset "${object.assetId}".`,
-            path: `${objectPath}.assetId`,
-          });
-        }
-        const hasImagePlacementEffect = object.effects?.some(
-          (effect) => effect.type === "image-placement",
-        );
-        if (
-          object.type === "image" &&
-          !object.assetId &&
-          !object.src &&
-          !hasImagePlacementEffect
-        ) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "image-source-required",
-            message: `Image object "${object.id}" requires assetId or src.`,
-            path: objectPath,
-          });
-        }
         validateEffects(diagnostics, object.effects, objectPath, options);
+        runValidators(diagnostics, options.validators, {
+          document,
+          path: objectPath,
+          surface,
+          layer,
+          object,
+        });
+        object.effects?.forEach((effect, effectIndex) =>
+          runValidators(diagnostics, options.validators, {
+            document,
+            path: `${objectPath}.effects[${effectIndex}]`,
+            surface,
+            layer,
+            object,
+            effect,
+          }),
+        );
       });
     });
   });

@@ -4,6 +4,7 @@ import {
   normalizeEditorDocument,
   validateEditorDocument,
   type EditorDocumentCapabilityCollectionOptions,
+  type EditorDocumentValidator,
   type EditorDocumentValidationOptions,
 } from "./index";
 
@@ -24,6 +25,9 @@ export type KitEditorDocumentEffect<TPayload = Record<string, unknown>> =
   EditorEffect<TPayload> & {
     type: KitEditorDocumentEffectType;
   };
+
+export const KIT_EDITOR_DOCUMENT_VALIDATORS: readonly EditorDocumentValidator[] =
+  [];
 
 export function isKitEditorDocumentEffectType(
   type: string,
@@ -54,6 +58,10 @@ export function validateKitEditorDocument(
   return validateEditorDocument(value, {
     ...options,
     resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
+    validators: [
+      ...KIT_EDITOR_DOCUMENT_VALIDATORS,
+      ...(options.validators ?? []),
+    ],
   });
 }
 
@@ -76,6 +84,9 @@ export type {
   EditorDocumentCapabilityRequirement,
   EditorDocumentDiagnostic,
   EditorDocumentRequirePolicy,
+  EditorDocumentValidator,
+  EditorDocumentValidatorContext,
+  EditorDocumentValidatorDiagnostic,
   EditorEffect,
   EditorImageObject,
   EditorLayer,

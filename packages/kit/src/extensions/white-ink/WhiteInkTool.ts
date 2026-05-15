@@ -374,19 +374,12 @@ export class WhiteInkTool implements ExtensionDefinition {
       context.effect.payload && typeof context.effect.payload === "object"
         ? context.effect.payload
         : {};
-    const assetId =
-      typeof (payload as Record<string, unknown>).assetId === "string"
-        ? ((payload as Record<string, unknown>).assetId as string)
-        : undefined;
-    const asset = assetId
-      ? context.document.assets?.find((item) => item.id === assetId)
-      : undefined;
     const src =
       (typeof (payload as Record<string, unknown>).src === "string" &&
         ((payload as Record<string, unknown>).src as string)) ||
       (typeof (payload as Record<string, unknown>).sourceUrl === "string" &&
         ((payload as Record<string, unknown>).sourceUrl as string)) ||
-      asset?.src;
+      undefined;
     const id =
       (typeof (payload as Record<string, unknown>).id === "string" &&
         ((payload as Record<string, unknown>).id as string).trim()) ||
@@ -409,7 +402,6 @@ export class WhiteInkTool implements ExtensionDefinition {
       },
       visual: {
         type: src ? "image" : "rect",
-        ...(assetId ? { assetId } : {}),
         ...(src ? { src } : {}),
       },
       props: {

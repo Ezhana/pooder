@@ -136,6 +136,67 @@ function testV2ImagePlacementImageDoesNotRequireSource() {
   );
 }
 
+function testImageObjectDoesNotRequireSource() {
+  const diagnostics = validateKitEditorDocument({
+    version: 2,
+    assets: [{ id: "template", type: "image" }],
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [
+          {
+            id: "image.user",
+            objects: [
+              {
+                id: "image-target",
+                type: "image",
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assertDeepEqual(
+    diagnostics,
+    [],
+    "image objects and image assets should allow empty src",
+  );
+}
+
+function testNormalizeDropsImageAssetId() {
+  const doc = normalizeEditorDocument({
+    version: 2,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [
+          {
+            id: "image.user",
+            objects: [
+              {
+                id: "image-target",
+                type: "image",
+                assetId: "legacy-asset",
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert(
+    !("assetId" in (doc.surfaces[0].layers[0].objects?.[0] ?? {})),
+    "normalize should drop legacy image assetId",
+  );
+}
+
 function testV1DocumentIsRejected() {
   const diagnostics = validateKitEditorDocument({
     version: 1,
@@ -198,7 +259,6 @@ function testValidationStructureAndReferences() {
               {
                 id: "img",
                 type: "image",
-                assetId: "missing",
                 frame: { x: 0, y: 0, width: 1, height: 1 },
               },
             ],
@@ -225,12 +285,46 @@ function testValidationStructureAndReferences() {
     "duplicate layer should be invalid",
   );
   assert(
-    codes.includes("object-asset-missing"),
-    "missing image asset should be invalid",
-  );
-  assert(
     codes.includes("view-surface-missing"),
     "missing view surface should be invalid",
+  );
+}
+
+function testCustomValidatorDiagnostics() {
+  const diagnostics = validateEditorDocument(
+    {
+      version: 2,
+      surfaces: [
+        {
+          id: "front",
+          size: { width: 1, height: 1, unit: "px" },
+          layers: [
+            {
+              id: "layer",
+              effects: [{ type: "custom-effect", capabilityId: "custom" }],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      validators: [
+        ({ effect, path, addDiagnostic }) => {
+          if (effect?.type !== "custom-effect") return;
+          addDiagnostic({
+            severity: "error",
+            code: "custom-effect-invalid",
+            message: "Custom effect is invalid.",
+            path,
+          });
+        },
+      ],
+    },
+  );
+
+  assert(
+    diagnostics.some((item) => item.code === "custom-effect-invalid"),
+    "custom validators should append diagnostics",
   );
 }
 
@@ -355,9 +449,12 @@ function testRequirePolicyDiagnostics() {
 function main() {
   testNormalizeDefaults();
   testV2ImagePlacementImageDoesNotRequireSource();
+  testImageObjectDoesNotRequireSource();
+  testNormalizeDropsImageAssetId();
   testV1DocumentIsRejected();
   testImageObjectRequiresFrame();
   testValidationStructureAndReferences();
+  testCustomValidatorDiagnostics();
   testCustomEffectRequiresCapabilityId();
   testKitEffectCapabilityResolution();
   testRequirePolicyDiagnostics();

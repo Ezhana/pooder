@@ -619,11 +619,7 @@ export class BackgroundTool implements ExtensionDefinition {
     context: RenderIntentCompilerContext<EditorEffect, EditorDocument>,
   ): RenderIntentPatch {
     const payload = isRecord(context.effect.payload) ? context.effect.payload : {};
-    const assetId = typeof payload.assetId === "string" ? payload.assetId : undefined;
-    const asset = assetId
-      ? context.document.assets?.find((item) => item.id === assetId)
-      : undefined;
-    const src = typeof payload.src === "string" ? payload.src : asset?.src;
+    const src = typeof payload.src === "string" ? payload.src : undefined;
     const id =
       (typeof payload.id === "string" && payload.id.trim()) ||
       `${context.target.surfaceId}.background`;
@@ -646,7 +642,6 @@ export class BackgroundTool implements ExtensionDefinition {
       },
       visual: {
         type: src ? "image" : "rect",
-        ...(assetId ? { assetId } : {}),
         ...(src ? { src } : {}),
       },
       props: {

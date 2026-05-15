@@ -15,7 +15,6 @@ import {
   normalizeKitEditorDocument,
   resolveKitEditorDocumentEffectCapabilityId,
   validateKitEditorDocument,
-  type EditorAsset,
   type EditorDocument,
   type EditorDocumentDiagnostic,
   type EditorEffect,
@@ -136,8 +135,7 @@ export async function applyKitEditorDocument(
       RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
       "RenderIntentCompilerRegistryService is required to apply an EditorDocument.",
     );
-  const assetsById = new Map((document.assets ?? []).map((asset) => [asset.id, asset]));
-  const intentDrafts = createBaseRenderIntentDrafts(document, assetsById);
+  const intentDrafts = createBaseRenderIntentDrafts(document);
   const effectEntries = collectEffectEntries(document).sort(compareEffectEntries);
 
   for (const entry of effectEntries) {
@@ -219,10 +217,7 @@ function collectAvailableCapabilityIds(
   );
 }
 
-function createBaseRenderIntentDrafts(
-  document: EditorDocument,
-  assetsById: Map<string, EditorAsset>,
-): RenderIntentDraft[] {
+function createBaseRenderIntentDrafts(document: EditorDocument): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
   document.surfaces.forEach((surface) => {
     surface.layers.forEach((layer) => {
@@ -232,7 +227,6 @@ function createBaseRenderIntentDrafts(
           layer,
           object,
           index,
-          assetsById,
         );
         if (draft) drafts.push(draft);
       });
@@ -246,7 +240,6 @@ function createObjectRenderIntentDraft(
   layer: EditorLayer,
   object: EditorObject,
   index: number,
-  assetsById: Map<string, EditorAsset>,
 ): RenderIntentDraft | null {
   if (!object.frame) return null;
   const objectOrder = object.order ?? index;
@@ -300,13 +293,11 @@ function createObjectRenderIntentDraft(
   } satisfies Omit<RenderIntentDraft, "visual">;
 
   if (object.type === "image") {
-    const source = resolveImageObjectSource(object, assetsById);
     return {
       ...base,
       visual: {
         type: "image",
-        ...(object.assetId ? { assetId: object.assetId } : {}),
-        ...(source ? { src: source } : {}),
+        ...(object.src ? { src: object.src } : {}),
       },
     };
   }
@@ -346,14 +337,6 @@ function normalizeRenderIntentTransform(object: EditorObject) {
     originX: object.transform?.originX ?? "left",
     originY: object.transform?.originY ?? "top",
   };
-}
-
-function resolveImageObjectSource(
-  object: Extract<EditorObject, { type: "image" }>,
-  assetsById: Map<string, EditorAsset>,
-): string | undefined {
-  const asset = object.assetId ? assetsById.get(object.assetId) : undefined;
-  return object.src || asset?.src;
 }
 
 function resolveLayerStack(layer: EditorLayer): number {

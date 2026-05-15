@@ -28,7 +28,6 @@ export interface RenderIntentSubject {
 
 export interface RenderIntentSource {
   src?: string;
-  assetId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -791,17 +790,16 @@ function resolveVisualSource(
   draft: RenderIntentDraft,
 ): { kind: "replacement" | "fallback" | "base"; source: RenderIntentSource } {
   const replacement = draft.visual?.replacement;
-  if (replacement?.src || replacement?.assetId) {
+  if (replacement?.src) {
     return { kind: "replacement", source: cloneRecord(replacement) };
   }
   const fallback = draft.visual?.fallback;
-  if (fallback?.src || fallback?.assetId) {
+  if (fallback?.src) {
     return { kind: "fallback", source: cloneRecord(fallback) };
   }
   return {
     kind: "base",
     source: {
-      ...(draft.visual?.assetId ? { assetId: draft.visual.assetId } : {}),
       ...(draft.visual?.src ? { src: draft.visual.src } : {}),
       ...(draft.visual?.metadata ? { metadata: cloneRecord(draft.visual.metadata) } : {}),
     },

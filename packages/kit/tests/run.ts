@@ -1367,7 +1367,7 @@ async function testApplyKitEditorDocument() {
               {
                 id: "front-template-image",
                 type: "image",
-                assetId: "template",
+                src: "/template.png",
                 frame: { x: 0, y: 0, width: 100, height: 120 },
                 effects: [{ type: "template-overlay" }],
               },
@@ -1387,7 +1387,7 @@ async function testApplyKitEditorDocument() {
               {
                 id: "front-slot",
                 type: "image",
-                assetId: "photo",
+                src: "/photo.png",
                 metadata: {
                   imagePlacement: {
                     committedSrc: "data:image/png;base64,cropped-front-slot",
@@ -1412,7 +1412,7 @@ async function testApplyKitEditorDocument() {
               {
                 id: "white-source",
                 type: "image",
-                assetId: "photo",
+                src: "/photo.png",
                 effects: [{ type: "white-ink", payload: { src: "/white.png" } }],
                 frame: { x: 0, y: 0, width: 10, height: 10 },
               },
@@ -2873,7 +2873,7 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
               {
                 id: "front.template.normal",
                 type: "image",
-                assetId: "template",
+                src: "/old-template.png",
                 frame: { x: 0, y: 0, width: 200, height: 100 },
                 effects: [
                   { type: "template-overlay", payload: { slot: "normal" } },
@@ -2882,7 +2882,7 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
               {
                 id: "front.template.normal.copy",
                 type: "image",
-                assetId: "template",
+                src: "/old-template.png",
                 frame: { x: 0, y: 0, width: 200, height: 100 },
                 effects: [
                   { type: "template-overlay", payload: { slot: "normal" } },
