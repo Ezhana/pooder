@@ -29,6 +29,20 @@ export interface EditorRect {
   height: number;
 }
 
+export interface SceneFrameMm {
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+}
+
+export interface SurfaceSceneFrames {
+  previewBounds: SceneFrameMm;
+  productionFrame: SceneFrameMm;
+  exportFrame?: SceneFrameMm;
+  viewportFocusFrame?: SceneFrameMm;
+}
+
 export interface EditorTransform {
   left?: number;
   top?: number;
@@ -67,6 +81,7 @@ export interface EditorSurface {
     bleed?: EditorRect;
     safe?: EditorRect;
   };
+  sceneFrames?: SurfaceSceneFrames;
   layers: EditorLayer[];
   effects?: EditorEffect[];
   metadata?: Record<string, unknown>;
@@ -242,6 +257,41 @@ function normalizeRect(value: unknown): EditorRect | undefined {
     return undefined;
   }
   return { x, y, width, height };
+}
+
+function normalizeSceneFrameMm(value: unknown): SceneFrameMm | undefined {
+  if (!isRecord(value)) return undefined;
+  const xMm = normalizeFiniteNumber(value.xMm);
+  const yMm = normalizeFiniteNumber(value.yMm);
+  const widthMm = normalizePositiveNumber(value.widthMm);
+  const heightMm = normalizePositiveNumber(value.heightMm);
+  if (
+    xMm === undefined ||
+    yMm === undefined ||
+    widthMm === undefined ||
+    heightMm === undefined
+  ) {
+    return undefined;
+  }
+  return { xMm, yMm, widthMm, heightMm };
+}
+
+function normalizeSurfaceSceneFrames(
+  value: unknown,
+): SurfaceSceneFrames | undefined {
+  if (!isRecord(value)) return undefined;
+  const previewBounds = normalizeSceneFrameMm(value.previewBounds);
+  const productionFrame = normalizeSceneFrameMm(value.productionFrame);
+  if (!previewBounds || !productionFrame) return undefined;
+  const exportFrame = normalizeSceneFrameMm(value.exportFrame);
+  const viewportFocusFrame = normalizeSceneFrameMm(value.viewportFocusFrame);
+
+  return {
+    previewBounds,
+    productionFrame,
+    ...(exportFrame ? { exportFrame } : {}),
+    ...(viewportFocusFrame ? { viewportFocusFrame } : {}),
+  };
 }
 
 function normalizeTransform(value: unknown): EditorTransform | undefined {
@@ -422,6 +472,7 @@ function normalizeSurface(value: unknown): EditorSurface | null {
     },
     frame:
       frame && (frame.trim || frame.bleed || frame.safe) ? frame : undefined,
+    sceneFrames: normalizeSurfaceSceneFrames(value.sceneFrames),
     layers,
     effects: normalizeEffects(value.effects),
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,

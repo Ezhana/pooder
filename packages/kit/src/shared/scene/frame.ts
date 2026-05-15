@@ -16,6 +16,30 @@ export function emptyFrameRect(): FrameRect {
   return { left: 0, top: 0, width: 0, height: 0 };
 }
 
+function sceneFrameToRect(frame: {
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+}): FrameRect {
+  return {
+    left: frame.xMm,
+    top: frame.yMm,
+    width: frame.widthMm,
+    height: frame.heightMm,
+  };
+}
+
+export function resolvePreviewFrameRect(
+  configService?: ConfigurationService,
+): FrameRect {
+  if (!configService) {
+    return emptyFrameRect();
+  }
+
+  return sceneFrameToRect(readSizeState(configService).sceneFrames.previewBounds);
+}
+
 export function resolveSurfaceFrameRect(
   canvasService?: CanvasService,
   configService?: ConfigurationService,

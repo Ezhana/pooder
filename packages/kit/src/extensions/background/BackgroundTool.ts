@@ -497,7 +497,11 @@ export class BackgroundTool implements ExtensionDefinition {
           return;
         }
 
-        if (e.key.startsWith("size.")) {
+        if (
+          e.key.startsWith("size.") ||
+          e.key.startsWith("surface.") ||
+          e.key.startsWith("scene.")
+        ) {
           this.latestSceneLayout = null;
           this.updateBackground();
         }

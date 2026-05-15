@@ -173,6 +173,7 @@ export class FabricRenderGraphAdapter implements Service {
     eventBus.on("tool:activated", this.onRuntimeVisibilityChange);
     eventBus.on("tool:session:change", this.onRuntimeVisibilityChange);
     eventBus.on("workflow:session:change", this.onRuntimeVisibilityChange);
+    eventBus.on("scene:layout:change", this.onRuntimeVisibilityChange);
   }
 
   private detachRuntimeVisibilityEvents() {
@@ -181,6 +182,7 @@ export class FabricRenderGraphAdapter implements Service {
     eventBus.off("tool:activated", this.onRuntimeVisibilityChange);
     eventBus.off("tool:session:change", this.onRuntimeVisibilityChange);
     eventBus.off("workflow:session:change", this.onRuntimeVisibilityChange);
+    eventBus.off("scene:layout:change", this.onRuntimeVisibilityChange);
   }
 
   private async runSyncLoop() {

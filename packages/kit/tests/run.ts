@@ -279,14 +279,22 @@ class FakeCanvasService {
   }
 
   updateViewportLayout(options: {
-    width?: number;
-    height?: number;
-    padding?: unknown;
-    frame?: unknown;
+    containerWidth: number;
+    containerHeight: number;
+    padding: number;
+    widthMm: number;
+    heightMm: number;
+    offsetX?: number;
+    offsetY?: number;
   }) {
-    if (typeof options.width === "number") this.canvas.width = options.width;
-    if (typeof options.height === "number") this.canvas.height = options.height;
+    this.canvas.width = options.containerWidth;
+    this.canvas.height = options.containerHeight;
     this.viewport.updateContainer(this.canvas.width, this.canvas.height);
+    this.viewport.layout.scale = 1;
+    this.viewport.layout.width = options.widthMm;
+    this.viewport.layout.height = options.heightMm;
+    this.viewport.layout.offsetX = (options.containerWidth - options.widthMm) / 2;
+    this.viewport.layout.offsetY = (options.containerHeight - options.heightMm) / 2;
     return this.viewport.layout;
   }
 
@@ -1162,6 +1170,13 @@ async function testDesignExportCapabilityExtension() {
     result.crop,
     { left: 1, top: 2, width: 30, height: 20 },
     "design export capability should map platform crop",
+  );
+
+  await facade.exportImage();
+  assertDeepEqual(
+    exportService.calls[exportService.calls.length - 1]?.crop,
+    { type: "frame", frame: "cut" },
+    "design export capability should default to cut frame crop",
   );
 
   await runtime.dispose();

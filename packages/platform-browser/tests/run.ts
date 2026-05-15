@@ -31,6 +31,14 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
   }
 }
 
+function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
+  const actualJson = JSON.stringify(actual);
+  const expectedJson = JSON.stringify(expected);
+  if (actualJson !== expectedJson) {
+    throw new Error(`${message} (expected ${expectedJson}, got ${actualJson})`);
+  }
+}
+
 class FakeCanvasService {
   resizeCalls: Array<{ height: number; width: number }> = [];
   renderCalls = 0;
@@ -311,6 +319,36 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterResyncsOnLayoutChange() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "art",
+      subject: { kind: "object", surfaceId: "s1", layerId: "art", objectId: "art" },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", stack: 10, layerOrder: 0 },
+      props: { width: 5, height: 5 },
+    },
+  ]);
+
+  await adapter.flush();
+  const before = canvas.reconcileCalls.length;
+  runtime.eventBus.emit("scene:layout:change", {});
+  await adapter.flush();
+
+  assert(
+    canvas.reconcileCalls.length > before,
+    "adapter should resync screen-space Fabric props after scene layout changes",
+  );
+
+  await runtime.dispose();
+}
+
 async function testFabricRenderGraphAdapterReportsSyncState() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -585,16 +623,85 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
   );
 }
 
+async function testSceneExportUsesCutFrameCrop() {
+  const source = {
+    data: {
+      exportKeys: ["element"],
+      layerId: "image.user",
+    },
+    visible: true,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 280, y: 220 };
+    },
+    async clone() {
+      return {
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  };
+  const exportCanvas = {
+    objects: [] as any[],
+    add(object: any) {
+      this.objects.push(object);
+    },
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,ok";
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  const cutRect = { left: 125, top: 75, width: 300, height: 180 };
+  service.canvasService = {
+    getObjects: () => [source],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: { left: number; top: number; width: number; height: number }) =>
+      rect,
+  };
+  service.sceneLayoutService = {
+    getLayout: () => ({
+      cutRect,
+      trimRect: cutRect,
+      bleedRect: cutRect,
+    }),
+  };
+  service.createExportCanvas = () => exportCanvas;
+
+  const result = await service.exportImage({
+    crop: { type: "frame", frame: "cut" },
+    includeHidden: true,
+    sourceLayerIds: ["image.user"],
+  });
+
+  assertDeepEqual(
+    result.crop,
+    cutRect,
+    "frame export should crop from scene layout cut rect",
+  );
+  assertEqual(result.width, cutRect.width * 2, "frame export width should use cut crop");
+  assertEqual(result.height, cutRect.height * 2, "frame export height should use cut crop");
+}
+
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["registers render graph adapter in browser host", testAttachRegistersRenderGraphAdapter],
     ["builds graph adapter draw list", testFabricRenderGraphAdapterBuildsDrawList],
+    ["resyncs graph adapter on layout change", testFabricRenderGraphAdapterResyncsOnLayoutChange],
     ["reports graph adapter sync state", testFabricRenderGraphAdapterReportsSyncState],
     ["preserves graph coordinate space", testFabricRenderGraphAdapterPreservesScreenSpace],
     ["projects without mutating source Fabric objects", testProjectionSuppressesSourceInGraphOnly],
     ["reconciles stale objects and clip cleanup", testCanvasReconcileRemovesStaleObjectsAndClearsClip],
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],
     ["exports by render graph node ids", testSceneExportMatchesRenderGraphNodeIds],
+    ["exports frame crops from scene layout cut rect", testSceneExportUsesCutFrameCrop],
   ];
 
   for (const [name, run] of tests) {

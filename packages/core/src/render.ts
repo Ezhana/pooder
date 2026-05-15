@@ -244,6 +244,8 @@ export interface CanvasService extends Service {
     padding: number;
     widthMm: number;
     heightMm: number;
+    offsetX?: number;
+    offsetY?: number;
   }): CanvasViewportLayout | null;
   getObjects(query?: CanvasObjectQuery): CanvasObjectLike[];
   getObject(id: string, layerId?: string): CanvasObjectLike | undefined;
@@ -303,10 +305,25 @@ export interface SceneExportService extends Service {
 export type SizeConstraintMode = "free" | "lockAspect" | "equal";
 export type CutMode = "trim" | "outset" | "inset";
 
+export interface SceneFrameMm {
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+}
+
+export interface SurfaceSceneFrames {
+  previewBounds: SceneFrameMm;
+  productionFrame: SceneFrameMm;
+  exportFrame?: SceneFrameMm;
+  viewportFocusFrame?: SceneFrameMm;
+}
+
 export interface SizeState {
   unit: Unit;
-  actualWidthMm: number;
-  actualHeightMm: number;
+  surfaceWidthMm: number;
+  surfaceHeightMm: number;
+  sceneFrames: SurfaceSceneFrames;
   constraintMode: SizeConstraintMode;
   aspectRatio: number;
   cutMode: CutMode;

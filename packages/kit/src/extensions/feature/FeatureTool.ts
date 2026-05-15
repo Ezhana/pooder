@@ -221,6 +221,8 @@ export class FeatureTool implements ExtensionDefinition {
 
         if (
           e.key.startsWith("size.") ||
+          e.key.startsWith("surface.") ||
+          e.key.startsWith("scene.") ||
           e.key.startsWith(`${this.configNamespace}.`)
         ) {
           void this.refreshGeometry();
@@ -607,8 +609,8 @@ export class FeatureTool implements ExtensionDefinition {
     if (!configService) return { ok: false };
 
     const sizeState = readSizeState(configService);
-    const dielineWidth = sizeState.actualWidthMm;
-    const dielineHeight = sizeState.actualHeightMm;
+    const dielineWidth = sizeState.sceneFrames.productionFrame.widthMm;
+    const dielineHeight = sizeState.sceneFrames.productionFrame.heightMm;
 
     let changed = false;
     const next = this.workingFeatures.map((f) => {
@@ -655,8 +657,8 @@ export class FeatureTool implements ExtensionDefinition {
     }
 
     const sizeState = readSizeState(configService);
-    const dielineWidth = sizeState.actualWidthMm;
-    const dielineHeight = sizeState.actualHeightMm;
+    const dielineWidth = sizeState.sceneFrames.productionFrame.widthMm;
+    const dielineHeight = sizeState.sceneFrames.productionFrame.heightMm;
 
     const result = completeFeaturesStrict(
       this.workingFeatures,

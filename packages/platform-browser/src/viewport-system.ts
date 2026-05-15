@@ -61,6 +61,15 @@ export class ViewportSystem {
     this.updateLayout();
   }
 
+  setOffset(offsetX: number, offsetY: number) {
+    if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY)) return;
+    this._layout = {
+      ...this._layout,
+      offsetX,
+      offsetY,
+    };
+  }
+
   private updateLayout() {
     this._layout = Coordinate.calculateLayout(
       this._containerSize,

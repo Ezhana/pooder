@@ -15,6 +15,7 @@ import {
   readSizeState,
   sanitizeMmValue,
   toMm,
+  type SceneFrameMm,
   type SizeConstraintMode,
 } from "../../shared/scene/scene-layout-model";
 import type { Unit } from "../../coordinate";
@@ -31,8 +32,11 @@ export type ChangedSizeField = "width" | "height" | "both";
 
 export interface SizeViewState {
   unit: Unit;
-  actualWidthMm: number;
-  actualHeightMm: number;
+  surfaceWidthMm: number;
+  surfaceHeightMm: number;
+  productionFrame: SceneFrameMm;
+  productionWidthMm: number;
+  productionHeightMm: number;
   constraintMode: SizeConstraintMode;
   aspectRatio: number;
   cutMode: string;
@@ -41,8 +45,8 @@ export interface SizeViewState {
   minMm: number;
   maxMm: number;
   stepMm: number;
-  actualWidth: number;
-  actualHeight: number;
+  productionWidth: number;
+  productionHeight: number;
 }
 
 export interface SizeToolOptions extends SizeCapabilityOptions {
@@ -116,18 +120,18 @@ export class SizeTool implements ExtensionDefinition {
           default: "mm",
         },
         {
-          id: "size.actualWidthMm",
+          id: "surface.widthMm",
           type: "number",
-          label: "Actual Width (mm)",
+          label: "Surface Width (mm)",
           min: 10,
           max: 2000,
           step: 0.1,
           default: 500,
         },
         {
-          id: "size.actualHeightMm",
+          id: "surface.heightMm",
           type: "number",
-          label: "Actual Height (mm)",
+          label: "Surface Height (mm)",
           min: 10,
           max: 2000,
           step: 0.1,
@@ -282,12 +286,22 @@ export class SizeTool implements ExtensionDefinition {
   private ensureDefaults(configService: ConfigurationService) {
     const state = readSizeState(configService);
     configService.update("size.unit", state.unit);
-    configService.update("size.actualWidthMm", state.actualWidthMm);
-    configService.update("size.actualHeightMm", state.actualHeightMm);
+    configService.update("surface.widthMm", state.surfaceWidthMm);
+    configService.update("surface.heightMm", state.surfaceHeightMm);
+    configService.update("scene.previewBounds", state.sceneFrames.previewBounds);
+    configService.update("scene.productionFrame", state.sceneFrames.productionFrame);
+    configService.update(
+      "scene.viewportFocusFrame",
+      state.sceneFrames.viewportFocusFrame ?? state.sceneFrames.productionFrame,
+    );
+    if (state.sceneFrames.exportFrame) {
+      configService.update("scene.exportFrame", state.sceneFrames.exportFrame);
+    }
     configService.update("size.constraintMode", state.constraintMode);
     configService.update(
       "size.aspectRatio",
-      state.actualWidthMm / Math.max(0.001, state.actualHeightMm),
+      state.sceneFrames.productionFrame.widthMm /
+        Math.max(0.001, state.sceneFrames.productionFrame.heightMm),
     );
     configService.update("size.cutMode", state.cutMode);
     configService.update("size.cutMarginMm", state.cutMarginMm);
@@ -307,10 +321,14 @@ export class SizeTool implements ExtensionDefinition {
     const configService = this.getConfigService();
     if (!configService) return null;
     const state = readSizeState(configService);
+    const productionFrame = state.sceneFrames.productionFrame;
     return {
       ...state,
-      actualWidth: fromMm(state.actualWidthMm, state.unit),
-      actualHeight: fromMm(state.actualHeightMm, state.unit),
+      productionFrame,
+      productionWidthMm: productionFrame.widthMm,
+      productionHeightMm: productionFrame.heightMm,
+      productionWidth: fromMm(productionFrame.widthMm, state.unit),
+      productionHeight: fromMm(productionFrame.heightMm, state.unit),
     };
   }
 
@@ -335,10 +353,11 @@ export class SizeTool implements ExtensionDefinition {
       stepMm: state.stepMm,
     };
 
+    const currentFrame = state.sceneFrames.productionFrame;
     let nextWidthMm =
-      providedWidthMm !== undefined ? providedWidthMm : state.actualWidthMm;
+      providedWidthMm !== undefined ? providedWidthMm : currentFrame.widthMm;
     let nextHeightMm =
-      providedHeightMm !== undefined ? providedHeightMm : state.actualHeightMm;
+      providedHeightMm !== undefined ? providedHeightMm : currentFrame.heightMm;
 
     if (state.constraintMode === "equal") {
       const anchor =
@@ -374,9 +393,23 @@ export class SizeTool implements ExtensionDefinition {
       }
     }
 
-    configService.update("size.actualWidthMm", nextWidthMm);
-    configService.update("size.actualHeightMm", nextHeightMm);
+    const centerX = currentFrame.xMm + currentFrame.widthMm / 2;
+    const centerY = currentFrame.yMm + currentFrame.heightMm / 2;
+    const nextProductionFrame = {
+      ...currentFrame,
+      xMm: centerX - nextWidthMm / 2,
+      yMm: centerY - nextHeightMm / 2,
+      widthMm: nextWidthMm,
+      heightMm: nextHeightMm,
+    };
+
+    configService.update("scene.productionFrame", nextProductionFrame);
+    configService.update("scene.viewportFocusFrame", nextProductionFrame);
     configService.update("size.unit", inputUnit);
+    configService.update(
+      "size.aspectRatio",
+      nextProductionFrame.widthMm / Math.max(0.001, nextProductionFrame.heightMm),
+    );
     this.emitStateChanged();
     return this.getStateForUI();
   }
@@ -386,23 +419,34 @@ export class SizeTool implements ExtensionDefinition {
     if (!configService) return null;
     const state = readSizeState(configService);
     const mode = normalizeConstraintMode(modeRaw);
+    const currentFrame = state.sceneFrames.productionFrame;
 
     configService.update("size.constraintMode", mode);
     if (mode === "lockAspect") {
-      const ratio = state.actualWidthMm / Math.max(0.001, state.actualHeightMm);
+      const ratio =
+        currentFrame.widthMm / Math.max(0.001, currentFrame.heightMm);
       configService.update("size.aspectRatio", ratio);
     }
     if (mode === "equal") {
       const value = sanitizeMmValue(
-        Math.max(state.actualWidthMm, state.actualHeightMm),
+        Math.max(currentFrame.widthMm, currentFrame.heightMm),
         {
           minMm: state.minMm,
           maxMm: state.maxMm,
           stepMm: state.stepMm,
         },
       );
-      configService.update("size.actualWidthMm", value);
-      configService.update("size.actualHeightMm", value);
+      const centerX = currentFrame.xMm + currentFrame.widthMm / 2;
+      const centerY = currentFrame.yMm + currentFrame.heightMm / 2;
+      const nextProductionFrame = {
+        ...currentFrame,
+        xMm: centerX - value / 2,
+        yMm: centerY - value / 2,
+        widthMm: value,
+        heightMm: value,
+      };
+      configService.update("scene.productionFrame", nextProductionFrame);
+      configService.update("scene.viewportFocusFrame", nextProductionFrame);
       configService.update("size.aspectRatio", 1);
     }
     this.emitStateChanged();

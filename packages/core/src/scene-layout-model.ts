@@ -8,9 +8,11 @@ import {
 } from "./dieline-shape";
 import type {
   CanvasService,
+  SceneFrameMm,
   SceneGeometrySnapshot,
   SceneLayoutSnapshot,
   SceneRect,
+  SurfaceSceneFrames,
   SizeConstraintMode,
   SizeState,
   CutMode,
@@ -19,8 +21,12 @@ import { parseLengthToMm } from "./units";
 
 export const DEFAULT_SIZE_STATE: SizeState = {
   unit: "mm",
-  actualWidthMm: 500,
-  actualHeightMm: 500,
+  surfaceWidthMm: 500,
+  surfaceHeightMm: 500,
+  sceneFrames: {
+    previewBounds: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
+    productionFrame: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
+  },
   constraintMode: "free",
   aspectRatio: 1,
   cutMode: "trim",
@@ -41,6 +47,58 @@ function clamp(value: number, min: number, max: number): number {
 function roundToStep(value: number, step: number): number {
   if (!Number.isFinite(step) || step <= 0) return value;
   return Math.round(value / step) * step;
+}
+
+function readLengthMm(
+  configService: ConfigurationService,
+  key: string,
+  fallback: number,
+): number {
+  const parsed = readOptionalLengthMm(configService, key);
+  return parsed === undefined ? fallback : parsed;
+}
+
+function readOptionalLengthMm(
+  configService: ConfigurationService,
+  key: string,
+): number | undefined {
+  const value = configService.get(key);
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? parseLengthToMm(value, "mm") : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = parseLengthToMm(value, "mm");
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeFrameMm(
+  value: unknown,
+  fallback: SceneFrameMm,
+): SceneFrameMm {
+  if (!isRecord(value)) return { ...fallback };
+  const xMm = Number(value.xMm);
+  const yMm = Number(value.yMm);
+  const widthMm = Number(value.widthMm);
+  const heightMm = Number(value.heightMm);
+
+  if (
+    !Number.isFinite(xMm) ||
+    !Number.isFinite(yMm) ||
+    !Number.isFinite(widthMm) ||
+    !Number.isFinite(heightMm) ||
+    widthMm <= 0 ||
+    heightMm <= 0
+  ) {
+    return { ...fallback };
+  }
+
+  return { xMm, yMm, widthMm, heightMm };
 }
 
 export function sanitizeMmValue(
@@ -155,20 +213,19 @@ export function readSizeState(configService: ConfigurationService): SizeState {
     Number(configService.get("size.stepMm", DEFAULT_SIZE_STATE.stepMm)),
   );
 
-  const actualWidthMm = sanitizeMmValue(
-    parseLengthToMm(
-      configService.get("size.actualWidthMm", DEFAULT_SIZE_STATE.actualWidthMm),
-      "mm",
+  const surfaceWidthMm = sanitizeMmValue(
+    readLengthMm(
+      configService,
+      "surface.widthMm",
+      DEFAULT_SIZE_STATE.surfaceWidthMm,
     ),
     { minMm, maxMm, stepMm },
   );
-  const actualHeightMm = sanitizeMmValue(
-    parseLengthToMm(
-      configService.get(
-        "size.actualHeightMm",
-        DEFAULT_SIZE_STATE.actualHeightMm,
-      ),
-      "mm",
+  const surfaceHeightMm = sanitizeMmValue(
+    readLengthMm(
+      configService,
+      "surface.heightMm",
+      DEFAULT_SIZE_STATE.surfaceHeightMm,
     ),
     { minMm, maxMm, stepMm },
   );
@@ -179,7 +236,7 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   const aspectRatio =
     Number.isFinite(aspectRaw) && aspectRaw > 0
       ? aspectRaw
-      : actualWidthMm / Math.max(0.001, actualHeightMm);
+      : surfaceWidthMm / Math.max(0.001, surfaceHeightMm);
 
   const cutMarginMm = Math.max(
     0,
@@ -193,11 +250,44 @@ export function readSizeState(configService: ConfigurationService): SizeState {
     "size.viewPadding",
     DEFAULT_SIZE_STATE.viewPadding,
   );
+  const defaultPreviewBounds = {
+    xMm: 0,
+    yMm: 0,
+    widthMm: surfaceWidthMm,
+    heightMm: surfaceHeightMm,
+  };
+  const previewBounds = normalizeFrameMm(
+    configService.get("scene.previewBounds"),
+    defaultPreviewBounds,
+  );
+  const productionFrame = normalizeFrameMm(
+    configService.get("scene.productionFrame"),
+    previewBounds,
+  );
+  const explicitExportFrame = isRecord(configService.get("scene.exportFrame"))
+    ? normalizeFrameMm(configService.get("scene.exportFrame"), productionFrame)
+    : undefined;
+  const explicitViewportFocusFrame = isRecord(
+    configService.get("scene.viewportFocusFrame"),
+  )
+    ? normalizeFrameMm(
+        configService.get("scene.viewportFocusFrame"),
+        productionFrame,
+      )
+    : undefined;
 
   return {
     unit,
-    actualWidthMm,
-    actualHeightMm,
+    surfaceWidthMm,
+    surfaceHeightMm,
+    sceneFrames: {
+      previewBounds,
+      productionFrame,
+      ...(explicitExportFrame ? { exportFrame: explicitExportFrame } : {}),
+      ...(explicitViewportFocusFrame
+        ? { viewportFocusFrame: explicitViewportFocusFrame }
+        : {}),
+    },
     constraintMode: normalizeConstraintMode(
       configService.get(
         "size.constraintMode",
@@ -216,38 +306,117 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   };
 }
 
-function rectByCenter(
-  centerX: number,
-  centerY: number,
-  width: number,
-  height: number,
+function rectByFrame(
+  frame: SceneFrameMm,
+  scale: number,
+  offsetX: number,
+  offsetY: number,
 ): SceneRect {
+  const left = offsetX + frame.xMm * scale;
+  const top = offsetY + frame.yMm * scale;
+  const width = frame.widthMm * scale;
+  const height = frame.heightMm * scale;
   return {
-    left: centerX - width / 2,
-    top: centerY - height / 2,
+    left,
+    top,
     width,
     height,
-    centerX,
-    centerY,
+    centerX: left + width / 2,
+    centerY: top + height / 2,
   };
 }
 
-function getCutSizeMm(size: SizeState): { widthMm: number; heightMm: number } {
+function getCutFrameMm(size: SizeState, frame: SceneFrameMm): SceneFrameMm {
   if (size.cutMode === "trim") {
-    return { widthMm: size.actualWidthMm, heightMm: size.actualHeightMm };
+    return { ...frame };
   }
 
   const delta = size.cutMarginMm * 2;
   if (size.cutMode === "outset") {
     return {
-      widthMm: size.actualWidthMm + delta,
-      heightMm: size.actualHeightMm + delta,
+      xMm: frame.xMm - size.cutMarginMm,
+      yMm: frame.yMm - size.cutMarginMm,
+      widthMm: frame.widthMm + delta,
+      heightMm: frame.heightMm + delta,
     };
   }
 
+  const widthMm = Math.max(size.minMm, frame.widthMm - delta);
+  const heightMm = Math.max(size.minMm, frame.heightMm - delta);
   return {
-    widthMm: Math.max(size.minMm, size.actualWidthMm - delta),
-    heightMm: Math.max(size.minMm, size.actualHeightMm - delta),
+    xMm: frame.xMm + (frame.widthMm - widthMm) / 2,
+    yMm: frame.yMm + (frame.heightMm - heightMm) / 2,
+    widthMm,
+    heightMm,
+  };
+}
+
+function boundingRect(left: SceneRect, right: SceneRect): SceneRect {
+  const minLeft = Math.min(left.left, right.left);
+  const minTop = Math.min(left.top, right.top);
+  const maxRight = Math.max(left.left + left.width, right.left + right.width);
+  const maxBottom = Math.max(left.top + left.height, right.top + right.height);
+  const width = maxRight - minLeft;
+  const height = maxBottom - minTop;
+  return {
+    left: minLeft,
+    top: minTop,
+    width,
+    height,
+    centerX: minLeft + width / 2,
+    centerY: minTop + height / 2,
+  };
+}
+
+type ResolvedSurfaceSceneFrames = SurfaceSceneFrames & {
+  exportFrame: SceneFrameMm;
+  viewportFocusFrame: SceneFrameMm;
+};
+
+function deriveSceneFrames(size: SizeState): ResolvedSurfaceSceneFrames {
+  const { previewBounds, productionFrame, viewportFocusFrame } =
+    size.sceneFrames;
+  return {
+    previewBounds,
+    productionFrame,
+    exportFrame:
+      size.sceneFrames.exportFrame ?? getCutFrameMm(size, productionFrame),
+    viewportFocusFrame: viewportFocusFrame ?? productionFrame,
+  };
+}
+
+function resolveFrameOffset(
+  frame: SceneFrameMm,
+  focusFrame: SceneFrameMm,
+  scale: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  padding: number,
+): { offsetX: number; offsetY: number } {
+  const viewportCenterX = canvasWidth / 2;
+  const viewportCenterY = canvasHeight / 2;
+  const initialOffsetX =
+    viewportCenterX - (focusFrame.xMm + focusFrame.widthMm / 2) * scale;
+  const initialOffsetY =
+    viewportCenterY - (focusFrame.yMm + focusFrame.heightMm / 2) * scale;
+
+  const offsetLeftX = padding - frame.xMm * scale;
+  const offsetRightX = canvasWidth - padding - (frame.xMm + frame.widthMm) * scale;
+  const offsetTopY = padding - frame.yMm * scale;
+  const offsetBottomY =
+    canvasHeight - padding - (frame.yMm + frame.heightMm) * scale;
+
+  return {
+    offsetX: clamp(
+      initialOffsetX,
+      Math.min(offsetLeftX, offsetRightX),
+      Math.max(offsetLeftX, offsetRightX),
+    ),
+    offsetY: clamp(
+      initialOffsetY,
+      Math.min(offsetTopY, offsetBottomY),
+      Math.max(offsetTopY, offsetBottomY),
+    ),
   };
 }
 
@@ -260,9 +429,11 @@ export function computeSceneLayout(
   const canvasHeight = viewportSize.height || 0;
   if (canvasWidth <= 0 || canvasHeight <= 0) return null;
 
-  const { widthMm: cutWidthMm, heightMm: cutHeightMm } = getCutSizeMm(size);
-  const viewWidthMm = Math.max(size.actualWidthMm, cutWidthMm);
-  const viewHeightMm = Math.max(size.actualHeightMm, cutHeightMm);
+  const sceneFrames = deriveSceneFrames(size);
+  const { previewBounds, productionFrame, exportFrame, viewportFocusFrame } =
+    sceneFrames;
+  const viewWidthMm = previewBounds.widthMm;
+  const viewHeightMm = previewBounds.heightMm;
   if (
     !Number.isFinite(viewWidthMm) ||
     !Number.isFinite(viewHeightMm) ||
@@ -277,6 +448,19 @@ export function computeSceneLayout(
     canvasWidth,
     canvasHeight,
   );
+  const baseLayout = Coordinate.calculateLayout(
+    { width: canvasWidth, height: canvasHeight },
+    { width: viewWidthMm, height: viewHeightMm },
+    viewPaddingPx,
+  );
+  const { offsetX, offsetY } = resolveFrameOffset(
+    previewBounds,
+    viewportFocusFrame,
+    baseLayout.scale,
+    canvasWidth,
+    canvasHeight,
+    viewPaddingPx,
+  );
   const layout =
     canvasService.updateViewportLayout({
       containerWidth: canvasWidth,
@@ -284,12 +468,9 @@ export function computeSceneLayout(
       padding: viewPaddingPx,
       widthMm: viewWidthMm,
       heightMm: viewHeightMm,
-    }) ??
-    Coordinate.calculateLayout(
-      { width: canvasWidth, height: canvasHeight },
-      { width: viewWidthMm, height: viewHeightMm },
-      viewPaddingPx,
-    );
+      offsetX,
+      offsetY,
+    }) ?? { ...baseLayout, offsetX, offsetY };
   if (
     !Number.isFinite(layout.scale) ||
     !Number.isFinite(layout.offsetX) ||
@@ -299,21 +480,19 @@ export function computeSceneLayout(
     return null;
   }
 
-  const centerX = layout.offsetX + layout.width / 2;
-  const centerY = layout.offsetY + layout.height / 2;
-  const trimWidthPx = size.actualWidthMm * layout.scale;
-  const trimHeightPx = size.actualHeightMm * layout.scale;
-  const cutWidthPx = cutWidthMm * layout.scale;
-  const cutHeightPx = cutHeightMm * layout.scale;
-
-  const trimRect = rectByCenter(centerX, centerY, trimWidthPx, trimHeightPx);
-  const cutRect = rectByCenter(centerX, centerY, cutWidthPx, cutHeightPx);
-  const bleedRect = rectByCenter(
-    centerX,
-    centerY,
-    Math.max(trimWidthPx, cutWidthPx),
-    Math.max(trimHeightPx, cutHeightPx),
+  const trimRect = rectByFrame(
+    productionFrame,
+    layout.scale,
+    layout.offsetX,
+    layout.offsetY,
   );
+  const cutRect = rectByFrame(
+    exportFrame,
+    layout.scale,
+    layout.offsetX,
+    layout.offsetY,
+  );
+  const bleedRect = boundingRect(trimRect, cutRect);
 
   return {
     scale: layout.scale,
@@ -322,10 +501,10 @@ export function computeSceneLayout(
     trimRect,
     cutRect,
     bleedRect,
-    trimWidthMm: size.actualWidthMm,
-    trimHeightMm: size.actualHeightMm,
-    cutWidthMm,
-    cutHeightMm,
+    trimWidthMm: productionFrame.widthMm,
+    trimHeightMm: productionFrame.heightMm,
+    cutWidthMm: exportFrame.widthMm,
+    cutHeightMm: exportFrame.heightMm,
     cutMode: size.cutMode,
     cutMarginMm: size.cutMarginMm,
   };

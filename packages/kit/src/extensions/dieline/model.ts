@@ -135,8 +135,8 @@ export function readDielineState(
       configService.get(configKey("shapeStyle"), base.shapeStyle),
       base.shapeStyle,
     ),
-    width: sizeState.actualWidthMm,
-    height: sizeState.actualHeightMm,
+    width: sizeState.sceneFrames.productionFrame.widthMm,
+    height: sizeState.sceneFrames.productionFrame.heightMm,
     radius: parseLengthToMm(
       configService.get(configKey("radius"), base.radius),
       "mm",

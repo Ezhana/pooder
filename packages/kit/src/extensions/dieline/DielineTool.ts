@@ -175,6 +175,8 @@ export class DielineTool implements ExtensionDefinition {
     configService.onAnyChange((e: { key: string; value: any }) => {
       if (
         e.key.startsWith("size.") ||
+        e.key.startsWith("surface.") ||
+        e.key.startsWith("scene.") ||
         e.key.startsWith(`${this.configNamespace}.`)
       ) {
         Object.assign(

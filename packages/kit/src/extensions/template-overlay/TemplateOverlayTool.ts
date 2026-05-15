@@ -18,7 +18,7 @@ import type {
 } from "@pooder/document/kit";
 import {
   type FrameRect,
-  resolveSurfaceFrameRect,
+  resolvePreviewFrameRect,
 } from "../../shared/scene/frame";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import { IMAGE_OBJECT_LAYER_ID } from "../../shared/constants/layers";
@@ -137,7 +137,11 @@ export class TemplateOverlayTool implements ExtensionDefinition {
         if (event.key === this.configKey) {
           this.config = normalizeTemplateOverlayConfig(event.value);
           this.refresh();
-        } else if (event.key.startsWith("size.")) {
+        } else if (
+          event.key.startsWith("size.") ||
+          event.key.startsWith("surface.") ||
+          event.key.startsWith("scene.")
+        ) {
           this.refresh();
         }
       },
@@ -292,7 +296,7 @@ export class TemplateOverlayTool implements ExtensionDefinition {
   }
 
   private getSurfaceFrameRect(): FrameRect {
-    return resolveSurfaceFrameRect(this.canvasService, this.getConfigService());
+    return resolvePreviewFrameRect(this.getConfigService());
   }
 
   private applyRuntimePatches(): void {

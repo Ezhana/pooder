@@ -15,8 +15,10 @@ export {
 export type {
   CutMode,
   SceneGeometrySnapshot,
+  SceneFrameMm,
   SceneLayoutSnapshot,
   SceneRect,
+  SurfaceSceneFrames,
   SizeConstraintMode,
   SizeState,
 } from "@pooder/core";

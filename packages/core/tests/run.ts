@@ -54,6 +54,8 @@ class FakeLayoutCanvasService implements CanvasService {
     padding: number;
     widthMm: number;
     heightMm: number;
+    offsetX?: number;
+    offsetY?: number;
   }) {
     const availableWidth = Math.max(0, options.containerWidth - options.padding * 2);
     const availableHeight = Math.max(0, options.containerHeight - options.padding * 2);
@@ -65,8 +67,12 @@ class FakeLayoutCanvasService implements CanvasService {
     const height = options.heightMm * scale;
     return {
       scale,
-      offsetX: (options.containerWidth - width) / 2,
-      offsetY: (options.containerHeight - height) / 2,
+      offsetX: Number.isFinite(options.offsetX)
+        ? Number(options.offsetX)
+        : (options.containerWidth - width) / 2,
+      offsetY: Number.isFinite(options.offsetY)
+        ? Number(options.offsetY)
+        : (options.containerHeight - height) / 2,
       width,
       height,
     };
@@ -1550,36 +1556,44 @@ async function testSceneLayoutModelDefaultsAndPadding() {
 async function testSceneLayoutModelComputesCutModes() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeSceneLayout(canvas, {
-    actualHeightMm: 100,
-    actualWidthMm: 100,
     aspectRatio: 1,
     constraintMode: "free",
     cutMarginMm: 10,
     cutMode: "outset",
     maxMm: 2000,
     minMm: 10,
+    sceneFrames: {
+      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+    },
     stepMm: 0.1,
+    surfaceHeightMm: 100,
+    surfaceWidthMm: 100,
     unit: "mm",
     viewPadding: "16%",
   });
 
   assert(layout, "outset layout should resolve");
-  assertClose(layout.scale, 3.4);
-  assertClose(layout.cutRect.left, 196);
-  assertClose(layout.cutRect.width, 408);
-  assertClose(layout.trimRect.left, 230);
-  assertClose(layout.trimRect.width, 340);
+  assertClose(layout.scale, 4.08);
+  assertClose(layout.trimRect.left, 196);
+  assertClose(layout.trimRect.width, 408);
+  assertClose(layout.cutRect.left, 155.2);
+  assertClose(layout.cutRect.width, 489.6);
 
   const insetLayout = computeSceneLayout(canvas, {
-    actualHeightMm: 100,
-    actualWidthMm: 100,
     aspectRatio: 1,
     constraintMode: "free",
     cutMarginMm: 10,
     cutMode: "inset",
     maxMm: 2000,
     minMm: 10,
+    sceneFrames: {
+      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+    },
     stepMm: 0.1,
+    surfaceHeightMm: 100,
+    surfaceWidthMm: 100,
     unit: "mm",
     viewPadding: "16%",
   });
@@ -1589,18 +1603,112 @@ async function testSceneLayoutModelComputesCutModes() {
   assertClose(insetLayout.cutRect.width, 326.4);
 }
 
+async function testSceneLayoutModelPositionsProductionFrame() {
+  const canvas = new FakeLayoutCanvasService(800, 600);
+  const layout = computeSceneLayout(canvas, {
+    aspectRatio: 1299 / 709,
+    constraintMode: "free",
+    cutMarginMm: 0,
+    cutMode: "trim",
+    maxMm: 2000,
+    minMm: 0.1,
+    sceneFrames: {
+      previewBounds: { xMm: 0, yMm: 0, widthMm: 1299, heightMm: 709 },
+      productionFrame: { xMm: 265, yMm: 319, widthMm: 770, heightMm: 300 },
+    },
+    stepMm: 0.001,
+    surfaceHeightMm: 709,
+    surfaceWidthMm: 1299,
+    unit: "mm",
+    viewPadding: 0,
+  });
+
+  assert(layout, "production frame layout should resolve");
+  assertClose(layout.scale, 800 / 1299);
+  assertClose(layout.trimRect.centerX, 650 * layout.scale);
+  assertClose(layout.trimRect.left, 265 * layout.scale);
+  assertClose(
+    layout.trimRect.top,
+    300 - 150 * layout.scale,
+  );
+  assertClose(layout.trimRect.width, 770 * layout.scale);
+  assertClose(layout.trimRect.height, 300 * layout.scale);
+  assertClose(layout.cutRect.left, layout.trimRect.left);
+  assertClose(layout.cutRect.width, layout.trimRect.width);
+  assertEqual(layout.trimWidthMm, 770);
+  assertEqual(layout.trimHeightMm, 300);
+}
+
+async function testSceneLayoutModelClampsFocusedProductionFrame() {
+  const canvas = new FakeLayoutCanvasService(800, 600);
+  const layout = computeSceneLayout(canvas, {
+    aspectRatio: 1,
+    constraintMode: "free",
+    cutMarginMm: 0,
+    cutMode: "trim",
+    maxMm: 2000,
+    minMm: 0.1,
+    sceneFrames: {
+      previewBounds: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
+      productionFrame: { xMm: 0, yMm: 0, widthMm: 120, heightMm: 120 },
+    },
+    stepMm: 0.001,
+    surfaceHeightMm: 500,
+    surfaceWidthMm: 500,
+    unit: "mm",
+    viewPadding: 0,
+  });
+
+  assert(layout, "edge production frame layout should resolve");
+  assertClose(layout.scale, 600 / 500);
+  assertClose(layout.trimRect.left, 200);
+  assertClose(layout.trimRect.top, 0);
+}
+
+async function testSceneLayoutModelUsesExplicitExportFrame() {
+  const canvas = new FakeLayoutCanvasService(800, 600);
+  const layout = computeSceneLayout(canvas, {
+    aspectRatio: 1,
+    constraintMode: "free",
+    cutMarginMm: 20,
+    cutMode: "outset",
+    maxMm: 2000,
+    minMm: 0.1,
+    sceneFrames: {
+      exportFrame: { xMm: 10, yMm: 15, widthMm: 80, heightMm: 70 },
+      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      productionFrame: { xMm: 20, yMm: 20, widthMm: 50, heightMm: 40 },
+    },
+    stepMm: 0.001,
+    surfaceHeightMm: 100,
+    surfaceWidthMm: 100,
+    unit: "mm",
+    viewPadding: 0,
+  });
+
+  assert(layout, "explicit export frame layout should resolve");
+  assertEqual(layout.cutWidthMm, 80);
+  assertEqual(layout.cutHeightMm, 70);
+  assertClose(layout.cutRect.left, 190);
+  assertClose(layout.cutRect.width, 80 * layout.scale);
+}
+
 async function testSceneLayoutModelBuildsDielineGeometry() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeSceneLayout(canvas, {
-    actualHeightMm: 100,
-    actualWidthMm: 100,
     aspectRatio: 1,
     constraintMode: "free",
     cutMarginMm: 10,
     cutMode: "outset",
     maxMm: 2000,
     minMm: 10,
+    sceneFrames: {
+      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+    },
     stepMm: 0.1,
+    surfaceHeightMm: 100,
+    surfaceWidthMm: 100,
     unit: "mm",
     viewPadding: "16%",
   });
@@ -1626,8 +1734,8 @@ async function testSceneLayoutModelBuildsDielineGeometry() {
   assertEqual(geometry.shapeStyle.fitMode, "contain");
   assertEqual(geometry.shapeStyle.lobeSpread, 1);
   assertEqual(geometry.width, layout.trimRect.width);
-  assertClose(geometry.radius, 17);
-  assertClose(geometry.offset, 34);
+  assertClose(geometry.radius, 20.4);
+  assertClose(geometry.offset, 40.8);
   assertEqual(geometry.customSourceWidthPx, 320);
   assertEqual(geometry.customSourceHeightPx, 240);
 }
@@ -1722,6 +1830,18 @@ async function main() {
       testSceneLayoutModelDefaultsAndPadding,
     ],
     ["computes scene cut mode layouts", testSceneLayoutModelComputesCutModes],
+    [
+      "positions trim and cut rectangles from production frame",
+      testSceneLayoutModelPositionsProductionFrame,
+    ],
+    [
+      "clamps focused production frame to keep preview visible",
+      testSceneLayoutModelClampsFocusedProductionFrame,
+    ],
+    [
+      "uses explicit export frame instead of derived cut frame",
+      testSceneLayoutModelUsesExplicitExportFrame,
+    ],
     [
       "builds scene dieline geometry from config",
       testSceneLayoutModelBuildsDielineGeometry,
