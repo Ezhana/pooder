@@ -311,6 +311,49 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterReportsSyncState() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  await adapter.flush();
+
+  const states: ReturnType<FabricRenderGraphAdapter["getSyncState"]>[] = [];
+  const stop = adapter.onSyncStateChange((state) => {
+    states.push(state);
+  }, { immediate: true });
+
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "background",
+      subject: { kind: "object", surfaceId: "s1", layerId: "bg", objectId: "bg" },
+      visual: { type: "rect" },
+      ordering: { layerId: "bg", stack: 0, layerOrder: 0 },
+      props: { width: 10, height: 10 },
+    },
+  ]);
+
+  assert(
+    states.some((state) => state.loading),
+    "adapter should report loading while graph sync is pending",
+  );
+
+  await adapter.flush();
+  const finalState = states[states.length - 1];
+  assert(finalState, "adapter should report a final sync state");
+  assertEqual(finalState.loading, false, "adapter should report idle after flush");
+  assertEqual(finalState.pending, 0, "adapter should clear pending sync count");
+  assert(
+    finalState.generation > 0,
+    "adapter should expose a monotonic sync generation",
+  );
+
+  stop();
+  await runtime.dispose();
+}
+
 async function testFabricRenderGraphAdapterPreservesScreenSpace() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -546,6 +589,7 @@ async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["registers render graph adapter in browser host", testAttachRegistersRenderGraphAdapter],
     ["builds graph adapter draw list", testFabricRenderGraphAdapterBuildsDrawList],
+    ["reports graph adapter sync state", testFabricRenderGraphAdapterReportsSyncState],
     ["preserves graph coordinate space", testFabricRenderGraphAdapterPreservesScreenSpace],
     ["projects without mutating source Fabric objects", testProjectionSuppressesSourceInGraphOnly],
     ["reconciles stale objects and clip cleanup", testCanvasReconcileRemovesStaleObjectsAndClearsClip],

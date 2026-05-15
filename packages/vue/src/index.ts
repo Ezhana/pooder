@@ -7,4 +7,8 @@ export {
   POODER_RUNTIME_KEY,
   usePooderRuntime,
 } from "./runtime";
+export type {
+  PooderCanvasHostReadyPayload,
+  PooderCanvasHostRenderLoadingPayload,
+} from "./canvas-host";
 export type { PooderRuntimeLike } from "./runtime";

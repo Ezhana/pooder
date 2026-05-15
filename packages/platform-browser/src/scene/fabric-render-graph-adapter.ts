@@ -26,6 +26,17 @@ import { CANVAS_SERVICE } from "../tokens";
 
 export const RENDER_GRAPH_RENDER_SCOPE = "core-render-graph";
 
+export interface FabricRenderGraphSyncState {
+  error?: unknown;
+  generation: number;
+  loading: boolean;
+  pending: number;
+}
+
+export type FabricRenderGraphSyncStateListener = (
+  state: FabricRenderGraphSyncState,
+) => void;
+
 type FabricRenderTargetCanvasService = CanvasService & {
   reconcileRenderGraphDrawList(
     items: FabricRenderTargetItem[],
@@ -44,6 +55,11 @@ export class FabricRenderGraphAdapter implements Service {
   private graphSubscription?: { dispose(): void };
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
+  private syncGeneration = 0;
+  private completedSyncGeneration = 0;
+  private syncError: unknown;
+  private readonly syncStateListeners =
+    new Set<FabricRenderGraphSyncStateListener>();
 
   private readonly onRuntimeVisibilityChange = () => {
     this.requestSync();
@@ -85,28 +101,70 @@ export class FabricRenderGraphAdapter implements Service {
     this.eventBus = undefined;
     this.syncRequested = false;
     this.syncPromise = null;
+    this.completedSyncGeneration = this.syncGeneration;
+    this.emitSyncState();
+    this.syncStateListeners.clear();
   }
 
   requestSync() {
     this.syncRequested = true;
+    this.syncGeneration += 1;
+    this.syncError = undefined;
+    this.emitSyncState();
     if (this.syncPromise) return this.syncPromise;
 
+    let syncError: unknown;
     this.syncPromise = Promise.resolve()
       .then(() => this.runSyncLoop())
       .catch((error) => {
+        syncError = error;
+        this.syncError = error;
         console.error("[FabricRenderGraphAdapter] graph sync failed.", error);
       })
       .finally(() => {
         this.syncPromise = null;
         if (this.syncRequested) {
           void this.requestSync();
+          return;
         }
+        this.completedSyncGeneration = this.syncGeneration;
+        this.syncError = syncError;
+        this.emitSyncState();
       });
     return this.syncPromise;
   }
 
   async flush(): Promise<void> {
     await this.requestSync();
+  }
+
+  getSyncState(): FabricRenderGraphSyncState {
+    const pending = Math.max(0, this.syncGeneration - this.completedSyncGeneration);
+    return {
+      ...(this.syncError === undefined ? {} : { error: this.syncError }),
+      generation: this.syncGeneration,
+      loading: pending > 0 || Boolean(this.syncPromise) || this.syncRequested,
+      pending,
+    };
+  }
+
+  onSyncStateChange(
+    listener: FabricRenderGraphSyncStateListener,
+    options: { immediate?: boolean } = {},
+  ): () => void {
+    this.syncStateListeners.add(listener);
+    if (options.immediate) {
+      listener(this.getSyncState());
+    }
+
+    return () => {
+      this.syncStateListeners.delete(listener);
+    };
+  }
+
+  private emitSyncState() {
+    const state = this.getSyncState();
+    this.syncStateListeners.forEach((listener) => listener(state));
   }
 
   private attachRuntimeVisibilityEvents() {

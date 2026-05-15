@@ -11,13 +11,18 @@ import {
   type BrowserHostAttachment,
 } from "@pooder/platform-browser";
 import { usePooderRuntime, type PooderRuntimeLike } from "./runtime";
+import type {
+  PooderCanvasHostReadyPayload,
+  PooderCanvasHostRenderLoadingPayload,
+} from "./canvas-host";
 
 const props = defineProps<{
   runtime?: PooderRuntimeLike;
 }>();
 
 const emit = defineEmits<{
-  (e: "ready"): void;
+  (e: "ready", payload: PooderCanvasHostReadyPayload): void;
+  (e: "render-loading-change", payload: PooderCanvasHostRenderLoadingPayload): void;
 }>();
 
 const injectedRuntime = props.runtime ? null : usePooderRuntime();
@@ -25,9 +30,34 @@ const container = ref<HTMLDivElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 
 let browserHost: BrowserHostAttachment | null = null;
+let renderLoadingFrame = 0;
+let stopRenderSyncStateChange: null | (() => void) = null;
 
 function getRuntime(): PooderRuntimeLike {
   return props.runtime ?? injectedRuntime!;
+}
+
+function waitForNextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+function emitRenderLoadingChange(payload: PooderCanvasHostRenderLoadingPayload) {
+  if (renderLoadingFrame) {
+    window.cancelAnimationFrame(renderLoadingFrame);
+    renderLoadingFrame = 0;
+  }
+
+  if (payload.loading) {
+    emit("render-loading-change", payload);
+    return;
+  }
+
+  renderLoadingFrame = window.requestAnimationFrame(() => {
+    renderLoadingFrame = 0;
+    emit("render-loading-change", payload);
+  });
 }
 
 onMounted(() => {
@@ -41,10 +71,34 @@ onMounted(() => {
     container: container.value,
   });
 
-  emit("ready");
+  const host = browserHost;
+  stopRenderSyncStateChange = host.fabricRenderGraphAdapter.onSyncStateChange(
+    (state) => {
+      emitRenderLoadingChange({
+        ...(state.error === undefined ? {} : { error: state.error }),
+        generation: state.generation,
+        loading: state.loading,
+        pending: state.pending,
+      });
+    },
+    { immediate: true },
+  );
+
+  emit("ready", {
+    flushRender: async () => {
+      await host.fabricRenderGraphAdapter.flush();
+      await waitForNextAnimationFrame();
+    },
+  });
 });
 
 onUnmounted(() => {
+  stopRenderSyncStateChange?.();
+  stopRenderSyncStateChange = null;
+  if (renderLoadingFrame) {
+    window.cancelAnimationFrame(renderLoadingFrame);
+    renderLoadingFrame = 0;
+  }
   browserHost?.dispose();
   browserHost = null;
 });
