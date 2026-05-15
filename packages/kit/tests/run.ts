@@ -520,6 +520,10 @@ function testTemplateOverlayConfig() {
       render: {
         src: "",
       },
+      small: {
+        src: "",
+        enabled: false,
+      },
       unknown: {
         src: "/unknown.png",
       },
@@ -560,6 +564,16 @@ function testTemplateOverlayConfig() {
   assert(
     !normalized.slots.render,
     "template overlay should drop empty src slots",
+  );
+  assertEqual(
+    normalized.slots.small?.src,
+    "",
+    "template overlay should preserve disabled empty slots",
+  );
+  assertEqual(
+    normalized.slots.small?.enabled,
+    false,
+    "template overlay should preserve disabled empty slot state",
   );
   assert(
     !("unknown" in normalized.slots),

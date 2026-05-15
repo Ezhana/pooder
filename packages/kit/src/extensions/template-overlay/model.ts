@@ -140,15 +140,18 @@ export const normalizeTemplateOverlayConfig = (
     if (!isRecord(rawSlot)) return;
 
     const src = typeof rawSlot.src === "string" ? rawSlot.src.trim() : "";
-    if (!src) return;
+    const enabled = typeof rawSlot.enabled === "boolean"
+      ? rawSlot.enabled
+      : undefined;
+    if (!src && enabled !== false) return;
 
     const normalized: TemplateOverlaySlotConfig = { src };
     const opacity = clampOpacity(rawSlot.opacity);
     if (opacity !== undefined) {
       normalized.opacity = opacity;
     }
-    if (typeof rawSlot.enabled === "boolean") {
-      normalized.enabled = rawSlot.enabled;
+    if (enabled !== undefined) {
+      normalized.enabled = enabled;
     }
     const placement = normalizePlacement(rawSlot.placement);
     if (placement) {
