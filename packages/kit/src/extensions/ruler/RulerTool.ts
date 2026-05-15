@@ -167,7 +167,6 @@ export class RulerTool implements ExtensionDefinition {
         }
       } else if (
         e.key.startsWith("size.") ||
-        e.key.startsWith("surface.") ||
         e.key.startsWith("scene.")
       ) {
         shouldUpdate = true;

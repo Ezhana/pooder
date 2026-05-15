@@ -1553,22 +1553,19 @@ async function testSceneLayoutModelDefaultsAndPadding() {
   );
 }
 
-async function testSceneLayoutModelComputesCutModes() {
+async function testSceneLayoutModelUsesExportFrames() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
-    cutMarginMm: 10,
-    cutMode: "outset",
     maxMm: 2000,
     minMm: 10,
     sceneFrames: {
+      exportFrame: { xMm: -10, yMm: -10, widthMm: 120, heightMm: 120 },
       previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
       productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
     },
     stepMm: 0.1,
-    surfaceHeightMm: 100,
-    surfaceWidthMm: 100,
     unit: "mm",
     viewPadding: "16%",
   });
@@ -1583,17 +1580,14 @@ async function testSceneLayoutModelComputesCutModes() {
   const insetLayout = computeSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
-    cutMarginMm: 10,
-    cutMode: "inset",
     maxMm: 2000,
     minMm: 10,
     sceneFrames: {
+      exportFrame: { xMm: 10, yMm: 10, widthMm: 80, heightMm: 80 },
       previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
       productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
     },
     stepMm: 0.1,
-    surfaceHeightMm: 100,
-    surfaceWidthMm: 100,
     unit: "mm",
     viewPadding: "16%",
   });
@@ -1608,8 +1602,6 @@ async function testSceneLayoutModelPositionsProductionFrame() {
   const layout = computeSceneLayout(canvas, {
     aspectRatio: 1299 / 709,
     constraintMode: "free",
-    cutMarginMm: 0,
-    cutMode: "trim",
     maxMm: 2000,
     minMm: 0.1,
     sceneFrames: {
@@ -1617,8 +1609,6 @@ async function testSceneLayoutModelPositionsProductionFrame() {
       productionFrame: { xMm: 265, yMm: 319, widthMm: 770, heightMm: 300 },
     },
     stepMm: 0.001,
-    surfaceHeightMm: 709,
-    surfaceWidthMm: 1299,
     unit: "mm",
     viewPadding: 0,
   });
@@ -1644,8 +1634,6 @@ async function testSceneLayoutModelClampsFocusedProductionFrame() {
   const layout = computeSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
-    cutMarginMm: 0,
-    cutMode: "trim",
     maxMm: 2000,
     minMm: 0.1,
     sceneFrames: {
@@ -1653,8 +1641,6 @@ async function testSceneLayoutModelClampsFocusedProductionFrame() {
       productionFrame: { xMm: 0, yMm: 0, widthMm: 120, heightMm: 120 },
     },
     stepMm: 0.001,
-    surfaceHeightMm: 500,
-    surfaceWidthMm: 500,
     unit: "mm",
     viewPadding: 0,
   });
@@ -1670,8 +1656,6 @@ async function testSceneLayoutModelUsesExplicitExportFrame() {
   const layout = computeSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
-    cutMarginMm: 20,
-    cutMode: "outset",
     maxMm: 2000,
     minMm: 0.1,
     sceneFrames: {
@@ -1680,8 +1664,6 @@ async function testSceneLayoutModelUsesExplicitExportFrame() {
       productionFrame: { xMm: 20, yMm: 20, widthMm: 50, heightMm: 40 },
     },
     stepMm: 0.001,
-    surfaceHeightMm: 100,
-    surfaceWidthMm: 100,
     unit: "mm",
     viewPadding: 0,
   });
@@ -1698,17 +1680,14 @@ async function testSceneLayoutModelBuildsDielineGeometry() {
   const layout = computeSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
-    cutMarginMm: 10,
-    cutMode: "outset",
     maxMm: 2000,
     minMm: 10,
     sceneFrames: {
+      exportFrame: { xMm: -10, yMm: -10, widthMm: 120, heightMm: 120 },
       previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
       productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
     },
     stepMm: 0.1,
-    surfaceHeightMm: 100,
-    surfaceWidthMm: 100,
     unit: "mm",
     viewPadding: "16%",
   });
@@ -1829,7 +1808,7 @@ async function main() {
       "resolves scene layout defaults and responsive padding",
       testSceneLayoutModelDefaultsAndPadding,
     ],
-    ["computes scene cut mode layouts", testSceneLayoutModelComputesCutModes],
+    ["computes scene export frame layouts", testSceneLayoutModelUsesExportFrames],
     [
       "positions trim and cut rectangles from production frame",
       testSceneLayoutModelPositionsProductionFrame,

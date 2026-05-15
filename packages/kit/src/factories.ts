@@ -6,7 +6,6 @@ import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImagePlacementCapabilityExtension } from "./extensions/image";
 import { RulerCapabilityExtension } from "./extensions/ruler";
-import { SizeCapabilityExtension } from "./extensions/size";
 import { TemplateOverlayCapabilityExtension } from "./extensions/template-overlay";
 import { WhiteInkCapabilityExtension } from "./extensions/white-ink";
 
@@ -37,10 +36,6 @@ export const createFeatureCapability = (
 export const createImagePlacementCapability = (
   options?: ConstructorParameters<typeof ImagePlacementCapabilityExtension>[0],
 ) => new ImagePlacementCapabilityExtension(options);
-
-export const createSizeCapability = (
-  options?: ConstructorParameters<typeof SizeCapabilityExtension>[0],
-) => new SizeCapabilityExtension(options);
 
 export const createTemplateOverlayCapability = (
   options?: ConstructorParameters<typeof TemplateOverlayCapabilityExtension>[0],

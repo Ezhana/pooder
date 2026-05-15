@@ -221,7 +221,6 @@ export class FeatureTool implements ExtensionDefinition {
 
         if (
           e.key.startsWith("size.") ||
-          e.key.startsWith("surface.") ||
           e.key.startsWith("scene.") ||
           e.key.startsWith(`${this.configNamespace}.`)
         ) {

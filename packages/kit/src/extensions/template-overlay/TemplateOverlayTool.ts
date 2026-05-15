@@ -139,7 +139,6 @@ export class TemplateOverlayTool implements ExtensionDefinition {
           this.refresh();
         } else if (
           event.key.startsWith("size.") ||
-          event.key.startsWith("surface.") ||
           event.key.startsWith("scene.")
         ) {
           this.refresh();

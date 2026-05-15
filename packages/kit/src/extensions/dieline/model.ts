@@ -124,6 +124,8 @@ export function readDielineState(
   const sourceHeight = Number(
     configService.get(configKey("customSourceHeightPx"), 0),
   );
+  const productionFrame = sizeState.sceneFrames.productionFrame;
+  const exportFrame = sizeState.sceneFrames.exportFrame ?? productionFrame;
 
   return {
     ...base,
@@ -135,19 +137,14 @@ export function readDielineState(
       configService.get(configKey("shapeStyle"), base.shapeStyle),
       base.shapeStyle,
     ),
-    width: sizeState.sceneFrames.productionFrame.widthMm,
-    height: sizeState.sceneFrames.productionFrame.heightMm,
+    width: productionFrame.widthMm,
+    height: productionFrame.heightMm,
     radius: parseLengthToMm(
       configService.get(configKey("radius"), base.radius),
       "mm",
     ),
     padding: sizeState.viewPadding,
-    offset:
-      sizeState.cutMode === "outset"
-        ? sizeState.cutMarginMm
-        : sizeState.cutMode === "inset"
-          ? -sizeState.cutMarginMm
-          : 0,
+    offset: (exportFrame.widthMm - productionFrame.widthMm) / 2,
     mainLine: {
       width: configService.get(configKey("strokeWidth"), base.mainLine.width),
       color: configService.get(configKey("strokeColor"), base.mainLine.color),

@@ -175,7 +175,6 @@ export class DielineTool implements ExtensionDefinition {
     configService.onAnyChange((e: { key: string; value: any }) => {
       if (
         e.key.startsWith("size.") ||
-        e.key.startsWith("surface.") ||
         e.key.startsWith("scene.") ||
         e.key.startsWith(`${this.configNamespace}.`)
       ) {
@@ -499,8 +498,10 @@ export class DielineTool implements ExtensionDefinition {
     );
 
     if (options.normalizeCutMode !== false) {
-      configService.update("size.cutMode", "trim");
-      configService.update("size.cutMarginMm", 0);
+      const sizeState = readSizeState(configService);
+      configService.update("scene.exportFrame", {
+        ...sizeState.sceneFrames.productionFrame,
+      });
     }
   }
 

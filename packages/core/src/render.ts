@@ -321,13 +321,9 @@ export interface SurfaceSceneFrames {
 
 export interface SizeState {
   unit: Unit;
-  surfaceWidthMm: number;
-  surfaceHeightMm: number;
   sceneFrames: SurfaceSceneFrames;
   constraintMode: SizeConstraintMode;
   aspectRatio: number;
-  cutMode: CutMode;
-  cutMarginMm: number;
   viewPadding: number | string;
   minMm: number;
   maxMm: number;
@@ -354,8 +350,6 @@ export interface SceneLayoutSnapshot {
   trimHeightMm: number;
   cutWidthMm: number;
   cutHeightMm: number;
-  cutMode: CutMode;
-  cutMarginMm: number;
 }
 
 export interface SceneGeometrySnapshot {

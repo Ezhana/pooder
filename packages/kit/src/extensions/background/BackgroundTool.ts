@@ -499,7 +499,6 @@ export class BackgroundTool implements ExtensionDefinition {
 
         if (
           e.key.startsWith("size.") ||
-          e.key.startsWith("surface.") ||
           e.key.startsWith("scene.")
         ) {
           this.latestSceneLayout = null;

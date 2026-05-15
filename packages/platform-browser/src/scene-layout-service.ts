@@ -24,7 +24,7 @@ interface ConfigChangeEvent {
   oldValue: unknown;
 }
 
-const CONFIG_WATCH_PREFIXES = ["size.", "surface.", "scene.", "dieline."] as const;
+const CONFIG_WATCH_PREFIXES = ["size.", "scene.", "dieline."] as const;
 const GET_SCENE_LAYOUT_COMMAND = "getSceneLayout";
 const GET_SCENE_GEOMETRY_COMMAND = "getSceneGeometry";
 

@@ -21,16 +21,12 @@ import { parseLengthToMm } from "./units";
 
 export const DEFAULT_SIZE_STATE: SizeState = {
   unit: "mm",
-  surfaceWidthMm: 500,
-  surfaceHeightMm: 500,
   sceneFrames: {
     previewBounds: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
     productionFrame: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
   },
   constraintMode: "free",
   aspectRatio: 1,
-  cutMode: "trim",
-  cutMarginMm: 0,
   viewPadding: "16%",
   minMm: 10,
   maxMm: 2000,
@@ -47,30 +43,6 @@ function clamp(value: number, min: number, max: number): number {
 function roundToStep(value: number, step: number): number {
   if (!Number.isFinite(step) || step <= 0) return value;
   return Math.round(value / step) * step;
-}
-
-function readLengthMm(
-  configService: ConfigurationService,
-  key: string,
-  fallback: number,
-): number {
-  const parsed = readOptionalLengthMm(configService, key);
-  return parsed === undefined ? fallback : parsed;
-}
-
-function readOptionalLengthMm(
-  configService: ConfigurationService,
-  key: string,
-): number | undefined {
-  const value = configService.get(key);
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? parseLengthToMm(value, "mm") : undefined;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = parseLengthToMm(value, "mm");
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -213,39 +185,6 @@ export function readSizeState(configService: ConfigurationService): SizeState {
     Number(configService.get("size.stepMm", DEFAULT_SIZE_STATE.stepMm)),
   );
 
-  const surfaceWidthMm = sanitizeMmValue(
-    readLengthMm(
-      configService,
-      "surface.widthMm",
-      DEFAULT_SIZE_STATE.surfaceWidthMm,
-    ),
-    { minMm, maxMm, stepMm },
-  );
-  const surfaceHeightMm = sanitizeMmValue(
-    readLengthMm(
-      configService,
-      "surface.heightMm",
-      DEFAULT_SIZE_STATE.surfaceHeightMm,
-    ),
-    { minMm, maxMm, stepMm },
-  );
-
-  const aspectRaw = Number(
-    configService.get("size.aspectRatio", DEFAULT_SIZE_STATE.aspectRatio),
-  );
-  const aspectRatio =
-    Number.isFinite(aspectRaw) && aspectRaw > 0
-      ? aspectRaw
-      : surfaceWidthMm / Math.max(0.001, surfaceHeightMm);
-
-  const cutMarginMm = Math.max(
-    0,
-    parseLengthToMm(
-      configService.get("size.cutMarginMm", DEFAULT_SIZE_STATE.cutMarginMm),
-      "mm",
-    ),
-  );
-
   const viewPadding = configService.get(
     "size.viewPadding",
     DEFAULT_SIZE_STATE.viewPadding,
@@ -253,13 +192,28 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   const defaultPreviewBounds = {
     xMm: 0,
     yMm: 0,
-    widthMm: surfaceWidthMm,
-    heightMm: surfaceHeightMm,
+    widthMm: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneFrames.previewBounds.widthMm, {
+      minMm,
+      maxMm,
+      stepMm,
+    }),
+    heightMm: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneFrames.previewBounds.heightMm, {
+      minMm,
+      maxMm,
+      stepMm,
+    }),
   };
   const previewBounds = normalizeFrameMm(
     configService.get("scene.previewBounds"),
     defaultPreviewBounds,
   );
+  const aspectRaw = Number(
+    configService.get("size.aspectRatio", DEFAULT_SIZE_STATE.aspectRatio),
+  );
+  const aspectRatio =
+    Number.isFinite(aspectRaw) && aspectRaw > 0
+      ? aspectRaw
+      : previewBounds.widthMm / Math.max(0.001, previewBounds.heightMm);
   const productionFrame = normalizeFrameMm(
     configService.get("scene.productionFrame"),
     previewBounds,
@@ -278,8 +232,6 @@ export function readSizeState(configService: ConfigurationService): SizeState {
 
   return {
     unit,
-    surfaceWidthMm,
-    surfaceHeightMm,
     sceneFrames: {
       previewBounds,
       productionFrame,
@@ -295,10 +247,6 @@ export function readSizeState(configService: ConfigurationService): SizeState {
       ),
     ),
     aspectRatio,
-    cutMode: normalizeCutMode(
-      configService.get("size.cutMode", DEFAULT_SIZE_STATE.cutMode),
-    ),
-    cutMarginMm,
     viewPadding,
     minMm,
     maxMm,
@@ -323,31 +271,6 @@ function rectByFrame(
     height,
     centerX: left + width / 2,
     centerY: top + height / 2,
-  };
-}
-
-function getCutFrameMm(size: SizeState, frame: SceneFrameMm): SceneFrameMm {
-  if (size.cutMode === "trim") {
-    return { ...frame };
-  }
-
-  const delta = size.cutMarginMm * 2;
-  if (size.cutMode === "outset") {
-    return {
-      xMm: frame.xMm - size.cutMarginMm,
-      yMm: frame.yMm - size.cutMarginMm,
-      widthMm: frame.widthMm + delta,
-      heightMm: frame.heightMm + delta,
-    };
-  }
-
-  const widthMm = Math.max(size.minMm, frame.widthMm - delta);
-  const heightMm = Math.max(size.minMm, frame.heightMm - delta);
-  return {
-    xMm: frame.xMm + (frame.widthMm - widthMm) / 2,
-    yMm: frame.yMm + (frame.heightMm - heightMm) / 2,
-    widthMm,
-    heightMm,
   };
 }
 
@@ -379,8 +302,7 @@ function deriveSceneFrames(size: SizeState): ResolvedSurfaceSceneFrames {
   return {
     previewBounds,
     productionFrame,
-    exportFrame:
-      size.sceneFrames.exportFrame ?? getCutFrameMm(size, productionFrame),
+    exportFrame: size.sceneFrames.exportFrame ?? productionFrame,
     viewportFocusFrame: viewportFocusFrame ?? productionFrame,
   };
 }
@@ -505,8 +427,6 @@ export function computeSceneLayout(
     trimHeightMm: productionFrame.heightMm,
     cutWidthMm: exportFrame.widthMm,
     cutHeightMm: exportFrame.heightMm,
-    cutMode: size.cutMode,
-    cutMarginMm: size.cutMarginMm,
   };
 }
 

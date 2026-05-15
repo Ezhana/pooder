@@ -305,7 +305,6 @@ export class WhiteInkTool implements ExtensionDefinition {
 
         if (
           e.key.startsWith("size.") ||
-          e.key.startsWith("surface.") ||
           e.key.startsWith("scene.")
         ) {
           this.updateWhiteInks();

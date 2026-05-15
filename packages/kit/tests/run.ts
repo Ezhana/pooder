@@ -76,11 +76,6 @@ import {
   type RulerCapabilityApi,
 } from "../src/extensions/ruler";
 import {
-  SIZE_CAPABILITY_ID,
-  SizeCapabilityExtension,
-  type SizeCapabilityApi,
-} from "../src/extensions/size";
-import {
   TEMPLATE_OVERLAY_CAPABILITY_ID,
   TemplateOverlayCapabilityExtension,
   createTemplateOverlayCapabilityDefinition,
@@ -107,7 +102,6 @@ import {
   createClipCapability,
   createFeatureCapability,
   createImagePlacementCapability,
-  createSizeCapability,
   createTemplateOverlayCapability,
   createWhiteInkCapability,
 } from "../src/factories";
@@ -1202,7 +1196,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createDielineGeometryCapability());
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
-  runtime.extensions.register(createSizeCapability());
   await runtime.extensions.flushActivation();
 
   assert(
@@ -1227,11 +1220,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     runtime.extensions.getState(FEATURE_CAPABILITY_ID)?.state === "active",
     "feature capability factory should activate",
   );
-  assert(
-    runtime.extensions.getState(SIZE_CAPABILITY_ID)?.state === "active",
-    "size capability factory should activate",
-  );
-
   const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
     "ToolRegistryService",
   );
@@ -1241,7 +1229,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     DIELINE_GEOMETRY_CAPABILITY_ID,
     CLIP_CAPABILITY_ID,
     FEATURE_CAPABILITY_ID,
-    SIZE_CAPABILITY_ID,
   ]) {
     assert(
       !toolRegistry.hasTool(toolId),
@@ -1832,8 +1819,6 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     canvasHeight: 600,
     canvasWidth: 800,
     cutHeightMm: 120,
-    cutMarginMm: 10,
-    cutMode: "outset",
     cutRect: rectByCenter(400, 300, 360, 360),
     cutWidthMm: 120,
     scale: 3,
@@ -2471,8 +2456,6 @@ function testImageSessionShapeOverlayUsesDielineGeometry() {
     canvasHeight: 600,
     canvasWidth: 800,
     cutHeightMm: 120,
-    cutMarginMm: 10,
-    cutMode: "outset",
     cutRect: rectByCenter(400, 300, 360, 360),
     cutWidthMm: 120,
     scale: 3,
@@ -2566,7 +2549,12 @@ async function testDielineGeometryCapabilityExtension() {
       runtime.config.update("storefrontDieline.shape", "custom");
       runtime.config.update("storefrontDieline.pathData", result.pathData);
       if (options.normalizeCutMode !== false) {
-        runtime.config.update("size.cutMode", "trim");
+        runtime.config.update("scene.exportFrame", {
+          heightMm: 100,
+          widthMm: 100,
+          xMm: 0,
+          yMm: 0,
+        });
       }
     },
     getGeometry: () => null,
@@ -2644,10 +2632,10 @@ async function testDielineGeometryCapabilityExtension() {
     "M0 0 L10 0 L10 10 Z",
     "dieline geometry should write detected path to caller namespace",
   );
-  assertEqual(
-    runtime.config.get("size.cutMode"),
-    "trim",
-    "dieline geometry should normalize cut mode when requested",
+  assertDeepEqual(
+    runtime.config.get("scene.exportFrame"),
+    { heightMm: 100, widthMm: 100, xMm: 0, yMm: 0 },
+    "dieline geometry should normalize the export frame when requested",
   );
 
   const element = registeredFacade.upsertPathElement({
@@ -2917,6 +2905,13 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
     throw new Error("template overlay capability facade should be registered");
   }
 
+  runtime.config.update("scene.previewBounds", {
+    xMm: 0,
+    yMm: 0,
+    widthMm: 200,
+    heightMm: 100,
+  });
+
   await facade.replaceConfig({
     version: 1,
     slots: {
@@ -2963,12 +2958,12 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
   );
   assertDeepEqual(
     source?.frame,
-    { x: 275, y: 100, width: 250, height: 200 },
+    { x: 50, y: 10, width: 100, height: 40 },
     "template overlay config should patch original object frame",
   );
   assertDeepEqual(
     source?.transform,
-    { left: 275, top: 100, originX: "left", originY: "top" },
+    { left: 50, top: 10, originX: "left", originY: "top" },
     "template overlay config should patch original object transform",
   );
   assertEqual(source?.props.opacity, 1, "template opacity should default to 1");
@@ -3040,48 +3035,6 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
     cleared?.visibility?.op,
     "const",
     "clearing template overlay patches should not clear other source patches",
-  );
-
-  await runtime.dispose();
-}
-
-async function testSizeCapabilityExtension() {
-  const runtime = new Pooder();
-
-  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.extensions.register(new SizeCapabilityExtension());
-
-  await runtime.extensions.flushActivation();
-
-  assertEqual(
-    runtime.extensions.getState(SIZE_CAPABILITY_ID)?.state,
-    "active",
-    "size capability should activate",
-  );
-
-  const facade =
-    runtime.capabilities.get<SizeCapabilityApi>(SIZE_CAPABILITY_ID);
-  if (!facade) {
-    throw new Error("size capability facade should be registered");
-  }
-
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(SIZE_CAPABILITY_ID),
-    "size capability registration should not require a tool",
-  );
-
-  facade.setUnit("cm");
-  assertEqual(
-    runtime.config.get("size.unit"),
-    "cm",
-    "size capability should mutate shared size config",
-  );
-  assert(
-    !!facade.getState(),
-    "size capability should expose current size state",
   );
 
   await runtime.dispose();
@@ -3331,7 +3284,6 @@ async function main() {
   await testBackgroundCapabilityExtension();
   await testTemplateOverlayCapabilityExtension();
   await testTemplateOverlayConfigPatchesOriginalRenderIntents();
-  await testSizeCapabilityExtension();
   await testRulerCapabilityExtension();
   await testFeatureCapabilityDefinition();
   console.log("ok");

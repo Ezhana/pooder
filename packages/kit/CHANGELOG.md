@@ -17,7 +17,7 @@
   layer ids, and config namespaces while keeping `WhiteInkTool` as the
   compatibility wrapper.
 - Added typed `pooder.kit.template-overlay`, `pooder.kit.background`,
-  `pooder.kit.size`, and `pooder.kit.ruler` capability facades with
+  and `pooder.kit.ruler` capability facades with
   capability-only extensions so presentational helpers can be enabled
   independently without registering kit-owned toolbar tools.
 - Added a typed `pooder.kit.design-export` capability facade and
@@ -41,7 +41,7 @@
 - Updated legacy white ink commands to delegate through the white ink
   capability wrapper and made white ink settings namespace-aware for
   capability-only use.
-- Updated legacy template overlay, background, size, and ruler wrappers to
+- Updated legacy template overlay, background, and ruler wrappers to
   register typed capability facades while preserving existing command/config
   compatibility. Capability-only variants accept caller-owned config
   namespaces or layer ids where supported.
@@ -56,7 +56,7 @@
   compatibility surfaces after moving storefront dieline workflow orchestration
   to app-owned typed capability composition.
 - Removed kit-owned product tool contributions from legacy image, white ink,
-  dieline, feature, and size compatibility wrappers while keeping capability,
+  dieline, and feature compatibility wrappers while keeping capability,
   command bridge, config, and render producer contributions.
 - Moved former app-specific default layer ids behind the explicit
   `KIT_LEGACY_LAYER_PRESET`; capability options should pass caller-owned layer
@@ -80,23 +80,22 @@
   `createFeatureCapability()`.
 - Deprecated compatibility wrapper: `createFeatureExtension` ->
   `createFeatureCapability()`.
-- Deprecated compatibility wrapper: `SizeTool` -> `createSizeCapability()`.
-- Deprecated compatibility wrapper: `createSizeExtension` ->
-  `createSizeCapability()`.
-
 ### Removed
 
 - Removed legacy `tools` contributions for `pooder.kit.image`,
-  `pooder.kit.white-ink`, `pooder.kit.dieline`, `pooder.kit.feature`, and
-  `pooder.kit.size` so installing kit no longer adds product tools.
+  `pooder.kit.white-ink`, `pooder.kit.dieline`, and `pooder.kit.feature` so
+  installing kit no longer adds product tools.
 - Removed public compatibility factories `createImageExtension`,
   `createWhiteInkExtension`, `createDielineExtension`,
-  `createFeatureExtension`, `createSizeExtension`, and
+  `createFeatureExtension`, `createSizeExtension`, `createSizeCapability`, and
   `createDielineWorkflowExtension`. Use `createImagePlacementCapability`,
   `createWhiteInkCapability`, `createDielineGeometryCapability`,
-  `createFeatureCapability`, and `createSizeCapability` instead.
+  and `createFeatureCapability` instead.
 - Removed public wrapper barrel exports for `ImageTool`, `WhiteInkTool`,
   `DielineTool`, `FeatureTool`, and `SizeTool`.
+- Removed `pooder.kit.size`; scene sizing is now modeled by explicit
+  `scene.previewBounds`, `scene.productionFrame`, `scene.exportFrame`, and
+  `scene.viewportFocusFrame` frames.
 - Removed the legacy kit-owned `DielineWorkflowExtension`; applications should
   compose export, edge detection, and dieline geometry through typed
   capability facades.

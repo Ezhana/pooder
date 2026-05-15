@@ -3,7 +3,6 @@ export * from "./clip";
 export * from "./design-export";
 export * from "./edge-detection";
 export * from "./image";
-export * from "./size";
 export * from "./template-overlay";
 export * from "./dieline";
 export * from "./feature";
