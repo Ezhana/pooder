@@ -16,10 +16,9 @@
   white ink extension that accepts caller-provided source layer ids, render
   layer ids, and config namespaces while keeping `WhiteInkTool` as the
   compatibility wrapper.
-- Added typed `pooder.kit.template-overlay`, `pooder.kit.background`,
-  and `pooder.kit.ruler` capability facades with
-  capability-only extensions so presentational helpers can be enabled
-  independently without registering kit-owned toolbar tools.
+- Added typed `pooder.kit.template-overlay` and `pooder.kit.ruler`
+  capability facades with capability-only extensions so presentational helpers
+  can be enabled independently without registering kit-owned toolbar tools.
 - Added a typed `pooder.kit.design-export` capability facade and
   capability-only design export extension for layer, element, scene-rect, and
   frame exports while keeping the legacy `exportImage` command bridge.
@@ -41,7 +40,7 @@
 - Updated legacy white ink commands to delegate through the white ink
   capability wrapper and made white ink settings namespace-aware for
   capability-only use.
-- Updated legacy template overlay, background, and ruler wrappers to
+- Updated legacy template overlay and ruler wrappers to
   register typed capability facades while preserving existing command/config
   compatibility. Capability-only variants accept caller-owned config
   namespaces or layer ids where supported.
@@ -99,6 +98,8 @@
 - Removed the legacy kit-owned `DielineWorkflowExtension`; applications should
   compose export, edge detection, and dieline geometry through typed
   capability facades.
+- Removed legacy `pooder.kit.background`; background artwork should be modeled
+  as ordinary document layers and objects.
 
 ### Migration Examples
 

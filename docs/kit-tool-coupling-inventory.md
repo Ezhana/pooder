@@ -35,7 +35,6 @@ the original coupling unless they explicitly note a later migration slice.
 | `FeatureTool` | Removed public wrapper; formerly `pooder.kit.feature` | Feature geometry kit capability; feature placement workflow moves to app |
 | `SizeTool` | Removed public wrapper; formerly `pooder.kit.size` | Size/session-independent scene config capability |
 | `TemplateOverlayTool` | No | Template overlay kit capability |
-| `BackgroundTool` | No | Background layer kit capability |
 | `RulerTool` | No | Ruler overlay kit capability |
 | `DesignExportExtension` | No | Export kit/platform capability |
 | `DielineWorkflowExtension` | Removed | App workflow |
@@ -209,25 +208,6 @@ the original coupling unless they explicitly note a later migration slice.
   slot names encode current product overlay assumptions.
 - Ownership: template overlay config normalization and rendering are kit
   capability; caller-owned target layers are required for new API; Fabric image
-  rendering is platform implementation.
-- Migration target: P3.S4.
-
-## `BackgroundTool`
-
-- Extension id: `pooder.kit.background`.
-- Tool: none.
-- Commands: `background.getConfig`, `background.resetConfig`,
-  `background.replaceConfig`, `background.patchConfig`,
-  `background.upsertLayer`, `background.removeLayer`.
-- Config keys: `background.config`; also responds to `size.*`.
-- Layers: `background`.
-- Events/listeners: listens to `canvas:resized`, `scene:layout:change`, and
-  background/size config changes.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`, platform scene
-  layout helpers, Fabric image loading.
-- Coupling to migrate: background layer id and default config are kit defaults;
-  layer ids should be caller-controlled where this participates in app scenes.
-- Ownership: reusable background layer rendering is kit capability; browser
   rendering is platform implementation.
 - Migration target: P3.S4.
 

@@ -57,11 +57,12 @@ Completed:
   preview refresh, session state, and caller-owned source/target layers; the
   legacy `WhiteInkTool` wrapper was kept during the compatibility window and
   removed from public exports in P5.S3.
-- P3.S4 template overlay, background, size, and ruler capabilities have been
-  added. Applications can resolve typed `pooder.kit.template-overlay`,
-  `pooder.kit.background`, `pooder.kit.size`, and `pooder.kit.ruler` facades,
-  enable each capability independently, and provide caller-owned config
-  namespaces or layer ids where supported.
+- P3.S4 template overlay, size, and ruler capabilities have been added.
+  Applications can resolve typed `pooder.kit.template-overlay`,
+  `pooder.kit.size`, and `pooder.kit.ruler` facades, enable each capability
+  independently, and provide caller-owned config namespaces or layer ids where
+  supported. Legacy `pooder.kit.background` was removed after background
+  artwork moved to ordinary document layers and objects.
 - P3.S5 export capability has been added. Applications can resolve a typed
   `pooder.kit.design-export` facade for layer, element, scene-rect, and frame
   exports while the legacy `exportImage` command remains available as a
@@ -183,7 +184,6 @@ Known starting points:
 - `FeatureTool`
 - `SizeTool`
 - `TemplateOverlayTool`
-- `BackgroundTool`
 - `RulerTool`
 - `DesignExportExtension`
 - `DielineWorkflowExtension`
@@ -371,7 +371,7 @@ Acceptance:
 - White ink extraction can run against caller-selected image elements or layers.
 - Existing white ink session behavior still works through the wrapper.
 
-### Slice P3.S4 - Template, Background, Size, Ruler Capabilities
+### Slice P3.S4 - Template, Size, Ruler Capabilities
 
 Deliverables:
 

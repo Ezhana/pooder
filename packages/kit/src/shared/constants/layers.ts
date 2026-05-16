@@ -1,4 +1,3 @@
-export const BACKGROUND_LAYER_ID = "background";
 export const TEMPLATE_OVERLAY_NORMAL_LAYER_ID = "template-overlay.normal";
 export const TEMPLATE_OVERLAY_FRAME_LAYER_ID = "template-overlay.frame";
 export const TEMPLATE_OVERLAY_PROD_LAYER_ID = "template-overlay.prod";
@@ -16,7 +15,6 @@ export const RULER_LAYER_ID = "ruler-overlay";
 export const FILM_LAYER_ID = "overlay";
 
 export const KIT_LEGACY_LAYER_PRESET = {
-  background: BACKGROUND_LAYER_ID,
   templateOverlayNormal: TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
   templateOverlayFrame: TEMPLATE_OVERLAY_FRAME_LAYER_ID,
   templateOverlayProd: TEMPLATE_OVERLAY_PROD_LAYER_ID,

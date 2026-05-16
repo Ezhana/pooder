@@ -23,7 +23,6 @@ import {
   type EditorSurface,
 } from "@pooder/document/kit";
 import {
-  createBackgroundCapability,
   createClipCapability,
   createDielineGeometryCapability,
   createFeatureCapability,
@@ -31,7 +30,6 @@ import {
   createTemplateOverlayCapability,
   createWhiteInkCapability,
 } from "../factories";
-import { BACKGROUND_CAPABILITY_ID } from "../extensions/background";
 import { CLIP_CAPABILITY_ID } from "../extensions/clip";
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
@@ -81,7 +79,6 @@ const EFFECT_PHASE_ORDER = {
 } as const;
 
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
-  [BACKGROUND_CAPABILITY_ID]: () => createBackgroundCapability(),
   [CLIP_CAPABILITY_ID]: () => createClipCapability(),
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
   [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),

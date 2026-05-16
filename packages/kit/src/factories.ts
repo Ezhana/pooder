@@ -1,4 +1,3 @@
-import { BackgroundCapabilityExtension } from "./extensions/background";
 import { ClipCapabilityExtension } from "./extensions/clip";
 import { DesignExportCapabilityExtension } from "./extensions/design-export";
 import { DielineGeometryCapabilityExtension } from "./extensions/dieline";
@@ -8,10 +7,6 @@ import { ImagePlacementCapabilityExtension } from "./extensions/image";
 import { RulerCapabilityExtension } from "./extensions/ruler";
 import { TemplateOverlayCapabilityExtension } from "./extensions/template-overlay";
 import { WhiteInkCapabilityExtension } from "./extensions/white-ink";
-
-export const createBackgroundCapability = (
-  options?: ConstructorParameters<typeof BackgroundCapabilityExtension>[0],
-) => new BackgroundCapabilityExtension(options);
 
 export const createClipCapability = (
   options?: ConstructorParameters<typeof ClipCapabilityExtension>[0],

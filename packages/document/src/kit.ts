@@ -9,7 +9,6 @@ import {
 } from "./index";
 
 export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
-  background: "pooder.kit.background",
   clip: "pooder.kit.clip",
   "template-overlay": "pooder.kit.template-overlay",
   dieline: "pooder.kit.dieline-geometry",

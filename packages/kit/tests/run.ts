@@ -54,15 +54,6 @@ import {
   type WhiteInkCapabilityApi,
 } from "../src/extensions/white-ink";
 import {
-  BACKGROUND_CAPABILITY_ID,
-  BackgroundCapabilityExtension,
-  createBackgroundCapabilityDefinition,
-  getBackgroundConfigKey,
-  normalizeBackgroundConfigNamespace,
-  normalizeBackgroundLayerId,
-  type BackgroundCapabilityApi,
-} from "../src/extensions/background";
-import {
   CLIP_CAPABILITY_ID,
   ClipCapabilityExtension,
 } from "../src/extensions/clip";
@@ -994,21 +985,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     "white ink layer id should trim caller input",
   );
   assertEqual(
-    normalizeBackgroundConfigNamespace(" storefrontBackground "),
-    "storefrontBackground",
-    "background config namespace should trim caller input",
-  );
-  assertEqual(
-    getBackgroundConfigKey("storefrontBackground", "layers"),
-    "storefrontBackground.layers",
-    "background config keys should stay caller-namespaced",
-  );
-  assertEqual(
-    normalizeBackgroundLayerId("", "legacy.background"),
-    "legacy.background",
-    "background layer id should fall back",
-  );
-  assertEqual(
     normalizeRulerConfigNamespace(" storefrontRuler "),
     "storefrontRuler",
     "ruler config namespace should trim caller input",
@@ -1038,9 +1014,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     createWhiteInkCapabilityDefinition({} as WhiteInkCapabilityApi, {
       capabilityId: "custom.white-ink",
     }),
-    createBackgroundCapabilityDefinition({} as BackgroundCapabilityApi, {
-      capabilityId: "custom.background",
-    }),
     createRulerCapabilityDefinition({} as RulerCapabilityApi, {
       capabilityId: "custom.ruler",
     }),
@@ -1060,7 +1033,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
       "custom.dieline",
       "custom.export",
       "custom.white-ink",
-      "custom.background",
       "custom.ruler",
       "custom.template-overlay",
       "custom.feature",
@@ -1250,6 +1222,7 @@ function testCreateKitCapabilitiesForDocument() {
           {
             id: "artwork",
             effects: [
+              { type: "background" },
               { type: "dieline" },
               { type: "feature" },
               { type: "template-overlay", require: "warn" },
@@ -1281,7 +1254,7 @@ function testCreateKitCapabilitiesForDocument() {
       IMAGE_PLACEMENT_CAPABILITY_ID,
       TEMPLATE_OVERLAY_CAPABILITY_ID,
     ].sort(),
-    "document helper should create each referenced kit capability once",
+    "document helper should create supported kit capabilities once and ignore background effects",
   );
 }
 
@@ -1359,13 +1332,14 @@ async function testApplyKitEditorDocument() {
           {
             id: "front-template",
             role: "background",
-            effects: [
-              {
-                type: "background",
-                payload: { id: "front-bg", color: "#eeeeee" },
-              },
-            ],
             objects: [
+              {
+                id: "front-bg",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+                style: { fill: "#eeeeee" },
+                locked: true,
+              },
               {
                 id: "front-template-image",
                 type: "image",
@@ -1455,6 +1429,14 @@ async function testApplyKitEditorDocument() {
   const renderGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
+  const backgroundGraphNode = renderGraph.layers
+    .find((layer) => layer.id === "front-template")
+    ?.nodes.find((node) => node.id === "front-bg");
+  assertEqual(
+    backgroundGraphNode?.props.fill,
+    "#eeeeee",
+    "document apply should render background layers through ordinary objects",
+  );
   const committedGraphNode = renderGraph.layers
     .find((layer) => layer.id === "front-artwork")
     ?.nodes.find((node) => node.id === "image:front-slot");
@@ -2745,65 +2727,6 @@ async function testWhiteInkCapabilityExtension() {
   await runtime.dispose();
 }
 
-async function testBackgroundCapabilityExtension() {
-  const runtime = new Pooder();
-
-  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.extensions.register(
-    new BackgroundCapabilityExtension({
-      configNamespace: "storefrontBackground",
-      layers: {
-        backgroundLayerId: "app.background",
-      },
-    }),
-  );
-
-  await runtime.extensions.flushActivation();
-
-  assertEqual(
-    runtime.extensions.getState(BACKGROUND_CAPABILITY_ID)?.state,
-    "active",
-    "background capability should activate",
-  );
-
-  const facade = runtime.capabilities.get<BackgroundCapabilityApi>(
-    BACKGROUND_CAPABILITY_ID,
-  );
-  if (!facade) {
-    throw new Error("background capability facade should be registered");
-  }
-
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(BACKGROUND_CAPABILITY_ID),
-    "background capability registration should not require a tool",
-  );
-  assert(
-    runtime.config.getDefinition("storefrontBackground.config"),
-    "background capability should accept caller config namespace",
-  );
-
-  facade.upsertLayer({
-    id: "hero",
-    kind: "color",
-    anchor: "viewport",
-    fit: "cover",
-    opacity: 1,
-    order: 1,
-    enabled: true,
-    exportable: false,
-    color: "#fff",
-  });
-  assert(
-    facade.getConfig().layers.some((layer) => layer.id === "hero"),
-    "background capability should expose config mutation facade",
-  );
-
-  await runtime.dispose();
-}
-
 async function testTemplateOverlayCapabilityExtension() {
   const runtime = new Pooder();
 
@@ -3281,7 +3204,6 @@ async function main() {
   testImageSessionShapeOverlayUsesDielineGeometry();
   await testDielineGeometryCapabilityExtension();
   await testWhiteInkCapabilityExtension();
-  await testBackgroundCapabilityExtension();
   await testTemplateOverlayCapabilityExtension();
   await testTemplateOverlayConfigPatchesOriginalRenderIntents();
   await testRulerCapabilityExtension();
