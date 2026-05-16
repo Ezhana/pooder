@@ -1418,6 +1418,67 @@ async function testRenderIntentProjectionAndVisibilityContext() {
   });
 }
 
+async function testRenderIntentProjectionPreservesSourceStacking() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+
+    intents.setDocumentIntents([
+      {
+        id: "template.normal",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "template",
+          objectId: "template.normal",
+        },
+        visual: { type: "image", src: "/normal.png" },
+        ordering: { layerId: "template", stack: 1, objectOrder: 0 },
+      },
+      {
+        id: "template.frame",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "template",
+          objectId: "template.frame",
+        },
+        visual: { type: "image", src: "/frame.png" },
+        ordering: { layerId: "template", stack: 1, objectOrder: 1 },
+      },
+      {
+        id: "template.projection",
+        subject: {
+          kind: "layer",
+          surfaceId: "front",
+          layerId: "session.overlay",
+        },
+        projection: {
+          sourceLayerIds: ["template"],
+          suppressSource: true,
+        },
+        ordering: {
+          layerId: "session.overlay",
+          stack: 2,
+          objectOrder: 0,
+        },
+      },
+    ]);
+
+    const projectedSubjectIds = intents
+      .getGraph()
+      .layers.find((layer) => layer.id === "session.overlay")
+      ?.nodes.map((node) => node.projection?.sourceSubjectId);
+
+    assertDeepEqual(
+      projectedSubjectIds,
+      ["template.normal", "template.frame"],
+      "projection should preserve source layer stacking order",
+    );
+  });
+}
+
 async function testRenderIntentClipTargetsLayerAndSubject() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
@@ -1795,6 +1856,10 @@ async function main() {
     [
       "builds render intent projection nodes and visibility context",
       testRenderIntentProjectionAndVisibilityContext,
+    ],
+    [
+      "preserves source stacking when projecting render intent nodes",
+      testRenderIntentProjectionPreservesSourceStacking,
     ],
     [
       "keeps render intent clip targets graph-scoped",

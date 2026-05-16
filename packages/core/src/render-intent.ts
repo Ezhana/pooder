@@ -521,7 +521,7 @@ export function createRenderGraph(
       ...layer,
       nodes: layer.nodes.sort(compareGraphNodes),
     }))
-    .sort((a, b) => a.stack - b.stack || a.order - b.order || a.id.localeCompare(b.id));
+    .sort(compareGraphLayers);
 
   return {
     revision,
@@ -535,7 +535,9 @@ function appendProjectionNodes(
   drafts: readonly RenderIntentDraft[],
   layerMap: Map<string, RenderGraphLayer>,
 ) {
-  const sourceNodes = Array.from(layerMap.values()).flatMap((layer) => layer.nodes);
+  const sourceNodes = Array.from(layerMap.values())
+    .sort(compareGraphLayers)
+    .flatMap((layer) => layer.nodes.slice().sort(compareGraphNodes));
 
   drafts.forEach((draft) => {
     const projection = draft.projection;
@@ -626,7 +628,7 @@ function createProjectionGraphNode(
       objectOrder: draft.ordering.objectOrder ?? 0,
       channel,
       channelOrder: CHANNEL_ORDER[channel],
-      subOrder: draft.ordering.subOrder ?? 0,
+      subOrder: (draft.ordering.subOrder ?? 0) + index / 1_000_000,
     },
   };
 }
@@ -813,6 +815,10 @@ function compareGraphNodes(a: RenderGraphNode, b: RenderGraphNode): number {
     a.sortKey.subOrder - b.sortKey.subOrder ||
     a.id.localeCompare(b.id)
   );
+}
+
+function compareGraphLayers(a: RenderGraphLayer, b: RenderGraphLayer): number {
+  return a.stack - b.stack || a.order - b.order || a.id.localeCompare(b.id);
 }
 
 function mergeDraft(
