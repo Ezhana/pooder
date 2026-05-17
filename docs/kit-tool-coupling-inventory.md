@@ -39,7 +39,7 @@ the original coupling unless they explicitly note a later migration slice.
 | `DesignExportExtension` | No | Export kit/platform capability |
 | `DielineWorkflowExtension` | Removed | App workflow |
 | `MirrorTool` | No | Browser/platform viewport helper or optional compatibility utility |
-| `FilmTool` | No | Overlay kit capability or compatibility utility |
+| `FilmTool` | Removed | Superseded by dynamic scene/document layers |
 
 ## `ImageTool`
 
@@ -285,18 +285,14 @@ the original coupling unless they explicitly note a later migration slice.
 
 - Extension id: `pooder.kit.film`.
 - Tool: none.
-- Commands: `setFilmImage`.
-- Config keys: `film.url`, `film.opacity`.
-- Layers: `overlay`.
-- Events/listeners: listens to `canvas:resized` and `film.*` config changes.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`, Fabric image
-  loading.
-- Coupling to migrate: generic layer id `overlay` and viewport-cover behavior
-  are hard-coded.
-- Ownership: reusable overlay rendering can be kit capability; browser image
-  rendering remains platform implementation; command/config are compatibility
-  surface.
-- Migration target: not in current known slices; consider with P3.S4.
+- Status: removed from `@pooder/kit`.
+- Removed compatibility surface: command `setFilmImage`, config keys
+  `film.url` and `film.opacity`, and legacy preset `filmOverlay`.
+- Replacement path: callers should create dynamic `SceneService` layers or
+  document layers and render ordinary image objects for background, reference,
+  or overlay imagery.
+- Rationale: the hard-coded `overlay` layer and viewport-cover behavior became
+  redundant after dynamic layer support moved layer ownership to callers.
 
 ## Migration Readiness Notes
 

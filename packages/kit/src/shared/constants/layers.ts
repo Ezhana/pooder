@@ -12,7 +12,6 @@ export const DIELINE_LAYER_ID = "dieline-overlay";
 export const FEATURE_DIELINE_LAYER_ID = "feature-dieline-overlay";
 export const FEATURE_OVERLAY_LAYER_ID = "feature-overlay";
 export const RULER_LAYER_ID = "ruler-overlay";
-export const FILM_LAYER_ID = "overlay";
 
 export const KIT_LEGACY_LAYER_PRESET = {
   templateOverlayNormal: TEMPLATE_OVERLAY_NORMAL_LAYER_ID,
@@ -29,7 +28,6 @@ export const KIT_LEGACY_LAYER_PRESET = {
   featureDieline: FEATURE_DIELINE_LAYER_ID,
   featureOverlay: FEATURE_OVERLAY_LAYER_ID,
   rulerOverlay: RULER_LAYER_ID,
-  filmOverlay: FILM_LAYER_ID,
 } as const;
 
 export type KitLegacyLayerPreset = typeof KIT_LEGACY_LAYER_PRESET;
