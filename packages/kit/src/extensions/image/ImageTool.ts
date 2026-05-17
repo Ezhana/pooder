@@ -499,6 +499,8 @@ export class ImageTool implements ExtensionDefinition {
   private canvasObjectMovingHandler?: (event?: any) => void;
   private canvasBeforeRenderHandler?: (event?: any) => void;
   private canvasAfterRenderHandler?: (event?: any) => void;
+  private pendingCanvasSessionSlotId: string | null = null;
+  private pendingCanvasSessionTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   constructor(options: ImageToolOptions = {}) {
     this.id = String(options.id || IMAGE_PLACEMENT_CAPABILITY_ID).trim() ||
@@ -549,6 +551,7 @@ export class ImageTool implements ExtensionDefinition {
     this.sceneSubscription?.dispose();
     this.sceneSubscription = undefined;
     clearRenderIntentSource(this.renderIntentService, IMAGE_RUNTIME_RENDER_SCOPE);
+    this.clearPendingCanvasSession();
     this.workingImages.clear();
     this.retainedWorkingImageBaselines.clear();
     this.activeSlotId = null;
@@ -899,6 +902,7 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private setSessionNotice(notice: ImagePlacementSessionNotice | null) {
+    if (this.sessionNotice === notice) return;
     this.sessionNotice = notice;
     this.context?.eventBus.emit("image:session:notice", notice);
     this.emitStateChange();
@@ -907,6 +911,11 @@ export class ImageTool implements ExtensionDefinition {
   private async beginSession(slotId: string) {
     const slot = this.getSlotElement(slotId);
     if (!slot) return { ok: false, reason: "slot-not-found" };
+    this.clearPendingCanvasSession(slotId);
+    if (this.activeSlotId === slotId && this.workingImages.has(slotId)) {
+      this.emitStateChange();
+      return { ok: true };
+    }
     this.activeSlotId = slotId;
     this.patchCommittedImageVisibilityForSlots();
     if (!this.workingImages.has(slotId)) {
@@ -973,13 +982,13 @@ export class ImageTool implements ExtensionDefinition {
       this.retainWorkingImageBaseline(slotId);
     }
     await this.updateImagesAsync();
-    this.emitStateChange();
     return { ok: true };
   }
 
   private async setImageTransform(
     slotId: string,
     updates: ImagePlacementTransformUpdates,
+    options: { skipRender?: boolean } = {},
   ) {
     const slot = this.getSlotElement(slotId);
     if (!slot) return { ok: false, reason: "slot-not-found" };
@@ -1005,7 +1014,9 @@ export class ImageTool implements ExtensionDefinition {
     }
     this.workingImages.set(slotId, next);
     this.syncWorkingSlotVisibilityContext();
-    this.updateImages();
+    if (!options.skipRender) {
+      this.updateImages();
+    }
     this.emitStateChange();
     return { ok: true };
   }
@@ -1042,6 +1053,7 @@ export class ImageTool implements ExtensionDefinition {
   }
 
   private resetSession(slotId?: string) {
+    this.clearPendingCanvasSession(slotId);
     if (slotId) {
       this.restoreOrDeleteWorkingImage(slotId);
       if (this.activeSlotId === slotId) this.activeSlotId = null;
@@ -1557,10 +1569,51 @@ export class ImageTool implements ExtensionDefinition {
     const slotId = selected?.data?.slotId;
     if (typeof slotId !== "string") return;
     this.activeSlotId = slotId;
-    void this.beginSession(slotId);
+    if (this.workingImages.has(slotId)) {
+      this.emitStateChange();
+      return;
+    }
+    this.scheduleCanvasSession(slotId);
+  }
+
+  private scheduleCanvasSession(slotId: string) {
+    this.pendingCanvasSessionSlotId = slotId;
+    if (this.pendingCanvasSessionTimer !== null) return;
+
+    this.pendingCanvasSessionTimer = globalThis.setTimeout(() => {
+      const nextSlotId = this.pendingCanvasSessionSlotId;
+      this.pendingCanvasSessionSlotId = null;
+      this.pendingCanvasSessionTimer = null;
+
+      if (!nextSlotId) return;
+      if (this.activeSlotId === nextSlotId && this.workingImages.has(nextSlotId)) {
+        this.emitStateChange();
+        return;
+      }
+
+      void this.beginSession(nextSlotId);
+    }, 0);
+  }
+
+  private clearPendingCanvasSession(slotId?: string) {
+    if (slotId && this.pendingCanvasSessionSlotId !== slotId) return;
+    if (this.pendingCanvasSessionTimer !== null) {
+      globalThis.clearTimeout(this.pendingCanvasSessionTimer);
+    }
+    this.pendingCanvasSessionSlotId = null;
+    this.pendingCanvasSessionTimer = null;
   }
 
   private onSelectionCleared = () => {
+    const pendingSlotId = this.pendingCanvasSessionSlotId;
+    this.clearPendingCanvasSession();
+    if (
+      pendingSlotId &&
+      this.activeSlotId === pendingSlotId &&
+      !this.workingImages.has(pendingSlotId)
+    ) {
+      this.activeSlotId = null;
+    }
     this.endMoveSnapInteraction();
     this.emitStateChange();
   };
@@ -1884,12 +1937,16 @@ export class ImageTool implements ExtensionDefinition {
     const coverScale = getCoverScaleFromRect(slot.frame, source);
     const sceneScale = this.canvasService.getSceneScale();
     const objectScale = finiteNumber(target.scaleX, 1) / Math.max(0.0001, sceneScale);
-    void this.setImageTransform(slotId, {
-      left: (center.x - slot.frame.left) / Math.max(1, slot.frame.width),
-      top: (center.y - slot.frame.top) / Math.max(1, slot.frame.height),
-      scale: objectScale / Math.max(0.0001, coverScale),
-      angle: finiteNumber(target.angle, 0),
-    });
+    void this.setImageTransform(
+      slotId,
+      {
+        left: (center.x - slot.frame.left) / Math.max(1, slot.frame.width),
+        top: (center.y - slot.frame.top) / Math.max(1, slot.frame.height),
+        scale: objectScale / Math.max(0.0001, coverScale),
+        angle: finiteNumber(target.angle, 0),
+      },
+      { skipRender: true },
+    );
   };
 
   private buildWorkingImageSpecs(): RenderObjectSpec[] {
