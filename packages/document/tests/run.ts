@@ -35,9 +35,16 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
+const TEST_DOCUMENT_CONFIG = {
+  "scene.previewBounds": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  "scene.productionFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  "scene.viewportFocusFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+};
+
 function testNormalizeDefaults() {
   const doc = normalizeEditorDocument({
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -68,6 +75,7 @@ function testNormalizeDefaults() {
   });
 
   assertEqual(doc.version, EDITOR_DOCUMENT_VERSION, "version should normalize");
+  assertDeepEqual(doc.config, TEST_DOCUMENT_CONFIG, "config should normalize");
   assertEqual(doc.views?.[0]?.id, "front", "default view should use surface id");
   assertEqual(
     doc.surfaces[0].layers[0].visible,
@@ -108,7 +116,8 @@ function testNormalizeDefaults() {
 
 function testV2ImagePlacementImageDoesNotRequireSource() {
   const diagnostics = validateKitEditorDocument({
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -138,7 +147,8 @@ function testV2ImagePlacementImageDoesNotRequireSource() {
 
 function testImageObjectDoesNotRequireSource() {
   const diagnostics = validateKitEditorDocument({
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     assets: [{ id: "template", type: "image" }],
     surfaces: [
       {
@@ -167,39 +177,10 @@ function testImageObjectDoesNotRequireSource() {
   );
 }
 
-function testNormalizeDropsImageAssetId() {
-  const doc = normalizeEditorDocument({
-    version: 2,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        layers: [
-          {
-            id: "image.user",
-            objects: [
-              {
-                id: "image-target",
-                type: "image",
-                assetId: "legacy-asset",
-                frame: { x: 0, y: 0, width: 100, height: 120 },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  assert(
-    !("assetId" in (doc.surfaces[0].layers[0].objects?.[0] ?? {})),
-    "normalize should drop legacy image assetId",
-  );
-}
-
-function testV1DocumentIsRejected() {
+function testV2DocumentIsRejected() {
   const diagnostics = validateKitEditorDocument({
-    version: 1,
+    version: 2,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -211,13 +192,32 @@ function testV1DocumentIsRejected() {
 
   assert(
     diagnostics.some((item) => item.code === "document-version-invalid"),
-    "v1 document should be rejected",
+    "v2 document should be rejected",
+  );
+}
+
+function testDocumentConfigIsRequired() {
+  const diagnostics = validateKitEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        layers: [],
+      },
+    ],
+  });
+
+  assert(
+    diagnostics.some((item) => item.code === "document-config-required"),
+    "missing document config should be rejected",
   );
 }
 
 function testImageObjectRequiresFrame() {
   const diagnostics = validateKitEditorDocument({
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -246,7 +246,8 @@ function testImageObjectRequiresFrame() {
 
 function testValidationStructureAndReferences() {
   const diagnostics = validateKitEditorDocument({
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     assets: [{ id: "template", type: "image", src: "/template.png" }],
     surfaces: [
       {
@@ -293,7 +294,8 @@ function testValidationStructureAndReferences() {
 function testCustomValidatorDiagnostics() {
   const diagnostics = validateEditorDocument(
     {
-      version: 2,
+      version: EDITOR_DOCUMENT_VERSION,
+      config: TEST_DOCUMENT_CONFIG,
       surfaces: [
         {
           id: "front",
@@ -330,7 +332,8 @@ function testCustomValidatorDiagnostics() {
 
 function testCustomEffectRequiresCapabilityId() {
   const diagnostics = validateEditorDocument({
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -364,7 +367,8 @@ function testKitEffectCapabilityResolution() {
   );
 
   const diagnostics = validateKitEditorDocument({
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -393,7 +397,8 @@ function testKitEffectCapabilityResolution() {
 
 function testRequirePolicyDiagnostics() {
   const doc: EditorDocument = {
-    version: 2,
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -450,8 +455,8 @@ function main() {
   testNormalizeDefaults();
   testV2ImagePlacementImageDoesNotRequireSource();
   testImageObjectDoesNotRequireSource();
-  testNormalizeDropsImageAssetId();
-  testV1DocumentIsRejected();
+  testV2DocumentIsRejected();
+  testDocumentConfigIsRequired();
   testImageObjectRequiresFrame();
   testValidationStructureAndReferences();
   testCustomValidatorDiagnostics();

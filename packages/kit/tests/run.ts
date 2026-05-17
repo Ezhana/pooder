@@ -149,6 +149,12 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
+const TEST_DOCUMENT_CONFIG = {
+  "scene.previewBounds": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  "scene.productionFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  "scene.viewportFocusFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+};
+
 function imagePlacementCommittedVisibility(slotId: string) {
   return {
     op: "not",
@@ -1213,7 +1219,8 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
 
 function testCreateKitCapabilitiesForDocument() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 2,
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -1260,7 +1267,8 @@ function testCreateKitCapabilitiesForDocument() {
 
 function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 2,
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -1318,7 +1326,8 @@ async function testApplyKitEditorDocument() {
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
   const document = {
-    version: 2,
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
     assets: [
       { id: "template", type: "image", src: "/template.png" },
       { id: "photo", type: "image", src: "/photo.png" },
@@ -1405,11 +1414,13 @@ async function testApplyKitEditorDocument() {
   };
   runtime.extensions.registerMany(createKitCapabilitiesForDocument(document));
   await runtime.extensions.flushActivation();
-  const initialDielineShape = runtime.config.get("dieline.shape");
 
   const result = await applyKitEditorDocument(runtime, document);
 
-  assert(result.ok, "document apply should succeed");
+  assert(
+    result.ok,
+    `document apply should succeed (${JSON.stringify(result.diagnostics)})`,
+  );
   assertDeepEqual(
     result.appliedSurfaceIds,
     ["front"],
@@ -1501,9 +1512,9 @@ async function testApplyKitEditorDocument() {
     "feature effect should compile to declarative render graph data",
   );
   assertEqual(
-    runtime.config.get("dieline.shape"),
-    initialDielineShape,
-    "document apply should not write runtime config",
+    runtime.config.get("scene.previewBounds"),
+    TEST_DOCUMENT_CONFIG["scene.previewBounds"],
+    "document apply should import document config",
   );
   assert(
     renderGraph.layers.flatMap((layer) => layer.nodes).some(
@@ -1518,7 +1529,8 @@ async function testApplyKitEditorDocument() {
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
-    version: 2,
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -1549,7 +1561,8 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 
   const optionalRuntime = new Pooder();
   const optionalResult = await applyKitEditorDocument(optionalRuntime, {
-    version: 2,
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -1605,7 +1618,8 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   const missingCompilerResult = await applyKitEditorDocument(
     missingCompilerRuntime,
     {
-      version: 2,
+      version: 3,
+      config: TEST_DOCUMENT_CONFIG,
       surfaces: [
         {
           id: "front",
@@ -1658,7 +1672,8 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   });
   await throwRuntime.extensions.flushActivation();
   const throwResult = await applyKitEditorDocument(throwRuntime, {
-    version: 2,
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
@@ -2786,7 +2801,8 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 2,
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
     assets: [{ id: "template", type: "image", src: "/old-template.png" }],
     surfaces: [
       {

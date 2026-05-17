@@ -38,6 +38,11 @@ import { TEMPLATE_OVERLAY_CAPABILITY_ID } from "../extensions/template-overlay";
 import { WHITE_INK_CAPABILITY_ID } from "../extensions/white-ink";
 
 export interface KitEditorDocumentRuntime {
+  readonly config?: {
+    get<T = unknown>(key: string, defaultValue?: T): T;
+    import(data: Record<string, unknown>): void;
+    update(key: string, value: unknown): void;
+  };
   readonly services: {
     getOrThrow<T extends Service>(
       identifier: ServiceIdentifier<T>,
@@ -111,6 +116,23 @@ export async function applyKitEditorDocument(
   if (hasErrors(diagnostics)) {
     return createResult(false, document, diagnostics, []);
   }
+  if (!runtime.config) {
+    return createResult(
+      false,
+      document,
+      [
+        ...diagnostics,
+        {
+          severity: "error",
+          code: "runtime-config-required",
+          message: "ConfigurationService runtime facade is required to apply an EditorDocument.",
+          path: "config",
+        },
+      ],
+      [],
+    );
+  }
+  runtime.config.import(document.config);
 
   const capabilityResult = collectKitEditorDocumentCapabilityRequirements(
     document,

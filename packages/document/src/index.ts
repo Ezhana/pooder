@@ -1,4 +1,4 @@
-export const EDITOR_DOCUMENT_VERSION = 2 as const;
+export const EDITOR_DOCUMENT_VERSION = 3 as const;
 
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
@@ -29,20 +29,6 @@ export interface EditorRect {
   height: number;
 }
 
-export interface SceneFrameMm {
-  xMm: number;
-  yMm: number;
-  widthMm: number;
-  heightMm: number;
-}
-
-export interface SurfaceSceneFrames {
-  previewBounds: SceneFrameMm;
-  productionFrame: SceneFrameMm;
-  exportFrame?: SceneFrameMm;
-  viewportFocusFrame?: SceneFrameMm;
-}
-
 export interface EditorTransform {
   left?: number;
   top?: number;
@@ -55,6 +41,7 @@ export interface EditorTransform {
 
 export interface EditorDocument {
   version: EditorDocumentVersion;
+  config: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   assets?: EditorAsset[];
   surfaces: EditorSurface[];
@@ -81,7 +68,6 @@ export interface EditorSurface {
     bleed?: EditorRect;
     safe?: EditorRect;
   };
-  sceneFrames?: SurfaceSceneFrames;
   layers: EditorLayer[];
   effects?: EditorEffect[];
   metadata?: Record<string, unknown>;
@@ -216,6 +202,11 @@ export interface EditorDocumentCapabilityCollectionResult {
 
 const VALID_UNITS = new Set(["px", "mm", "cm", "in"]);
 const VALID_REQUIRE_POLICIES = new Set(["strict", "warn", "ignore"]);
+const REQUIRED_CONFIG_FRAME_KEYS = [
+  "scene.previewBounds",
+  "scene.productionFrame",
+  "scene.viewportFocusFrame",
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -259,7 +250,9 @@ function normalizeRect(value: unknown): EditorRect | undefined {
   return { x, y, width, height };
 }
 
-function normalizeSceneFrameMm(value: unknown): SceneFrameMm | undefined {
+function normalizeSceneFrameMm(
+  value: unknown,
+): { xMm: number; yMm: number; widthMm: number; heightMm: number } | undefined {
   if (!isRecord(value)) return undefined;
   const xMm = normalizeFiniteNumber(value.xMm);
   const yMm = normalizeFiniteNumber(value.yMm);
@@ -274,24 +267,6 @@ function normalizeSceneFrameMm(value: unknown): SceneFrameMm | undefined {
     return undefined;
   }
   return { xMm, yMm, widthMm, heightMm };
-}
-
-function normalizeSurfaceSceneFrames(
-  value: unknown,
-): SurfaceSceneFrames | undefined {
-  if (!isRecord(value)) return undefined;
-  const previewBounds = normalizeSceneFrameMm(value.previewBounds);
-  const productionFrame = normalizeSceneFrameMm(value.productionFrame);
-  if (!previewBounds || !productionFrame) return undefined;
-  const exportFrame = normalizeSceneFrameMm(value.exportFrame);
-  const viewportFocusFrame = normalizeSceneFrameMm(value.viewportFocusFrame);
-
-  return {
-    previewBounds,
-    productionFrame,
-    ...(exportFrame ? { exportFrame } : {}),
-    ...(viewportFocusFrame ? { viewportFocusFrame } : {}),
-  };
 }
 
 function normalizeTransform(value: unknown): EditorTransform | undefined {
@@ -472,7 +447,6 @@ function normalizeSurface(value: unknown): EditorSurface | null {
     },
     frame:
       frame && (frame.trim || frame.bleed || frame.safe) ? frame : undefined,
-    sceneFrames: normalizeSurfaceSceneFrames(value.sceneFrames),
     layers,
     effects: normalizeEffects(value.effects),
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
@@ -507,6 +481,7 @@ function normalizeView(value: unknown): EditorView | null {
 
 export function normalizeEditorDocument(value: unknown): EditorDocument {
   const input = isRecord(value) ? value : {};
+  const config = isRecord(input.config) ? cloneRecord(input.config) : {};
   const surfaces = Array.isArray(input.surfaces)
     ? input.surfaces
         .map(normalizeSurface)
@@ -532,6 +507,7 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
 
   return {
     version: EDITOR_DOCUMENT_VERSION,
+    config,
     ...(isRecord(input.metadata) ? { metadata: cloneRecord(input.metadata) } : {}),
     ...(assets.length ? { assets } : {}),
     surfaces,
@@ -605,6 +581,33 @@ function validateEffect(
   }
 }
 
+function validateDocumentConfig(
+  diagnostics: EditorDocumentDiagnostic[],
+  input: Record<string, unknown>,
+  document: EditorDocument,
+) {
+  if (!isRecord(input.config)) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "document-config-required",
+      message: "EditorDocument config is required.",
+      path: "config",
+    });
+    return;
+  }
+
+  REQUIRED_CONFIG_FRAME_KEYS.forEach((key) => {
+    if (!normalizeSceneFrameMm(document.config[key])) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "document-config-frame-required",
+        message: `EditorDocument config requires a valid "${key}" frame.`,
+        path: `config.${key}`,
+      });
+    }
+  });
+}
+
 function validateEffects(
   diagnostics: EditorDocumentDiagnostic[],
   effects: EditorEffect[] | undefined,
@@ -654,6 +657,8 @@ export function validateEditorDocument(
   const layerIds = new Set<string>();
   const objectIds = new Set<string>();
   const viewIds = new Set<string>();
+
+  validateDocumentConfig(diagnostics, input, document);
 
   runValidators(diagnostics, options.validators, {
     document,

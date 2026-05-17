@@ -3,6 +3,7 @@ import { inject } from "vue";
 import { Pooder } from "@pooder/core";
 import type {
   CapabilityRegistryChangeEvent,
+  ConfigurationDefinitionsChangeEvent,
   ExtensionDefinition,
   ExtensionStateSnapshot,
   RegisteredCapabilityDefinition,
@@ -80,6 +81,16 @@ export interface PooderRuntimeLike {
     getDefinition(id: string): any;
     import(data: Record<string, any>): void;
     listDefinitions(): any;
+    onAnyChange(
+      callback: (event: { key: string; value: any; oldValue: any }) => void,
+    ): { dispose(): void };
+    onDefinitionsChange(
+      callback: (event: ConfigurationDefinitionsChangeEvent) => void,
+    ): { dispose(): void };
+    onDidChange(
+      key: string,
+      callback: (event: { key: string; value: any; oldValue: any }) => void,
+    ): { dispose(): void };
     update(key: string, value: any): void;
   };
   readonly workbench: {

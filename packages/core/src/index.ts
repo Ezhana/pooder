@@ -107,6 +107,16 @@ type RuntimeConfigApi = {
   export(): Record<string, any>;
   listDefinitions(): ReturnType<ConfigurationService["listDefinitions"]>;
   getDefinition(id: string): ReturnType<ConfigurationService["getDefinition"]>;
+  onDidChange(
+    key: string,
+    callback: Parameters<ConfigurationService["onDidChange"]>[1],
+  ): Disposable;
+  onAnyChange(
+    callback: Parameters<ConfigurationService["onAnyChange"]>[0],
+  ): Disposable;
+  onDefinitionsChange(
+    callback: Parameters<ConfigurationService["onDefinitionsChange"]>[0],
+  ): Disposable;
 };
 
 type RuntimeWorkbenchApi = {
@@ -261,6 +271,11 @@ export class Pooder {
       export: () => this.configurationService.export(),
       listDefinitions: () => this.configurationService.listDefinitions(),
       getDefinition: (id) => this.configurationService.getDefinition(id),
+      onDidChange: (key, callback) =>
+        this.configurationService.onDidChange(key, callback),
+      onAnyChange: (callback) => this.configurationService.onAnyChange(callback),
+      onDefinitionsChange: (callback) =>
+        this.configurationService.onDefinitionsChange(callback),
     };
 
     this.workbench = {
