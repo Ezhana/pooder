@@ -13,6 +13,7 @@ export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   "template-overlay": "pooder.kit.template-overlay",
   dieline: "pooder.kit.dieline-geometry",
   feature: "pooder.kit.feature",
+  "configurable-visual": "pooder.kit.configurable-visual",
   "image-placement": "pooder.kit.image-placement",
   "white-ink": "pooder.kit.white-ink",
 } as const;

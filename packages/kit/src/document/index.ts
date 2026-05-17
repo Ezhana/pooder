@@ -23,6 +23,7 @@ import {
   type EditorSurface,
 } from "@pooder/document/kit";
 import {
+  createConfigurableVisualCapability,
   createClipCapability,
   createDielineGeometryCapability,
   createFeatureCapability,
@@ -31,6 +32,7 @@ import {
   createWhiteInkCapability,
 } from "../factories";
 import { CLIP_CAPABILITY_ID } from "../extensions/clip";
+import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-visual";
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
 import { IMAGE_PLACEMENT_CAPABILITY_ID } from "../extensions/image";
@@ -85,6 +87,7 @@ const EFFECT_PHASE_ORDER = {
 
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [CLIP_CAPABILITY_ID]: () => createClipCapability(),
+  [CONFIGURABLE_VISUAL_CAPABILITY_ID]: () => createConfigurableVisualCapability(),
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
   [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),
   [IMAGE_PLACEMENT_CAPABILITY_ID]: () => createImagePlacementCapability(),

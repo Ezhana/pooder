@@ -72,6 +72,10 @@ import {
   createTemplateOverlayCapabilityDefinition,
   type TemplateOverlayCapabilityApi,
 } from "../src/extensions/template-overlay";
+import {
+  CONFIGURABLE_VISUAL_CAPABILITY_ID,
+  type ConfigurableVisualCapabilityApi,
+} from "../src/extensions/configurable-visual";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
 import {
@@ -92,6 +96,7 @@ import {
   createDielineGeometryCapability,
   createClipCapability,
   createFeatureCapability,
+  createConfigurableVisualCapability,
   createImagePlacementCapability,
   createTemplateOverlayCapability,
   createWhiteInkCapability,
@@ -1174,6 +1179,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createDielineGeometryCapability());
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
+  runtime.extensions.register(createConfigurableVisualCapability());
   await runtime.extensions.flushActivation();
 
   assert(
@@ -1198,6 +1204,11 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     runtime.extensions.getState(FEATURE_CAPABILITY_ID)?.state === "active",
     "feature capability factory should activate",
   );
+  assert(
+    runtime.extensions.getState(CONFIGURABLE_VISUAL_CAPABILITY_ID)?.state ===
+      "active",
+    "configurable visual capability factory should activate",
+  );
   const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
     "ToolRegistryService",
   );
@@ -1207,6 +1218,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     DIELINE_GEOMETRY_CAPABILITY_ID,
     CLIP_CAPABILITY_ID,
     FEATURE_CAPABILITY_ID,
+    CONFIGURABLE_VISUAL_CAPABILITY_ID,
   ]) {
     assert(
       !toolRegistry.hasTool(toolId),
@@ -1243,6 +1255,7 @@ function testCreateKitCapabilitiesForDocument() {
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
                   { type: "clip", payload: { source: { type: "dieline" } } },
+                  { type: "configurable-visual" },
                 ],
               },
             ],
@@ -1258,6 +1271,7 @@ function testCreateKitCapabilitiesForDocument() {
       DIELINE_GEOMETRY_CAPABILITY_ID,
       CLIP_CAPABILITY_ID,
       FEATURE_CAPABILITY_ID,
+      CONFIGURABLE_VISUAL_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
       TEMPLATE_OVERLAY_CAPABILITY_ID,
     ].sort(),
@@ -2979,6 +2993,173 @@ async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
   await runtime.dispose();
 }
 
+async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
+  const runtime = new Pooder();
+
+  runtime.extensions.register(createConfigurableVisualCapability());
+  await runtime.extensions.flushActivation();
+
+  await applyKitEditorDocument(runtime, {
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 200, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "front.flash-base",
+            objects: [
+              {
+                id: "front.flash-base",
+                type: "image",
+                src: "/default-flash.png",
+                frame: { x: 0, y: 0, width: 200, height: 100 },
+                effects: [
+                  {
+                    type: "configurable-visual",
+                    payload: { key: "flash-base" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
+  const facade = runtime.capabilities.get<ConfigurableVisualCapabilityApi>(
+    CONFIGURABLE_VISUAL_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("configurable visual capability facade should be registered");
+  }
+
+  assertDeepEqual(
+    runtime.config.export(),
+    TEST_DOCUMENT_CONFIG,
+    "unused configurable visual capability should not add a default config value",
+  );
+
+  const defaultNode = renderIntentService
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.flash-base");
+  assertEqual(
+    defaultNode?.visual?.src,
+    "/default-flash.png",
+    "configurable visual should preserve document default src before config patch",
+  );
+  assertEqual(
+    defaultNode?.visible,
+    true,
+    "configurable visual should preserve document default visibility before config patch",
+  );
+
+  runtime.config.update("configurableVisual", {
+    "flash-base": {
+      enabled: true,
+      optionId: "flash-holo",
+      optionName: "Holographic",
+      src: "/runtime-flash.png",
+    },
+  });
+  const patchedNode = renderIntentService
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.flash-base");
+  assertEqual(
+    patchedNode?.visual?.src,
+    "/runtime-flash.png",
+    "configurable visual config should patch the original object src",
+  );
+  assertEqual(
+    patchedNode?.visible,
+    true,
+    "enabled configurable visual config with src should make the object visible",
+  );
+  assert(
+    Boolean(runtime.config.export().configurableVisual),
+    "configurable visual config should be exported after user mutation",
+  );
+
+  runtime.config.update("configurableVisual", {
+    "flash-base": {
+      enabled: false,
+      optionId: "flash-none",
+      optionName: "No Flashing",
+    },
+  });
+  const disabledNode = renderIntentService
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.flash-base");
+  assertEqual(
+    disabledNode?.visible,
+    false,
+    "disabled configurable visual config should hide the original target object",
+  );
+
+  const runtimeWithPersistedConfig = new Pooder();
+  runtimeWithPersistedConfig.extensions.register(
+    createConfigurableVisualCapability(),
+  );
+  await runtimeWithPersistedConfig.extensions.flushActivation();
+  await applyKitEditorDocument(runtimeWithPersistedConfig, {
+    version: 3,
+    config: {
+      ...TEST_DOCUMENT_CONFIG,
+      configurableVisual: {
+        "flash-base": {
+          enabled: true,
+          src: "/persisted-flash.png",
+        },
+      },
+    },
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 200, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "front.flash-base",
+            objects: [
+              {
+                id: "front.flash-base",
+                type: "image",
+                frame: { x: 0, y: 0, width: 200, height: 100 },
+                effects: [
+                  {
+                    type: "configurable-visual",
+                    payload: { key: "flash-base" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const persistedNode = runtimeWithPersistedConfig.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.flash-base");
+  assertEqual(
+    persistedNode?.visual?.src,
+    "/persisted-flash.png",
+    "persisted configurable visual config should patch after document apply",
+  );
+
+  await runtime.dispose();
+  await runtimeWithPersistedConfig.dispose();
+}
+
 async function testRulerCapabilityExtension() {
   const runtime = new Pooder();
 
@@ -3222,6 +3403,7 @@ async function main() {
   await testWhiteInkCapabilityExtension();
   await testTemplateOverlayCapabilityExtension();
   await testTemplateOverlayConfigPatchesOriginalRenderIntents();
+  await testConfigurableVisualConfigPatchesOriginalRenderIntents();
   await testRulerCapabilityExtension();
   await testFeatureCapabilityDefinition();
   console.log("ok");

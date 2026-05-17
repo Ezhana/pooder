@@ -1,4 +1,5 @@
 export * from "./clip";
+export * from "./configurable-visual";
 export * from "./design-export";
 export * from "./edge-detection";
 export * from "./image";
