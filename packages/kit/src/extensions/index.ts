@@ -3,7 +3,6 @@ export * from "./configurable-visual";
 export * from "./design-export";
 export * from "./edge-detection";
 export * from "./image";
-export * from "./template-overlay";
 export * from "./dieline";
 export * from "./feature";
 export * from "./mirror";

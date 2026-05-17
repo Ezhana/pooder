@@ -62,12 +62,6 @@ export interface RenderIntentPlacementAspect {
   fit?: "cover" | "contain" | "stretch";
 }
 
-export interface RenderIntentOverlayAspect {
-  enabled?: boolean;
-  role?: string;
-  slot?: string;
-}
-
 export interface RenderIntentClippingAspect {
   enabled?: boolean;
   effects?: RenderEffectSpec[];
@@ -111,7 +105,6 @@ export interface RenderIntentDraft {
   visual?: RenderIntentVisualAspect;
   placement?: RenderIntentPlacementAspect;
   projection?: RenderIntentProjectionAspect;
-  overlay?: RenderIntentOverlayAspect;
   clipping?: RenderIntentClippingAspect;
   interaction?: RenderIntentInteractionAspect;
   export?: RenderIntentExportAspect;
@@ -590,6 +583,10 @@ function createProjectionGraphNode(
   const interactive = projection.interactive === true;
   const channel = draft.ordering.channel ?? "overlay";
   const id = `projection:${draft.id}:${sourceNode.id}:${index}`;
+  const visibility = mergeVisibilityExprs(
+    sourceNode.visibility,
+    draft.export?.visibility,
+  );
 
   return {
     ...cloneRecord(sourceNode),
@@ -620,9 +617,10 @@ function createProjectionGraphNode(
       sourceSubjectId: sourceNode.subjectId,
       suppressSource: projection.suppressSource !== false,
     },
-    visible: draft.export?.visible !== false,
-    visibility: cloneRecord(draft.export?.visibility),
-    exportable: draft.export?.exportable !== false,
+    visible: sourceNode.visible !== false && draft.export?.visible !== false,
+    visibility,
+    exportable:
+      sourceNode.exportable !== false && draft.export?.exportable !== false,
     sortKey: {
       layerOrder: draft.ordering.layerOrder ?? 0,
       objectOrder: draft.ordering.objectOrder ?? 0,
@@ -630,6 +628,18 @@ function createProjectionGraphNode(
       channelOrder: CHANNEL_ORDER[channel],
       subOrder: (draft.ordering.subOrder ?? 0) + index / 1_000_000,
     },
+  };
+}
+
+function mergeVisibilityExprs(
+  source: VisibilityExpr | undefined,
+  projection: VisibilityExpr | undefined,
+): VisibilityExpr | undefined {
+  if (!source) return cloneRecord(projection);
+  if (!projection) return cloneRecord(source);
+  return {
+    op: "all",
+    exprs: [cloneRecord(source), cloneRecord(projection)],
   };
 }
 
@@ -697,7 +707,6 @@ function createDraftFromPatch(
     visual: patch.visual,
     placement: patch.placement,
     projection: patch.projection,
-    overlay: patch.overlay,
     clipping: patch.clipping,
     interaction: patch.interaction,
     export: patch.export,
@@ -766,7 +775,6 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       ...(draft.data ?? {}),
       renderIntentId: draft.id,
       subject: draft.subject,
-      ...(draft.overlay ? { templateOverlay: draft.overlay } : {}),
       ...(typeof draft.interaction?.locked === "boolean"
         ? { locked: draft.interaction.locked }
         : {}),
@@ -832,7 +840,6 @@ function mergeDraft(
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
     projection: mergeOptionalRecord(base.projection, patch.projection),
-    overlay: mergeOptionalRecord(base.overlay, patch.overlay),
     clipping: mergeOptionalRecord(base.clipping, patch.clipping),
     interaction: mergeOptionalRecord(base.interaction, patch.interaction),
     export: mergeOptionalRecord(base.export, patch.export),
@@ -853,7 +860,6 @@ function mergePatch(
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
     projection: mergeOptionalRecord(base.projection, patch.projection),
-    overlay: mergeOptionalRecord(base.overlay, patch.overlay),
     clipping: mergeOptionalRecord(base.clipping, patch.clipping),
     interaction: mergeOptionalRecord(base.interaction, patch.interaction),
     export: mergeOptionalRecord(base.export, patch.export),

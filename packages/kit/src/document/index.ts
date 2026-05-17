@@ -28,7 +28,6 @@ import {
   createDielineGeometryCapability,
   createFeatureCapability,
   createImagePlacementCapability,
-  createTemplateOverlayCapability,
   createWhiteInkCapability,
 } from "../factories";
 import { CLIP_CAPABILITY_ID } from "../extensions/clip";
@@ -36,7 +35,6 @@ import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-vi
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
 import { IMAGE_PLACEMENT_CAPABILITY_ID } from "../extensions/image";
-import { TEMPLATE_OVERLAY_CAPABILITY_ID } from "../extensions/template-overlay";
 import { WHITE_INK_CAPABILITY_ID } from "../extensions/white-ink";
 
 export interface KitEditorDocumentRuntime {
@@ -91,7 +89,6 @@ const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
   [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),
   [IMAGE_PLACEMENT_CAPABILITY_ID]: () => createImagePlacementCapability(),
-  [TEMPLATE_OVERLAY_CAPABILITY_ID]: () => createTemplateOverlayCapability(),
   [WHITE_INK_CAPABILITY_ID]: () => createWhiteInkCapability(),
 };
 

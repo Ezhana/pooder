@@ -408,7 +408,7 @@ function testRequirePolicyDiagnostics() {
             id: "layer",
             effects: [
               { type: "dieline", require: "strict" },
-              { type: "template-overlay", require: "warn" },
+              { type: "configurable-visual", require: "warn" },
               { type: "white-ink", require: "ignore" },
             ],
           },
@@ -434,7 +434,7 @@ function testRequirePolicyDiagnostics() {
       (item) =>
         item.code === "capability-optional-missing" &&
         item.severity === "warning" &&
-        item.capabilityId === "pooder.kit.template-overlay",
+        item.capabilityId === "pooder.kit.configurable-visual",
     ),
     "warn missing capability should produce warning",
   );

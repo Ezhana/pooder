@@ -10,7 +10,6 @@ import {
 
 export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   clip: "pooder.kit.clip",
-  "template-overlay": "pooder.kit.template-overlay",
   dieline: "pooder.kit.dieline-geometry",
   feature: "pooder.kit.feature",
   "configurable-visual": "pooder.kit.configurable-visual",

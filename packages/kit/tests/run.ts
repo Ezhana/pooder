@@ -67,21 +67,11 @@ import {
   type RulerCapabilityApi,
 } from "../src/extensions/ruler";
 import {
-  TEMPLATE_OVERLAY_CAPABILITY_ID,
-  TemplateOverlayCapabilityExtension,
-  createTemplateOverlayCapabilityDefinition,
-  type TemplateOverlayCapabilityApi,
-} from "../src/extensions/template-overlay";
-import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   type ConfigurableVisualCapabilityApi,
 } from "../src/extensions/configurable-visual";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
-import {
-  normalizeTemplateOverlayConfig,
-  patchTemplateOverlayConfig,
-} from "../src/extensions/template-overlay/model";
 import {
   normalizePointInGeometry,
   resolveFeaturePosition,
@@ -98,7 +88,6 @@ import {
   createFeatureCapability,
   createConfigurableVisualCapability,
   createImagePlacementCapability,
-  createTemplateOverlayCapability,
   createWhiteInkCapability,
 } from "../src/factories";
 import {
@@ -498,145 +487,6 @@ function testMaskOps() {
   );
 }
 
-function testTemplateOverlayConfig() {
-  const normalized = normalizeTemplateOverlayConfig({
-    version: 1,
-    clip: {
-      enabled: true,
-      targetLayerIds: [" image.user ", "image.user", ""],
-    },
-    slots: {
-      normal: {
-        src: " /normal.png ",
-        opacity: 2,
-        placement: {
-          space: "surfaceFrameRatio",
-          x: 0,
-          y: "0",
-          width: 1,
-          height: 1,
-        },
-      },
-      back: {
-        src: "/back.png",
-        enabled: false,
-      },
-      render: {
-        src: "",
-      },
-      small: {
-        src: "",
-        enabled: false,
-      },
-      unknown: {
-        src: "/unknown.png",
-      },
-    },
-  });
-
-  assertEqual(normalized.version, 1, "template overlay version should be v1");
-  assertEqual(
-    normalized.slots.normal?.src,
-    "/normal.png",
-    "template overlay should trim slot src",
-  );
-  assertEqual(
-    normalized.clip?.targetLayerIds?.length,
-    1,
-    "template overlay should normalize clip target layer ids",
-  );
-  assertEqual(
-    normalized.slots.normal?.opacity,
-    1,
-    "template overlay opacity should be clamped",
-  );
-  assertEqual(
-    normalized.slots.normal?.placement?.height,
-    1,
-    "template overlay should normalize slot placement",
-  );
-  assertEqual(
-    normalized.slots.back?.src,
-    "/back.png",
-    "template overlay should preserve the back slot in config",
-  );
-  assertEqual(
-    normalized.slots.back?.enabled,
-    false,
-    "template overlay should preserve slot enabled",
-  );
-  assert(
-    !normalized.slots.render,
-    "template overlay should drop empty src slots",
-  );
-  assertEqual(
-    normalized.slots.small?.src,
-    "",
-    "template overlay should preserve disabled empty slots",
-  );
-  assertEqual(
-    normalized.slots.small?.enabled,
-    false,
-    "template overlay should preserve disabled empty slot state",
-  );
-  assert(
-    !("unknown" in normalized.slots),
-    "template overlay should drop unknown slots",
-  );
-
-  const patched = patchTemplateOverlayConfig(normalized, {
-    clip: {
-      enabled: false,
-    },
-    slots: {
-      normal: {
-        opacity: 0.25,
-      },
-      frame: {
-        src: "/frame.png",
-        placement: {
-          space: "surfaceFrameRatio",
-          x: 0.1,
-          y: 0.12,
-          width: 0.3,
-          height: 0.2,
-        },
-      },
-      back: null,
-    },
-  });
-
-  assertEqual(
-    patched.slots.normal?.src,
-    "/normal.png",
-    "template overlay patch should preserve existing slot src",
-  );
-  assertEqual(
-    patched.slots.normal?.opacity,
-    0.25,
-    "template overlay patch should update slot opacity",
-  );
-  assertEqual(
-    patched.clip?.enabled,
-    false,
-    "template overlay patch should update clip config",
-  );
-  assertEqual(
-    patched.slots.frame?.src,
-    "/frame.png",
-    "template overlay patch should add slots",
-  );
-  assertEqual(
-    patched.slots.frame?.placement?.x,
-    0.1,
-    "template overlay patch should add slot placement",
-  );
-  assert(
-    !patched.slots.back,
-    "template overlay patch should remove null slots",
-  );
-}
-
 function testEdgeScale() {
   const currentMax = 100;
   const baseBounds = { width: 50, height: 20 };
@@ -1028,10 +878,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     createRulerCapabilityDefinition({} as RulerCapabilityApi, {
       capabilityId: "custom.ruler",
     }),
-    createTemplateOverlayCapabilityDefinition(
-      {} as TemplateOverlayCapabilityApi,
-      { capabilityId: "custom.template-overlay" },
-    ),
     createFeatureCapabilityDefinition({} as FeatureCapabilityApi, {
       capabilityId: "custom.feature",
     }),
@@ -1045,7 +891,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
       "custom.export",
       "custom.white-ink",
       "custom.ruler",
-      "custom.template-overlay",
       "custom.feature",
     ],
     "capability definitions should accept caller-provided capability ids",
@@ -1244,7 +1089,6 @@ function testCreateKitCapabilitiesForDocument() {
               { type: "background" },
               { type: "dieline" },
               { type: "feature" },
-              { type: "template-overlay", require: "warn" },
               { type: "dieline" },
             ],
             objects: [
@@ -1273,7 +1117,6 @@ function testCreateKitCapabilitiesForDocument() {
       FEATURE_CAPABILITY_ID,
       CONFIGURABLE_VISUAL_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
-      TEMPLATE_OVERLAY_CAPABILITY_ID,
     ].sort(),
     "document helper should create supported kit capabilities once and ignore background effects",
   );
@@ -1368,7 +1211,12 @@ async function testApplyKitEditorDocument() {
                 type: "image",
                 src: "/template.png",
                 frame: { x: 0, y: 0, width: 100, height: 120 },
-                effects: [{ type: "template-overlay" }],
+                effects: [
+                  {
+                    type: "configurable-visual",
+                    payload: { key: "customization.template.artwork" },
+                  },
+                ],
               },
             ],
           },
@@ -1585,7 +1433,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
           {
             id: "front-artwork",
             effects: [
-              { type: "template-overlay", require: "warn" },
+              { type: "configurable-visual", require: "warn" },
               { type: "white-ink", require: "ignore" },
             ],
           },
@@ -1598,7 +1446,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
     optionalResult.diagnostics.some(
       (item) =>
         item.code === "capability-optional-missing" &&
-        item.capabilityId === TEMPLATE_OVERLAY_CAPABILITY_ID,
+        item.capabilityId === CONFIGURABLE_VISUAL_CAPABILITY_ID,
     ),
     "warn missing capability should return warning diagnostic",
   );
@@ -1619,13 +1467,10 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   const missingCompilerRuntime = new Pooder();
   missingCompilerRuntime.extensions.register(
     createFakeCapabilityExtension({
-      [TEMPLATE_OVERLAY_CAPABILITY_ID]: {
-        getConfig: () => ({ version: 1, slots: {} }),
-        patchConfig: async () => ({ version: 1, slots: {} }),
-        replaceConfig: async (config: any) => config,
-        clearConfig: async () => ({ version: 1, slots: {} }),
+      [CONFIGURABLE_VISUAL_CAPABILITY_ID]: {
+        getConfig: () => ({}),
         refresh: () => {},
-      } satisfies TemplateOverlayCapabilityApi,
+      } satisfies ConfigurableVisualCapabilityApi,
     }),
   );
   await missingCompilerRuntime.extensions.flushActivation();
@@ -1647,7 +1492,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
                   type: "image",
                   src: "/template.png",
                   frame: { x: 0, y: 0, width: 1, height: 1 },
-                  effects: [{ type: "template-overlay", require: "strict" }],
+                  effects: [{ type: "configurable-visual", require: "strict" }],
                 },
               ],
             },
@@ -1661,7 +1506,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
     missingCompilerResult.diagnostics.some(
       (item) =>
         item.code === "compiler-missing" &&
-        item.capabilityId === TEMPLATE_OVERLAY_CAPABILITY_ID,
+        item.capabilityId === CONFIGURABLE_VISUAL_CAPABILITY_ID,
     ),
     "strict missing compiler should return compiler diagnostic",
   );
@@ -1671,11 +1516,11 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   throwRuntime.extensions.register({
     id: "test.throwing-render-compiler",
     contribute: () => ({
-      capabilities: [{ id: TEMPLATE_OVERLAY_CAPABILITY_ID, facade: {} }],
+      capabilities: [{ id: CONFIGURABLE_VISUAL_CAPABILITY_ID, facade: {} }],
       renderIntentCompilers: [
         {
-          capabilityId: TEMPLATE_OVERLAY_CAPABILITY_ID,
-          effectType: "template-overlay",
+          capabilityId: CONFIGURABLE_VISUAL_CAPABILITY_ID,
+          effectType: "configurable-visual",
           compile: () => {
             throw new Error("boom");
           },
@@ -1701,7 +1546,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
                 type: "image",
                 src: "/template.png",
                 frame: { x: 0, y: 0, width: 1, height: 1 },
-                effects: [{ type: "template-overlay", require: "warn" }],
+                effects: [{ type: "configurable-visual", require: "warn" }],
               },
             ],
           },
@@ -1878,8 +1723,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         },
         sessionProjections: [
           {
-            id: "template-overlay",
-            sourceLayerIds: ["front.template-overlay"],
+            id: "business-helper",
+            sourceLayerIds: ["front.business-helper"],
             placement: "above",
             interactive: false,
           },
@@ -1891,16 +1736,16 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
   renderIntentService.setDocumentIntents([
     {
-      id: "front-template-overlay",
+      id: "front-business-helper",
       subject: {
         kind: "object",
         surfaceId: "legacy",
-        layerId: "front.template-overlay",
-        objectId: "front-template-overlay",
+        layerId: "front.business-helper",
+        objectId: "front-business-helper",
       },
       visual: { type: "rect" },
       ordering: {
-        layerId: "front.template-overlay",
+        layerId: "front.business-helper",
         stack: 500,
         layerOrder: 0,
       },
@@ -1965,7 +1810,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assert(
     sessionOverlayLayer?.nodes.some((node) =>
-      node.id.startsWith("projection:pooder.kit.image-placement.runtime.projection.above.slot.template-overlay"),
+      node.id.startsWith("projection:pooder.kit.image-placement.runtime.projection.above.slot.business-helper"),
     ),
     "image session should project declared business helpers above the working image",
   );
@@ -2756,243 +2601,6 @@ async function testWhiteInkCapabilityExtension() {
   await runtime.dispose();
 }
 
-async function testTemplateOverlayCapabilityExtension() {
-  const runtime = new Pooder();
-
-  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.extensions.register(
-    new TemplateOverlayCapabilityExtension({
-      configNamespace: "storefrontTemplate",
-      layers: {
-        clipTargetLayerIds: ["app.image"],
-      },
-    }),
-  );
-
-  await runtime.extensions.flushActivation();
-
-  assertEqual(
-    runtime.extensions.getState(TEMPLATE_OVERLAY_CAPABILITY_ID)?.state,
-    "active",
-    "template overlay capability should activate",
-  );
-
-  const facade = runtime.capabilities.get<TemplateOverlayCapabilityApi>(
-    TEMPLATE_OVERLAY_CAPABILITY_ID,
-  );
-  if (!facade) {
-    throw new Error("template overlay capability facade should be registered");
-  }
-
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(TEMPLATE_OVERLAY_CAPABILITY_ID),
-    "template overlay capability registration should not require a tool",
-  );
-  assert(
-    runtime.config.getDefinition("storefrontTemplate.config"),
-    "template overlay capability should accept caller config namespace",
-  );
-
-  const patched = await facade.patchConfig({
-    clip: { enabled: true, targetLayerIds: ["app.image"] },
-  });
-  assert(
-    patched.clip?.targetLayerIds?.[0] === "app.image",
-    "template overlay capability should expose config mutation facade",
-  );
-
-  await runtime.dispose();
-}
-
-async function testTemplateOverlayConfigPatchesOriginalRenderIntents() {
-  const runtime = new Pooder();
-
-  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.extensions.register(createTemplateOverlayCapability());
-  await runtime.extensions.flushActivation();
-
-  await applyKitEditorDocument(runtime, {
-    version: 3,
-    config: TEST_DOCUMENT_CONFIG,
-    assets: [{ id: "template", type: "image", src: "/old-template.png" }],
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 200, height: 100, unit: "mm" },
-        layers: [
-          {
-            id: "front.template-overlay",
-            objects: [
-              {
-                id: "front.template.normal",
-                type: "image",
-                src: "/old-template.png",
-                frame: { x: 0, y: 0, width: 200, height: 100 },
-                effects: [
-                  { type: "template-overlay", payload: { slot: "normal" } },
-                ],
-              },
-              {
-                id: "front.template.normal.copy",
-                type: "image",
-                src: "/old-template.png",
-                frame: { x: 0, y: 0, width: 200, height: 100 },
-                effects: [
-                  { type: "template-overlay", payload: { slot: "normal" } },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  const facade = runtime.capabilities.get<TemplateOverlayCapabilityApi>(
-    TEMPLATE_OVERLAY_CAPABILITY_ID,
-  );
-  if (!facade) {
-    throw new Error("template overlay capability facade should be registered");
-  }
-
-  runtime.config.update("scene.previewBounds", {
-    xMm: 0,
-    yMm: 0,
-    widthMm: 200,
-    heightMm: 100,
-  });
-
-  await facade.replaceConfig({
-    version: 1,
-    slots: {
-      normal: {
-        enabled: true,
-        src: "/new-template.png",
-        placement: {
-          space: "surfaceFrameRatio",
-          x: 0.25,
-          y: 0.1,
-          width: 0.5,
-          height: 0.4,
-        },
-      },
-    },
-  });
-
-  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
-    RENDER_INTENT_SERVICE,
-  );
-  const graph = renderIntentService.getGraph();
-  const nodes = graph.layers.flatMap((layer) => layer.nodes);
-  const source = nodes.find(
-    (node) => node.subjectId === "front.template.normal",
-  );
-  const sourceCopy = nodes.find(
-    (node) => node.subjectId === "front.template.normal.copy",
-  );
-  assert(source, "template overlay should keep the original object in graph");
-  assert(sourceCopy, "all objects bound to a slot should be patched");
-  assertEqual(
-    source?.visual?.src,
-    "/new-template.png",
-    "template overlay config should patch original object replacement src",
-  );
-  assertEqual(
-    sourceCopy?.visual?.src,
-    "/new-template.png",
-    "template overlay config should patch every target for the slot",
-  );
-  assert(
-    !nodes.some((node) => node.id === "template-overlay.normal"),
-    "template overlay should not create replacement render graph objects",
-  );
-  assertDeepEqual(
-    source?.frame,
-    { x: 50, y: 10, width: 100, height: 40 },
-    "template overlay config should patch original object frame",
-  );
-  assertDeepEqual(
-    source?.transform,
-    { left: 50, top: 10, originX: "left", originY: "top" },
-    "template overlay config should patch original object transform",
-  );
-  assertEqual(source?.props.opacity, 1, "template opacity should default to 1");
-
-  renderIntentService.patchIntent("pooder.kit.image-placement", {
-    id: "front.template.normal",
-    export: { visibility: { op: "const", value: false } },
-  });
-  await facade.replaceConfig({
-    version: 1,
-    slots: {
-      normal: {
-        enabled: true,
-        opacity: 0.3,
-        src: "/newer-template.png",
-      },
-    },
-  });
-  const updated = renderIntentService
-    .getGraph()
-    .layers.flatMap((layer) => layer.nodes)
-    .find((node) => node.subjectId === "front.template.normal");
-  assertEqual(
-    updated?.visual?.src,
-    "/newer-template.png",
-    "template overlay patch should update without clearing other source patches",
-  );
-  assertEqual(
-    updated?.visibility?.op,
-    "const",
-    "image placement runtime patch should survive template overlay config updates",
-  );
-
-  await facade.replaceConfig({
-    version: 1,
-    slots: {
-      normal: {
-        enabled: false,
-        src: "/disabled-template.png",
-      },
-    },
-  });
-  const disabled = renderIntentService
-    .getGraph()
-    .layers.flatMap((layer) => layer.nodes)
-    .find((node) => node.subjectId === "front.template.normal");
-  assertEqual(
-    disabled?.visible,
-    false,
-    "disabled template overlay slot should hide the original target object",
-  );
-
-  await facade.clearConfig();
-  const cleared = renderIntentService
-    .getGraph()
-    .layers.flatMap((layer) => layer.nodes)
-    .find((node) => node.subjectId === "front.template.normal");
-  assertEqual(
-    cleared?.visual?.src,
-    "/old-template.png",
-    "clearing template overlay config should restore original source",
-  );
-  assertDeepEqual(
-    cleared?.frame,
-    { x: 0, y: 0, width: 200, height: 100 },
-    "clearing template overlay config should restore original frame",
-  );
-  assertEqual(
-    cleared?.visibility?.op,
-    "const",
-    "clearing template overlay patches should not clear other source patches",
-  );
-
-  await runtime.dispose();
-}
-
 async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   const runtime = new Pooder();
 
@@ -3380,7 +2988,6 @@ async function main() {
   testWrappedOffsets();
   testBridgeSelection();
   testMaskOps();
-  testTemplateOverlayConfig();
   testEdgeScale();
   testFeaturePlacementProjection();
   testVisibilityDsl();
@@ -3401,8 +3008,6 @@ async function main() {
   testImageSessionShapeOverlayUsesDielineGeometry();
   await testDielineGeometryCapabilityExtension();
   await testWhiteInkCapabilityExtension();
-  await testTemplateOverlayCapabilityExtension();
-  await testTemplateOverlayConfigPatchesOriginalRenderIntents();
   await testConfigurableVisualConfigPatchesOriginalRenderIntents();
   await testRulerCapabilityExtension();
   await testFeatureCapabilityDefinition();
