@@ -9,6 +9,7 @@ import {
   WORKFLOW_SESSION_SERVICE,
   buildSceneGeometry,
   computeSceneLayout,
+  evaluateVisibilityExpr,
   mergeRenderIntentPatchDraft,
   readSizeState,
   resolveViewPaddingPx,
@@ -1418,6 +1419,102 @@ async function testRenderIntentProjectionAndVisibilityContext() {
   });
 }
 
+async function testRenderIntentProjectionPreservesSourceVisibility() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+
+    intents.setDocumentIntents([
+      {
+        id: "hidden.source",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "template",
+          objectId: "hidden.source",
+        },
+        visual: { type: "image", src: "/hidden.png" },
+        ordering: { layerId: "template", stack: 1, objectOrder: 0 },
+        export: { visible: false },
+      },
+      {
+        id: "conditional.source",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "template",
+          objectId: "conditional.source",
+        },
+        visual: { type: "image", src: "/conditional.png" },
+        ordering: { layerId: "template", stack: 1, objectOrder: 1 },
+        export: { visibility: { op: "contextTruthy", key: "show.source" } },
+      },
+      {
+        id: "template.projection",
+        subject: {
+          kind: "layer",
+          surfaceId: "front",
+          layerId: "session.overlay",
+        },
+        projection: {
+          sourceLayerIds: ["template"],
+          suppressSource: true,
+        },
+        ordering: {
+          layerId: "session.overlay",
+          stack: 2,
+          objectOrder: 0,
+        },
+        export: { visibility: { op: "contextTruthy", key: "show.session" } },
+      },
+    ]);
+
+    const projectedNodes = intents
+      .getGraph()
+      .layers.find((layer) => layer.id === "session.overlay")
+      ?.nodes ?? [];
+    const hiddenProjection = projectedNodes.find(
+      (node) => node.projection?.sourceSubjectId === "hidden.source",
+    );
+    const conditionalProjection = projectedNodes.find(
+      (node) => node.projection?.sourceSubjectId === "conditional.source",
+    );
+
+    assertEqual(
+      hiddenProjection?.visible,
+      false,
+      "projection should not make an invisible source visible",
+    );
+    assertEqual(
+      conditionalProjection?.visibility?.op,
+      "all",
+      "projection should require both source and projection visibility",
+    );
+    assertEqual(
+      evaluateVisibilityExpr(conditionalProjection?.visibility, {
+        contextValues: { "show.source": true, "show.session": false },
+      }),
+      false,
+      "projection should hide when its own visibility context is false",
+    );
+    assertEqual(
+      evaluateVisibilityExpr(conditionalProjection?.visibility, {
+        contextValues: { "show.source": false, "show.session": true },
+      }),
+      false,
+      "projection should hide when the source visibility context is false",
+    );
+    assertEqual(
+      evaluateVisibilityExpr(conditionalProjection?.visibility, {
+        contextValues: { "show.source": true, "show.session": true },
+      }),
+      true,
+      "projection should show when both visibility contexts are true",
+    );
+  });
+}
+
 async function testRenderIntentProjectionPreservesSourceStacking() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
@@ -1856,6 +1953,10 @@ async function main() {
     [
       "builds render intent projection nodes and visibility context",
       testRenderIntentProjectionAndVisibilityContext,
+    ],
+    [
+      "preserves source visibility when projecting render intent nodes",
+      testRenderIntentProjectionPreservesSourceVisibility,
     ],
     [
       "preserves source stacking when projecting render intent nodes",
