@@ -2,16 +2,19 @@ import {
   IMAGE_PLACEMENT_CAPABILITY_ID,
   type ImagePlacementCapabilityOptions,
 } from "./capability";
-import { ImageTool, type ImageToolOptions } from "./ImageTool";
+import {
+  ImagePlacementCapabilityImplementation,
+  type ImagePlacementCapabilityImplementationOptions,
+} from "./ImageTool";
 
 export interface ImagePlacementCapabilityExtensionOptions
   extends ImagePlacementCapabilityOptions {
   id?: string;
 }
 
-export class ImagePlacementCapabilityExtension extends ImageTool {
+export class ImagePlacementCapabilityExtension extends ImagePlacementCapabilityImplementation {
   constructor(options: ImagePlacementCapabilityExtensionOptions = {}) {
-    const toolOptions: ImageToolOptions = {
+    const toolOptions: ImagePlacementCapabilityImplementationOptions = {
       ...options,
       capabilityId: options.capabilityId || IMAGE_PLACEMENT_CAPABILITY_ID,
       id: options.id || IMAGE_PLACEMENT_CAPABILITY_ID,

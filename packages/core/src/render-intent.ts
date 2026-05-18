@@ -76,7 +76,17 @@ export interface RenderIntentProjectionAspect {
   suppressSource?: boolean;
 }
 
+export interface RenderIntentInteractionSessionAspect {
+  kind: string;
+  surfaceId?: string;
+  objectId?: string;
+  source?: string;
+  mode?: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface RenderIntentInteractionAspect {
+  session?: RenderIntentInteractionSessionAspect;
   imagePlacement?: Record<string, unknown>;
   selectable?: boolean;
   evented?: boolean;
@@ -780,6 +790,9 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
         : {}),
       ...(draft.interaction?.imagePlacement
         ? { imagePlacement: draft.interaction.imagePlacement }
+        : {}),
+      ...(draft.interaction?.session
+        ? { session: draft.interaction.session }
         : {}),
     },
     effects: draft.clipping?.effects?.map(cloneRecord) ?? [],

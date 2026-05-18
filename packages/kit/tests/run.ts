@@ -1237,17 +1237,19 @@ async function testApplyKitEditorDocument() {
                 src: "/photo.png",
                 metadata: {
                   imagePlacement: {
-                    committedSrc: "data:image/png;base64,cropped-front-slot",
-                    sourceSrc: "/photo.png",
-                    sourceTransform: {
+                    source: { src: "/photo.png" },
+                    transform: {
                       left: 0.6,
                       top: 0.4,
                       scale: 1.3,
                       angle: 22,
                       opacity: 1,
                     },
-                    width: 400,
-                    height: 320,
+                    derived: {
+                      src: "data:image/png;base64,cropped-front-slot",
+                      width: 400,
+                      height: 320,
+                    },
                   },
                 },
                 effects: [
@@ -1595,6 +1597,7 @@ async function testImagePlacementCapabilityExtension() {
       slots: [],
     }),
     resetSession: () => {},
+    validatePlacement: async () => ({ ok: true }),
     validateSession: async () => ({ ok: true }),
   };
   runtime.extensions.register({
@@ -1869,12 +1872,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "cropped production image should be centered in the slot",
   );
   assertEqual(
-    committedImage.metadata?.sourceSrc,
+    committedImage.metadata?.source?.src,
     "/photo.png",
     "completed session should keep the original source image in metadata",
   );
   assertDeepEqual(
-    committedImage.metadata?.sourceTransform,
+    committedImage.metadata?.transform,
     {
       left: 0.6,
       top: 0.4,
@@ -2059,6 +2062,111 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     (strictResult as any).ok,
     false,
     "strict image placement policy should block outside-frame completion",
+  );
+
+  await runtime.dispose();
+}
+
+async function testImagePlacementCompleteSyncsCanvasTransform() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const exportService = new FakeSceneExportService();
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 100, top: 120, width: 200, height: 160 },
+    format: "png",
+    height: 320,
+    multiplier: 2,
+    sourceElementIds: ["slot"],
+    sourceLayerIds: ["image.user"],
+    url: "data:image/png;base64,cropped-slot",
+    width: 400,
+  };
+  let renderedSessionScale = 0;
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "artwork" });
+  scene.addElement({
+    id: "slot",
+    layerId: "artwork",
+    type: "rect",
+    width: 200,
+    height: 160,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 100, y: 120, width: 200, height: 160 },
+        image: {
+          src: "/photo.png",
+          metadata: { width: 100, height: 80 },
+          left: 0.5,
+          top: 0.5,
+          scale: 1,
+          angle: 0,
+        },
+      },
+    },
+    transform: { left: 100, top: 120 },
+  });
+
+  runtime.extensions.register(createImagePlacementCapability());
+  await runtime.extensions.flushActivation();
+  const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
+
+  await facade.beginSession("slot");
+  const canvasTarget: any = {
+    angle: 12,
+    data: {
+      id: "session-image:slot",
+      layerId: "image.user.session.image",
+      slotId: "slot",
+      source: "working",
+      type: "image-placement-image",
+    },
+    getCenterPoint: () => ({ x: 150, y: 152 }),
+    getObjectScaling: () => ({ x: 3, y: 3 }),
+    height: 80,
+    left: 150,
+    scaleX: 3,
+    scaleY: 3,
+    top: 152,
+    width: 100,
+  };
+  canvasService.canvas.getObjects = () => [canvasTarget] as any;
+  canvasService.setActiveObject(canvasTarget);
+  exportService.exportImage = async (options: Record<string, any>) => {
+    const graph = runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph();
+    const sessionNode = graph.layers
+      .find((layer) => layer.id === "image.user.session.image")
+      ?.nodes.find((node) => node.id === "session-image:slot");
+    renderedSessionScale = Number(sessionNode?.props.scaleX || 0);
+    return FakeSceneExportService.prototype.exportImage.call(exportService, options);
+  };
+
+  await facade.completeSession("slot");
+  const committedImage = (scene.getElement("slot")?.data as any)?.imagePlacement
+    ?.image;
+  assertDeepEqual(
+    committedImage.metadata?.transform,
+    {
+      left: 0.25,
+      top: 0.2,
+      scale: 1.5,
+      angle: 12,
+      opacity: 1,
+    },
+    "complete session should sync the latest canvas object transform before cropping",
+  );
+  assertEqual(
+    renderedSessionScale,
+    3,
+    "complete session should re-render the crop source with the synced canvas source size",
   );
 
   await runtime.dispose();
@@ -3002,6 +3110,7 @@ async function main() {
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();
+  await testImagePlacementCompleteSyncsCanvasTransform();
   await testImagePlacementKeepsWorkingImagesAcrossSlotSwitches();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayVisibilityFollowsEditingSessions();

@@ -45,3 +45,31 @@ export interface WorkflowSessionChangeEvent {
   detail?: unknown;
   state: WorkflowSessionState;
 }
+
+export type WorkflowInteractionSessionEventType =
+  | "session:start"
+  | "session:update"
+  | "session:end"
+  | "session:cancel";
+
+export interface WorkflowInteractionSessionPayload {
+  sessionId: string;
+  kind: string;
+  surfaceId: string | null;
+  objectId: string | null;
+  source: string;
+  mode: string | null;
+  payload: Record<string, unknown>;
+}
+
+export type WorkflowInteractionSessionEvent = WorkflowInteractionSessionPayload;
+
+export interface WorkflowInteractionSessionInput {
+  sessionId?: string;
+  kind: string;
+  surfaceId?: string | null;
+  objectId?: string | null;
+  source?: string;
+  mode?: string | null;
+  payload?: Record<string, unknown>;
+}

@@ -5,6 +5,10 @@ import type {
   WorkflowSessionChangeEvent,
   WorkflowSessionDefinition,
   WorkflowSessionId,
+  WorkflowInteractionSessionEvent,
+  WorkflowInteractionSessionEventType,
+  WorkflowInteractionSessionInput,
+  WorkflowInteractionSessionPayload,
   WorkflowSessionLeavePolicy,
   WorkflowSessionLeaveResult,
   WorkflowSessionState,
@@ -18,6 +22,7 @@ export default class WorkflowSessionService implements Service {
     WorkflowSessionDefinition
   >();
   private readonly dirtyTrackers = new Map<WorkflowSessionId, () => boolean>();
+  private interactionSessionSeq = 0;
   private eventBus?: EventBus;
 
   init(context: ServiceContext) {
@@ -123,6 +128,30 @@ export default class WorkflowSessionService implements Service {
     this.emitSessionChange(id, "begin");
   }
 
+  startSession(input: WorkflowInteractionSessionInput): WorkflowInteractionSessionPayload {
+    const payload = this.normalizeInteractionSessionInput(input);
+    this.emitInteractionSession("session:start", payload);
+    return payload;
+  }
+
+  updateSession(input: WorkflowInteractionSessionInput): WorkflowInteractionSessionPayload {
+    const payload = this.normalizeInteractionSessionInput(input);
+    this.emitInteractionSession("session:update", payload);
+    return payload;
+  }
+
+  endSession(input: WorkflowInteractionSessionInput): WorkflowInteractionSessionPayload {
+    const payload = this.normalizeInteractionSessionInput(input);
+    this.emitInteractionSession("session:end", payload);
+    return payload;
+  }
+
+  cancelSession(input: WorkflowInteractionSessionInput): WorkflowInteractionSessionPayload {
+    const payload = this.normalizeInteractionSessionInput(input);
+    this.emitInteractionSession("session:cancel", payload);
+    return payload;
+  }
+
   async validate(
     workflowId: WorkflowSessionId,
   ): Promise<WorkflowSessionValidationResult> {
@@ -220,6 +249,22 @@ export default class WorkflowSessionService implements Service {
     };
   }
 
+  onSessionStart(callback: (event: WorkflowInteractionSessionEvent) => void) {
+    return this.onInteractionSession("session:start", callback);
+  }
+
+  onSessionUpdate(callback: (event: WorkflowInteractionSessionEvent) => void) {
+    return this.onInteractionSession("session:update", callback);
+  }
+
+  onSessionEnd(callback: (event: WorkflowInteractionSessionEvent) => void) {
+    return this.onInteractionSession("session:end", callback);
+  }
+
+  onSessionCancel(callback: (event: WorkflowInteractionSessionEvent) => void) {
+    return this.onInteractionSession("session:cancel", callback);
+  }
+
   dispose() {
     this.sessions.clear();
     this.definitions.clear();
@@ -258,6 +303,47 @@ export default class WorkflowSessionService implements Service {
     } satisfies WorkflowSessionChangeEvent);
   }
 
+  private onInteractionSession(
+    type: WorkflowInteractionSessionEventType,
+    callback: (event: WorkflowInteractionSessionEvent) => void,
+  ) {
+    this.eventBus?.on(type, callback);
+    return {
+      dispose: () => this.eventBus?.off(type, callback),
+    };
+  }
+
+  private emitInteractionSession(
+    type: WorkflowInteractionSessionEventType,
+    payload: WorkflowInteractionSessionPayload,
+  ) {
+    this.eventBus?.emit(type, payload);
+  }
+
+  private normalizeInteractionSessionInput(
+    input: WorkflowInteractionSessionInput,
+  ): WorkflowInteractionSessionPayload {
+    const kind = String(input.kind || "").trim();
+    if (!kind) {
+      throw new Error("Workflow interaction session kind is required.");
+    }
+    const sessionId = String(input.sessionId || "").trim() ||
+      `${kind}:${Date.now()}:${++this.interactionSessionSeq}`;
+    const source = String(input.source || "").trim() || "unknown";
+    const mode = input.mode === undefined || input.mode === null
+      ? null
+      : String(input.mode).trim() || null;
+    return {
+      sessionId,
+      kind,
+      surfaceId: normalizeNullableText(input.surfaceId),
+      objectId: normalizeNullableText(input.objectId),
+      source,
+      mode,
+      payload: isRecord(input.payload) ? { ...input.payload } : {},
+    };
+  }
+
   private normalizeId(workflowId: WorkflowSessionId): string {
     const id = String(workflowId || "").trim();
     if (!id) {
@@ -265,4 +351,14 @@ export default class WorkflowSessionService implements Service {
     }
     return id;
   }
+}
+
+function normalizeNullableText(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

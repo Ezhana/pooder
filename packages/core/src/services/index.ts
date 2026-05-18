@@ -10,6 +10,7 @@ import ToolRegistryService from "./ToolRegistryService";
 import ToolSessionService from "./ToolSessionService";
 import WorkbenchService from "./WorkbenchService";
 import WorkflowSessionService from "./WorkflowSessionService";
+import SnapService from "../snap";
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -21,6 +22,7 @@ import {
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
+  SNAP_SERVICE,
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
   WORKBENCH_SERVICE,
@@ -38,6 +40,7 @@ export {
   ToolSessionService,
   WorkbenchService,
   WorkflowSessionService,
+  SnapService,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
@@ -46,6 +49,7 @@ export {
   CANVAS_SERVICE,
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
+  SNAP_SERVICE,
   SCENE_LAYOUT_SERVICE,
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,

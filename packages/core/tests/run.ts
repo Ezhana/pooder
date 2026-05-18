@@ -4,6 +4,8 @@ import {
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
+  SNAP_SERVICE,
+  SnapService,
   TOOL_REGISTRY_SERVICE,
   TOOL_SESSION_SERVICE,
   WORKFLOW_SESSION_SERVICE,
@@ -1102,6 +1104,104 @@ async function testWorkflowSessionsWithoutTools() {
   });
 }
 
+async function testWorkflowSessionInteractionEvents() {
+  await withRuntime(async (runtime) => {
+    const workflowSessions = runtime.services.getOrThrow<WorkflowSessionService>(
+      WORKFLOW_SESSION_SERVICE,
+    );
+    const events: Array<{ type: string; kind: string; objectId: string | null }> = [];
+
+    runtime.eventBus.on("session:start", (event: any) => {
+      events.push({ type: "start", kind: event.kind, objectId: event.objectId });
+    });
+    runtime.eventBus.on("session:update", (event: any) => {
+      events.push({ type: "update", kind: event.kind, objectId: event.objectId });
+    });
+    runtime.eventBus.on("session:end", (event: any) => {
+      events.push({ type: "end", kind: event.kind, objectId: event.objectId });
+    });
+    runtime.eventBus.on("session:cancel", (event: any) => {
+      events.push({ type: "cancel", kind: event.kind, objectId: event.objectId });
+    });
+
+    const start = workflowSessions.startSession({
+      kind: "image-placement",
+      surfaceId: "front",
+      objectId: "slot",
+      source: "render-graph",
+      mode: "edit",
+      payload: { fit: "cover" },
+    });
+    const next = workflowSessions.startSession({
+      kind: "image-placement",
+      surfaceId: "front",
+      objectId: "slot-2",
+      source: "render-graph",
+      mode: "edit",
+    });
+    workflowSessions.updateSession({ ...start, payload: { scale: 1.2 } });
+    workflowSessions.endSession(start);
+    workflowSessions.cancelSession(next);
+
+    assert(start.sessionId !== next.sessionId, "interaction session ids should be unique");
+    assertDeepEqual(
+      events,
+      [
+        { type: "start", kind: "image-placement", objectId: "slot" },
+        { type: "start", kind: "image-placement", objectId: "slot-2" },
+        { type: "update", kind: "image-placement", objectId: "slot" },
+        { type: "end", kind: "image-placement", objectId: "slot" },
+        { type: "cancel", kind: "image-placement", objectId: "slot-2" },
+      ],
+      "generic workflow interaction sessions should emit stable lifecycle events",
+    );
+  });
+}
+
+async function testSnapServiceComputesGeometryMatches() {
+  const snap = new SnapService();
+  const edge = snap.compute({
+    moving: { left: 96, top: 15, width: 20, height: 20 },
+    targets: [{ id: "frame", bounds: { left: 100, top: 10, width: 80, height: 60 } }],
+    options: { thresholdPx: 6, viewportScale: 1 },
+  });
+  assertEqual(edge.delta.x, 4, "edge snap should return x delta");
+  assertEqual(edge.delta.y, -5, "edge snap should return y delta");
+
+  const center = snap.compute({
+    moving: { left: 134, top: 32, width: 12, height: 12 },
+    targets: [{ id: "frame", bounds: { left: 100, top: 10, width: 80, height: 60 } }],
+    options: { thresholdPx: 6, viewportScale: 1 },
+  });
+  assertEqual(center.delta.x, 0, "center-aligned x should not move");
+  assertEqual(center.matches.some((match) => match.kind === "center"), true);
+
+  const scaled = snap.compute({
+    moving: { left: 96, top: 0, width: 20, height: 20 },
+    targets: [{ id: "frame", bounds: { left: 100, top: 100, width: 80, height: 60 } }],
+    options: { thresholdPx: 6, viewportScale: 2 },
+  });
+  assertEqual(scaled.delta.x, 0, "viewport scale should reduce scene threshold");
+
+  const none = snap.compute({
+    moving: { left: 0, top: 0, width: 20, height: 20 },
+    targets: [],
+  });
+  assertDeepEqual(none.delta, { x: 0, y: 0 }, "snap without targets should be inert");
+}
+
+async function testRuntimeRegistersSnapService() {
+  await withRuntime(async (runtime) => {
+    const snap = runtime.services.getOrThrow<SnapService>(SNAP_SERVICE);
+    const result = snap.compute({
+      moving: { left: 4, top: 0, width: 10, height: 10 },
+      targets: [{ id: "origin", bounds: { left: 0, top: 0, width: 10, height: 10 } }],
+      options: { includeCenters: false },
+    });
+    assertEqual(result.delta.x, -4, "runtime snap service should be registered");
+  });
+}
+
 async function testWorkflowDirtyTrackerCanBlockLeave() {
   await withRuntime(async (runtime) => {
     const workflowSessions = runtime.services.getOrThrow(
@@ -1934,6 +2034,12 @@ async function main() {
       "manages workflow sessions without registered tools",
       testWorkflowSessionsWithoutTools,
     ],
+    [
+      "emits generic workflow interaction session events",
+      testWorkflowSessionInteractionEvents,
+    ],
+    ["computes generic snap matches", testSnapServiceComputesGeometryMatches],
+    ["registers generic snap service", testRuntimeRegistersSnapService],
     [
       "workflow dirty trackers can block leave",
       testWorkflowDirtyTrackerCanBlockLeave,

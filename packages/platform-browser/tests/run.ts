@@ -319,6 +319,79 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterUsesDerivedImageDimensions() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  const renderIntentService = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  renderIntentService.setDocumentIntents([
+    {
+      id: "slot",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "slot",
+        objectType: "image",
+      },
+      visual: {
+        type: "image",
+        replacement: {
+          src: "data:image/png;base64,cropped",
+          metadata: {
+            derived: {
+              width: 400,
+              height: 320,
+            },
+          },
+        },
+      },
+      placement: {
+        frame: { x: 100, y: 120, width: 200, height: 160 },
+        transform: {
+          left: 200,
+          top: 200,
+          originX: "center",
+          originY: "center",
+          scaleX: 0.5,
+          scaleY: 0.5,
+        },
+      },
+      ordering: { layerId: "art", stack: 10, layerOrder: 0 },
+    },
+  ]);
+
+  await adapter.flush();
+  const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  const image = last?.items.find((item) => item.spec.id === "image:slot")?.spec;
+  assert(image, "adapter should draw the committed image replacement");
+  assertEqual(
+    image.props.width,
+    undefined,
+    "derived-size images should not be rewritten to the slot frame width",
+  );
+  assertEqual(
+    image.props.height,
+    undefined,
+    "derived-size images should not be rewritten to the slot frame height",
+  );
+  assertEqual(
+    image.props.scaleX,
+    0.5,
+    "derived-size images should keep the committed bitmap scale",
+  );
+  assertEqual(
+    image.props.scaleY,
+    0.5,
+    "derived-size images should keep the committed bitmap scale",
+  );
+
+  await runtime.dispose();
+}
+
 async function testFabricRenderGraphAdapterResyncsOnLayoutChange() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -694,6 +767,10 @@ async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["registers render graph adapter in browser host", testAttachRegistersRenderGraphAdapter],
     ["builds graph adapter draw list", testFabricRenderGraphAdapterBuildsDrawList],
+    [
+      "uses derived image dimensions for committed replacements",
+      testFabricRenderGraphAdapterUsesDerivedImageDimensions,
+    ],
     ["resyncs graph adapter on layout change", testFabricRenderGraphAdapterResyncsOnLayoutChange],
     ["reports graph adapter sync state", testFabricRenderGraphAdapterReportsSyncState],
     ["preserves graph coordinate space", testFabricRenderGraphAdapterPreservesScreenSpace],

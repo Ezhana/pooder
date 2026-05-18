@@ -53,6 +53,7 @@ export class FabricRenderGraphAdapter implements Service {
   private workflowSessionService?: WorkflowSessionService;
   private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
+  private canvasMouseDownHandler?: (event?: any) => void;
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
   private syncGeneration = 0;
@@ -86,11 +87,13 @@ export class FabricRenderGraphAdapter implements Service {
       this.requestSync();
     });
     this.attachRuntimeVisibilityEvents();
+    this.attachCanvasInteractionEvents();
     this.requestSync();
   }
 
   dispose() {
     this.detachRuntimeVisibilityEvents();
+    this.detachCanvasInteractionEvents();
     this.graphSubscription?.dispose();
     this.graphSubscription = undefined;
     this.renderIntentService = undefined;
@@ -174,6 +177,46 @@ export class FabricRenderGraphAdapter implements Service {
     eventBus.on("tool:session:change", this.onRuntimeVisibilityChange);
     eventBus.on("workflow:session:change", this.onRuntimeVisibilityChange);
     eventBus.on("scene:layout:change", this.onRuntimeVisibilityChange);
+  }
+
+  private attachCanvasInteractionEvents() {
+    if (
+      !this.canvasService ||
+      this.canvasMouseDownHandler ||
+      typeof this.canvasService.onCanvasEvent !== "function"
+    ) {
+      return;
+    }
+    this.canvasMouseDownHandler = (event?: any) => {
+      this.startInteractionSessionFromTarget(event?.target);
+    };
+    this.canvasService.onCanvasEvent("mouse:down", this.canvasMouseDownHandler);
+  }
+
+  private detachCanvasInteractionEvents() {
+    if (
+      !this.canvasService ||
+      !this.canvasMouseDownHandler ||
+      typeof this.canvasService.offCanvasEvent !== "function"
+    ) {
+      return;
+    }
+    this.canvasService.offCanvasEvent("mouse:down", this.canvasMouseDownHandler);
+    this.canvasMouseDownHandler = undefined;
+  }
+
+  private startInteractionSessionFromTarget(target: any) {
+    const session = normalizeInteractionSession(target?.data?.session);
+    if (!session || !this.workflowSessionService) return;
+    this.workflowSessionService.startSession({
+      ...session,
+      source: session.source || "render-graph",
+      payload: {
+        ...(session.payload ?? {}),
+        renderNodeId: target?.data?.renderNodeId,
+        subjectId: target?.data?.subjectId,
+      },
+    });
   }
 
   private detachRuntimeVisibilityEvents() {
@@ -342,8 +385,18 @@ export class FabricRenderGraphAdapter implements Service {
     const transform = node.transform ?? {};
     const hasTransformLeft = Number.isFinite(transform.left);
     const hasTransformTop = Number.isFinite(transform.top);
-    const imageWidth = finitePositiveNumber(node.visual?.metadata?.width);
-    const imageHeight = finitePositiveNumber(node.visual?.metadata?.height);
+    const visualMetadata = isRecord(node.visual?.metadata)
+      ? node.visual.metadata
+      : undefined;
+    const derivedMetadata = isRecord(visualMetadata?.derived)
+      ? visualMetadata.derived
+      : undefined;
+    const imageWidth = finitePositiveNumber(
+      derivedMetadata?.width ?? visualMetadata?.width,
+    );
+    const imageHeight = finitePositiveNumber(
+      derivedMetadata?.height ?? visualMetadata?.height,
+    );
     const hasFrameSizedImage =
       node.type === "image" && frame && imageWidth && imageHeight;
 
@@ -405,4 +458,33 @@ function normalizeIds(values: unknown): string[] {
         .filter((item) => item.length > 0),
     ),
   );
+}
+
+function normalizeInteractionSession(value: unknown): {
+  kind: string;
+  surfaceId?: string | null;
+  objectId?: string | null;
+  source?: string;
+  mode?: string | null;
+  payload?: Record<string, unknown>;
+} | null {
+  if (!isRecord(value)) return null;
+  const kind = normalizeText(value.kind);
+  if (!kind) return null;
+  return {
+    kind,
+    surfaceId: normalizeText(value.surfaceId) || null,
+    objectId: normalizeText(value.objectId) || null,
+    source: normalizeText(value.source),
+    mode: normalizeText(value.mode) || null,
+    payload: isRecord(value.payload) ? { ...value.payload } : {},
+  };
+}
+
+function normalizeText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

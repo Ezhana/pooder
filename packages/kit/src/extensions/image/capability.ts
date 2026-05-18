@@ -64,6 +64,7 @@ export interface ImagePlacementCapabilityApi {
   ): Promise<{ ok: boolean; reason?: string }>;
   clearImage(slotId: string): Promise<{ ok: boolean; reason?: string }>;
   resetSession(slotId?: string): void;
+  validatePlacement(slotId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
   validateSession(slotId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
   completeSession(slotId?: string): Promise<{ ok: boolean } | ImagePlacementSessionNotice>;
   focusSlot(

@@ -9,6 +9,8 @@ import {
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  SNAP_SERVICE,
+  WORKFLOW_SESSION_SERVICE,
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
@@ -24,7 +26,9 @@ import {
   type SceneExportService,
   type SceneLayoutService,
   type SceneService,
+  type SnapService,
   type VisibilityExpr,
+  type WorkflowSessionService,
 } from "@pooder/core";
 import type {
   EditorDocument,
@@ -154,7 +158,8 @@ export interface ImageExportPlacementImageResult {
   slotIds: string[];
 }
 
-export interface ImageToolOptions extends ImagePlacementCapabilityOptions {
+export interface ImagePlacementCapabilityImplementationOptions
+  extends ImagePlacementCapabilityOptions {
   id?: string;
 }
 
@@ -231,9 +236,8 @@ function cloneImageState(
 function readMetadataSourceSrc(
   metadata: Record<string, unknown> | undefined,
 ): string {
-  const sourceSrc = isRecord(metadata) && typeof metadata.sourceSrc === "string"
-    ? metadata.sourceSrc.trim()
-    : "";
+  const source = isRecord(metadata?.source) ? metadata.source : undefined;
+  const sourceSrc = typeof source?.src === "string" ? source.src.trim() : "";
   return sourceSrc;
 }
 
@@ -242,8 +246,9 @@ function createCommittedImagePlacementTransform(
   metadata: Record<string, unknown> | undefined,
 ): RenderIntentTransform | undefined {
   if (!frame) return undefined;
-  const imageWidth = finitePositiveNumber(metadata?.width);
-  const imageHeight = finitePositiveNumber(metadata?.height);
+  const derived = isRecord(metadata?.derived) ? metadata.derived : undefined;
+  const imageWidth = finitePositiveNumber(derived?.width ?? metadata?.width);
+  const imageHeight = finitePositiveNumber(derived?.height ?? metadata?.height);
   return {
     left: frame.left + frame.width / 2,
     top: frame.top + frame.height / 2,
@@ -270,9 +275,7 @@ function readMetadataSourceTransform(
   metadata: Record<string, unknown> | undefined,
   fallback: ImagePlacementSourceTransform,
 ): ImagePlacementSourceTransform {
-  const transform = isRecord(metadata?.sourceTransform)
-    ? metadata.sourceTransform
-    : null;
+  const transform = isRecord(metadata?.transform) ? metadata.transform : null;
   if (!transform) return fallback;
   return {
     left: clampNormalized(finiteNumber(transform.left, fallback.left)),
@@ -302,10 +305,7 @@ function createEditableWorkingImage(
       resolveImageTransformSnapshot(committed),
     ),
     src: sourceSrc,
-    metadata: {
-      ...(metadata ?? {}),
-      ...(committed.src ? { committedSrc: committed.src } : {}),
-    },
+    metadata: metadata ?? {},
   };
 }
 
@@ -315,10 +315,30 @@ function stripDerivedImageMetadata(
   const next = cloneImageMetadata(metadata) ?? {};
   delete next.height;
   delete next.committedSrc;
+  delete next.derived;
   delete next.sourceSrc;
   delete next.sourceTransform;
   delete next.width;
   return next;
+}
+
+function readMetadataDerivedImage(
+  metadata: Record<string, unknown> | undefined,
+): ImagePlacementImageState | undefined {
+  const derived = isRecord(metadata?.derived) ? metadata.derived : undefined;
+  const src = typeof derived?.src === "string"
+    ? derived.src.trim()
+    : typeof derived?.url === "string"
+      ? derived.url.trim()
+      : "";
+  if (!src) return undefined;
+  return {
+    src,
+    metadata: {
+      ...(metadata ?? {}),
+      ...derived,
+    },
+  };
 }
 
 function normalizeImage(value: unknown): ImagePlacementImageState | null {
@@ -453,11 +473,7 @@ function getSlotFrame(element: SceneElement): FrameRect | null {
   };
 }
 
-/**
- * @deprecated Compatibility class name. The implementation is now the
- * document-driven image placement capability.
- */
-export class ImageTool implements ExtensionDefinition {
+export class ImagePlacementCapabilityImplementation implements ExtensionDefinition {
   id: string;
   metadata = {
     name: "ImagePlacementCapability",
@@ -471,6 +487,8 @@ export class ImageTool implements ExtensionDefinition {
   private sceneService?: SceneService;
   private sceneLayoutService?: SceneLayoutService;
   private exportService?: SceneExportService;
+  private snapService?: SnapService;
+  private workflowSessionService?: WorkflowSessionService;
   private context?: ExtensionContext;
   private sceneSubscription?: { dispose(): void };
   private readonly subscriptions = new SubscriptionBag();
@@ -502,7 +520,7 @@ export class ImageTool implements ExtensionDefinition {
   private pendingCanvasSessionSlotId: string | null = null;
   private pendingCanvasSessionTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
-  constructor(options: ImageToolOptions = {}) {
+  constructor(options: ImagePlacementCapabilityImplementationOptions = {}) {
     this.id = String(options.id || IMAGE_PLACEMENT_CAPABILITY_ID).trim() ||
       IMAGE_PLACEMENT_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || IMAGE_PLACEMENT_CAPABILITY_ID;
@@ -531,6 +549,10 @@ export class ImageTool implements ExtensionDefinition {
     );
     this.exportService = context.services.get<SceneExportService>(
       SCENE_EXPORT_SERVICE,
+    );
+    this.snapService = context.services.get<SnapService>(SNAP_SERVICE);
+    this.workflowSessionService = context.services.get<WorkflowSessionService>(
+      WORKFLOW_SESSION_SERVICE,
     );
 
     this.sceneSubscription?.dispose();
@@ -565,6 +587,8 @@ export class ImageTool implements ExtensionDefinition {
     this.sceneService = undefined;
     this.sceneLayoutService = undefined;
     this.exportService = undefined;
+    this.snapService = undefined;
+    this.workflowSessionService = undefined;
     this.context = undefined;
   }
 
@@ -651,6 +675,21 @@ export class ImageTool implements ExtensionDefinition {
             : "cover",
       },
       interaction: {
+        session: {
+          kind: "image-placement",
+          surfaceId: resolved.surface.id,
+          objectId: object.id,
+          source: "render-graph",
+          mode: "edit",
+          payload: {
+            slotId: object.id,
+            fit:
+              payload.fit === "contain" || payload.fit === "stretch"
+                ? payload.fit
+                : "cover",
+            accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
+          },
+        },
         imagePlacement: {
           enabled: true,
           slotId: object.id,
@@ -707,23 +746,30 @@ export class ImageTool implements ExtensionDefinition {
     _document: EditorDocument,
     object: EditorImageObject,
   ): ImagePlacementImageState | undefined {
-    const src = object.src;
     const placementMetadata = isRecord(object.metadata?.imagePlacement)
       ? object.metadata.imagePlacement
       : undefined;
-    const transform = object.transform ?? {};
+    const source = isRecord(placementMetadata?.source)
+      ? placementMetadata.source
+      : undefined;
+    const src = typeof source?.src === "string" && source.src
+      ? source.src
+      : object.src;
+    const placementTransform = readMetadataSourceTransform(placementMetadata, {
+      left: 0.5,
+      top: 0.5,
+      scale: 1,
+      angle: 0,
+      opacity: 1,
+    });
     if (!src) return undefined;
     return {
       src,
-      left: finiteNumber(transform.left, 0.5),
-      top: finiteNumber(transform.top, 0.5),
-      scale:
-        Number.isFinite(transform.scaleX) &&
-        transform.scaleX === transform.scaleY
-          ? Math.max(0.05, Number(transform.scaleX))
-          : 1,
-      angle: finiteNumber(transform.angle, 0),
-      opacity: 1,
+      left: placementTransform.left,
+      top: placementTransform.top,
+      scale: placementTransform.scale,
+      angle: placementTransform.angle,
+      opacity: placementTransform.opacity,
       ...(placementMetadata ? { metadata: { ...placementMetadata } } : {}),
     };
   }
@@ -735,14 +781,7 @@ export class ImageTool implements ExtensionDefinition {
     const metadata = isRecord(object.metadata?.imagePlacement)
       ? object.metadata.imagePlacement
       : {};
-    const committedSrc =
-      (typeof metadata.committedSrc === "string" && metadata.committedSrc) ||
-      "";
-    if (!committedSrc) return undefined;
-    return {
-      src: committedSrc,
-      metadata: { ...metadata },
-    };
+    return readMetadataDerivedImage(metadata);
   }
 
   private getImagePlacementFacade(): ImagePlacementCapabilityApi {
@@ -760,6 +799,7 @@ export class ImageTool implements ExtensionDefinition {
       setImageSource: (slotId, source) => this.setImageSource(slotId, source),
       setImageTransform: (slotId, updates) =>
         this.setImageTransform(slotId, updates),
+      validatePlacement: (slotId) => this.validateSession(slotId),
       validateSession: (slotId) => this.validateSession(slotId),
     };
   }
@@ -969,6 +1009,10 @@ export class ImageTool implements ExtensionDefinition {
       metadata: {
         ...stripDerivedImageMetadata(current.metadata),
         ...(source.metadata ?? {}),
+        source: {
+          src,
+          ...(source.metadata ? { metadata: { ...source.metadata } } : {}),
+        },
       },
       left: current.left ?? 0.5,
       top: current.top ?? 0.5,
@@ -1012,6 +1056,10 @@ export class ImageTool implements ExtensionDefinition {
     if (Number.isFinite(updates.opacity as number)) {
       next.opacity = Number(updates.opacity);
     }
+    next.metadata = {
+      ...(next.metadata ?? {}),
+      transform: resolveImageTransformSnapshot(next),
+    };
     this.workingImages.set(slotId, next);
     this.syncWorkingSlotVisibilityContext();
     if (!options.skipRender) {
@@ -1054,6 +1102,15 @@ export class ImageTool implements ExtensionDefinition {
 
   private resetSession(slotId?: string) {
     this.clearPendingCanvasSession(slotId);
+    this.resolveSessionTargetIds(slotId).forEach((id) => {
+      this.workflowSessionService?.cancelSession({
+        kind: "image-placement",
+        objectId: id,
+        source: "image-placement-facade",
+        mode: "edit",
+        payload: { slotId: id },
+      });
+    });
     if (slotId) {
       this.restoreOrDeleteWorkingImage(slotId);
       if (this.activeSlotId === slotId) this.activeSlotId = null;
@@ -1071,6 +1128,7 @@ export class ImageTool implements ExtensionDefinition {
   private async validateSession(slotId?: string) {
     const policy = this.getPlacementPolicy();
     const targetIds = this.resolveSessionTargetIds(slotId);
+    await this.syncWorkingImageTransformsFromCanvas(targetIds);
     const targetIdSet = new Set(targetIds);
     const slots = this.getSlotStates().filter((slot) => targetIdSet.has(slot.id));
     const missing = slots.filter((slot) => !slot.image?.src);
@@ -1128,6 +1186,15 @@ export class ImageTool implements ExtensionDefinition {
       const commitResult = await this.commitWorkingImagesAsCropped(targetIds);
       if (!commitResult.ok) return commitResult;
       if (!slotId || this.activeSlotId === slotId) this.activeSlotId = null;
+      targetIds.forEach((id) => {
+        this.workflowSessionService?.endSession({
+          kind: "image-placement",
+          objectId: id,
+          source: "image-placement-facade",
+          mode: "edit",
+          payload: { slotId: id },
+        });
+      });
       this.syncWorkingSlotVisibilityContext();
       await this.updateImagesAsync();
       this.emitStateChange();
@@ -1171,6 +1238,9 @@ export class ImageTool implements ExtensionDefinition {
       const croppedSrc = croppedImage.url || image.src;
       const sourceSrc = readMetadataSourceSrc(image.metadata) || image.src;
       const sourceTransform = resolveImageTransformSnapshot(image);
+      const sourceMetadata = isRecord(image.metadata?.source)
+        ? image.metadata.source
+        : {};
       this.sourceSizeCache.rememberSourceSize(croppedSrc, {
         width: croppedImage.width,
         height: croppedImage.height,
@@ -1183,11 +1253,19 @@ export class ImageTool implements ExtensionDefinition {
         scale: 1,
         angle: 0,
         metadata: {
-          ...(image.metadata ?? {}),
-          width: croppedImage.width,
-          height: croppedImage.height,
-          sourceSrc,
-          sourceTransform,
+          ...stripDerivedImageMetadata(image.metadata),
+          source: {
+            ...sourceMetadata,
+            src: sourceSrc,
+          },
+          transform: sourceTransform,
+          derived: {
+            src: croppedSrc,
+            width: croppedImage.width,
+            height: croppedImage.height,
+            multiplier: croppedImage.multiplier,
+            format: croppedImage.format,
+          },
         },
       });
     }
@@ -1717,6 +1795,53 @@ export class ImageTool implements ExtensionDefinition {
       return { x: null, y: null };
     }
 
+    if (this.snapService) {
+      const result = this.snapService.compute({
+        moving: bounds,
+        targets: [
+          {
+            id: "frame",
+            lines: [
+              { id: "frame-left", axis: "x", kind: "edge", position: frame.left },
+              {
+                id: "frame-center-x",
+                axis: "x",
+                kind: "center",
+                position: frame.left + frame.width / 2,
+              },
+              {
+                id: "frame-right",
+                axis: "x",
+                kind: "edge",
+                position: frame.left + frame.width,
+              },
+              { id: "frame-top", axis: "y", kind: "edge", position: frame.top },
+              {
+                id: "frame-center-y",
+                axis: "y",
+                kind: "center",
+                position: frame.top + frame.height / 2,
+              },
+              {
+                id: "frame-bottom",
+                axis: "y",
+                kind: "edge",
+                position: frame.top + frame.height,
+              },
+            ],
+          },
+        ],
+        options: {
+          thresholdPx: IMAGE_MOVE_SNAP_THRESHOLD_PX,
+          viewportScale: this.canvasService?.getSceneScale() ?? 1,
+        },
+      });
+      return {
+        x: this.toImageSnapMatch(result.matches.find((match) => match.axis === "x") ?? null),
+        y: this.toImageSnapMatch(result.matches.find((match) => match.axis === "y") ?? null),
+      };
+    }
+
     const frameCenterX = frame.left + frame.width / 2;
     const frameCenterY = frame.top + frame.height / 2;
     const boundsCenterX = bounds.left + bounds.width / 2;
@@ -1769,6 +1894,17 @@ export class ImageTool implements ExtensionDefinition {
           deltaScene: frame.top + frame.height - (bounds.top + bounds.height),
         },
       ]),
+    };
+  }
+
+  private toImageSnapMatch(match: ReturnType<SnapService["compute"]>["matches"][number] | null): SnapMatch | null {
+    if (!match) return null;
+    return {
+      axis: match.axis,
+      lineId: match.targetLineId as SnapLineId,
+      kind: match.kind,
+      lineScene: match.position,
+      deltaScene: match.delta,
     };
   }
 
@@ -1913,31 +2049,77 @@ export class ImageTool implements ExtensionDefinition {
 
   private onObjectModified = (event: any) => {
     const target = event?.target;
+    const slotId = this.getWorkingImageTargetSlotId(target);
+    if (!slotId) return;
+    if (this.movingSlotId === slotId) {
+      this.applyMoveSnapToTarget(target);
+    }
+    this.endMoveSnapInteraction();
+    void this.syncWorkingImageTransformFromTarget(target);
+  };
+
+  private async syncWorkingImageTransformsFromCanvas(slotIds: readonly string[]) {
+    for (const slotId of slotIds) {
+      const target = this.getWorkingImageCanvasTarget(slotId);
+      if (target) {
+        await this.syncWorkingImageTransformFromTarget(target);
+      }
+    }
+  }
+
+  private getWorkingImageCanvasTarget(slotId: string): any | null {
+    const normalizedSlotId = String(slotId || "").trim();
+    if (!normalizedSlotId || !this.workingImages.has(normalizedSlotId)) return null;
+    const layerId = `${this.imageLayerId}.session.image`;
+    const target =
+      this.canvasService?.getObject(`session-image:${normalizedSlotId}`, layerId) ||
+      this.canvasService?.getActiveObject();
+    return this.getWorkingImageTargetSlotId(target) === normalizedSlotId ? target : null;
+  }
+
+  private getWorkingImageTargetSlotId(target: any): string | null {
     const slotId = target?.data?.slotId;
     if (
       typeof slotId !== "string" ||
       target?.data?.type !== "image-placement-image" ||
       target?.data?.source !== "working"
     ) {
-      return;
+      return null;
     }
-    const slot = this.getSlotStates().find((item) => item.id === slotId);
-    if (!slot || !this.canvasService) return;
-    if (this.movingSlotId === slotId) {
-      this.applyMoveSnapToTarget(target);
-    }
-    this.endMoveSnapInteraction();
+    return slotId;
+  }
+
+  private async syncWorkingImageTransformFromTarget(target: any) {
+    const slotId = this.getWorkingImageTargetSlotId(target);
+    const slot = slotId
+      ? this.getSlotStates().find((item) => item.id === slotId)
+      : null;
+    if (!slot || !this.canvasService || !slotId) return;
+    const rawCenter = typeof target.getCenterPoint === "function"
+      ? target.getCenterPoint()
+      : { x: finiteNumber(target.left, 0), y: finiteNumber(target.top, 0) };
     const center = this.canvasService.toScenePoint({
-      x: finiteNumber(target.left, 0),
-      y: finiteNumber(target.top, 0),
+      x: finiteNumber(rawCenter?.x, finiteNumber(target.left, 0)),
+      y: finiteNumber(rawCenter?.y, finiteNumber(target.top, 0)),
     });
-    const sourceWidth = finiteNumber(target.width, 1);
-    const sourceHeight = finiteNumber(target.height, 1);
-    const source: SourceSize = { width: sourceWidth, height: sourceHeight };
+    const source: SourceSize = {
+      width: finiteNumber(target.width, 1),
+      height: finiteNumber(target.height, 1),
+    };
+    const image = this.workingImages.get(slotId) || slot.image;
+    if (image?.src) {
+      this.sourceSizeCache.rememberSourceSize(image.src, source);
+    }
+    const objectScaling = typeof target.getObjectScaling === "function"
+      ? target.getObjectScaling()
+      : null;
     const coverScale = getCoverScaleFromRect(slot.frame, source);
     const sceneScale = this.canvasService.getSceneScale();
-    const objectScale = finiteNumber(target.scaleX, 1) / Math.max(0.0001, sceneScale);
-    void this.setImageTransform(
+    const objectScale = finiteNumber(
+      objectScaling?.x,
+      finiteNumber(target.scaleX, 1),
+    ) / Math.max(0.0001, sceneScale);
+    await this.setImageTransform(
       slotId,
       {
         left: (center.x - slot.frame.left) / Math.max(1, slot.frame.width),
@@ -1947,7 +2129,7 @@ export class ImageTool implements ExtensionDefinition {
       },
       { skipRender: true },
     );
-  };
+  }
 
   private buildWorkingImageSpecs(): RenderObjectSpec[] {
     return this.getSlotStates()
@@ -2008,6 +2190,9 @@ export class ImageTool implements ExtensionDefinition {
         type: "image-placement-image",
         slotId: slot.id,
         source: options.committed ? "committed" : "working",
+        session: this.createImagePlacementSessionData(slot, {
+          source: options.committed ? "image-placement-committed" : "image-placement-working",
+        }),
       },
       props: {
         left: slot.frame.left + (image.left ?? 0.5) * slot.frame.width,
@@ -2108,6 +2293,9 @@ export class ImageTool implements ExtensionDefinition {
               layerId: this.imageLayerId,
               type: "image-placement-upload",
               slotId: slot.id,
+              session: this.createImagePlacementSessionData(slot, {
+                source: "image-placement-upload",
+              }),
             },
             props: {
               left: slot.frame.left,
@@ -2142,6 +2330,9 @@ export class ImageTool implements ExtensionDefinition {
             data: {
               type: "image-placement-upload-label",
               slotId: slot.id,
+              session: this.createImagePlacementSessionData(slot, {
+                source: "image-placement-upload",
+              }),
             },
             props: {
               left: slot.frame.left + slot.frame.width / 2,
@@ -2239,7 +2430,36 @@ export class ImageTool implements ExtensionDefinition {
           },
         });
       });
-    });
+      });
+  }
+
+  private createImagePlacementSessionData(
+    slot: ImagePlacementSlotState,
+    options: { source: string },
+  ) {
+    return {
+      kind: "image-placement",
+      surfaceId: this.resolveSlotSurfaceId(slot),
+      objectId: slot.id,
+      source: options.source,
+      mode: "edit",
+      payload: {
+        slotId: slot.id,
+        fit: slot.fit,
+      },
+    };
+  }
+
+  private resolveSlotSurfaceId(slot: ImagePlacementSlotState): string | null {
+    const metadata = isRecord(slot.metadata) ? slot.metadata : {};
+    const subject = isRecord(metadata.subject) ? metadata.subject : {};
+    const surfaceId =
+      typeof metadata.documentSurfaceId === "string"
+        ? metadata.documentSurfaceId
+        : typeof subject.surfaceId === "string"
+          ? subject.surfaceId
+          : "";
+    return surfaceId || null;
   }
 
   private getSurfaceFrameRect(): FrameRect {
