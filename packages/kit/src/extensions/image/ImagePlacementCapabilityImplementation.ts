@@ -237,7 +237,11 @@ function readMetadataSourceSrc(
   metadata: Record<string, unknown> | undefined,
 ): string {
   const source = isRecord(metadata?.source) ? metadata.source : undefined;
-  const sourceSrc = typeof source?.src === "string" ? source.src.trim() : "";
+  const sourceSrc = typeof source?.src === "string"
+    ? source.src.trim()
+    : typeof metadata?.sourceSrc === "string"
+      ? metadata.sourceSrc.trim()
+      : "";
   return sourceSrc;
 }
 
@@ -275,7 +279,11 @@ function readMetadataSourceTransform(
   metadata: Record<string, unknown> | undefined,
   fallback: ImagePlacementSourceTransform,
 ): ImagePlacementSourceTransform {
-  const transform = isRecord(metadata?.transform) ? metadata.transform : null;
+  const transform = isRecord(metadata?.transform)
+    ? metadata.transform
+    : isRecord(metadata?.sourceTransform)
+      ? metadata.sourceTransform
+      : null;
   if (!transform) return fallback;
   return {
     left: clampNormalized(finiteNumber(transform.left, fallback.left)),
@@ -330,7 +338,9 @@ function readMetadataDerivedImage(
     ? derived.src.trim()
     : typeof derived?.url === "string"
       ? derived.url.trim()
-      : "";
+      : typeof metadata?.committedSrc === "string"
+        ? metadata.committedSrc.trim()
+        : "";
   if (!src) return undefined;
   return {
     src,

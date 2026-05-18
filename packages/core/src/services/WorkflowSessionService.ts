@@ -327,8 +327,14 @@ export default class WorkflowSessionService implements Service {
     if (!kind) {
       throw new Error("Workflow interaction session kind is required.");
     }
+    const objectId = normalizeNullableText(input.objectId);
+    const surfaceId = normalizeNullableText(input.surfaceId);
     const sessionId = String(input.sessionId || "").trim() ||
-      `${kind}:${Date.now()}:${++this.interactionSessionSeq}`;
+      this.createInteractionSessionId(kind, {
+        mode: input.mode,
+        objectId,
+        surfaceId,
+      });
     const source = String(input.source || "").trim() || "unknown";
     const mode = input.mode === undefined || input.mode === null
       ? null
@@ -336,12 +342,28 @@ export default class WorkflowSessionService implements Service {
     return {
       sessionId,
       kind,
-      surfaceId: normalizeNullableText(input.surfaceId),
-      objectId: normalizeNullableText(input.objectId),
+      surfaceId,
+      objectId,
       source,
       mode,
       payload: isRecord(input.payload) ? { ...input.payload } : {},
     };
+  }
+
+  private createInteractionSessionId(
+    kind: string,
+    input: { mode?: string | null; objectId: string | null; surfaceId: string | null },
+  ): string {
+    const mode = input.mode === undefined || input.mode === null
+      ? null
+      : String(input.mode).trim() || null;
+    if (input.objectId) {
+      return [kind, mode, "object", input.objectId].filter(Boolean).join(":");
+    }
+    if (input.surfaceId) {
+      return [kind, mode, "surface", input.surfaceId].filter(Boolean).join(":");
+    }
+    return `${kind}:${Date.now()}:${++this.interactionSessionSeq}`;
   }
 
   private normalizeId(workflowId: WorkflowSessionId): string {

@@ -6,7 +6,7 @@ import type {
   ImagePlacementSlotState,
   ImagePlacementSource,
   ImagePlacementTransformUpdates,
-} from "./ImageTool";
+} from "./ImagePlacementCapabilityImplementation";
 import type { ImageOperation } from "./imageOperations";
 
 export const IMAGE_PLACEMENT_CAPABILITY_ID =

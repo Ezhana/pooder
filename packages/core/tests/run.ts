@@ -1109,19 +1109,44 @@ async function testWorkflowSessionInteractionEvents() {
     const workflowSessions = runtime.services.getOrThrow<WorkflowSessionService>(
       WORKFLOW_SESSION_SERVICE,
     );
-    const events: Array<{ type: string; kind: string; objectId: string | null }> = [];
+    const events: Array<{
+      type: string;
+      kind: string;
+      objectId: string | null;
+      sessionId: string;
+    }> = [];
 
     runtime.eventBus.on("session:start", (event: any) => {
-      events.push({ type: "start", kind: event.kind, objectId: event.objectId });
+      events.push({
+        type: "start",
+        kind: event.kind,
+        objectId: event.objectId,
+        sessionId: event.sessionId,
+      });
     });
     runtime.eventBus.on("session:update", (event: any) => {
-      events.push({ type: "update", kind: event.kind, objectId: event.objectId });
+      events.push({
+        type: "update",
+        kind: event.kind,
+        objectId: event.objectId,
+        sessionId: event.sessionId,
+      });
     });
     runtime.eventBus.on("session:end", (event: any) => {
-      events.push({ type: "end", kind: event.kind, objectId: event.objectId });
+      events.push({
+        type: "end",
+        kind: event.kind,
+        objectId: event.objectId,
+        sessionId: event.sessionId,
+      });
     });
     runtime.eventBus.on("session:cancel", (event: any) => {
-      events.push({ type: "cancel", kind: event.kind, objectId: event.objectId });
+      events.push({
+        type: "cancel",
+        kind: event.kind,
+        objectId: event.objectId,
+        sessionId: event.sessionId,
+      });
     });
 
     const start = workflowSessions.startSession({
@@ -1140,18 +1165,43 @@ async function testWorkflowSessionInteractionEvents() {
       mode: "edit",
     });
     workflowSessions.updateSession({ ...start, payload: { scale: 1.2 } });
-    workflowSessions.endSession(start);
-    workflowSessions.cancelSession(next);
+    const ended = workflowSessions.endSession({
+      kind: "image-placement",
+      objectId: "slot",
+      source: "image-placement-facade",
+      mode: "edit",
+    });
+    const cancelled = workflowSessions.cancelSession({
+      kind: "image-placement",
+      objectId: "slot-2",
+      source: "image-placement-facade",
+      mode: "edit",
+    });
 
     assert(start.sessionId !== next.sessionId, "interaction session ids should be unique");
+    assertEqual(
+      ended.sessionId,
+      start.sessionId,
+      "interaction session end should reuse the object session id",
+    );
+    assertEqual(
+      cancelled.sessionId,
+      next.sessionId,
+      "interaction session cancel should reuse the object session id",
+    );
     assertDeepEqual(
       events,
       [
-        { type: "start", kind: "image-placement", objectId: "slot" },
-        { type: "start", kind: "image-placement", objectId: "slot-2" },
-        { type: "update", kind: "image-placement", objectId: "slot" },
-        { type: "end", kind: "image-placement", objectId: "slot" },
-        { type: "cancel", kind: "image-placement", objectId: "slot-2" },
+        { type: "start", kind: "image-placement", objectId: "slot", sessionId: start.sessionId },
+        { type: "start", kind: "image-placement", objectId: "slot-2", sessionId: next.sessionId },
+        { type: "update", kind: "image-placement", objectId: "slot", sessionId: start.sessionId },
+        { type: "end", kind: "image-placement", objectId: "slot", sessionId: start.sessionId },
+        {
+          type: "cancel",
+          kind: "image-placement",
+          objectId: "slot-2",
+          sessionId: next.sessionId,
+        },
       ],
       "generic workflow interaction sessions should emit stable lifecycle events",
     );

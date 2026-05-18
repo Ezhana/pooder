@@ -3,7 +3,7 @@ export type {
   ImagePlacementPlaceholderStyle,
   ImagePlacementSlotState,
   ImagePlacementTransformUpdates,
-} from "./ImageTool";
+} from "./ImagePlacementCapabilityImplementation";
 export type { ImagePlacementViewState } from "./capability";
 
 import type { ImagePlacementViewState } from "./capability";

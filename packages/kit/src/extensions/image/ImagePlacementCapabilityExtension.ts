@@ -5,7 +5,7 @@ import {
 import {
   ImagePlacementCapabilityImplementation,
   type ImagePlacementCapabilityImplementationOptions,
-} from "./ImageTool";
+} from "./ImagePlacementCapabilityImplementation";
 
 export interface ImagePlacementCapabilityExtensionOptions
   extends ImagePlacementCapabilityOptions {
