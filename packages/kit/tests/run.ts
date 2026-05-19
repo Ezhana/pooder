@@ -108,7 +108,7 @@ import type {
 import {
   COMMAND_SERVICE,
   SCENE_SERVICE,
-  TOOL_SESSION_SERVICE,
+  SESSION_SERVICE,
   type CapabilityDefinition,
   type CommandContribution,
   type CommandService,
@@ -116,6 +116,7 @@ import {
   Pooder,
   type RenderIntentService,
   type SceneService,
+  type SessionService,
   ToolRegistryService,
 } from "@pooder/core";
 
@@ -153,14 +154,8 @@ function imagePlacementCommittedVisibility(slotId: string) {
   return {
     op: "not",
     expr: {
-      op: "all",
-      exprs: [
-        { op: "sessionActive", toolId: IMAGE_PLACEMENT_CAPABILITY_ID },
-        {
-          op: "contextTruthy",
-          key: `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.${slotId}`,
-        },
-      ],
+      op: "sessionScopeActive",
+      scope: { subjectId: slotId, channel: "image-placement" },
     },
   };
 }
@@ -541,8 +536,11 @@ function testVisibilityDsl() {
 
   const context = {
     activeToolId: "pooder.kit.image",
-    isSessionActive: (toolId: string) => toolId === "pooder.kit.feature",
-    hasAnyActiveSession: () => true,
+    isSessionActive: (sessionId: string) => sessionId === "session.feature",
+    isSessionScopeActive: (scope: { channel?: string | null }) =>
+      scope.channel === "feature",
+    hasAnyActiveSession: (scope?: { channel?: string | null }) =>
+      !scope || scope.channel === "feature",
     layers,
   };
 
@@ -570,14 +568,14 @@ function testVisibilityDsl() {
   );
   assert(
     evaluateVisibilityExpr(
-      { op: "sessionActive", toolId: "pooder.kit.feature" },
+      { op: "sessionActive", sessionId: "session.feature" },
       context,
     ) === true,
     "sessionActive true failed",
   );
   assert(
     evaluateVisibilityExpr(
-      { op: "sessionActive", toolId: "pooder.kit.ruler" },
+      { op: "sessionActive", sessionId: "session.ruler" },
       context,
     ) === false,
     "sessionActive false failed",
@@ -643,7 +641,7 @@ function testVisibilityDsl() {
         op: "all",
         exprs: [
           { op: "layerExists", layerId: "ruler-overlay" },
-          { op: "sessionActive", toolId: "pooder.kit.feature" },
+          { op: "sessionScopeActive", scope: { channel: "feature" } },
         ],
       },
       context,
@@ -1766,13 +1764,13 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const renderGraph = renderIntentService.getGraph();
   const imageLayer = renderGraph.layers.find((layer) => layer.id === "artwork");
   const imageSessionLayer = renderGraph.layers.find(
-    (layer) => layer.id === "image.user.session.image",
+    (layer) => layer.id === "image.session.image",
   );
   const sessionLayer = renderGraph.layers.find(
-    (layer) => layer.id === "image-overlay.session.controls",
+    (layer) => layer.id === "image.session.controls",
   );
   const sessionOverlayLayer = renderGraph.layers.find(
-    (layer) => layer.id === "image.user.session.overlay",
+    (layer) => layer.id === "image.session.overlay",
   );
   const committedImageNode = imageLayer?.nodes.find(
     (node: any) => node.id === "image:slot",
@@ -1788,7 +1786,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "image session working object should render above business document layers",
   );
   const sessionImage = imageSessionLayer?.nodes.find(
-    (node: any) => node.id === "session-image:slot",
+    (node: any) => node.id === "session-image:image-placement:slot",
   );
   assert(sessionImage, "image session should render a separate working object");
   const sessionImageNode = sessionImage!;
@@ -1894,12 +1892,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertDeepEqual(
     exportService.calls[0]?.sourceElementIds,
-    ["session-image:slot"],
+    ["session-image:image-placement:slot"],
     "complete session should export the active working slot image",
   );
   assertDeepEqual(
     exportService.calls[0]?.sourceLayerIds,
-    ["image.user.session.image"],
+    ["image.session.image"],
     "complete session should export the working image from the session pass",
   );
 
@@ -1961,8 +1959,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assert(
     !graph.layers
-      .find((layer) => layer.id === "image.user.session.image")
-      ?.nodes.some((node: any) => node.id === "session-image:slot"),
+      .find((layer) => layer.id === "image.session.image")
+      ?.nodes.some((node: any) => node.id === "session-image:image-placement:slot"),
     "completed slot should clear the framework session image layer",
   );
   await facade.exportPlacementImage({ slotIds: ["slot"] });
@@ -2121,8 +2119,8 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   const canvasTarget: any = {
     angle: 12,
     data: {
-      id: "session-image:slot",
-      layerId: "image.user.session.image",
+      id: "session-image:image-placement:slot",
+      layerId: "image.session.image",
       slotId: "slot",
       source: "working",
       type: "image-placement-image",
@@ -2143,8 +2141,8 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
       .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
       .getGraph();
     const sessionNode = graph.layers
-      .find((layer) => layer.id === "image.user.session.image")
-      ?.nodes.find((node) => node.id === "session-image:slot");
+      .find((layer) => layer.id === "image.session.image")
+      ?.nodes.find((node) => node.id === "session-image:image-placement:slot");
     renderedSessionScale = Number(sessionNode?.props.scaleX || 0);
     return FakeSceneExportService.prototype.exportImage.call(exportService, options);
   };
@@ -2261,20 +2259,20 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
   await facade.beginSession("slot-b");
   let imageSessionLayer = renderIntentService
     .getGraph()
-    .layers.find((layer) => layer.id === "image.user.session.image");
+    .layers.find((layer) => layer.id === "image.session.image");
   assert(
-    imageSessionLayer?.nodes.some((node: any) => node.id === "session-image:slot-a"),
+    imageSessionLayer?.nodes.some((node: any) => node.id === "session-image:image-placement:slot-a"),
     "uploaded working image should remain visible after focusing another slot",
   );
 
   await facade.requestUpload("slot-b");
   imageSessionLayer = renderIntentService
     .getGraph()
-    .layers.find((layer) => layer.id === "image.user.session.image");
+    .layers.find((layer) => layer.id === "image.session.image");
   const workingObjectIds = imageSessionLayer?.nodes.map((node: any) => node.id) ?? [];
   assert(
-    workingObjectIds.includes("session-image:slot-a") &&
-      workingObjectIds.includes("session-image:slot-b"),
+    workingObjectIds.includes("session-image:image-placement:slot-a") &&
+      workingObjectIds.includes("session-image:image-placement:slot-b"),
     "multiple uploaded working images should render together before commit",
   );
   assert(
@@ -2349,11 +2347,13 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   const dielineNode = dielineLayer?.nodes[0];
   assert(dielineLayer, "dieline render intent should expose the dieline overlay layer");
 
-  const sessions = runtime.services.getOrThrow(TOOL_SESSION_SERVICE);
+  const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
   const context = {
     activeToolId: null,
-    hasAnyActiveSession: () => sessions.hasAnyActiveSession(),
-    isSessionActive: (toolId: string) => sessions.hasActiveSession(toolId),
+    hasAnyActiveSession: (scope?: { channel?: string | null }) =>
+      sessions.hasActiveSession({ scope }),
+    isSessionScopeActive: (scope: { channel?: string | null }) =>
+      sessions.hasActiveSession({ scope }),
   };
 
   assertEqual(
@@ -2362,30 +2362,39 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
     "dieline overlay should be visible when no edit session is active",
   );
 
-  await sessions.begin(IMAGE_PLACEMENT_CAPABILITY_ID);
+  sessions.createSession({
+    sessionId: "image-placement:slot",
+    scope: { channel: "image-placement", subjectId: "slot" },
+  });
   assertEqual(
     evaluateVisibilityExpr(dielineNode?.visibility, context),
     false,
     "dieline overlay should be hidden during image placement sessions",
   );
-  sessions.deactivateSession(IMAGE_PLACEMENT_CAPABILITY_ID);
+  await sessions.cancelSession("image-placement:slot");
 
-  await sessions.begin(WHITE_INK_CAPABILITY_ID);
+  sessions.createSession({
+    sessionId: "white-ink:front",
+    scope: { channel: "white-ink", subjectId: "front" },
+  });
   assertEqual(
     evaluateVisibilityExpr(dielineNode?.visibility, context),
     false,
     "dieline overlay should be hidden during white ink sessions",
   );
-  sessions.deactivateSession(WHITE_INK_CAPABILITY_ID);
+  await sessions.cancelSession("white-ink:front");
 
-  await sessions.begin(DIELINE_GEOMETRY_CAPABILITY_ID);
+  sessions.createSession({
+    sessionId: "dieline:front",
+    scope: { channel: DIELINE_GEOMETRY_CAPABILITY_ID, subjectId: "front" },
+  });
   assertEqual(
     evaluateVisibilityExpr(dielineNode?.visibility, context),
     true,
     "dieline overlay should remain visible during dieline sessions",
   );
 
-  sessions.deactivateSession(DIELINE_GEOMETRY_CAPABILITY_ID);
+  await sessions.cancelSession("dieline:front");
 
   assertEqual(
     evaluateVisibilityExpr(dielineNode?.visibility, context),

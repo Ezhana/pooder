@@ -4,11 +4,10 @@ import {
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
+  SESSION_SERVICE,
   SNAP_SERVICE,
   SnapService,
   TOOL_REGISTRY_SERVICE,
-  TOOL_SESSION_SERVICE,
-  WORKFLOW_SESSION_SERVICE,
   buildSceneGeometry,
   computeSceneLayout,
   evaluateVisibilityExpr,
@@ -23,8 +22,8 @@ import {
   type SceneService,
   type Service,
   type ToolContribution,
-  type WorkflowSessionChangeEvent,
-  type WorkflowSessionService,
+  type SessionChangeEvent,
+  type SessionService,
 } from "../src";
 
 declare const process: {
@@ -1049,20 +1048,26 @@ async function testRemovingSceneLayerRemovesScopedElements() {
   });
 }
 
-async function testWorkflowSessionsWithoutTools() {
+async function testSessionsWithoutTools() {
   await withRuntime(async (runtime) => {
-    const workflowSessions = runtime.services.getOrThrow<WorkflowSessionService>(
-      WORKFLOW_SESSION_SERVICE,
+    const sessions = runtime.services.getOrThrow<SessionService>(
+      SESSION_SERVICE,
     );
-    const changes: WorkflowSessionChangeEvent[] = [];
+    const changes: SessionChangeEvent[] = [];
     let beginCount = 0;
     let validateCount = 0;
     let commitCount = 0;
 
-    workflowSessions.onDidChange((event) => changes.push(event));
-    workflowSessions.registerSession({
-      id: "storefront.image-placement",
+    sessions.onDidChange((event) => changes.push(event));
+    sessions.createSession({
+      sessionId: "session.image-placement.front.slot",
+      scope: {
+        surfaceId: "front",
+        subjectId: "slot",
+        channel: "image-placement",
+      },
       leavePolicy: "commit",
+      draft: { scale: 1 },
       lifecycle: {
         begin: () => {
           beginCount += 1;
@@ -1078,11 +1083,10 @@ async function testWorkflowSessionsWithoutTools() {
       },
     });
 
-    await workflowSessions.begin("storefront.image-placement");
-    workflowSessions.markDirty("storefront.image-placement");
+    sessions.markDirty("session.image-placement.front.slot");
 
-    const leaveResult = await workflowSessions.handleBeforeLeave(
-      "storefront.image-placement",
+    const leaveResult = await sessions.handleBeforeLeave(
+      "session.image-placement.front.slot",
     );
 
     assertDeepEqual(leaveResult, { decision: "allow" });
@@ -1090,120 +1094,72 @@ async function testWorkflowSessionsWithoutTools() {
     assertEqual(validateCount, 1);
     assertEqual(commitCount, 1);
     assertEqual(
-      workflowSessions.getState("storefront.image-placement").status,
-      "idle",
+      sessions.getSession("session.image-placement.front.slot")?.status,
+      "committed",
     );
     assertEqual(
-      workflowSessions.getState("storefront.image-placement").dirty,
+      sessions.getSession("session.image-placement.front.slot")?.dirty,
+      false,
+    );
+    assertEqual(
+      sessions.hasActiveSession({
+        scope: { surfaceId: "front", subjectId: "slot" },
+      }),
       false,
     );
     assertDeepEqual(
       changes.map((event) => event.reason),
-      ["begin", "dirty", "commit"],
+      ["create", "dirty", "committing", "commit"],
     );
   });
 }
 
-async function testWorkflowSessionInteractionEvents() {
+async function testSessionLifecycleEvents() {
   await withRuntime(async (runtime) => {
-    const workflowSessions = runtime.services.getOrThrow<WorkflowSessionService>(
-      WORKFLOW_SESSION_SERVICE,
+    const sessions = runtime.services.getOrThrow<SessionService>(
+      SESSION_SERVICE,
     );
     const events: Array<{
-      type: string;
-      kind: string;
-      objectId: string | null;
+      reason: string;
       sessionId: string;
     }> = [];
 
-    runtime.eventBus.on("session:start", (event: any) => {
-      events.push({
-        type: "start",
-        kind: event.kind,
-        objectId: event.objectId,
-        sessionId: event.sessionId,
-      });
-    });
-    runtime.eventBus.on("session:update", (event: any) => {
-      events.push({
-        type: "update",
-        kind: event.kind,
-        objectId: event.objectId,
-        sessionId: event.sessionId,
-      });
-    });
-    runtime.eventBus.on("session:end", (event: any) => {
-      events.push({
-        type: "end",
-        kind: event.kind,
-        objectId: event.objectId,
-        sessionId: event.sessionId,
-      });
-    });
-    runtime.eventBus.on("session:cancel", (event: any) => {
-      events.push({
-        type: "cancel",
-        kind: event.kind,
-        objectId: event.objectId,
-        sessionId: event.sessionId,
-      });
+    sessions.onDidChange((event) => {
+      events.push({ reason: event.reason, sessionId: event.sessionId });
     });
 
-    const start = workflowSessions.startSession({
-      kind: "image-placement",
-      surfaceId: "front",
-      objectId: "slot",
-      source: "render-graph",
-      mode: "edit",
-      payload: { fit: "cover" },
+    sessions.createSession({
+      sessionId: "image:front:slot",
+      scope: { surfaceId: "front", subjectId: "slot", channel: "image" },
+      draft: { scale: 1 },
     });
-    const next = workflowSessions.startSession({
-      kind: "image-placement",
-      surfaceId: "front",
-      objectId: "slot-2",
-      source: "render-graph",
-      mode: "edit",
+    sessions.createSession({
+      sessionId: "image:front:slot-2",
+      scope: { surfaceId: "front", subjectId: "slot-2", channel: "image" },
     });
-    workflowSessions.updateSession({ ...start, payload: { scale: 1.2 } });
-    const ended = workflowSessions.endSession({
-      kind: "image-placement",
-      objectId: "slot",
-      source: "image-placement-facade",
-      mode: "edit",
-    });
-    const cancelled = workflowSessions.cancelSession({
-      kind: "image-placement",
-      objectId: "slot-2",
-      source: "image-placement-facade",
-      mode: "edit",
-    });
+    sessions.updateSession("image:front:slot", { draft: { scale: 1.2 } });
+    sessions.focusSession("image:front:slot");
+    await sessions.commitSession("image:front:slot");
+    await sessions.cancelSession("image:front:slot-2");
 
-    assert(start.sessionId !== next.sessionId, "interaction session ids should be unique");
+    assertEqual(sessions.getFocusedSessionId(), "image:front:slot");
+    assertEqual(sessions.isSessionActive("image:front:slot"), false);
     assertEqual(
-      ended.sessionId,
-      start.sessionId,
-      "interaction session end should reuse the object session id",
-    );
-    assertEqual(
-      cancelled.sessionId,
-      next.sessionId,
-      "interaction session cancel should reuse the object session id",
+      sessions.listSessions({ scope: { channel: "image" } }).length,
+      2,
     );
     assertDeepEqual(
       events,
       [
-        { type: "start", kind: "image-placement", objectId: "slot", sessionId: start.sessionId },
-        { type: "start", kind: "image-placement", objectId: "slot-2", sessionId: next.sessionId },
-        { type: "update", kind: "image-placement", objectId: "slot", sessionId: start.sessionId },
-        { type: "end", kind: "image-placement", objectId: "slot", sessionId: start.sessionId },
-        {
-          type: "cancel",
-          kind: "image-placement",
-          objectId: "slot-2",
-          sessionId: next.sessionId,
-        },
+        { reason: "create", sessionId: "image:front:slot" },
+        { reason: "create", sessionId: "image:front:slot-2" },
+        { reason: "update", sessionId: "image:front:slot" },
+        { reason: "focus", sessionId: "image:front:slot" },
+        { reason: "committing", sessionId: "image:front:slot" },
+        { reason: "commit", sessionId: "image:front:slot" },
+        { reason: "cancel", sessionId: "image:front:slot-2" },
       ],
-      "generic workflow interaction sessions should emit stable lifecycle events",
+      "sessions should emit unified lifecycle events",
     );
   });
 }
@@ -1252,69 +1208,49 @@ async function testRuntimeRegistersSnapService() {
   });
 }
 
-async function testWorkflowDirtyTrackerCanBlockLeave() {
+async function testSessionDirtyTrackerCanBlockLeave() {
   await withRuntime(async (runtime) => {
-    const workflowSessions = runtime.services.getOrThrow(
-      WORKFLOW_SESSION_SERVICE,
+    const sessions = runtime.services.getOrThrow<SessionService>(
+      SESSION_SERVICE,
     );
-    const tracker = workflowSessions.registerDirtyTracker(
-      "storefront.feature",
+    sessions.createSession({
+      sessionId: "session.feature",
+      scope: { channel: "feature" },
+    });
+    const tracker = sessions.registerDirtyTracker(
+      "session.feature",
       () => true,
     );
 
-    await workflowSessions.begin("storefront.feature");
     const leaveResult =
-      await workflowSessions.handleBeforeLeave("storefront.feature");
+      await sessions.handleBeforeLeave("session.feature");
 
     assertDeepEqual(leaveResult, {
       decision: "blocked",
       reason: "session-dirty",
     });
-    assertEqual(workflowSessions.hasActiveSession("storefront.feature"), true);
+    assertEqual(sessions.isSessionActive("session.feature"), true);
 
     tracker.dispose();
-    workflowSessions.markDirty("storefront.feature", false);
+    sessions.markDirty("session.feature", false);
     assertDeepEqual(
-      await workflowSessions.handleBeforeLeave("storefront.feature"),
+      await sessions.handleBeforeLeave("session.feature"),
       { decision: "allow" },
     );
   });
 }
 
-async function testLegacyToolSessionUsesWorkflowSessionState() {
+async function testWorkbenchDoesNotManageSessions() {
   await withRuntime(async (runtime) => {
-    const calls: string[] = [];
     runtime.extensions.register({
-      id: "legacy-tool-session",
+      id: "tool-session-decoupled",
       contribute() {
         return {
-          commands: [
-            {
-              id: "legacy.begin",
-              command: "legacy.begin",
-              title: "legacy.begin",
-              handler: () => calls.push("begin"),
-            },
-            {
-              id: "legacy.rollback",
-              command: "legacy.rollback",
-              title: "legacy.rollback",
-              handler: () => calls.push("rollback"),
-            },
-          ],
           tools: [
             {
-              id: "legacy.session-tool",
-              name: "Legacy Session Tool",
+              id: "decoupled.session-tool",
+              name: "Decoupled Session Tool",
               interaction: "session",
-              commands: {
-                begin: "legacy.begin",
-                rollback: "legacy.rollback",
-              },
-              session: {
-                autoBegin: true,
-                leavePolicy: "rollback",
-              },
             },
           ],
         };
@@ -1323,27 +1259,18 @@ async function testLegacyToolSessionUsesWorkflowSessionState() {
     });
 
     await runtime.extensions.flushActivation();
-    const toolSessions = runtime.services.getOrThrow(TOOL_SESSION_SERVICE);
-    const workflowSessions = runtime.services.getOrThrow(
-      WORKFLOW_SESSION_SERVICE,
+    const sessions = runtime.services.getOrThrow<SessionService>(
+      SESSION_SERVICE,
     );
 
-    await runtime.workbench.activate("legacy.session-tool");
-    toolSessions.markDirty("legacy.session-tool");
+    await runtime.workbench.activate("decoupled.session-tool");
 
-    assertEqual(toolSessions.getState("legacy.session-tool").status, "active");
-    assertEqual(
-      workflowSessions.getState("legacy.session-tool").status,
-      "active",
-    );
-    assertEqual(workflowSessions.isDirty("legacy.session-tool"), true);
+    assertEqual(sessions.hasActiveSession(), false);
 
     const result = await runtime.workbench.deactivate();
 
     assertEqual(result.ok, true);
-    assertDeepEqual(calls, ["begin", "rollback"]);
-    assertEqual(toolSessions.getState("legacy.session-tool").status, "idle");
-    assertEqual(workflowSessions.isDirty("legacy.session-tool"), false);
+    assertEqual(sessions.hasActiveSession(), false);
   });
 }
 
@@ -2081,22 +2008,22 @@ async function main() {
       testRemovingSceneLayerRemovesScopedElements,
     ],
     [
-      "manages workflow sessions without registered tools",
-      testWorkflowSessionsWithoutTools,
+      "manages sessions without registered tools",
+      testSessionsWithoutTools,
     ],
     [
-      "emits generic workflow interaction session events",
-      testWorkflowSessionInteractionEvents,
+      "emits generic session lifecycle events",
+      testSessionLifecycleEvents,
     ],
     ["computes generic snap matches", testSnapServiceComputesGeometryMatches],
     ["registers generic snap service", testRuntimeRegistersSnapService],
     [
-      "workflow dirty trackers can block leave",
-      testWorkflowDirtyTrackerCanBlockLeave,
+      "session dirty trackers can block leave",
+      testSessionDirtyTrackerCanBlockLeave,
     ],
     [
-      "legacy tool sessions use workflow session state",
-      testLegacyToolSessionUsesWorkflowSessionState,
+      "workbench does not manage sessions",
+      testWorkbenchDoesNotManageSessions,
     ],
     [
       "keeps render intent runtime patches source scoped",

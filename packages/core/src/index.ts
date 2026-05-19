@@ -23,9 +23,8 @@ import {
   RenderIntentService,
   SceneService,
   ToolRegistryService,
-  ToolSessionService,
   WorkbenchService,
-  WorkflowSessionService,
+  SessionService,
   SnapService,
 } from "./services";
 import { ExtensionContext } from "./context";
@@ -151,17 +150,11 @@ export class Pooder {
     new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
   private readonly toolRegistryService = new ToolRegistryService();
-  private readonly workflowSessionService = new WorkflowSessionService();
+  private readonly sessionService = new SessionService();
   private readonly snapService = new SnapService();
-  private readonly toolSessionService = new ToolSessionService({
-    commandService: this.commandService,
-    toolRegistry: this.toolRegistryService,
-    workflowSessionService: this.workflowSessionService,
-  });
   private readonly workbenchService = new WorkbenchService({
     eventBus: this.eventBus,
     toolRegistry: this.toolRegistryService,
-    sessionService: this.toolSessionService,
   });
   private readonly extensionManager: ExtensionManager;
 
@@ -192,17 +185,13 @@ export class Pooder {
     );
     this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
     this.registerService(
-      this.workflowSessionService,
-      CORE_SERVICE_TOKENS.WORKFLOW_SESSION,
+      this.sessionService,
+      CORE_SERVICE_TOKENS.SESSION,
     );
     this.registerService(this.snapService, CORE_SERVICE_TOKENS.SNAP);
     this.registerService(
       this.toolRegistryService,
       CORE_SERVICE_TOKENS.TOOL_REGISTRY,
-    );
-    this.registerService(
-      this.toolSessionService,
-      CORE_SERVICE_TOKENS.TOOL_SESSION,
     );
     this.registerService(this.workbenchService, CORE_SERVICE_TOKENS.WORKBENCH);
 

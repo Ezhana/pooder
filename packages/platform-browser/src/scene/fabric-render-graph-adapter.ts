@@ -1,8 +1,7 @@
 import {
   RENDER_INTENT_SERVICE,
-  TOOL_SESSION_SERVICE,
+  SESSION_SERVICE,
   WORKBENCH_SERVICE,
-  WORKFLOW_SESSION_SERVICE,
   evaluateVisibilityExpr,
   type CanvasService,
   type RenderEffectSpec,
@@ -12,10 +11,9 @@ import {
   type RenderObjectSpec,
   type Service,
   type ServiceContext,
-  type ToolSessionService,
   type VisibilityLayerState,
   type WorkbenchService,
-  type WorkflowSessionService,
+  type SessionService,
   type RenderIntentService,
 } from "@pooder/core";
 import type {
@@ -49,11 +47,9 @@ export class FabricRenderGraphAdapter implements Service {
   private renderIntentService?: RenderIntentService;
   private canvasService?: FabricRenderTargetCanvasService;
   private workbenchService?: WorkbenchService;
-  private toolSessionService?: ToolSessionService;
-  private workflowSessionService?: WorkflowSessionService;
+  private sessionService?: SessionService;
   private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
-  private canvasMouseDownHandler?: (event?: any) => void;
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
   private syncGeneration = 0;
@@ -73,8 +69,7 @@ export class FabricRenderGraphAdapter implements Service {
       | FabricRenderTargetCanvasService
       | undefined;
     this.workbenchService = context.get(WORKBENCH_SERVICE);
-    this.toolSessionService = context.get(TOOL_SESSION_SERVICE);
-    this.workflowSessionService = context.get(WORKFLOW_SESSION_SERVICE);
+    this.sessionService = context.get(SESSION_SERVICE);
     this.eventBus = context.eventBus;
 
     if (!this.renderIntentService || !this.canvasService) {
@@ -87,20 +82,17 @@ export class FabricRenderGraphAdapter implements Service {
       this.requestSync();
     });
     this.attachRuntimeVisibilityEvents();
-    this.attachCanvasInteractionEvents();
     this.requestSync();
   }
 
   dispose() {
     this.detachRuntimeVisibilityEvents();
-    this.detachCanvasInteractionEvents();
     this.graphSubscription?.dispose();
     this.graphSubscription = undefined;
     this.renderIntentService = undefined;
     this.canvasService = undefined;
     this.workbenchService = undefined;
-    this.toolSessionService = undefined;
-    this.workflowSessionService = undefined;
+    this.sessionService = undefined;
     this.eventBus = undefined;
     this.syncRequested = false;
     this.syncPromise = null;
@@ -174,57 +166,15 @@ export class FabricRenderGraphAdapter implements Service {
     const eventBus = this.eventBus;
     if (!eventBus) return;
     eventBus.on("tool:activated", this.onRuntimeVisibilityChange);
-    eventBus.on("tool:session:change", this.onRuntimeVisibilityChange);
-    eventBus.on("workflow:session:change", this.onRuntimeVisibilityChange);
+    eventBus.on("session:change", this.onRuntimeVisibilityChange);
     eventBus.on("scene:layout:change", this.onRuntimeVisibilityChange);
-  }
-
-  private attachCanvasInteractionEvents() {
-    if (
-      !this.canvasService ||
-      this.canvasMouseDownHandler ||
-      typeof this.canvasService.onCanvasEvent !== "function"
-    ) {
-      return;
-    }
-    this.canvasMouseDownHandler = (event?: any) => {
-      this.startInteractionSessionFromTarget(event?.target);
-    };
-    this.canvasService.onCanvasEvent("mouse:down", this.canvasMouseDownHandler);
-  }
-
-  private detachCanvasInteractionEvents() {
-    if (
-      !this.canvasService ||
-      !this.canvasMouseDownHandler ||
-      typeof this.canvasService.offCanvasEvent !== "function"
-    ) {
-      return;
-    }
-    this.canvasService.offCanvasEvent("mouse:down", this.canvasMouseDownHandler);
-    this.canvasMouseDownHandler = undefined;
-  }
-
-  private startInteractionSessionFromTarget(target: any) {
-    const session = normalizeInteractionSession(target?.data?.session);
-    if (!session || !this.workflowSessionService) return;
-    this.workflowSessionService.startSession({
-      ...session,
-      source: session.source || "render-graph",
-      payload: {
-        ...(session.payload ?? {}),
-        renderNodeId: target?.data?.renderNodeId,
-        subjectId: target?.data?.subjectId,
-      },
-    });
   }
 
   private detachRuntimeVisibilityEvents() {
     const eventBus = this.eventBus;
     if (!eventBus) return;
     eventBus.off("tool:activated", this.onRuntimeVisibilityChange);
-    eventBus.off("tool:session:change", this.onRuntimeVisibilityChange);
-    eventBus.off("workflow:session:change", this.onRuntimeVisibilityChange);
+    eventBus.off("session:change", this.onRuntimeVisibilityChange);
     eventBus.off("scene:layout:change", this.onRuntimeVisibilityChange);
   }
 
@@ -292,14 +242,14 @@ export class FabricRenderGraphAdapter implements Service {
     return this.requireRenderIntentService().createVisibilityEvalContext({
       activeToolId: this.workbenchService?.activeToolId ?? null,
       getLayerState: (layerId: string) => layers.get(layerId),
-      isWorkflowSessionActive: (workflowId: string) =>
-        this.workflowSessionService?.hasActiveSession(workflowId) ?? false,
-      hasAnyActiveWorkflowSession: () =>
-        this.workflowSessionService?.hasAnyActiveSession() ?? false,
-      isSessionActive: (toolId: string) =>
-        this.toolSessionService?.getState(toolId).status === "active",
-      hasAnyActiveSession: () =>
-        this.toolSessionService?.hasAnyActiveSession() ?? false,
+      isSessionActive: (sessionId: string) =>
+        this.sessionService?.isSessionActive(sessionId) ?? false,
+      isSessionScopeActive: (scope) =>
+        this.sessionService?.hasActiveSession({ scope }) ?? false,
+      isSessionFocused: (sessionId: string) =>
+        this.sessionService?.getFocusedSessionId() === sessionId,
+      hasAnyActiveSession: (scope) =>
+        this.sessionService?.hasActiveSession({ scope }) ?? false,
     });
   }
 
@@ -385,8 +335,9 @@ export class FabricRenderGraphAdapter implements Service {
     const transform = node.transform ?? {};
     const hasTransformLeft = Number.isFinite(transform.left);
     const hasTransformTop = Number.isFinite(transform.top);
-    const visualMetadata = isRecord(node.visual?.metadata)
-      ? node.visual.metadata
+    const nodeVisual = node.visual;
+    const visualMetadata = isRecord(nodeVisual?.metadata)
+      ? nodeVisual.metadata
       : undefined;
     const derivedMetadata = isRecord(visualMetadata?.derived)
       ? visualMetadata.derived
@@ -458,31 +409,6 @@ function normalizeIds(values: unknown): string[] {
         .filter((item) => item.length > 0),
     ),
   );
-}
-
-function normalizeInteractionSession(value: unknown): {
-  kind: string;
-  surfaceId?: string | null;
-  objectId?: string | null;
-  source?: string;
-  mode?: string | null;
-  payload?: Record<string, unknown>;
-} | null {
-  if (!isRecord(value)) return null;
-  const kind = normalizeText(value.kind);
-  if (!kind) return null;
-  return {
-    kind,
-    surfaceId: normalizeText(value.surfaceId) || null,
-    objectId: normalizeText(value.objectId) || null,
-    source: normalizeText(value.source),
-    mode: normalizeText(value.mode) || null,
-    payload: isRecord(value.payload) ? { ...value.payload } : {},
-  };
-}
-
-function normalizeText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -57,9 +57,10 @@ import {
   patchRenderObjectSpecs,
 } from "../../shared/runtime/renderIntentPatches";
 
-const IMAGE_SESSION_TOOL_ID = "pooder.kit.image-placement";
+const IMAGE_SESSION_CHANNEL = "image-placement";
 const LEGACY_IMAGE_TOOL_ID = "pooder.kit.image";
-const WHITE_INK_SESSION_TOOL_ID = "pooder.kit.white-ink";
+const WHITE_INK_SESSION_CHANNEL = "white-ink";
+const WHITE_INK_TOOL_ID = "pooder.kit.white-ink";
 
 export interface DielineToolOptions
   extends Partial<DielineState>, DielineGeometryCapabilityOptions {
@@ -320,8 +321,8 @@ export class DielineTool implements ExtensionDefinition {
       expr: {
         op: "any",
         exprs: [
-          { op: "sessionActive", toolId: IMAGE_SESSION_TOOL_ID },
-          { op: "sessionActive", toolId: WHITE_INK_SESSION_TOOL_ID },
+          { op: "anySessionActive", scope: { channel: IMAGE_SESSION_CHANNEL } },
+          { op: "anySessionActive", scope: { channel: WHITE_INK_SESSION_CHANNEL } },
         ],
       },
     };
@@ -338,7 +339,7 @@ export class DielineTool implements ExtensionDefinition {
           op: "not",
           expr: {
             op: "activeToolIn",
-            ids: [LEGACY_IMAGE_TOOL_ID, WHITE_INK_SESSION_TOOL_ID],
+            ids: [LEGACY_IMAGE_TOOL_ID, WHITE_INK_TOOL_ID],
           },
         },
       ],

@@ -1,6 +1,7 @@
 import type { Service } from "./service";
 import type { Unit } from "./coordinate";
 import type { DielineShape, DielineShapeStyle } from "./dieline-shape";
+import type { SessionScope } from "./workflow-session";
 
 export type RenderObjectType = "rect" | "image" | "path" | "text";
 
@@ -67,11 +68,11 @@ export type VisibilityExpr =
   | { op: "const"; value: boolean }
   | { op: "contextTruthy"; key: string }
   | { op: "contextEquals"; key: string; value: unknown }
-  | { op: "workflowSessionActive"; workflowId: string }
-  | { op: "anyWorkflowSessionActive" }
   | { op: "activeToolIn"; ids: string[] }
-  | { op: "sessionActive"; toolId: string }
-  | { op: "anySessionActive" }
+  | { op: "sessionActive"; sessionId: string }
+  | { op: "sessionScopeActive"; scope: Partial<SessionScope> }
+  | { op: "sessionFocused"; sessionId: string }
+  | { op: "anySessionActive"; scope?: Partial<SessionScope> }
   | { op: "layerExists"; layerId: string }
   | {
       op: "layerObjectCount";
@@ -103,10 +104,10 @@ export interface VisibilityLayerState {
 export interface VisibilityEvalContext {
   activeToolId?: string | null;
   contextValues?: Map<string, unknown> | Record<string, unknown>;
-  isSessionActive?: (toolId: string) => boolean;
-  hasAnyActiveSession?: () => boolean;
-  isWorkflowSessionActive?: (workflowId: string) => boolean;
-  hasAnyActiveWorkflowSession?: () => boolean;
+  isSessionActive?: (sessionId: string) => boolean;
+  isSessionScopeActive?: (scope: Partial<SessionScope>) => boolean;
+  isSessionFocused?: (sessionId: string) => boolean;
+  hasAnyActiveSession?: (scope?: Partial<SessionScope>) => boolean;
   layers?: Map<string, VisibilityLayerState>;
   getLayerState?: (layerId: string) => VisibilityLayerState | undefined;
   getContextValue?: (key: string) => unknown;
@@ -159,13 +160,13 @@ export function evaluateVisibilityExpr(
         context.activeToolId && expr.ids.includes(context.activeToolId),
       );
     case "sessionActive":
-      return Boolean(context.isSessionActive?.(expr.toolId));
+      return Boolean(context.isSessionActive?.(expr.sessionId));
+    case "sessionScopeActive":
+      return Boolean(context.isSessionScopeActive?.(expr.scope));
+    case "sessionFocused":
+      return Boolean(context.isSessionFocused?.(expr.sessionId));
     case "anySessionActive":
-      return Boolean(context.hasAnyActiveSession?.());
-    case "workflowSessionActive":
-      return Boolean(context.isWorkflowSessionActive?.(expr.workflowId));
-    case "anyWorkflowSessionActive":
-      return Boolean(context.hasAnyActiveWorkflowSession?.());
+      return Boolean(context.hasAnyActiveSession?.(expr.scope));
     case "layerExists":
       return Boolean(readVisibilityLayerState(context, expr.layerId)?.exists);
     case "layerObjectCount": {

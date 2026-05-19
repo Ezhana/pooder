@@ -8,9 +8,8 @@ import type {
 } from "../render-intent";
 import type SceneService from "./SceneService";
 import type ToolRegistryService from "./ToolRegistryService";
-import type ToolSessionService from "./ToolSessionService";
 import type WorkbenchService from "./WorkbenchService";
-import type WorkflowSessionService from "./WorkflowSessionService";
+import type SessionService from "./SessionService";
 import type SnapService from "../snap";
 import type {
   CanvasService,
@@ -41,12 +40,9 @@ export const SCENE_EXPORT_SERVICE =
 export const SNAP_SERVICE = createServiceToken<SnapService>("SnapService");
 export const TOOL_REGISTRY_SERVICE =
   createServiceToken<ToolRegistryService>("ToolRegistryService");
-export const TOOL_SESSION_SERVICE =
-  createServiceToken<ToolSessionService>("ToolSessionService");
 export const WORKBENCH_SERVICE =
   createServiceToken<WorkbenchService>("WorkbenchService");
-export const WORKFLOW_SESSION_SERVICE =
-  createServiceToken<WorkflowSessionService>("WorkflowSessionService");
+export const SESSION_SERVICE = createServiceToken<SessionService>("SessionService");
 
 export const CORE_SERVICE_TOKENS = {
   CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
@@ -60,7 +56,6 @@ export const CORE_SERVICE_TOKENS = {
   SCENE_EXPORT: SCENE_EXPORT_SERVICE,
   SNAP: SNAP_SERVICE,
   TOOL_REGISTRY: TOOL_REGISTRY_SERVICE,
-  TOOL_SESSION: TOOL_SESSION_SERVICE,
   WORKBENCH: WORKBENCH_SERVICE,
-  WORKFLOW_SESSION: WORKFLOW_SESSION_SERVICE,
+  SESSION: SESSION_SERVICE,
 } as const;

@@ -9,8 +9,8 @@ import {
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  SESSION_SERVICE,
   SNAP_SERVICE,
-  WORKFLOW_SESSION_SERVICE,
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
@@ -26,9 +26,10 @@ import {
   type SceneExportService,
   type SceneLayoutService,
   type SceneService,
+  type SessionArtifact,
+  type SessionService,
   type SnapService,
   type VisibilityExpr,
-  type WorkflowSessionService,
 } from "@pooder/core";
 import type {
   EditorDocument,
@@ -190,6 +191,11 @@ interface SnapCandidate {
   deltaScene: number;
 }
 
+interface ImagePlacementSessionDraft {
+  slotId: string;
+  image: ImagePlacementImageState | null;
+}
+
 const DEFAULT_IMAGE_LAYER_ID = KIT_LEGACY_LAYER_PRESET.imageObject;
 const DEFAULT_OVERLAY_LAYER_ID = KIT_LEGACY_LAYER_PRESET.imageOverlay;
 const IMAGE_OBJECT_STACK = 660;
@@ -197,6 +203,7 @@ const IMAGE_OVERLAY_STACK = 800;
 const IMAGE_RENDER_SCOPE = "pooder.kit.image-placement";
 const IMAGE_RUNTIME_RENDER_SCOPE = "pooder.kit.image-placement.runtime";
 const IMAGE_ACTIVE_SLOT_CONTEXT_PREFIX = "image-placement.active-slot";
+const IMAGE_SESSION_CHANNEL = "image-placement";
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -498,7 +505,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private sceneLayoutService?: SceneLayoutService;
   private exportService?: SceneExportService;
   private snapService?: SnapService;
-  private workflowSessionService?: WorkflowSessionService;
+  private sessionService?: SessionService;
   private context?: ExtensionContext;
   private sceneSubscription?: { dispose(): void };
   private readonly subscriptions = new SubscriptionBag();
@@ -528,6 +535,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private canvasBeforeRenderHandler?: (event?: any) => void;
   private canvasAfterRenderHandler?: (event?: any) => void;
   private pendingCanvasSessionSlotId: string | null = null;
+  private pendingCanvasSessionTarget: any = null;
   private pendingCanvasSessionTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   constructor(options: ImagePlacementCapabilityImplementationOptions = {}) {
@@ -561,9 +569,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       SCENE_EXPORT_SERVICE,
     );
     this.snapService = context.services.get<SnapService>(SNAP_SERVICE);
-    this.workflowSessionService = context.services.get<WorkflowSessionService>(
-      WORKFLOW_SESSION_SERVICE,
-    );
+    this.sessionService = context.services.get<SessionService>(SESSION_SERVICE);
 
     this.sceneSubscription?.dispose();
     this.sceneSubscription = this.sceneService?.onDidChange(() => this.updateImages());
@@ -598,7 +604,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.sceneLayoutService = undefined;
     this.exportService = undefined;
     this.snapService = undefined;
-    this.workflowSessionService = undefined;
+    this.sessionService = undefined;
     this.context = undefined;
   }
 
@@ -686,9 +692,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       },
       interaction: {
         session: {
-          kind: "image-placement",
-          surfaceId: resolved.surface.id,
-          objectId: object.id,
+          sessionId: this.getImageSessionId(object.id),
+          scope: {
+            surfaceId: resolved.surface.id,
+            subjectId: object.id,
+            channel: IMAGE_SESSION_CHANNEL,
+          },
           source: "render-graph",
           mode: "edit",
           payload: {
@@ -974,6 +983,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         createEditableWorkingImage(this.getCommittedImage(slot)),
       );
     }
+    this.upsertImageSessionDraft(slotId, this.workingImages.get(slotId) ?? null);
+    this.sessionService?.focusSession(this.getImageSessionId(slotId));
     this.syncWorkingSlotVisibilityContext();
     this.setSessionNotice(null);
     await this.updateImagesAsync();
@@ -1030,6 +1041,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       angle: current.angle ?? 0,
       opacity: current.opacity ?? 1,
     });
+    this.upsertImageSessionDraft(slotId, this.workingImages.get(slotId) ?? null);
     this.syncWorkingSlotVisibilityContext();
     this.rememberSourceSizeFromMetadata(src, source.metadata);
     if (!this.retainedWorkingImageBaselines.has(slotId)) {
@@ -1071,6 +1083,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       transform: resolveImageTransformSnapshot(next),
     };
     this.workingImages.set(slotId, next);
+    this.upsertImageSessionDraft(slotId, next);
     this.syncWorkingSlotVisibilityContext();
     if (!options.skipRender) {
       this.updateImages();
@@ -1104,6 +1117,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const slot = this.getSlotElement(slotId);
     if (!slot) return { ok: false, reason: "slot-not-found" };
     this.workingImages.set(slotId, null);
+    this.upsertImageSessionDraft(slotId, null);
     this.syncWorkingSlotVisibilityContext();
     this.updateImages();
     this.emitStateChange();
@@ -1113,12 +1127,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private resetSession(slotId?: string) {
     this.clearPendingCanvasSession(slotId);
     this.resolveSessionTargetIds(slotId).forEach((id) => {
-      this.workflowSessionService?.cancelSession({
-        kind: "image-placement",
-        objectId: id,
-        source: "image-placement-facade",
-        mode: "edit",
-        payload: { slotId: id },
+      void this.sessionService?.cancelSession(this.getImageSessionId(id), {
+        slotId: id,
       });
     });
     if (slotId) {
@@ -1197,14 +1207,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       if (!commitResult.ok) return commitResult;
       if (!slotId || this.activeSlotId === slotId) this.activeSlotId = null;
       targetIds.forEach((id) => {
-        this.workflowSessionService?.endSession({
-          kind: "image-placement",
-          objectId: id,
-          source: "image-placement-facade",
-          mode: "edit",
-          payload: { slotId: id },
-        });
+        void this.sessionService?.commitSession(this.getImageSessionId(id));
       });
+      this.sessionService?.focusSession(null);
       this.syncWorkingSlotVisibilityContext();
       await this.updateImagesAsync();
       this.emitStateChange();
@@ -1295,8 +1300,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       format: "png",
       includeHidden: true,
       multiplier: 2,
-      sourceElementIds: [`session-image:${slot.id}`],
-      sourceLayerIds: [`${this.imageLayerId}.session.image`],
+      sourceElementIds: [this.getWorkingImageNodeId(slot.id)],
+      sourceLayerIds: [`image.session.image`],
     });
     return {
       url: result.url,
@@ -1396,6 +1401,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         });
       }
     }
+    this.recordImageSessionCommitArtifacts(slotId, image);
     this.workingImages.delete(slotId);
     this.retainedWorkingImageBaselines.delete(slotId);
     this.syncWorkingSlotVisibilityContext();
@@ -1423,18 +1429,17 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private getCommittedImageVisibility(slotId: string): VisibilityExpr {
+    const slot = this.getSlotElement(slotId);
+    const slotState = slot ? this.getSlotState(slot) : null;
+    const surfaceId = slotState ? this.resolveSlotSurfaceId(slotState) : null;
+    const scope = {
+      ...(surfaceId && surfaceId !== "legacy" ? { surfaceId } : {}),
+      subjectId: slotId,
+      channel: IMAGE_SESSION_CHANNEL,
+    };
     return {
       op: "not",
-      expr: {
-        op: "all",
-        exprs: [
-          { op: "sessionActive", toolId: this.capabilityId },
-          {
-            op: "contextTruthy",
-            key: this.getWorkingSlotVisibilityContextKey(slotId),
-          },
-        ],
-      },
+      expr: { op: "sessionScopeActive", scope },
     };
   }
 
@@ -1561,7 +1566,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         this.canvasService.discardActiveObject();
       } else {
         const obj =
-          this.canvasService.getObject(`session-image:${slotId}`, `${this.imageLayerId}.session.image`) ||
+          this.canvasService.getObject(this.getWorkingImageNodeId(slotId), `image.session.image`) ||
           this.canvasService.getObject(`image:${slotId}`, slot?.layerId) ||
           this.canvasService.getObject(`image:${slotId}`, this.overlayLayerId) ||
           this.canvasService.getObject(`image:${slotId}`, this.imageLayerId) ||
@@ -1659,28 +1664,53 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.activeSlotId = slotId;
     if (this.workingImages.has(slotId)) {
       this.emitStateChange();
+      this.emitCanvasSessionOpen(slotId, selected);
       return;
     }
-    this.scheduleCanvasSession(slotId);
+    this.scheduleCanvasSession(slotId, selected);
   }
 
-  private scheduleCanvasSession(slotId: string) {
+  private scheduleCanvasSession(slotId: string, target?: any) {
     this.pendingCanvasSessionSlotId = slotId;
+    this.pendingCanvasSessionTarget = target ?? null;
     if (this.pendingCanvasSessionTimer !== null) return;
 
     this.pendingCanvasSessionTimer = globalThis.setTimeout(() => {
       const nextSlotId = this.pendingCanvasSessionSlotId;
+      const nextTarget = this.pendingCanvasSessionTarget;
       this.pendingCanvasSessionSlotId = null;
+      this.pendingCanvasSessionTarget = null;
       this.pendingCanvasSessionTimer = null;
 
       if (!nextSlotId) return;
       if (this.activeSlotId === nextSlotId && this.workingImages.has(nextSlotId)) {
         this.emitStateChange();
+        this.emitCanvasSessionOpen(nextSlotId, nextTarget);
         return;
       }
 
-      void this.beginSession(nextSlotId);
+      void this.beginSession(nextSlotId).then((result) => {
+        if (result.ok) {
+          this.emitCanvasSessionOpen(nextSlotId, nextTarget);
+        }
+      });
     }, 0);
+  }
+
+  private emitCanvasSessionOpen(slotId: string, target?: any) {
+    const slot = this.getSlotStates().find((item) => item.id === slotId);
+    if (!slot) return;
+    this.context?.eventBus.emit("image:session:open", {
+      sessionId: this.getImageSessionId(slotId),
+      slotId,
+      source: "canvas",
+      scope: {
+        surfaceId: this.resolveSlotSurfaceId(slot),
+        subjectId: slot.id,
+        channel: IMAGE_SESSION_CHANNEL,
+      },
+      targetData: isRecord(target?.data) ? { ...target.data } : {},
+    });
   }
 
   private clearPendingCanvasSession(slotId?: string) {
@@ -1689,6 +1719,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       globalThis.clearTimeout(this.pendingCanvasSessionTimer);
     }
     this.pendingCanvasSessionSlotId = null;
+    this.pendingCanvasSessionTarget = null;
     this.pendingCanvasSessionTimer = null;
   }
 
@@ -2080,9 +2111,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private getWorkingImageCanvasTarget(slotId: string): any | null {
     const normalizedSlotId = String(slotId || "").trim();
     if (!normalizedSlotId || !this.workingImages.has(normalizedSlotId)) return null;
-    const layerId = `${this.imageLayerId}.session.image`;
+    const layerId = `image.session.image`;
     const target =
-      this.canvasService?.getObject(`session-image:${normalizedSlotId}`, layerId) ||
+      this.canvasService?.getObject(this.getWorkingImageNodeId(normalizedSlotId), layerId) ||
       this.canvasService?.getActiveObject();
     return this.getWorkingImageTargetSlotId(target) === normalizedSlotId ? target : null;
   }
@@ -2168,8 +2199,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private shouldRenderWorkingSlot(slotId: string): boolean {
-    if (!this.workingImages.has(slotId)) return false;
-    return !this.activeSlotId || this.activeSlotId === slotId;
+    return this.workingImages.has(slotId);
   }
 
   private shouldRenderWorkingImageSlot(slotId: string): boolean {
@@ -2189,7 +2219,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const scale =
       getCoverScaleFromRect(slot.frame, source) * Math.max(0.05, image.scale ?? 1);
     return {
-      id: options.committed ? `image:${slot.id}` : `session-image:${slot.id}`,
+      id: options.committed ? `image:${slot.id}` : this.getWorkingImageNodeId(slot.id),
       subjectId: slot.id,
       type: "image",
       src: image.src,
@@ -2397,26 +2427,32 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     });
     patchRenderObjectSpecs(renderIntentService, this.buildWorkingImageSpecs(), {
       sourceId: IMAGE_RUNTIME_RENDER_SCOPE,
-      layerId: `${this.imageLayerId}.session.image`,
+      layerId: `image.session.image`,
       stack: IMAGE_OVERLAY_STACK,
       layerOrder: 1,
       channel: "overlay",
-      visibility: { op: "sessionActive", toolId: this.capabilityId },
+      visibility: {
+        op: "anySessionActive",
+        scope: { channel: IMAGE_SESSION_CHANNEL },
+      },
     });
     patchRenderObjectSpecs(renderIntentService, this.buildSessionOverlaySpecs(), {
       sourceId: IMAGE_RUNTIME_RENDER_SCOPE,
-      layerId: `${this.overlayLayerId}.session.controls`,
+      layerId: `image.session.controls`,
       stack: IMAGE_OVERLAY_STACK,
       layerOrder: 3,
       channel: "overlay",
-      visibility: { op: "sessionActive", toolId: this.capabilityId },
+      visibility: {
+        op: "anySessionActive",
+        scope: { channel: IMAGE_SESSION_CHANNEL },
+      },
     });
 
     (
       [
-        ["below", `${this.imageLayerId}.session.underlay`, 0],
-        ["above", `${this.imageLayerId}.session.overlay`, 2],
-        ["controls", `${this.overlayLayerId}.session.controls`, 3],
+        ["below", `image.session.underlay`, 0],
+        ["above", `image.session.overlay`, 2],
+        ["controls", `image.session.controls`, 3],
       ] as const
     ).forEach(([placement, layerId, order]) => {
       this.buildSessionProjectionSpecs(placement).forEach((projection, index) => {
@@ -2436,11 +2472,84 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           },
           projection,
           export: {
-            visibility: { op: "sessionActive", toolId: this.capabilityId },
+            visibility: {
+              op: "anySessionActive",
+              scope: { channel: IMAGE_SESSION_CHANNEL },
+            },
           },
         });
       });
       });
+  }
+
+  private getImageSessionId(slotId: string): string {
+    return `${IMAGE_SESSION_CHANNEL}:${String(slotId || "").trim()}`;
+  }
+
+  private getWorkingImageNodeId(slotId: string): string {
+    return `session-image:${this.getImageSessionId(slotId)}`;
+  }
+
+  private upsertImageSessionDraft(
+    slotId: string,
+    image: ImagePlacementImageState | null,
+  ) {
+    const slot = this.getSlotStates().find((item) => item.id === slotId);
+    if (!slot || !this.sessionService) return;
+    const sessionId = this.getImageSessionId(slotId);
+    const draft: ImagePlacementSessionDraft = {
+      slotId,
+      image: cloneImageState(image),
+    };
+    const existing = this.sessionService.getSession(sessionId);
+    if (existing?.status === "active") {
+      this.sessionService.updateSession(sessionId, { draft, dirty: true });
+      return;
+    }
+    this.sessionService.createSession({
+      sessionId,
+      scope: {
+        surfaceId: this.resolveSlotSurfaceId(slot),
+        subjectId: slot.id,
+        channel: IMAGE_SESSION_CHANNEL,
+      },
+      draft,
+      leavePolicy: "block",
+    });
+  }
+
+  private recordImageSessionCommitArtifacts(
+    slotId: string,
+    image: ImagePlacementImageState | null,
+  ) {
+    if (!this.sessionService) return;
+    const sessionId = this.getImageSessionId(slotId);
+    if (!this.sessionService.getSession(sessionId)) return;
+    const artifacts: SessionArtifact[] = [
+      {
+        artifactId: `${sessionId}:image`,
+        role: "committed-image",
+        data: cloneImageState(image),
+      },
+    ];
+    if (image?.metadata?.transform) {
+      artifacts.push({
+        artifactId: `${sessionId}:source-transform`,
+        role: "source-transform",
+        data: image.metadata.transform,
+      });
+    }
+    if (image?.metadata?.derived) {
+      artifacts.push({
+        artifactId: `${sessionId}:derived`,
+        role: "derived-image",
+        data: image.metadata.derived,
+      });
+    }
+    this.sessionService.updateSession(sessionId, {
+      artifacts,
+      dirty: false,
+    });
   }
 
   private createImagePlacementSessionData(
@@ -2448,9 +2557,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     options: { source: string },
   ) {
     return {
-      kind: "image-placement",
-      surfaceId: this.resolveSlotSurfaceId(slot),
-      objectId: slot.id,
+      sessionId: this.getImageSessionId(slot.id),
+      scope: {
+        surfaceId: this.resolveSlotSurfaceId(slot),
+        subjectId: slot.id,
+        channel: IMAGE_SESSION_CHANNEL,
+      },
       source: options.source,
       mode: "edit",
       payload: {

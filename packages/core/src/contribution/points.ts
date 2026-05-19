@@ -10,15 +10,8 @@ export interface CommandContribution {
 
 export type ToolInteraction = "instant" | "session" | "hybrid";
 
-export type ToolSessionLeavePolicy = "block" | "commit" | "rollback";
-
 export interface ToolCommandBindings {
   execute?: string;
-  begin?: string;
-  validate?: string;
-  commit?: string;
-  rollback?: string;
-  reset?: string;
 }
 
 export interface ToolContribution {
@@ -29,10 +22,6 @@ export interface ToolContribution {
   interaction: ToolInteraction;
   parameters?: Record<string, any>;
   commands?: ToolCommandBindings;
-  session?: {
-    autoBegin?: boolean;
-    leavePolicy?: ToolSessionLeavePolicy;
-  };
 }
 
 export interface ConfigurationContribution {

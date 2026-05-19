@@ -8,6 +8,7 @@ import type {
   VisibilityEvalContext,
   VisibilityExpr,
 } from "./render";
+import type { SessionScope } from "./workflow-session";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
 export type RenderIntentChannel =
@@ -77,9 +78,8 @@ export interface RenderIntentProjectionAspect {
 }
 
 export interface RenderIntentInteractionSessionAspect {
-  kind: string;
-  surfaceId?: string;
-  objectId?: string;
+  sessionId: string;
+  scope?: SessionScope;
   source?: string;
   mode?: string;
   payload?: Record<string, unknown>;

@@ -7,9 +7,8 @@ import {
 } from "../render-intent";
 import SceneService from "./SceneService";
 import ToolRegistryService from "./ToolRegistryService";
-import ToolSessionService from "./ToolSessionService";
 import WorkbenchService from "./WorkbenchService";
-import WorkflowSessionService from "./WorkflowSessionService";
+import SessionService from "./SessionService";
 import SnapService from "../snap";
 import {
   CAPABILITY_REGISTRY_SERVICE,
@@ -24,9 +23,8 @@ import {
   SCENE_SERVICE,
   SNAP_SERVICE,
   TOOL_REGISTRY_SERVICE,
-  TOOL_SESSION_SERVICE,
   WORKBENCH_SERVICE,
-  WORKFLOW_SESSION_SERVICE,
+  SESSION_SERVICE,
 } from "./tokens";
 
 export {
@@ -37,9 +35,8 @@ export {
   RenderIntentService,
   SceneService,
   ToolRegistryService,
-  ToolSessionService,
   WorkbenchService,
-  WorkflowSessionService,
+  SessionService,
   SnapService,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -52,9 +49,8 @@ export {
   SNAP_SERVICE,
   SCENE_LAYOUT_SERVICE,
   TOOL_REGISTRY_SERVICE,
-  TOOL_SESSION_SERVICE,
   WORKBENCH_SERVICE,
-  WORKFLOW_SESSION_SERVICE,
+  SESSION_SERVICE,
   CORE_SERVICE_TOKENS,
 };
 
@@ -83,12 +79,6 @@ export type {
   ConfigurationDefinitionsChangeEvent,
   RegisteredConfigurationDefinition,
 } from "./ConfigurationService";
-export type {
-  LeaveDecision,
-  LeaveResult,
-  ToolSessionState,
-  ToolSessionStatus,
-} from "./ToolSessionService";
 export type {
   ToolSwitchContext,
   ToolSwitchGuard,

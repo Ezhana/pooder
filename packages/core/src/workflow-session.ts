@@ -1,75 +1,83 @@
-export type WorkflowSessionId = string;
-export type WorkflowSessionStatus = "idle" | "active";
-export type WorkflowSessionLeavePolicy = "block" | "commit" | "rollback";
-export type WorkflowSessionLeaveDecision = "allow" | "blocked";
+export type SessionId = string;
+export type SessionStatus =
+  | "active"
+  | "committing"
+  | "committed"
+  | "rolled-back"
+  | "cancelled";
+export type SessionLeavePolicy = "block" | "commit" | "rollback";
+export type SessionLeaveDecision = "allow" | "blocked";
 
-export interface WorkflowSessionState {
-  workflowId: WorkflowSessionId;
-  status: WorkflowSessionStatus;
-  dirty: boolean;
-  startedAt?: number;
-  lastUpdatedAt?: number;
+export interface SessionScope {
+  surfaceId?: string | null;
+  subjectId?: string | null;
+  channel?: string | null;
 }
 
-export interface WorkflowSessionValidationResult {
+export interface SessionArtifact<T = unknown> {
+  artifactId: string;
+  role: string;
+  data: T;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SessionState<TDraft = unknown, TResult = unknown> {
+  sessionId: SessionId;
+  scope: SessionScope;
+  status: SessionStatus;
+  dirty: boolean;
+  draft?: TDraft;
+  artifacts: SessionArtifact[];
+  result?: TResult;
+  startedAt: number;
+  updatedAt: number;
+}
+
+export interface SessionValidationResult {
   ok: boolean;
   result?: unknown;
 }
 
-export interface WorkflowSessionLeaveResult {
-  decision: WorkflowSessionLeaveDecision;
+export interface SessionLeaveResult {
+  decision: SessionLeaveDecision;
   reason?: string;
   detail?: unknown;
 }
 
-export interface WorkflowSessionLifecycle {
+export interface SessionLifecycle {
   begin?(): void | Promise<void>;
   validate?():
     | boolean
-    | WorkflowSessionValidationResult
-    | Promise<boolean | WorkflowSessionValidationResult>;
+    | SessionValidationResult
+    | Promise<boolean | SessionValidationResult>;
   commit?(): unknown | Promise<unknown>;
   rollback?(): void | Promise<void>;
+  cancel?(): void | Promise<void>;
 }
 
-export interface WorkflowSessionDefinition {
-  id: WorkflowSessionId;
-  leavePolicy?: WorkflowSessionLeavePolicy;
-  lifecycle?: WorkflowSessionLifecycle;
-  metadata?: Record<string, unknown>;
+export interface CreateSessionInput<TDraft = unknown> {
+  sessionId?: SessionId;
+  scope?: SessionScope;
+  draft?: TDraft;
+  artifacts?: SessionArtifact[];
+  leavePolicy?: SessionLeavePolicy;
+  lifecycle?: SessionLifecycle;
 }
 
-export interface WorkflowSessionChangeEvent {
-  workflowId: WorkflowSessionId;
+export interface UpdateSessionInput<TDraft = unknown> {
+  draft?: TDraft;
+  artifacts?: SessionArtifact[];
+  dirty?: boolean;
+}
+
+export interface ListSessionsQuery {
+  status?: SessionStatus | SessionStatus[];
+  scope?: Partial<SessionScope>;
+}
+
+export interface SessionChangeEvent {
+  sessionId: SessionId;
   reason: string;
+  state: SessionState;
   detail?: unknown;
-  state: WorkflowSessionState;
-}
-
-export type WorkflowInteractionSessionEventType =
-  | "session:start"
-  | "session:update"
-  | "session:end"
-  | "session:cancel";
-
-export interface WorkflowInteractionSessionPayload {
-  sessionId: string;
-  kind: string;
-  surfaceId: string | null;
-  objectId: string | null;
-  source: string;
-  mode: string | null;
-  payload: Record<string, unknown>;
-}
-
-export type WorkflowInteractionSessionEvent = WorkflowInteractionSessionPayload;
-
-export interface WorkflowInteractionSessionInput {
-  sessionId?: string;
-  kind: string;
-  surfaceId?: string | null;
-  objectId?: string | null;
-  source?: string;
-  mode?: string | null;
-  payload?: Record<string, unknown>;
 }
