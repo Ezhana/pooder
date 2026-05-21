@@ -263,6 +263,14 @@ function createObjectRenderIntentDraft(
   if (!object.frame) return null;
   const objectOrder = object.order ?? index;
   const layerOrder = layer.order ?? 0;
+  const interactionLocked = object.interaction?.locked ?? object.locked;
+  const interaction = {
+    selectable: object.interaction?.selectable ?? interactionLocked !== true,
+    evented: object.interaction?.evented ?? interactionLocked !== true,
+    ...(typeof interactionLocked === "boolean"
+      ? { locked: interactionLocked }
+      : {}),
+  };
   const base = {
     id: object.id,
     subject: {
@@ -296,17 +304,16 @@ function createObjectRenderIntentDraft(
     },
     props: {
       ...(object.style ?? {}),
-      selectable: object.locked !== true,
-      evented: object.locked !== true,
       ...(object.transform ?? {}),
     },
+    interaction,
     data: {
       id: object.id,
       layerId: layer.id,
       documentSurfaceId: surface.id,
       documentObjectType: object.type,
       documentLayerRole: layer.role,
-      locked: object.locked,
+      locked: interactionLocked,
       exportable: object.exportable,
     },
   } satisfies Omit<RenderIntentDraft, "visual">;

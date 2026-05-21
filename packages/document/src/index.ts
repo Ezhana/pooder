@@ -92,12 +92,19 @@ export interface EditorLayer {
   metadata?: Record<string, unknown>;
 }
 
+export interface EditorObjectInteraction {
+  selectable?: boolean;
+  evented?: boolean;
+  locked?: boolean;
+}
+
 export interface EditorObjectBase {
   id: string;
   frame?: EditorRect;
   order?: number;
   visible?: boolean;
   locked?: boolean;
+  interaction?: EditorObjectInteraction;
   exportable?: boolean;
   transform?: EditorTransform;
   style?: Record<string, unknown>;
@@ -294,6 +301,23 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
   return Object.keys(transform).length ? transform : undefined;
 }
 
+function normalizeObjectInteraction(
+  value: unknown,
+): EditorObjectInteraction | undefined {
+  if (!isRecord(value)) return undefined;
+  const interaction: EditorObjectInteraction = {};
+  if (typeof value.selectable === "boolean") {
+    interaction.selectable = value.selectable;
+  }
+  if (typeof value.evented === "boolean") {
+    interaction.evented = value.evented;
+  }
+  if (typeof value.locked === "boolean") {
+    interaction.locked = value.locked;
+  }
+  return Object.keys(interaction).length ? interaction : undefined;
+}
+
 function normalizeEffectTarget(value: unknown): EditorEffectTarget | undefined {
   if (value === undefined || value === "self") return "self";
   if (!isRecord(value)) return undefined;
@@ -357,6 +381,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
         : order,
     visible: typeof value.visible === "boolean" ? value.visible : true,
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
+    interaction: normalizeObjectInteraction(value.interaction),
     exportable:
       typeof value.exportable === "boolean" ? value.exportable : undefined,
     transform: normalizeTransform(value.transform),

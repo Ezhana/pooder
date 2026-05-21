@@ -1388,6 +1388,121 @@ async function testApplyKitEditorDocument() {
   await runtime.dispose();
 }
 
+async function testApplyKitEditorDocumentObjectInteraction() {
+  const runtime = new Pooder();
+  const result = await applyKitEditorDocument(runtime, {
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "legacy-locked",
+                type: "rect",
+                locked: true,
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+              },
+              {
+                id: "explicit-interaction",
+                type: "rect",
+                locked: true,
+                interaction: {
+                  selectable: true,
+                  evented: true,
+                  locked: false,
+                },
+                frame: { x: 25, y: 0, width: 20, height: 20 },
+              },
+              {
+                id: "interaction-locked",
+                type: "rect",
+                locked: false,
+                interaction: { locked: true },
+                frame: { x: 50, y: 0, width: 20, height: 20 },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert(
+    result.ok,
+    `document interaction apply should succeed (${JSON.stringify(result.diagnostics)})`,
+  );
+  assertDeepEqual(
+    result.document.surfaces[0].layers[0].objects?.[1]?.interaction,
+    { selectable: true, evented: true, locked: false },
+    "document interaction should remain on the normalized document",
+  );
+
+  const renderGraph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const nodes = renderGraph.layers.flatMap((layer) => layer.nodes);
+  const legacyLockedNode = nodes.find((node) => node.id === "legacy-locked");
+  const explicitInteractionNode = nodes.find(
+    (node) => node.id === "explicit-interaction",
+  );
+  const interactionLockedNode = nodes.find(
+    (node) => node.id === "interaction-locked",
+  );
+
+  assertEqual(
+    legacyLockedNode?.props.selectable,
+    false,
+    "missing interaction should keep legacy locked selectable behavior",
+  );
+  assertEqual(
+    legacyLockedNode?.props.evented,
+    false,
+    "missing interaction should keep legacy locked evented behavior",
+  );
+  assertEqual(
+    legacyLockedNode?.data.locked,
+    true,
+    "legacy locked should remain render graph locked data",
+  );
+  assertEqual(
+    explicitInteractionNode?.props.selectable,
+    true,
+    "interaction selectable should explicitly override object locked",
+  );
+  assertEqual(
+    explicitInteractionNode?.props.evented,
+    true,
+    "interaction evented should explicitly override object locked",
+  );
+  assertEqual(
+    explicitInteractionNode?.data.locked,
+    false,
+    "interaction locked should override object locked in render graph data",
+  );
+  assertEqual(
+    interactionLockedNode?.props.selectable,
+    false,
+    "interaction locked should drive selectable default",
+  );
+  assertEqual(
+    interactionLockedNode?.props.evented,
+    false,
+    "interaction locked should drive evented default",
+  );
+  assertEqual(
+    interactionLockedNode?.data.locked,
+    true,
+    "interaction locked should enter render graph locked data",
+  );
+
+  await runtime.dispose();
+}
+
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
@@ -3116,6 +3231,7 @@ async function main() {
   testCreateKitCapabilitiesForDocument();
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();
   await testApplyKitEditorDocument();
+  await testApplyKitEditorDocumentObjectInteraction();
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();

@@ -112,6 +112,75 @@ function testNormalizeDefaults() {
     "interaction",
     "effect phase should normalize",
   );
+  assertEqual(
+    doc.surfaces[0].layers[0].objects?.[0]?.interaction,
+    undefined,
+    "objects without interaction should remain unchanged",
+  );
+}
+
+function testNormalizeObjectInteraction() {
+  const doc = normalizeEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "valid",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                interaction: {
+                  selectable: true,
+                  evented: false,
+                  locked: true,
+                  cursor: "move",
+                },
+              },
+              {
+                id: "invalid",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                interaction: {
+                  selectable: "true",
+                  evented: 1,
+                  locked: null,
+                },
+              },
+              {
+                id: "empty",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                interaction: {},
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const objects = doc.surfaces[0].layers[0].objects;
+  assertDeepEqual(
+    objects?.[0]?.interaction,
+    { selectable: true, evented: false, locked: true },
+    "valid interaction fields should normalize",
+  );
+  assertEqual(
+    objects?.[1]?.interaction,
+    undefined,
+    "non-boolean interaction fields should be dropped",
+  );
+  assertEqual(
+    objects?.[2]?.interaction,
+    undefined,
+    "empty interaction should normalize to undefined",
+  );
 }
 
 function testV2ImagePlacementImageDoesNotRequireSource() {
@@ -453,6 +522,7 @@ function testRequirePolicyDiagnostics() {
 
 function main() {
   testNormalizeDefaults();
+  testNormalizeObjectInteraction();
   testV2ImagePlacementImageDoesNotRequireSource();
   testImageObjectDoesNotRequireSource();
   testV2DocumentIsRejected();
