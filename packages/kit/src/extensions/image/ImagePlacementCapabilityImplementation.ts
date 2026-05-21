@@ -10,7 +10,7 @@ import {
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SESSION_SERVICE,
-  SNAP_SERVICE,
+  computeDragInteraction,
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
@@ -28,7 +28,6 @@ import {
   type SceneService,
   type SessionArtifact,
   type SessionService,
-  type SnapService,
   type VisibilityExpr,
 } from "@pooder/core";
 import type {
@@ -176,14 +175,6 @@ type SnapLineId =
   | "frame-bottom";
 
 interface SnapMatch {
-  axis: SnapAxis;
-  lineId: SnapLineId;
-  kind: SnapLineKind;
-  lineScene: number;
-  deltaScene: number;
-}
-
-interface SnapCandidate {
   axis: SnapAxis;
   lineId: SnapLineId;
   kind: SnapLineKind;
@@ -504,7 +495,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private sceneService?: SceneService;
   private sceneLayoutService?: SceneLayoutService;
   private exportService?: SceneExportService;
-  private snapService?: SnapService;
   private sessionService?: SessionService;
   private context?: ExtensionContext;
   private sceneSubscription?: { dispose(): void };
@@ -568,7 +558,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.exportService = context.services.get<SceneExportService>(
       SCENE_EXPORT_SERVICE,
     );
-    this.snapService = context.services.get<SnapService>(SNAP_SERVICE);
     this.sessionService = context.services.get<SessionService>(SESSION_SERVICE);
 
     this.sceneSubscription?.dispose();
@@ -603,7 +592,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.sceneService = undefined;
     this.sceneLayoutService = undefined;
     this.exportService = undefined;
-    this.snapService = undefined;
     this.sessionService = undefined;
     this.context = undefined;
   }
@@ -1812,22 +1800,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     });
   }
 
-  private getSnapThresholdScene(px: number): number {
-    return this.canvasService?.toSceneLength(px) ?? px;
-  }
-
-  private pickSnapMatch(candidates: SnapCandidate[]): SnapMatch | null {
-    const threshold = this.getSnapThresholdScene(IMAGE_MOVE_SNAP_THRESHOLD_PX);
-    let best: SnapCandidate | null = null;
-    candidates.forEach((candidate) => {
-      if (Math.abs(candidate.deltaScene) > threshold) return;
-      if (!best || Math.abs(candidate.deltaScene) < Math.abs(best.deltaScene)) {
-        best = candidate;
-      }
-    });
-    return best;
-  }
-
   private computeMoveSnapMatches(
     bounds: FrameRect | null,
     frame: FrameRect,
@@ -1836,109 +1808,56 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       return { x: null, y: null };
     }
 
-    if (this.snapService) {
-      const result = this.snapService.compute({
-        moving: bounds,
-        targets: [
-          {
-            id: "frame",
-            lines: [
-              { id: "frame-left", axis: "x", kind: "edge", position: frame.left },
-              {
-                id: "frame-center-x",
-                axis: "x",
-                kind: "center",
-                position: frame.left + frame.width / 2,
-              },
-              {
-                id: "frame-right",
-                axis: "x",
-                kind: "edge",
-                position: frame.left + frame.width,
-              },
-              { id: "frame-top", axis: "y", kind: "edge", position: frame.top },
-              {
-                id: "frame-center-y",
-                axis: "y",
-                kind: "center",
-                position: frame.top + frame.height / 2,
-              },
-              {
-                id: "frame-bottom",
-                axis: "y",
-                kind: "edge",
-                position: frame.top + frame.height,
-              },
-            ],
-          },
-        ],
-        options: {
-          thresholdPx: IMAGE_MOVE_SNAP_THRESHOLD_PX,
-          viewportScale: this.canvasService?.getSceneScale() ?? 1,
+    const result = computeDragInteraction({
+      frame: bounds,
+      proposedFrame: bounds,
+      snapTargets: [
+        {
+          id: "frame",
+          lines: [
+            { id: "frame-left", axis: "x", kind: "edge", position: frame.left },
+            {
+              id: "frame-center-x",
+              axis: "x",
+              kind: "center",
+              position: frame.left + frame.width / 2,
+            },
+            {
+              id: "frame-right",
+              axis: "x",
+              kind: "edge",
+              position: frame.left + frame.width,
+            },
+            { id: "frame-top", axis: "y", kind: "edge", position: frame.top },
+            {
+              id: "frame-center-y",
+              axis: "y",
+              kind: "center",
+              position: frame.top + frame.height / 2,
+            },
+            {
+              id: "frame-bottom",
+              axis: "y",
+              kind: "edge",
+              position: frame.top + frame.height,
+            },
+          ],
         },
-      });
-      return {
-        x: this.toImageSnapMatch(result.matches.find((match) => match.axis === "x") ?? null),
-        y: this.toImageSnapMatch(result.matches.find((match) => match.axis === "y") ?? null),
-      };
-    }
-
-    const frameCenterX = frame.left + frame.width / 2;
-    const frameCenterY = frame.top + frame.height / 2;
-    const boundsCenterX = bounds.left + bounds.width / 2;
-    const boundsCenterY = bounds.top + bounds.height / 2;
-
+      ],
+      options: {
+        thresholdPx: IMAGE_MOVE_SNAP_THRESHOLD_PX,
+        viewportScale: this.canvasService?.getSceneScale() ?? 1,
+      },
+    });
     return {
-      x: this.pickSnapMatch([
-        {
-          axis: "x",
-          lineId: "frame-left",
-          kind: "edge",
-          lineScene: frame.left,
-          deltaScene: frame.left - bounds.left,
-        },
-        {
-          axis: "x",
-          lineId: "frame-center-x",
-          kind: "center",
-          lineScene: frameCenterX,
-          deltaScene: frameCenterX - boundsCenterX,
-        },
-        {
-          axis: "x",
-          lineId: "frame-right",
-          kind: "edge",
-          lineScene: frame.left + frame.width,
-          deltaScene: frame.left + frame.width - (bounds.left + bounds.width),
-        },
-      ]),
-      y: this.pickSnapMatch([
-        {
-          axis: "y",
-          lineId: "frame-top",
-          kind: "edge",
-          lineScene: frame.top,
-          deltaScene: frame.top - bounds.top,
-        },
-        {
-          axis: "y",
-          lineId: "frame-center-y",
-          kind: "center",
-          lineScene: frameCenterY,
-          deltaScene: frameCenterY - boundsCenterY,
-        },
-        {
-          axis: "y",
-          lineId: "frame-bottom",
-          kind: "edge",
-          lineScene: frame.top + frame.height,
-          deltaScene: frame.top + frame.height - (bounds.top + bounds.height),
-        },
-      ]),
+      x: this.toImageSnapMatch(result.matches.find((match) => match.axis === "x") ?? null),
+      y: this.toImageSnapMatch(result.matches.find((match) => match.axis === "y") ?? null),
     };
   }
 
-  private toImageSnapMatch(match: ReturnType<SnapService["compute"]>["matches"][number] | null): SnapMatch | null {
+  private toImageSnapMatch(
+    match: ReturnType<typeof computeDragInteraction>["matches"][number] | null,
+  ): SnapMatch | null {
     if (!match) return null;
     return {
       axis: match.axis,

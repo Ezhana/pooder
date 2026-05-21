@@ -183,6 +183,129 @@ function testNormalizeObjectInteraction() {
   );
 }
 
+function testNormalizeObjectConstraints() {
+  const doc = normalizeEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "valid",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                constraints: {
+                  drag: [
+                    {
+                      type: "rect",
+                      rect: { x: 0, y: 0, width: 100, height: 100 },
+                      mode: "contain",
+                      target: "center",
+                      ignored: true,
+                    },
+                    {
+                      type: "object",
+                      objectId: " frame ",
+                      source: "frame",
+                      mode: "contain",
+                    },
+                    { type: "rect", rect: { x: 0, y: 0, width: -1, height: 1 } },
+                    { type: "object", objectId: "" },
+                    { type: "path", pathId: "future" },
+                  ],
+                  resize: [{ type: "rect" }],
+                },
+              },
+              {
+                id: "empty",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                constraints: { drag: [] },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const objects = doc.surfaces[0].layers[0].objects;
+  assertDeepEqual(
+    objects?.[0]?.constraints,
+    {
+      drag: [
+        {
+          type: "rect",
+          rect: { x: 0, y: 0, width: 100, height: 100 },
+          mode: "contain",
+          target: "center",
+        },
+        { type: "object", objectId: "frame", source: "frame", mode: "contain" },
+      ],
+    },
+    "valid drag constraints should normalize and drop unknown fields",
+  );
+  assertEqual(
+    objects?.[1]?.constraints,
+    undefined,
+    "empty constraints should normalize to undefined",
+  );
+}
+
+function testObjectConstraintReferenceDiagnostics() {
+  const diagnostics = validateEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "self",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                constraints: {
+                  drag: [{ type: "object", objectId: "self" }],
+                },
+              },
+              {
+                id: "missing",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                constraints: {
+                  drag: [{ type: "object", objectId: "absent" }],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert(
+    diagnostics.some(
+      (item) => item.code === "object-drag-constraint-self-reference",
+    ),
+    "self-referencing object constraints should be diagnosed",
+  );
+  assert(
+    diagnostics.some(
+      (item) => item.code === "object-drag-constraint-object-missing",
+    ),
+    "missing object constraint references should be diagnosed",
+  );
+}
+
 function testV2ImagePlacementImageDoesNotRequireSource() {
   const diagnostics = validateKitEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
@@ -523,6 +646,8 @@ function testRequirePolicyDiagnostics() {
 function main() {
   testNormalizeDefaults();
   testNormalizeObjectInteraction();
+  testNormalizeObjectConstraints();
+  testObjectConstraintReferenceDiagnostics();
   testV2ImagePlacementImageDoesNotRequireSource();
   testImageObjectDoesNotRequireSource();
   testV2DocumentIsRejected();

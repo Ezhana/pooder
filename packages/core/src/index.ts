@@ -25,7 +25,6 @@ import {
   ToolRegistryService,
   WorkbenchService,
   SessionService,
-  SnapService,
 } from "./services";
 import { ExtensionContext } from "./context";
 
@@ -42,7 +41,7 @@ export * from "./dieline-shape";
 export * from "./scene-layout-model";
 export * from "./service";
 export * from "./workflow-session";
-export * from "./snap";
+export * from "./interaction";
 export * from "./services";
 export { default as EventBus } from "./event";
 
@@ -151,7 +150,6 @@ export class Pooder {
   private readonly sceneService = new SceneService();
   private readonly toolRegistryService = new ToolRegistryService();
   private readonly sessionService = new SessionService();
-  private readonly snapService = new SnapService();
   private readonly workbenchService = new WorkbenchService({
     eventBus: this.eventBus,
     toolRegistry: this.toolRegistryService,
@@ -188,7 +186,6 @@ export class Pooder {
       this.sessionService,
       CORE_SERVICE_TOKENS.SESSION,
     );
-    this.registerService(this.snapService, CORE_SERVICE_TOKENS.SNAP);
     this.registerService(
       this.toolRegistryService,
       CORE_SERVICE_TOKENS.TOOL_REGISTRY,

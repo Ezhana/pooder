@@ -10,7 +10,6 @@ import type SceneService from "./SceneService";
 import type ToolRegistryService from "./ToolRegistryService";
 import type WorkbenchService from "./WorkbenchService";
 import type SessionService from "./SessionService";
-import type SnapService from "../snap";
 import type {
   CanvasService,
   SceneExportService,
@@ -37,7 +36,6 @@ export const SCENE_LAYOUT_SERVICE =
   createServiceToken<SceneLayoutService>("SceneLayoutService");
 export const SCENE_EXPORT_SERVICE =
   createServiceToken<SceneExportService>("SceneExportService");
-export const SNAP_SERVICE = createServiceToken<SnapService>("SnapService");
 export const TOOL_REGISTRY_SERVICE =
   createServiceToken<ToolRegistryService>("ToolRegistryService");
 export const WORKBENCH_SERVICE =
@@ -54,7 +52,6 @@ export const CORE_SERVICE_TOKENS = {
   SCENE: SCENE_SERVICE,
   SCENE_LAYOUT: SCENE_LAYOUT_SERVICE,
   SCENE_EXPORT: SCENE_EXPORT_SERVICE,
-  SNAP: SNAP_SERVICE,
   TOOL_REGISTRY: TOOL_REGISTRY_SERVICE,
   WORKBENCH: WORKBENCH_SERVICE,
   SESSION: SESSION_SERVICE,

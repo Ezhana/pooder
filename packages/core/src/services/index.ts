@@ -9,7 +9,6 @@ import SceneService from "./SceneService";
 import ToolRegistryService from "./ToolRegistryService";
 import WorkbenchService from "./WorkbenchService";
 import SessionService from "./SessionService";
-import SnapService from "../snap";
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -21,7 +20,6 @@ import {
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
-  SNAP_SERVICE,
   TOOL_REGISTRY_SERVICE,
   WORKBENCH_SERVICE,
   SESSION_SERVICE,
@@ -37,7 +35,6 @@ export {
   ToolRegistryService,
   WorkbenchService,
   SessionService,
-  SnapService,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
@@ -46,7 +43,6 @@ export {
   CANVAS_SERVICE,
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
-  SNAP_SERVICE,
   SCENE_LAYOUT_SERVICE,
   TOOL_REGISTRY_SERVICE,
   WORKBENCH_SERVICE,

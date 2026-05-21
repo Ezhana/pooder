@@ -1503,6 +1503,91 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   await runtime.dispose();
 }
 
+async function testApplyKitEditorDocumentDragConstraints() {
+  const runtime = new Pooder();
+  const result = await applyKitEditorDocument(runtime, {
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "frame",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 80, height: 80 },
+              },
+              {
+                id: "constrained",
+                type: "rect",
+                frame: { x: 10, y: 10, width: 20, height: 20 },
+                constraints: {
+                  drag: [
+                    {
+                      type: "rect",
+                      rect: { x: 0, y: 0, width: 90, height: 90 },
+                      target: "frame",
+                    },
+                    {
+                      type: "object",
+                      objectId: "frame",
+                      source: "frame",
+                      target: "center",
+                    },
+                  ],
+                },
+              },
+              {
+                id: "unconstrained",
+                type: "rect",
+                frame: { x: 50, y: 50, width: 20, height: 20 },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert(
+    result.ok,
+    `document constraints apply should succeed (${JSON.stringify(result.diagnostics)})`,
+  );
+  const renderGraph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const nodes = renderGraph.layers.flatMap((layer) => layer.nodes);
+  assertDeepEqual(
+    nodes.find((node) => node.id === "constrained")?.data.dragConstraints,
+    [
+      {
+        type: "rect",
+        rect: { left: 0, top: 0, width: 90, height: 90 },
+        target: "frame",
+      },
+      {
+        type: "object",
+        objectId: "frame",
+        source: "frame",
+        fallbackFrame: { left: 0, top: 0, width: 80, height: 80 },
+        target: "center",
+      },
+    ],
+    "drag constraints should compile into render graph node data",
+  );
+  assertEqual(
+    nodes.find((node) => node.id === "unconstrained")?.data.dragConstraints,
+    undefined,
+    "objects without constraints should not carry drag constraint data",
+  );
+
+  await runtime.dispose();
+}
+
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
@@ -3232,6 +3317,7 @@ async function main() {
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();
   await testApplyKitEditorDocument();
   await testApplyKitEditorDocumentObjectInteraction();
+  await testApplyKitEditorDocumentDragConstraints();
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();

@@ -5,6 +5,7 @@ import {
   type ExtensionDefinition,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDraft,
+  type RenderIntentDragConstraint,
   type RenderIntentPatch,
   type RenderIntentService,
   type Service,
@@ -238,6 +239,7 @@ function collectAvailableCapabilityIds(
 
 function createBaseRenderIntentDrafts(document: EditorDocument): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
+  const objectFrames = collectDocumentObjectFrames(document);
   document.surfaces.forEach((surface) => {
     surface.layers.forEach((layer) => {
       layer.objects?.forEach((object, index) => {
@@ -246,6 +248,7 @@ function createBaseRenderIntentDrafts(document: EditorDocument): RenderIntentDra
           layer,
           object,
           index,
+          objectFrames,
         );
         if (draft) drafts.push(draft);
       });
@@ -259,6 +262,7 @@ function createObjectRenderIntentDraft(
   layer: EditorLayer,
   object: EditorObject,
   index: number,
+  objectFrames: ReadonlyMap<string, NonNullable<EditorObject["frame"]>>,
 ): RenderIntentDraft | null {
   if (!object.frame) return null;
   const objectOrder = object.order ?? index;
@@ -270,6 +274,7 @@ function createObjectRenderIntentDraft(
     ...(typeof interactionLocked === "boolean"
       ? { locked: interactionLocked }
       : {}),
+    ...compileObjectDragConstraints(object, objectFrames),
   };
   const base = {
     id: object.id,
@@ -352,6 +357,60 @@ function createObjectRenderIntentDraft(
     ...base,
     visual: { type: "text" },
     props: { ...base.props, text: object.text },
+  };
+}
+
+function collectDocumentObjectFrames(
+  document: EditorDocument,
+): Map<string, NonNullable<EditorObject["frame"]>> {
+  const frames = new Map<string, NonNullable<EditorObject["frame"]>>();
+  document.surfaces.forEach((surface) => {
+    surface.layers.forEach((layer) => {
+      layer.objects?.forEach((object) => {
+        if (object.id && object.frame) frames.set(object.id, object.frame);
+      });
+    });
+  });
+  return frames;
+}
+
+function compileObjectDragConstraints(
+  object: EditorObject,
+  objectFrames: ReadonlyMap<string, NonNullable<EditorObject["frame"]>>,
+): { dragConstraints?: RenderIntentDragConstraint[] } {
+  const constraints = object.constraints?.drag
+    ?.map((constraint): RenderIntentDragConstraint | null => {
+      if (constraint.type === "rect") {
+        return {
+          type: "rect",
+          rect: toGeometryRect(constraint.rect),
+          ...(constraint.mode ? { mode: constraint.mode } : {}),
+          ...(constraint.target ? { target: constraint.target } : {}),
+        };
+      }
+      const fallbackFrame = objectFrames.get(constraint.objectId);
+      if (!fallbackFrame) return null;
+      return {
+        type: "object",
+        objectId: constraint.objectId,
+        source: constraint.source ?? "frame",
+        fallbackFrame: toGeometryRect(fallbackFrame),
+        ...(constraint.mode ? { mode: constraint.mode } : {}),
+        ...(constraint.target ? { target: constraint.target } : {}),
+      };
+    })
+    .filter((constraint): constraint is RenderIntentDragConstraint =>
+      Boolean(constraint),
+    );
+  return constraints?.length ? { dragConstraints: constraints } : {};
+}
+
+function toGeometryRect(rect: NonNullable<EditorObject["frame"]>) {
+  return {
+    left: rect.x,
+    top: rect.y,
+    width: rect.width,
+    height: rect.height,
   };
 }
 

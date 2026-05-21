@@ -5,13 +5,18 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  SNAP_SERVICE,
-  SnapService,
   TOOL_REGISTRY_SERVICE,
   buildSceneGeometry,
   computeSceneLayout,
+  computeDragInteraction,
+  containsPoint,
+  containsRect,
+  createRectSnapLines,
   evaluateVisibilityExpr,
+  intersectRects,
   mergeRenderIntentPatchDraft,
+  normalizeRect,
+  projectRectIntoRect,
   readSizeState,
   resolveViewPaddingPx,
   createServiceToken,
@@ -1164,48 +1169,118 @@ async function testSessionLifecycleEvents() {
   });
 }
 
-async function testSnapServiceComputesGeometryMatches() {
-  const snap = new SnapService();
-  const edge = snap.compute({
-    moving: { left: 96, top: 15, width: 20, height: 20 },
-    targets: [{ id: "frame", bounds: { left: 100, top: 10, width: 80, height: 60 } }],
-    options: { thresholdPx: 6, viewportScale: 1 },
-  });
-  assertEqual(edge.delta.x, 4, "edge snap should return x delta");
-  assertEqual(edge.delta.y, -5, "edge snap should return y delta");
-
-  const center = snap.compute({
-    moving: { left: 134, top: 32, width: 12, height: 12 },
-    targets: [{ id: "frame", bounds: { left: 100, top: 10, width: 80, height: 60 } }],
-    options: { thresholdPx: 6, viewportScale: 1 },
-  });
-  assertEqual(center.delta.x, 0, "center-aligned x should not move");
-  assertEqual(center.matches.some((match) => match.kind === "center"), true);
-
-  const scaled = snap.compute({
-    moving: { left: 96, top: 0, width: 20, height: 20 },
-    targets: [{ id: "frame", bounds: { left: 100, top: 100, width: 80, height: 60 } }],
-    options: { thresholdPx: 6, viewportScale: 2 },
-  });
-  assertEqual(scaled.delta.x, 0, "viewport scale should reduce scene threshold");
-
-  const none = snap.compute({
-    moving: { left: 0, top: 0, width: 20, height: 20 },
-    targets: [],
-  });
-  assertDeepEqual(none.delta, { x: 0, y: 0 }, "snap without targets should be inert");
+async function testGeometryPrimitives() {
+  assertDeepEqual(
+    normalizeRect({ x: 1, y: 2, width: -5, height: 6 }),
+    { left: 1, top: 2, width: 0, height: 6 },
+    "rect normalization should accept editor-style x/y and clamp size",
+  );
+  assertDeepEqual(
+    intersectRects(
+      { left: 0, top: 0, width: 10, height: 10 },
+      { left: 5, top: 4, width: 10, height: 3 },
+    ),
+    { left: 5, top: 4, width: 5, height: 3 },
+    "rect intersection should return the overlapping frame",
+  );
+  assertEqual(
+    containsPoint({ left: 0, top: 0, width: 10, height: 10 }, { x: 10, y: 0 }),
+    true,
+    "point containment should include rect edges",
+  );
+  assertEqual(
+    containsRect(
+      { left: 0, top: 0, width: 10, height: 10 },
+      { left: 1, top: 1, width: 8, height: 8 },
+    ),
+    true,
+    "rect containment should detect contained frames",
+  );
+  assertDeepEqual(
+    projectRectIntoRect(
+      { left: 12, top: -2, width: 4, height: 4 },
+      { left: 0, top: 0, width: 10, height: 10 },
+    ),
+    { left: 6, top: 0, width: 4, height: 4 },
+    "frame projection should clamp to container bounds",
+  );
+  assertDeepEqual(
+    projectRectIntoRect(
+      { left: 9, top: 9, width: 4, height: 4 },
+      { left: 0, top: 0, width: 10, height: 10 },
+      "center",
+    ),
+    { left: 8, top: 8, width: 4, height: 4 },
+    "center projection should clamp the subject center",
+  );
 }
 
-async function testRuntimeRegistersSnapService() {
-  await withRuntime(async (runtime) => {
-    const snap = runtime.services.getOrThrow<SnapService>(SNAP_SERVICE);
-    const result = snap.compute({
-      moving: { left: 4, top: 0, width: 10, height: 10 },
-      targets: [{ id: "origin", bounds: { left: 0, top: 0, width: 10, height: 10 } }],
-      options: { includeCenters: false },
-    });
-    assertEqual(result.delta.x, -4, "runtime snap service should be registered");
+async function testDragInteractionSnapsAndConstrains() {
+  const constrained = computeDragInteraction({
+    frame: { left: 0, top: 0, width: 10, height: 10 },
+    delta: { x: 95, y: 0 },
+    constraints: [
+      { rect: { left: 0, top: 0, width: 100, height: 100 }, target: "frame" },
+    ],
   });
+  assertDeepEqual(
+    constrained.frame,
+    { left: 90, top: 0, width: 10, height: 10 },
+    "drag containment should clamp the final frame",
+  );
+
+  const centerConstrained = computeDragInteraction({
+    frame: { left: 0, top: 0, width: 20, height: 20 },
+    delta: { x: 100, y: 100 },
+    constraints: [
+      { rect: { left: 0, top: 0, width: 50, height: 50 }, target: "center" },
+    ],
+  });
+  assertDeepEqual(
+    centerConstrained.frame,
+    { left: 40, top: 40, width: 20, height: 20 },
+    "center containment should clamp by center rather than edges",
+  );
+
+  const snapped = computeDragInteraction({
+    frame: { left: 0, top: 0, width: 10, height: 10 },
+    proposedFrame: { left: 96, top: 15, width: 10, height: 10 },
+    snapTargets: [
+      { id: "frame", rect: { left: 100, top: 10, width: 80, height: 60 } },
+    ],
+    options: { thresholdPx: 6, includeCenters: false },
+  });
+  assertEqual(snapped.frame.left, 100, "drag should snap x to the nearest line");
+  assertEqual(snapped.frame.top, 10, "drag should snap y to the nearest line");
+  assertEqual(
+    snapped.matches.length,
+    2,
+    "drag should return one snap match per snapped axis",
+  );
+
+  const rejected = computeDragInteraction({
+    frame: { left: 0, top: 0, width: 10, height: 10 },
+    proposedFrame: { left: 86, top: 0, width: 10, height: 10 },
+    constraints: [
+      { rect: { left: 0, top: 0, width: 95, height: 95 }, target: "frame" },
+    ],
+    snapTargets: [
+      { id: "outside", rect: { left: 100, top: 0, width: 50, height: 50 } },
+    ],
+    options: { thresholdPx: 20, includeCenters: false },
+  });
+  assertEqual(
+    rejected.matches.length,
+    0,
+    "snap candidates that break hard constraints should be rejected",
+  );
+  assertEqual(rejected.frame.left, 85, "final projection still enforces bounds");
+
+  assertEqual(
+    createRectSnapLines({ left: 0, top: 0, width: 10, height: 20 }).length,
+    6,
+    "rect snap lines should include edges and centers",
+  );
 }
 
 async function testSessionDirtyTrackerCanBlockLeave() {
@@ -1379,6 +1454,13 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
           selectable: false,
           evented: true,
           locked: true,
+          dragConstraints: [
+            {
+              type: "rect",
+              rect: { left: 0, top: 0, width: 100, height: 100 },
+              target: "frame",
+            },
+          ],
         },
       },
     ]);
@@ -1398,6 +1480,17 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
       node?.data.locked,
       true,
       "interaction locked should override graph data",
+    );
+    assertDeepEqual(
+      node?.data.dragConstraints,
+      [
+        {
+          type: "rect",
+          rect: { left: 0, top: 0, width: 100, height: 100 },
+          target: "frame",
+        },
+      ],
+      "interaction drag constraints should enter render graph data",
     );
     assertEqual(
       node?.coordinateSpace,
@@ -2015,8 +2108,8 @@ async function main() {
       "emits generic session lifecycle events",
       testSessionLifecycleEvents,
     ],
-    ["computes generic snap matches", testSnapServiceComputesGeometryMatches],
-    ["registers generic snap service", testRuntimeRegistersSnapService],
+    ["computes geometry primitives", testGeometryPrimitives],
+    ["computes drag interaction snaps and constraints", testDragInteractionSnapsAndConstrains],
     [
       "session dirty trackers can block leave",
       testSessionDirtyTrackerCanBlockLeave,

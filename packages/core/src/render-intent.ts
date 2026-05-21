@@ -8,6 +8,11 @@ import type {
   VisibilityEvalContext,
   VisibilityExpr,
 } from "./render";
+import type {
+  DragConstraintMode,
+  DragConstraintTarget,
+  GeometryRect,
+} from "./interaction";
 import type { SessionScope } from "./workflow-session";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
@@ -85,9 +90,26 @@ export interface RenderIntentInteractionSessionAspect {
   payload?: Record<string, unknown>;
 }
 
+export type RenderIntentDragConstraint =
+  | {
+      type: "rect";
+      rect: GeometryRect;
+      mode?: DragConstraintMode;
+      target?: DragConstraintTarget;
+    }
+  | {
+      type: "object";
+      objectId: string;
+      source?: "frame";
+      mode?: DragConstraintMode;
+      target?: DragConstraintTarget;
+      fallbackFrame: GeometryRect;
+    };
+
 export interface RenderIntentInteractionAspect {
   session?: RenderIntentInteractionSessionAspect;
   imagePlacement?: Record<string, unknown>;
+  dragConstraints?: readonly RenderIntentDragConstraint[];
   selectable?: boolean;
   evented?: boolean;
   locked?: boolean;
@@ -790,6 +812,9 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
         : {}),
       ...(draft.interaction?.imagePlacement
         ? { imagePlacement: draft.interaction.imagePlacement }
+        : {}),
+      ...(draft.interaction?.dragConstraints
+        ? { dragConstraints: draft.interaction.dragConstraints }
         : {}),
       ...(draft.interaction?.session
         ? { session: draft.interaction.session }

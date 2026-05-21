@@ -2,12 +2,16 @@ import {
   RENDER_INTENT_SERVICE,
   SESSION_SERVICE,
   WORKBENCH_SERVICE,
+  computeDragInteraction,
   evaluateVisibilityExpr,
   type CanvasService,
+  type DragInteractionConstraint,
+  type GeometryRect,
   type RenderEffectSpec,
   type RenderGraph,
   type RenderGraphLayer,
   type RenderGraphNode,
+  type RenderIntentDragConstraint,
   type RenderObjectSpec,
   type Service,
   type ServiceContext,
@@ -23,6 +27,7 @@ import type {
 import { CANVAS_SERVICE } from "../tokens";
 
 export const RENDER_GRAPH_RENDER_SCOPE = "core-render-graph";
+const FABRIC_RENDER_GRAPH_TARGET = "render-graph";
 
 export interface FabricRenderGraphSyncState {
   error?: unknown;
@@ -50,6 +55,7 @@ export class FabricRenderGraphAdapter implements Service {
   private sessionService?: SessionService;
   private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
+  private canvasObjectMovingHandler?: (event?: any) => void;
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
   private syncGeneration = 0;
@@ -81,14 +87,25 @@ export class FabricRenderGraphAdapter implements Service {
     this.graphSubscription = this.renderIntentService.onDidChange(() => {
       this.requestSync();
     });
+    this.canvasObjectMovingHandler = (event?: any) => {
+      this.handleRenderGraphObjectMoving(event?.target);
+    };
+    this.canvasService.onCanvasEvent("object:moving", this.canvasObjectMovingHandler);
     this.attachRuntimeVisibilityEvents();
     this.requestSync();
   }
 
   dispose() {
     this.detachRuntimeVisibilityEvents();
+    if (this.canvasObjectMovingHandler) {
+      this.canvasService?.offCanvasEvent(
+        "object:moving",
+        this.canvasObjectMovingHandler,
+      );
+    }
     this.graphSubscription?.dispose();
     this.graphSubscription = undefined;
+    this.canvasObjectMovingHandler = undefined;
     this.renderIntentService = undefined;
     this.canvasService = undefined;
     this.workbenchService = undefined;
@@ -226,6 +243,75 @@ export class FabricRenderGraphAdapter implements Service {
 
     await canvas.reconcileRenderGraphDrawList(items, effects, { render: false });
     canvas.requestRenderAll();
+  }
+
+  private handleRenderGraphObjectMoving(target: any) {
+    const canvas = this.canvasService;
+    if (!canvas || target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) {
+      return;
+    }
+    const dragConstraints = normalizeRenderDragConstraints(
+      target.data?.dragConstraints,
+      (objectId) => this.resolveLiveObjectFrame(objectId),
+    );
+    if (!dragConstraints.length) return;
+
+    const frame = this.getTargetSceneBounds(target);
+    if (!frame) return;
+    const result = computeDragInteraction({
+      frame,
+      proposedFrame: frame,
+      constraints: dragConstraints,
+    });
+    const dx = canvas.toScreenLength(result.frame.left - frame.left);
+    const dy = canvas.toScreenLength(result.frame.top - frame.top);
+    if (dx === 0 && dy === 0) return;
+    target.set?.({
+      left: finiteNumber(target.left, 0) + dx,
+      top: finiteNumber(target.top, 0) + dy,
+    });
+    target.setCoords?.();
+  }
+
+  private resolveLiveObjectFrame(objectId: string): GeometryRect | null {
+    const canvas = this.canvasService;
+    if (!canvas) return null;
+    const normalized = String(objectId || "").trim();
+    if (!normalized) return null;
+    const target = canvas.getObjects({
+      includeHidden: true,
+      predicate: (object: any) =>
+        object?.data?.renderTarget === FABRIC_RENDER_GRAPH_TARGET &&
+        (object?.data?.subject?.objectId === normalized ||
+          object?.data?.subjectId === normalized),
+    })[0];
+    return target ? this.getTargetSceneBounds(target) : null;
+  }
+
+  private getTargetSceneBounds(target: any): GeometryRect | null {
+    const canvas = this.canvasService;
+    if (!canvas || !target) return null;
+    const rawBounds =
+      typeof target.getBoundingRect === "function"
+        ? target.getBoundingRect()
+        : {
+            left: finiteNumber(target.left, 0),
+            top: finiteNumber(target.top, 0),
+            width: finiteNumber(target.width, 0) * finiteNumber(target.scaleX, 1),
+            height: finiteNumber(target.height, 0) * finiteNumber(target.scaleY, 1),
+          };
+    const sceneBounds = canvas.toSceneRect({
+      left: finiteNumber(rawBounds.left, 0),
+      top: finiteNumber(rawBounds.top, 0),
+      width: finiteNumber(rawBounds.width, 0),
+      height: finiteNumber(rawBounds.height, 0),
+    });
+    return {
+      left: sceneBounds.left,
+      top: sceneBounds.top,
+      width: sceneBounds.width,
+      height: sceneBounds.height,
+    };
   }
 
   private buildVisibilityContext(graph: RenderGraph) {
@@ -398,6 +484,42 @@ export class FabricRenderGraphAdapter implements Service {
 function finitePositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeRenderDragConstraints(
+  value: unknown,
+  resolveObjectFrame: (objectId: string) => GeometryRect | null,
+): DragInteractionConstraint[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((constraint): DragInteractionConstraint | null => {
+      const item = constraint as Partial<RenderIntentDragConstraint>;
+      if (item.type === "rect" && item.rect) {
+        return {
+          rect: item.rect,
+          ...(item.mode ? { mode: item.mode } : {}),
+          ...(item.target ? { target: item.target } : {}),
+        };
+      }
+      if (item.type !== "object") return null;
+      const objectId = String(item.objectId || "").trim();
+      if (!objectId) return null;
+      const rect = resolveObjectFrame(objectId) ?? item.fallbackFrame;
+      if (!rect) return null;
+      return {
+        rect,
+        ...(item.mode ? { mode: item.mode } : {}),
+        ...(item.target ? { target: item.target } : {}),
+      };
+    })
+    .filter((constraint): constraint is DragInteractionConstraint =>
+      Boolean(constraint),
+    );
 }
 
 function normalizeIds(values: unknown): string[] {

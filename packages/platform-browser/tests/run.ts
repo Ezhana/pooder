@@ -40,6 +40,8 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
 }
 
 class FakeCanvasService {
+  objects: any[] = [];
+  handlers = new Map<string, Array<(...args: any[]) => void>>();
   resizeCalls: Array<{ height: number; width: number }> = [];
   renderCalls = 0;
   reconcileCalls: Array<{
@@ -65,8 +67,12 @@ class FakeCanvasService {
     });
   }
 
-  getObjects() {
-    return [];
+  getObjects(query: any = {}) {
+    return this.objects.filter((object) => {
+      if (!query.includeHidden && object?.visible === false) return false;
+      if (query.predicate && !query.predicate(object)) return false;
+      return true;
+    });
   }
 
   getViewportSize() {
@@ -77,12 +83,33 @@ class FakeCanvasService {
     return 1;
   }
 
+  toScreenLength(value: number) {
+    return value;
+  }
+
   toScenePoint(point: { x: number; y: number }) {
     return point;
   }
 
   toSceneRect(rect: { left: number; top: number; width: number; height: number }) {
     return rect;
+  }
+
+  onCanvasEvent(event: string, handler: (...args: any[]) => void) {
+    const handlers = this.handlers.get(event) ?? [];
+    handlers.push(handler);
+    this.handlers.set(event, handlers);
+  }
+
+  offCanvasEvent(event: string, handler: (...args: any[]) => void) {
+    this.handlers.set(
+      event,
+      (this.handlers.get(event) ?? []).filter((item) => item !== handler),
+    );
+  }
+
+  emitCanvasEvent(event: string, payload: any) {
+    (this.handlers.get(event) ?? []).forEach((handler) => handler(payload));
   }
 }
 
@@ -500,6 +527,104 @@ async function testFabricRenderGraphAdapterPreservesScreenSpace() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterConstrainsDragging() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  const target = {
+    left: 95,
+    top: 20,
+    width: 10,
+    height: 10,
+    scaleX: 1,
+    scaleY: 1,
+    data: {
+      renderTarget: "render-graph",
+      dragConstraints: [
+        {
+          type: "rect",
+          rect: { left: 0, top: 0, width: 100, height: 100 },
+          target: "frame",
+        },
+      ],
+    },
+    getBoundingRect() {
+      return {
+        left: this.left,
+        top: this.top,
+        width: this.width,
+        height: this.height,
+      };
+    },
+    set(values: Record<string, unknown>) {
+      Object.assign(this, values);
+    },
+    setCoords() {},
+  };
+
+  canvas.emitCanvasEvent("object:moving", { target });
+  assertEqual(target.left, 90, "rect drag constraints should clamp graph objects");
+
+  const reference = {
+    left: 10,
+    top: 10,
+    width: 40,
+    height: 40,
+    visible: true,
+    data: {
+      renderTarget: "render-graph",
+      subject: { objectId: "bounds" },
+      subjectId: "bounds",
+    },
+    getBoundingRect() {
+      return {
+        left: this.left,
+        top: this.top,
+        width: this.width,
+        height: this.height,
+      };
+    },
+  };
+  const objectConstrained = {
+    ...target,
+    left: 80,
+    top: 20,
+    data: {
+      renderTarget: "render-graph",
+      dragConstraints: [
+        {
+          type: "object",
+          objectId: "bounds",
+          fallbackFrame: { left: 0, top: 0, width: 10, height: 10 },
+          target: "center",
+        },
+      ],
+    },
+  };
+  canvas.objects = [reference];
+  canvas.emitCanvasEvent("object:moving", { target: objectConstrained });
+  assertEqual(
+    objectConstrained.left,
+    45,
+    "object constraints should use live object bounds when available",
+  );
+
+  objectConstrained.left = 80;
+  objectConstrained.data.dragConstraints[0].objectId = "missing";
+  canvas.objects = [];
+  canvas.emitCanvasEvent("object:moving", { target: objectConstrained });
+  assertEqual(
+    objectConstrained.left,
+    5,
+    "object constraints should fall back to compiled frames",
+  );
+
+  await runtime.dispose();
+}
+
 async function testProjectionSuppressesSourceInGraphOnly() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -774,6 +899,7 @@ async function main() {
     ["resyncs graph adapter on layout change", testFabricRenderGraphAdapterResyncsOnLayoutChange],
     ["reports graph adapter sync state", testFabricRenderGraphAdapterReportsSyncState],
     ["preserves graph coordinate space", testFabricRenderGraphAdapterPreservesScreenSpace],
+    ["constrains render graph object dragging", testFabricRenderGraphAdapterConstrainsDragging],
     ["projects without mutating source Fabric objects", testProjectionSuppressesSourceInGraphOnly],
     ["reconciles stale objects and clip cleanup", testCanvasReconcileRemovesStaleObjectsAndClearsClip],
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],

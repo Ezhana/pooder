@@ -90,6 +90,8 @@ export type {
   EditorImageObject,
   EditorLayer,
   EditorObject,
+  EditorObjectConstraints,
+  EditorObjectDragConstraint,
   EditorSurface,
   EditorView,
 } from "./index";
