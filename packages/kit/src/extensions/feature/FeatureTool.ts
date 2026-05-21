@@ -769,14 +769,14 @@ export class FeatureTool implements ExtensionDefinition {
       this.context.services.get<CommandService>(COMMAND_SERVICE);
     if (commandService) {
       try {
-        Promise.resolve(commandService.executeCommand("getSceneGeometry")).then(
-          (g) => {
+        Promise.resolve(commandService.executeCommand("getSceneGeometry"))
+          .then((g) => {
             if (g) {
               this.currentGeometry = g as DielineGeometry;
               this.redraw();
             }
-          },
-        );
+          })
+          .catch(() => {});
       } catch (e) {}
     }
 

@@ -1,7 +1,7 @@
 export type {
   ImagePlacementImageState,
   ImagePlacementPlaceholderStyle,
-  ImagePlacementSlotState,
+  ImagePlacementState,
   ImagePlacementTransformUpdates,
 } from "./ImagePlacementCapabilityImplementation";
 export type { ImagePlacementViewState } from "./capability";

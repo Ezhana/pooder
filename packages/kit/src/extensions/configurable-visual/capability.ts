@@ -10,9 +10,25 @@ export interface ConfigurableVisualCapabilityOptions {
   capabilityId?: string;
 }
 
+export interface ConfigurableVisualCommitInput {
+  configKey?: string;
+  key: string;
+  src: string;
+  enabled?: boolean;
+  opacity?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ConfigurableVisualClearInput {
+  configKey?: string;
+  key: string;
+}
+
 export interface ConfigurableVisualCapabilityApi {
+  clearCommittedVisual(input: ConfigurableVisualClearInput): void;
   getConfig(configKey: string): ConfigurableVisualConfig;
   refresh(): void;
+  setCommittedVisual(input: ConfigurableVisualCommitInput): void;
 }
 
 export function normalizeConfigurableVisualConfigKey(value: unknown): string {
@@ -34,6 +50,8 @@ export function createConfigurableVisualCapabilityDefinition(
     },
     commands: [
       { id: "getConfigurableVisualConfig", title: "Get Configurable Visual Config" },
+      { id: "setConfigurableVisualCommittedVisual", title: "Set Configurable Visual Committed Visual" },
+      { id: "clearConfigurableVisualCommittedVisual", title: "Clear Configurable Visual Committed Visual" },
     ],
     facade,
   };

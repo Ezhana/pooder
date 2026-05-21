@@ -150,14 +150,48 @@ const TEST_DOCUMENT_CONFIG = {
   "scene.viewportFocusFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
 };
 
-function imagePlacementCommittedVisibility(slotId: string) {
+function imagePlacementCommittedVisibility(placementId: string) {
   return {
     op: "not",
     expr: {
       op: "sessionScopeActive",
-      scope: { subjectId: slotId, channel: "image-placement" },
+      scope: { subjectId: placementId, channel: "image-placement" },
     },
   };
+}
+
+type ImagePlacementSessionInput = string | {
+  placementId: string;
+  sessionId?: string;
+};
+
+type ImagePlacementTestDriver = {
+  beginSession(input: ImagePlacementSessionInput): Promise<unknown>;
+  setImageSource(
+    input: ImagePlacementSessionInput,
+    source: { src: string; metadata?: Record<string, unknown> },
+  ): Promise<unknown>;
+  setImageTransform(
+    input: ImagePlacementSessionInput,
+    updates: {
+      left?: number;
+      top?: number;
+      scale?: number;
+      angle?: number;
+      opacity?: number;
+    },
+  ): Promise<unknown>;
+  completeSession(input?: ImagePlacementSessionInput): Promise<unknown>;
+  exportPlacementImage(options?: {
+    placementIds?: string[];
+    multiplier?: number;
+    format?: "png" | "jpeg";
+  }): Promise<unknown>;
+  resetSession(input?: ImagePlacementSessionInput): void;
+};
+
+function getImagePlacementTestDriver(extension: unknown): ImagePlacementTestDriver {
+  return extension as ImagePlacementTestDriver;
 }
 
 class FakeCanvasService {
@@ -670,10 +704,10 @@ function testImageViewStateHelper() {
   );
   assert(
     hasAnyImageInViewState({
-      slots: [],
+      placements: [],
       hasAnyImage: false,
-      activeSlotId: null,
-      focusedSlot: null,
+      activePlacementId: null,
+      focusedPlacement: null,
       hasWorkingChanges: false,
       sessionNotice: null,
     }) === false,
@@ -681,21 +715,25 @@ function testImageViewStateHelper() {
   );
   assert(
     hasAnyImageInViewState({
-      slots: [
+      placements: [
         {
-          id: "slot-1",
+          id: "placement-1",
           frame: { left: 0, top: 0, width: 100, height: 100 },
           fit: "cover",
+          committedImage: null,
+          commitTarget: { type: "document-object", objectId: "placement-1" },
           hasImage: true,
+          hasCommittedImage: false,
           image: { src: "blob:test", opacity: 1 },
           layerId: "image",
           order: 0,
+          sessionKey: "placement-1",
           visible: true,
         },
       ],
       hasAnyImage: true,
-      activeSlotId: "slot-1",
-      focusedSlot: null,
+      activePlacementId: "placement-1",
+      focusedPlacement: null,
       hasWorkingChanges: true,
       sessionNotice: null,
     }) === true,
@@ -1091,7 +1129,7 @@ function testCreateKitCapabilitiesForDocument() {
             ],
             objects: [
               {
-                id: "slot",
+                id: "placement",
                 type: "image",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
                 effects: [
@@ -1230,7 +1268,7 @@ async function testApplyKitEditorDocument() {
             ],
             objects: [
               {
-                id: "front-slot",
+                id: "front-placement",
                 type: "image",
                 src: "/photo.png",
                 metadata: {
@@ -1244,7 +1282,7 @@ async function testApplyKitEditorDocument() {
                       opacity: 1,
                     },
                     derived: {
-                      src: "data:image/png;base64,cropped-front-slot",
+                      src: "data:image/png;base64,cropped-front-placement",
                       width: 400,
                       height: 320,
                     },
@@ -1295,7 +1333,7 @@ async function testApplyKitEditorDocument() {
     "document apply should not write SceneService layers",
   );
   assertEqual(
-    scene.getElement("front-slot"),
+    scene.getElement("front-placement"),
     undefined,
     "document apply should not write SceneService elements",
   );
@@ -1312,7 +1350,7 @@ async function testApplyKitEditorDocument() {
   );
   const committedGraphNode = renderGraph.layers
     .find((layer) => layer.id === "front-artwork")
-    ?.nodes.find((node) => node.id === "image:front-slot");
+    ?.nodes.find((node) => node.id === "image:front-placement");
   assertDeepEqual(
     committedGraphNode?.transform,
     {
@@ -1323,7 +1361,7 @@ async function testApplyKitEditorDocument() {
       scaleX: 0.075,
       scaleY: 0.125,
     },
-    "document apply should compile committed image replacement to the slot-centered graph transform",
+    "document apply should compile committed image replacement to the placement-centered graph transform",
   );
   assertEqual(
     committedGraphNode?.props.selectable,
@@ -1337,12 +1375,12 @@ async function testApplyKitEditorDocument() {
   );
   assertDeepEqual(
     {
-      slotId: committedGraphNode?.data.slotId,
+      placementId: committedGraphNode?.data.placementId,
       source: committedGraphNode?.data.source,
       type: committedGraphNode?.data.type,
     },
     {
-      slotId: "front-slot",
+      placementId: "front-placement",
       source: "committed",
       type: "image-placement-image",
     },
@@ -1354,7 +1392,7 @@ async function testApplyKitEditorDocument() {
     "clip effect should write normalized clip metadata into RenderIntent data",
   );
   const clipEffect = committedGraphNode?.effects.find(
-    (effect) => effect.id === "clip.front-slot",
+    (effect) => effect.id === "clip.front-placement",
   );
   assertDeepEqual(
     clipEffect?.targetLayerIds,
@@ -1363,7 +1401,7 @@ async function testApplyKitEditorDocument() {
   );
   assertDeepEqual(
     clipEffect?.targetSubjectIds,
-    ["front-slot"],
+    ["front-placement"],
     "clip render intent should resolve object-level target ids",
   );
   assertEqual(
@@ -1668,8 +1706,10 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   missingCompilerRuntime.extensions.register(
     createFakeCapabilityExtension({
       [CONFIGURABLE_VISUAL_CAPABILITY_ID]: {
+        clearCommittedVisual: () => {},
         getConfig: () => ({}),
         refresh: () => {},
+        setCommittedVisual: () => {},
       } satisfies ConfigurableVisualCapabilityApi,
     }),
   );
@@ -1769,34 +1809,25 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 async function testImagePlacementCapabilityExtension() {
   const runtime = new Pooder();
   const facade: ImagePlacementCapabilityApi = {
-    beginSession: async () => ({ ok: true }),
-    requestUpload: async () => ({ ok: true }),
-    setImageSource: async () => ({ ok: true }),
-    setImageTransform: async () => ({ ok: true }),
-    applyImageOperation: async () => ({ ok: true }),
+    applyOperation: async () => ({ ok: true }),
     clearImage: async () => ({ ok: true }),
-    completeSession: async () => ({ ok: true }),
-    exportPlacementImage: async () => ({
-      format: "png",
-      height: 1,
-      imageIds: [],
-      multiplier: 1,
-      slotIds: [],
-      url: "data:image/png;base64,test",
-      width: 1,
-    }),
-    focusSlot: (id) => ({ ok: true, id }),
+    commitSession: async () => ({ ok: true }),
+    focusPlacement: (id) => ({ ok: true, id }),
     getViewState: () => ({
-      activeSlotId: null,
-      focusedSlot: null,
+      activePlacementId: null,
+      focusedPlacement: null,
       hasAnyImage: false,
       hasWorkingChanges: false,
       sessionNotice: null,
-      slots: [],
+      placements: [],
     }),
-    resetSession: () => {},
-    validatePlacement: async () => ({ ok: true }),
+    openSession: async () => ({ ok: true }),
+    rollbackSession: async () => ({ ok: true }),
+    setSource: async () => ({ ok: true }),
+    setTransform: async () => ({ ok: true }),
     validateSession: async () => ({ ok: true }),
+    validatePlacement: async () => ({ ok: true }),
+    refresh: () => {},
   };
   runtime.extensions.register({
     id: "test.image-placement",
@@ -1825,7 +1856,7 @@ async function testImagePlacementCapabilityExtension() {
     throw new Error("image placement capability facade should be registered");
   }
   assertDeepEqual(
-    registeredFacade.getViewState().slots,
+    registeredFacade.getViewState().placements,
     [],
     "image placement capability facade should expose image state",
   );
@@ -1850,9 +1881,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     format: "png",
     height: 320,
     multiplier: 2,
-    sourceElementIds: ["slot"],
+    sourceElementIds: ["placement"],
     sourceLayerIds: ["image.user"],
-    url: "data:image/png;base64,cropped-slot",
+    url: "data:image/png;base64,cropped-placement",
     width: 400,
   };
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
@@ -1905,7 +1936,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
   scene.addLayer({ id: "artwork" });
   scene.addElement({
-    id: "slot",
+    id: "placement",
     layerId: "artwork",
     type: "rect",
     width: 200,
@@ -1960,7 +1991,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
-  await facade.beginSession("slot");
+  const driver = getImagePlacementTestDriver(imageExtension);
+  await driver.beginSession("placement");
   const renderGraph = renderIntentService.getGraph();
   const imageLayer = renderGraph.layers.find((layer) => layer.id === "artwork");
   const imageSessionLayer = renderGraph.layers.find(
@@ -1973,11 +2005,11 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     (layer) => layer.id === "image.session.overlay",
   );
   const committedImageNode = imageLayer?.nodes.find(
-    (node: any) => node.id === "image:slot",
+    (node: any) => node.id === "image:placement",
   );
   assertDeepEqual(
     committedImageNode?.visibility,
-    imagePlacementCommittedVisibility("slot"),
+    imagePlacementCommittedVisibility("placement"),
     "committed image object should carry graph visibility while its working session is active",
   );
   assertEqual(
@@ -1986,7 +2018,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "image session working object should render above business document layers",
   );
   const sessionImage = imageSessionLayer?.nodes.find(
-    (node: any) => node.id === "session-image:image-placement:slot",
+    (node: any) => node.id === "session-image:image-placement:placement",
   );
   assert(sessionImage, "image session should render a separate working object");
   const sessionImageNode = sessionImage!;
@@ -2011,13 +2043,13 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assert(
     sessionOverlayLayer?.nodes.some((node) =>
-      node.id.startsWith("projection:pooder.kit.image-placement.runtime.projection.above.slot.business-helper"),
+      node.id.startsWith("projection:pooder.kit.image-placement.runtime.projection.above.placement.business-helper"),
     ),
     "image session should project declared business helpers above the working image",
   );
   const snapTarget = {
     data: {
-      slotId: "slot",
+      placementId: "placement",
       source: "working",
       type: "image-placement-image",
     },
@@ -2037,37 +2069,37 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   assertEqual(
     snapTarget.left,
     100,
-    "image session should snap a moving image edge to the slot edge",
+    "image session should snap a moving image edge to the placement edge",
   );
 
-  await facade.setImageTransform("slot", {
+  await driver.setImageTransform("placement", {
     angle: 22,
     left: 0.6,
     scale: 1.3,
     top: 0.4,
   });
-  await facade.completeSession();
-  const committedImage = (scene.getElement("slot")?.data as any)?.imagePlacement
+  await driver.completeSession();
+  const committedImage = (scene.getElement("placement")?.data as any)?.imagePlacement
     ?.image;
   assertEqual(
     committedImage.src,
-    "data:image/png;base64,cropped-slot",
-    "completed session should write the cropped production image to the slot",
+    "data:image/png;base64,cropped-placement",
+    "completed session should write the cropped production image to the placement",
   );
   assertEqual(
     committedImage.angle,
     0,
-    "cropped production image should reset session rotation in the slot",
+    "cropped production image should reset session rotation in the placement",
   );
   assertEqual(
     committedImage.scale,
     1,
-    "cropped production image should reset session scale in the slot",
+    "cropped production image should reset session scale in the placement",
   );
   assertEqual(
     committedImage.left,
     0.5,
-    "cropped production image should be centered in the slot",
+    "cropped production image should be centered in the placement",
   );
   assertEqual(
     committedImage.metadata?.source?.src,
@@ -2088,12 +2120,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   assertDeepEqual(
     exportService.calls[0]?.crop,
     { type: "sceneRect", rect: { left: 100, top: 120, width: 200, height: 160 } },
-    "complete session should crop the working image by the slot frame",
+    "complete session should crop the working image by the placement frame",
   );
   assertDeepEqual(
     exportService.calls[0]?.sourceElementIds,
-    ["session-image:image-placement:slot"],
-    "complete session should export the active working slot image",
+    ["session-image:image-placement:placement"],
+    "complete session should export the active working placement image",
   );
   assertDeepEqual(
     exportService.calls[0]?.sourceLayerIds,
@@ -2104,18 +2136,19 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const graph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
+  const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
   const artworkGraphLayer = graph.layers.find((layer) => layer.id === "artwork");
   const committedGraphNode = artworkGraphLayer?.nodes.find(
-    (node) => node.id === "image:slot",
+    (node) => node.id === "image:placement",
   );
   assertEqual(
     artworkGraphLayer?.id,
     "artwork",
-    "completed slot should render through the graph anchored business layer",
+    "completed placement should render through the graph anchored business layer",
   );
   assert(
-    committedGraphNode?.visual?.src === "data:image/png;base64,cropped-slot",
-    "completed slot should write the processed production image node",
+    committedGraphNode?.visual?.src === "data:image/png;base64,cropped-placement",
+    "completed placement should write the processed production image node",
   );
   assertDeepEqual(
     committedGraphNode?.transform,
@@ -2127,76 +2160,83 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       scaleX: 0.5,
       scaleY: 0.5,
     },
-    "completed slot should compile the committed bitmap into a slot-centered graph transform",
+    "completed placement should compile the committed bitmap into a placement-centered graph transform",
   );
   assertEqual(
     committedGraphNode?.props.selectable,
     false,
-    "completed slot committed image should be non-selectable through graph props",
+    "completed placement committed image should be non-selectable through graph props",
   );
   assertEqual(
     committedGraphNode?.props.evented,
     true,
-    "completed slot committed image should remain clickable through graph props",
+    "completed placement committed image should remain clickable through graph props",
   );
   assertDeepEqual(
     {
-      slotId: committedGraphNode?.data.slotId,
+      placementId: committedGraphNode?.data.placementId,
       source: committedGraphNode?.data.source,
       type: committedGraphNode?.data.type,
     },
     {
-      slotId: "slot",
+      placementId: "placement",
       source: "committed",
       type: "image-placement-image",
     },
-    "completed slot should expose generic committed image interaction data",
+    "completed placement should expose generic committed image interaction data",
   );
   assertDeepEqual(
     committedGraphNode?.visibility,
-    imagePlacementCommittedVisibility("slot"),
-    "completed slot should declaratively hide the graph-backed committed image while editing",
+    imagePlacementCommittedVisibility("placement"),
+    "completed placement should declaratively hide the graph-backed committed image while editing",
+  );
+  assertEqual(
+    evaluateVisibilityExpr(committedGraphNode?.visibility, {
+      isSessionScopeActive: (scope) => sessions.hasActiveSession({ scope }),
+    }),
+    true,
+    "completed placement committed image should be visible after the image session is committed",
   );
   assert(
     !graph.layers
       .find((layer) => layer.id === "image.session.image")
-      ?.nodes.some((node: any) => node.id === "session-image:image-placement:slot"),
-    "completed slot should clear the framework session image layer",
+      ?.nodes.some((node: any) => node.id === "session-image:image-placement:placement"),
+    "completed placement should clear the framework session image layer",
   );
-  await facade.exportPlacementImage({ slotIds: ["slot"] });
+  await driver.exportPlacementImage({ placementIds: ["placement"] });
   assertDeepEqual(
     exportService.calls[exportService.calls.length - 1]?.sourceLayerIds,
     ["artwork"],
-    "placement image export should use the committed slot business layer",
+    "placement image export should use the committed placement business layer",
   );
   assertDeepEqual(
     exportService.calls[exportService.calls.length - 1]?.sourceElementIds,
-    ["image:slot"],
+    ["image:placement"],
     "placement image export should target the committed production image object",
   );
 
-  await facade.beginSession("slot");
+  await driver.beginSession("placement");
   const reopenedState = facade.getViewState();
   assertEqual(
-    reopenedState.focusedSlot?.image?.src,
+    reopenedState.focusedPlacement?.image?.src,
     "/photo.png",
     "reopened image session should edit from the original source image",
   );
   assertEqual(
-    reopenedState.focusedSlot?.image?.scale,
+    reopenedState.focusedPlacement?.image?.scale,
     1.3,
     "reopened image session should restore the source transform",
   );
-  facade.resetSession("slot");
+  driver.resetSession("placement");
   const resetGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
   const resetGraphNode = resetGraph.layers
     .find((layer) => layer.id === "artwork")
-    ?.nodes.find((node) => node.id === "image:slot");
+    ?.nodes.find((node) => node.id === "image:placement");
   assertEqual(
     resetGraphNode?.visual?.src,
-    "data:image/png;base64,cropped-slot",
+    "data:image/png;base64,cropped-placement",
     "resetting a reopened image session should keep the committed production image",
   );
   assertDeepEqual(
@@ -2223,25 +2263,25 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertDeepEqual(
     {
-      slotId: resetGraphNode?.data.slotId,
+      placementId: resetGraphNode?.data.placementId,
       source: resetGraphNode?.data.source,
       type: resetGraphNode?.data.type,
     },
     {
-      slotId: "slot",
+      placementId: "placement",
       source: "committed",
       type: "image-placement-image",
     },
     "resetting a reopened image session should keep committed click target data",
   );
 
-  await facade.beginSession("slot");
-  await facade.setImageSource("slot", {
+  await driver.beginSession("placement");
+  await driver.setImageSource("placement", {
     src: "/photo.png",
     metadata: { width: 100, height: 80 },
   });
-  await facade.setImageTransform("slot", { left: -1 });
-  const warnResult = await facade.completeSession("slot");
+  await driver.setImageTransform("placement", { left: -1 });
+  const warnResult = await driver.completeSession("placement");
   assertEqual(
     (warnResult as any).ok,
     true,
@@ -2249,13 +2289,13 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
 
   runtime.config.update("image.session.placementPolicy", "strict");
-  await facade.beginSession("slot");
-  await facade.setImageSource("slot", {
+  await driver.beginSession("placement");
+  await driver.setImageSource("placement", {
     src: "/photo.png",
     metadata: { width: 100, height: 80 },
   });
-  await facade.setImageTransform("slot", { left: -1 });
-  const strictResult = await facade.completeSession("slot");
+  await driver.setImageTransform("placement", { left: -1 });
+  const strictResult = await driver.completeSession("placement");
   assertEqual(
     (strictResult as any).ok,
     false,
@@ -2275,9 +2315,9 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
     format: "png",
     height: 320,
     multiplier: 2,
-    sourceElementIds: ["slot"],
+    sourceElementIds: ["placement"],
     sourceLayerIds: ["image.user"],
-    url: "data:image/png;base64,cropped-slot",
+    url: "data:image/png;base64,cropped-placement",
     width: 400,
   };
   let renderedSessionScale = 0;
@@ -2287,7 +2327,7 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
   scene.addLayer({ id: "artwork" });
   scene.addElement({
-    id: "slot",
+    id: "placement",
     layerId: "artwork",
     type: "rect",
     width: 200,
@@ -2309,19 +2349,21 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
     transform: { left: 100, top: 120 },
   });
 
-  runtime.extensions.register(createImagePlacementCapability());
+  const imageExtension = createImagePlacementCapability();
+  runtime.extensions.register(imageExtension);
   await runtime.extensions.flushActivation();
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
+  const driver = getImagePlacementTestDriver(imageExtension);
 
-  await facade.beginSession("slot");
+  await driver.beginSession("placement");
   const canvasTarget: any = {
     angle: 12,
     data: {
-      id: "session-image:image-placement:slot",
+      id: "session-image:image-placement:placement",
       layerId: "image.session.image",
-      slotId: "slot",
+      placementId: "placement",
       source: "working",
       type: "image-placement-image",
     },
@@ -2342,13 +2384,13 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
       .getGraph();
     const sessionNode = graph.layers
       .find((layer) => layer.id === "image.session.image")
-      ?.nodes.find((node) => node.id === "session-image:image-placement:slot");
+      ?.nodes.find((node) => node.id === "session-image:image-placement:placement");
     renderedSessionScale = Number(sessionNode?.props.scaleX || 0);
     return FakeSceneExportService.prototype.exportImage.call(exportService, options);
   };
 
-  await facade.completeSession("slot");
-  const committedImage = (scene.getElement("slot")?.data as any)?.imagePlacement
+  await driver.completeSession("placement");
+  const committedImage = (scene.getElement("placement")?.data as any)?.imagePlacement
     ?.image;
   assertDeepEqual(
     committedImage.metadata?.transform,
@@ -2370,7 +2412,7 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   await runtime.dispose();
 }
 
-async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
+async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
@@ -2378,7 +2420,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
   const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
   scene.addLayer({ id: "artwork" });
   scene.addElement({
-    id: "slot-a",
+    id: "placement-a",
     layerId: "artwork",
     type: "rect",
     width: 100,
@@ -2391,7 +2433,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
     },
   });
   scene.addElement({
-    id: "slot-b",
+    id: "placement-b",
     layerId: "artwork",
     type: "rect",
     width: 100,
@@ -2404,7 +2446,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
     },
   });
   scene.addElement({
-    id: "committed-slot",
+    id: "committed-placement",
     layerId: "artwork",
     type: "rect",
     width: 100,
@@ -2425,84 +2467,261 @@ async function testImagePlacementKeepsWorkingImagesAcrossSlotSwitches() {
     },
   });
 
-  runtime.extensions.register(
-    createImagePlacementCapability({
-      requestUpload: async (slot) => ({
-        src: `/upload-${slot.id}.png`,
-        metadata: { width: 100, height: 100 },
-      }),
-    }),
-  );
+  const imageExtension = createImagePlacementCapability();
+  runtime.extensions.register(imageExtension);
   await runtime.extensions.flushActivation();
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
+  const driver = getImagePlacementTestDriver(imageExtension);
   const renderIntentService =
     runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
 
-  await facade.requestUpload("slot-a");
-  await facade.setImageTransform("slot-a", { scale: 1.8 });
-  facade.resetSession("slot-a");
-  const resetUploadedSlot = facade
+  await driver.setImageSource("placement-a", {
+    src: "/upload-placement-a.png",
+    metadata: { width: 100, height: 100 },
+  });
+  await driver.setImageTransform("placement-a", { scale: 1.8 });
+  driver.resetSession("placement-a");
+  const resetUploadedPlacement = facade
     .getViewState()
-    .slots.find((slot) => slot.id === "slot-a");
+    .placements.find((placement) => placement.id === "placement-a");
   assertEqual(
-    resetUploadedSlot?.image?.src,
-    "/upload-slot-a.png",
+    resetUploadedPlacement?.image?.src,
+    "/upload-placement-a.png",
     "resetting after upload should keep the uploaded draft image",
   );
   assertEqual(
-    resetUploadedSlot?.image?.scale,
+    resetUploadedPlacement?.image?.scale,
     1,
     "resetting after upload should restore the upload baseline transform",
   );
-  await facade.beginSession("slot-b");
+  await driver.beginSession("placement-b");
   let imageSessionLayer = renderIntentService
     .getGraph()
     .layers.find((layer) => layer.id === "image.session.image");
   assert(
-    imageSessionLayer?.nodes.some((node: any) => node.id === "session-image:image-placement:slot-a"),
-    "uploaded working image should remain visible after focusing another slot",
+    imageSessionLayer?.nodes.some((node: any) => node.id === "session-image:image-placement:placement-a"),
+    "uploaded working image should remain visible after focusing another placement",
   );
 
-  await facade.requestUpload("slot-b");
+  await driver.setImageSource("placement-b", {
+    src: "/upload-placement-b.png",
+    metadata: { width: 100, height: 100 },
+  });
   imageSessionLayer = renderIntentService
     .getGraph()
     .layers.find((layer) => layer.id === "image.session.image");
   const workingObjectIds = imageSessionLayer?.nodes.map((node: any) => node.id) ?? [];
   assert(
-    workingObjectIds.includes("session-image:image-placement:slot-a") &&
-      workingObjectIds.includes("session-image:image-placement:slot-b"),
+    workingObjectIds.includes("session-image:image-placement:placement-a") &&
+      workingObjectIds.includes("session-image:image-placement:placement-b"),
     "multiple uploaded working images should render together before commit",
   );
   assert(
     renderIntentService.getVisibilityContextValue(
-      `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.slot-a`,
+      `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-placement.placement-a`,
     ) === true,
-    "slot-a committed visibility context should stay active while its working image exists",
+    "placement-a committed visibility context should stay active while its working image exists",
   );
 
-  await facade.beginSession("committed-slot");
-  await facade.setImageTransform("committed-slot", { scale: 1.5, left: 0.2 });
-  facade.resetSession("committed-slot");
-  const restoredSlot = facade
+  await driver.beginSession("committed-placement");
+  await driver.setImageTransform("committed-placement", { scale: 1.5, left: 0.2 });
+  driver.resetSession("committed-placement");
+  const restoredPlacement = facade
     .getViewState()
-    .slots.find((slot) => slot.id === "committed-slot");
+    .placements.find((placement) => placement.id === "committed-placement");
   assertEqual(
-    restoredSlot?.image?.src,
+    restoredPlacement?.image?.src,
     "/committed.png",
     "resetting an edit session should restore the committed image source",
   );
   assertEqual(
-    restoredSlot?.image?.scale,
+    restoredPlacement?.image?.scale,
     1,
     "resetting an edit session should discard uncommitted transform changes",
   );
   assert(
     renderIntentService.getVisibilityContextValue(
-      `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-slot.committed-slot`,
+      `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-placement.committed-placement`,
     ) !== true,
     "resetting an edit session should reveal the committed image again",
+  );
+
+  await runtime.dispose();
+}
+
+async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const exportService = new FakeSceneExportService();
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 0, top: 0, width: 100, height: 100 },
+    format: "png",
+    height: 100,
+    multiplier: 1,
+    sourceElementIds: ["placement"],
+    sourceLayerIds: ["artwork"],
+    url: "data:image/png;base64,business-session",
+    width: 100,
+  };
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "artwork" });
+  scene.addElement({
+    id: "placement",
+    layerId: "artwork",
+    type: "rect",
+    width: 100,
+    height: 100,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 0, y: 0, width: 100, height: 100 },
+      },
+    },
+  });
+
+  const imageExtension = createImagePlacementCapability();
+  runtime.extensions.register(imageExtension);
+  await runtime.extensions.flushActivation();
+  const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
+  const driver = getImagePlacementTestDriver(imageExtension);
+  const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+  const sessionInput = {
+    placementId: "placement",
+    sessionId: "customization:image-placement:sku:new:front:placement",
+  };
+
+  await driver.beginSession(sessionInput);
+  await driver.setImageSource(sessionInput, {
+    src: "/draft.png",
+    metadata: { width: 100, height: 100 },
+  });
+  await driver.setImageTransform(sessionInput, { scale: 1.7 });
+
+  assert(
+    Boolean(sessions.getSession(sessionInput.sessionId)),
+    "app-owned image session id should be registered in SessionService",
+  );
+  await driver.beginSession(sessionInput);
+  assertEqual(
+    facade.getViewState().focusedPlacement?.image?.scale,
+    1.7,
+    "reopening the same app-owned image session should preserve the draft",
+  );
+  await driver.beginSession({
+    placementId: "placement",
+    sessionId: "customization:image-placement:sku:new:front:other",
+  });
+  assertEqual(
+    facade.getViewState().focusedPlacement?.image?.src,
+    undefined,
+    "a different app-owned image session should not reuse another session draft",
+  );
+  await driver.beginSession(sessionInput);
+  assertEqual(
+    facade.getViewState().focusedPlacement?.image?.scale,
+    1.7,
+    "returning to the original app-owned image session should restore its draft",
+  );
+
+  await driver.completeSession(sessionInput);
+  const committedImage = (scene.getElement("placement")?.data as any)?.imagePlacement
+    ?.image;
+  assertEqual(
+    committedImage.src,
+    "data:image/png;base64,business-session",
+    "completed app-owned image session should commit the draft to the placement",
+  );
+  assertEqual(
+    sessions.getSession(sessionInput.sessionId)?.status,
+    "committed",
+    "completed app-owned image session should commit the matching SessionService record",
+  );
+
+  await runtime.dispose();
+}
+
+async function testImagePlacementCanvasPressCanOnlyRequestSession() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "artwork" });
+  scene.addElement({
+    id: "placement",
+    layerId: "artwork",
+    type: "rect",
+    width: 100,
+    height: 100,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 0, y: 0, width: 100, height: 100 },
+      },
+    },
+  });
+
+  runtime.extensions.register(createImagePlacementCapability({
+    beginSessionOnCanvasInteraction: false,
+  }));
+  await runtime.extensions.flushActivation();
+  const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
+  const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+  const events: any[] = [];
+  const handler = (event: unknown) => {
+    events.push(event);
+  };
+  runtime.eventBus.on("image:session:open", handler);
+
+  runtime.eventBus.emit("mouse:down", {
+    target: {
+      data: {
+        session: {
+          payload: {
+            placementId: "placement",
+          },
+        },
+        type: "image-placement-image",
+      },
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  runtime.eventBus.off("image:session:open", handler);
+
+  assertEqual(
+    events.length,
+    1,
+    "canvas press should still emit one image session request event",
+  );
+  assertEqual(
+    events[0]?.placementId,
+    "placement",
+    "canvas session request event should expose placementId",
+  );
+  assertEqual(
+    "slotId" in (events[0] ?? {}),
+    false,
+    "canvas session request event should not expose slotId",
+  );
+  assertEqual(
+    facade.getViewState().hasWorkingChanges,
+    false,
+    "canvas session request should not create a working draft when auto begin is disabled",
+  );
+  assertEqual(
+    sessions.getSession("image-placement:placement"),
+    undefined,
+    "canvas session request should not create an internal image placement session",
   );
 
   await runtime.dispose();
@@ -2563,15 +2782,15 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   );
 
   sessions.createSession({
-    sessionId: "image-placement:slot",
-    scope: { channel: "image-placement", subjectId: "slot" },
+    sessionId: "image-placement:placement",
+    scope: { channel: "image-placement", subjectId: "placement" },
   });
   assertEqual(
     evaluateVisibilityExpr(dielineNode?.visibility, context),
     false,
     "dieline overlay should be hidden during image placement sessions",
   );
-  await sessions.cancelSession("image-placement:slot");
+  await sessions.cancelSession("image-placement:placement");
 
   sessions.createSession({
     sessionId: "white-ink:front",
@@ -3085,6 +3304,109 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   await runtimeWithPersistedConfig.dispose();
 }
 
+async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisible() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const exportService = new FakeSceneExportService();
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 0, top: 0, width: 100, height: 100 },
+    format: "png",
+    height: 100,
+    multiplier: 1,
+    sourceElementIds: ["front.image.user"],
+    sourceLayerIds: ["image.session.image"],
+    url: "data:image/png;base64,committed-configurable-placement",
+    width: 100,
+  };
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
+  runtime.extensions.register(createConfigurableVisualCapability());
+  const imageExtension = createImagePlacementCapability({
+    beginSessionOnCanvasInteraction: false,
+  });
+  runtime.extensions.register(imageExtension);
+  await runtime.extensions.flushActivation();
+
+  await applyKitEditorDocument(runtime, {
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "front.artwork",
+            objects: [
+              {
+                id: "front.image.user",
+                type: "image",
+                frame: { x: 0, y: 0, width: 100, height: 100 },
+                effects: [
+                  {
+                    type: "image-placement",
+                    payload: {
+                      accepts: ["image"],
+                      commitTarget: {
+                        type: "configurable-visual",
+                        key: "front.image.user",
+                      },
+                      sessionKey: "front.image.user",
+                    },
+                  },
+                  {
+                    type: "configurable-visual",
+                    payload: { key: "front.image.user" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const driver = getImagePlacementTestDriver(imageExtension);
+  const sessionInput = {
+    placementId: "front.image.user",
+    sessionId: "customization:image-placement:sku:new:front:front.image.user",
+  };
+  await driver.beginSession(sessionInput);
+  await driver.setImageSource(sessionInput, {
+    src: "/draft.png",
+    metadata: { width: 100, height: 100 },
+  });
+  await driver.completeSession(sessionInput);
+
+  const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+  const committedGraphNode = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.image.user" && node.visual?.src);
+  assertEqual(
+    committedGraphNode?.visual?.src,
+    "data:image/png;base64,committed-configurable-placement",
+    "configurable visual image placement commit should keep a committed image in the render graph",
+  );
+  assertEqual(
+    committedGraphNode?.props.evented,
+    true,
+    "configurable visual image placement commit should keep the committed image clickable",
+  );
+  assertEqual(
+    evaluateVisibilityExpr(committedGraphNode?.visibility, {
+      isSessionScopeActive: (scope) => sessions.hasActiveSession({ scope }),
+    }),
+    true,
+    "configurable visual image placement commit should be visible after the session is committed",
+  );
+
+  await runtime.dispose();
+}
+
 async function testRulerCapabilityExtension() {
   const runtime = new Pooder();
 
@@ -3322,13 +3644,16 @@ async function main() {
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();
   await testImagePlacementCompleteSyncsCanvasTransform();
-  await testImagePlacementKeepsWorkingImagesAcrossSlotSwitches();
+  await testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches();
+  await testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft();
+  await testImagePlacementCanvasPressCanOnlyRequestSession();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayVisibilityFollowsEditingSessions();
   testImageSessionShapeOverlayUsesDielineGeometry();
   await testDielineGeometryCapabilityExtension();
   await testWhiteInkCapabilityExtension();
   await testConfigurableVisualConfigPatchesOriginalRenderIntents();
+  await testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisible();
   await testRulerCapabilityExtension();
   await testFeatureCapabilityDefinition();
   console.log("ok");

@@ -127,6 +127,25 @@ type RuntimeWorkbenchApi = {
   readonly activeToolId: string | null;
 };
 
+type RuntimeSessionsApi = {
+  create: SessionService["createSession"];
+  update: SessionService["updateSession"];
+  get: SessionService["getSession"];
+  list: SessionService["listSessions"];
+  isActive: SessionService["isSessionActive"];
+  hasActive: SessionService["hasActiveSession"];
+  isDirty: SessionService["isDirty"];
+  markDirty: SessionService["markDirty"];
+  focus: SessionService["focusSession"];
+  getFocusedId: SessionService["getFocusedSessionId"];
+  validate: SessionService["validateSession"];
+  commit: SessionService["commitSession"];
+  rollback: SessionService["rollbackSession"];
+  cancel: SessionService["cancelSession"];
+  handleBeforeLeave: SessionService["handleBeforeLeave"];
+  onDidChange: SessionService["onDidChange"];
+};
+
 export class Pooder {
   readonly eventBus: EventBus = new EventBus();
   private readonly serviceRegistry: ServiceRegistry = new ServiceRegistry();
@@ -162,6 +181,7 @@ export class Pooder {
   readonly capabilities: RuntimeCapabilitiesApi;
   readonly config: RuntimeConfigApi;
   readonly workbench: RuntimeWorkbenchApi;
+  readonly sessions: RuntimeSessionsApi;
 
   constructor() {
     this.registerService(
@@ -276,6 +296,26 @@ export class Pooder {
           .getOrThrow(CORE_SERVICE_TOKENS.WORKBENCH)
           .activeToolId;
       },
+    };
+
+    this.sessions = {
+      create: (...args) => this.sessionService.createSession(...args),
+      update: (...args) => this.sessionService.updateSession(...args),
+      get: (...args) => this.sessionService.getSession(...args),
+      list: (...args) => this.sessionService.listSessions(...args),
+      isActive: (...args) => this.sessionService.isSessionActive(...args),
+      hasActive: (...args) => this.sessionService.hasActiveSession(...args),
+      isDirty: (...args) => this.sessionService.isDirty(...args),
+      markDirty: (...args) => this.sessionService.markDirty(...args),
+      focus: (...args) => this.sessionService.focusSession(...args),
+      getFocusedId: () => this.sessionService.getFocusedSessionId(),
+      validate: (...args) => this.sessionService.validateSession(...args),
+      commit: (...args) => this.sessionService.commitSession(...args),
+      rollback: (...args) => this.sessionService.rollbackSession(...args),
+      cancel: (...args) => this.sessionService.cancelSession(...args),
+      handleBeforeLeave: (...args) =>
+        this.sessionService.handleBeforeLeave(...args),
+      onDidChange: (...args) => this.sessionService.onDidChange(...args),
     };
   }
 

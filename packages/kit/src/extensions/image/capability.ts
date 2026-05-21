@@ -1,10 +1,8 @@
 import type { CapabilityDefinition } from "@pooder/core";
 import type {
-  ImageExportPlacementImageOptions,
-  ImageExportPlacementImageResult,
-  ImagePlacementSessionNotice,
-  ImagePlacementSlotState,
   ImagePlacementSource,
+  ImagePlacementSessionNotice,
+  ImagePlacementState,
   ImagePlacementTransformUpdates,
 } from "./ImagePlacementCapabilityImplementation";
 import type { ImageOperation } from "./imageOperations";
@@ -31,49 +29,62 @@ export interface ImageSessionProjection {
 
 export interface ImagePlacementCapabilityOptions {
   capabilityId?: string;
+  beginSessionOnCanvasInteraction?: boolean;
   layers?: ImagePlacementLayerOptions;
-  requestUpload?: (
-    slot: ImagePlacementSlotState,
-  ) => Promise<ImagePlacementSource | null | undefined>;
+}
+
+export type ImagePlacementCommitTarget =
+  | {
+      type: "configurable-visual";
+      configKey?: string;
+      key: string;
+    }
+  | {
+      type: "document-object";
+      objectId: string;
+    };
+
+export interface ImagePlacementSessionInput {
+  placementId: string;
+  sessionId?: string;
 }
 
 export interface ImagePlacementViewState {
-  slots: ImagePlacementSlotState[];
-  activeSlotId: string | null;
-  focusedSlot: ImagePlacementSlotState | null;
+  placements: ImagePlacementState[];
+  activePlacementId: string | null;
+  focusedPlacement: ImagePlacementState | null;
   hasAnyImage: boolean;
   hasWorkingChanges: boolean;
   sessionNotice: ImagePlacementSessionNotice | null;
 }
 
 export interface ImagePlacementCapabilityApi {
-  getViewState(): ImagePlacementViewState;
-  beginSession(slotId: string): Promise<{ ok: boolean; reason?: string }>;
-  requestUpload(slotId: string): Promise<{ ok: boolean; reason?: string }>;
-  setImageSource(
-    slotId: string,
-    source: ImagePlacementSource,
-  ): Promise<{ ok: boolean; reason?: string }>;
-  setImageTransform(
-    slotId: string,
-    updates: ImagePlacementTransformUpdates,
-  ): Promise<{ ok: boolean; reason?: string }>;
-  applyImageOperation(
-    slotId: string,
+  applyOperation(
+    input: string | ImagePlacementSessionInput,
     operation: ImageOperation,
+  ): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
+  clearImage(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
+  commitSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
+  getViewState(): ImagePlacementViewState;
+  openSession(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
+  rollbackSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
+  setSource(
+    input: string | ImagePlacementSessionInput,
+    source: ImagePlacementSource | string,
   ): Promise<{ ok: boolean; reason?: string }>;
-  clearImage(slotId: string): Promise<{ ok: boolean; reason?: string }>;
-  resetSession(slotId?: string): void;
-  validatePlacement(slotId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
-  validateSession(slotId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
-  completeSession(slotId?: string): Promise<{ ok: boolean } | ImagePlacementSessionNotice>;
-  focusSlot(
-    slotId: string | null,
+  setTransform(
+    input: string | ImagePlacementSessionInput,
+    transform: ImagePlacementTransformUpdates,
+  ): Promise<{ ok: boolean; reason?: string }>;
+  validateSession(input?: string | ImagePlacementSessionInput): Promise<ImagePlacementSessionNotice | { ok: true }>;
+
+  /** @deprecated Use validateSession(). */
+  validatePlacement(placementId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
+  focusPlacement(
+    placementId: string | null,
     options?: { syncCanvasSelection?: boolean; skipRender?: boolean },
   ): { ok: boolean; id?: string | null; reason?: string };
-  exportPlacementImage(
-    options?: ImageExportPlacementImageOptions,
-  ): Promise<ImageExportPlacementImageResult>;
+  refresh(): void;
 }
 
 export function normalizeImagePlacementLayerId(
@@ -93,17 +104,13 @@ export function createImagePlacementCapabilityDefinition(
     metadata: {
       name: "Image Placement",
       description:
-        "Upload, place, validate, and export document-defined image slots.",
+        "Describe document-defined image placement targets and emit placement interactions.",
       tags: ["kit", "image", "placement"],
     },
     commands: [
-      { id: "beginSession", title: "Begin Image Placement Session" },
-      { id: "requestUpload", title: "Request Image Upload" },
-      { id: "setImageSource", title: "Set Image Source" },
-      { id: "setImageTransform", title: "Set Image Transform" },
-      { id: "applyImageOperation", title: "Apply Image Operation" },
       { id: "getImageViewState", title: "Get Image View State" },
-      { id: "exportPlacementImage", title: "Export Placement Image" },
+      { id: "focusImagePlacement", title: "Focus Image Placement" },
+      { id: "refreshImagePlacements", title: "Refresh Image Placements" },
     ],
     facade,
   };

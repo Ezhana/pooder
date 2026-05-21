@@ -51,6 +51,8 @@ import {
   normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,
   type ImagePlacementCapabilityOptions,
+  type ImagePlacementCommitTarget,
+  type ImagePlacementSessionInput,
   type ImageSessionProjection,
   type ImageSessionProjectionPlacement,
   type ImagePlacementViewState,
@@ -70,6 +72,10 @@ import {
   DIELINE_GEOMETRY_CAPABILITY_ID,
   type DielineGeometryCapabilityApi,
 } from "../dieline/capability";
+import {
+  CONFIGURABLE_VISUAL_CAPABILITY_ID,
+  type ConfigurableVisualCapabilityApi,
+} from "../configurable-visual";
 
 export interface ImagePlacementImageState {
   src?: string;
@@ -103,9 +109,12 @@ interface ImagePlacementSourceTransform {
 }
 
 interface ImagePlacementEffectPayload {
+  placementId?: unknown;
   accepts?: unknown;
+  commitTarget?: unknown;
   fit?: unknown;
   placeholder?: unknown;
+  sessionKey?: unknown;
   sessionProjections?: unknown;
 }
 
@@ -120,7 +129,7 @@ export interface ImagePlacementPlaceholderStyle {
   labelFontFamily?: string;
 }
 
-export interface ImagePlacementSlotState {
+export interface ImagePlacementState {
   id: string;
   layerId: string;
   frame: FrameRect;
@@ -128,7 +137,11 @@ export interface ImagePlacementSlotState {
   order: number;
   visible: boolean;
   image: ImagePlacementImageState | null;
+  committedImage: ImagePlacementImageState | null;
   hasImage: boolean;
+  hasCommittedImage: boolean;
+  sessionKey: string;
+  commitTarget: ImagePlacementCommitTarget;
   placeholderStyle?: ImagePlacementPlaceholderStyle;
   sessionProjections?: ImageSessionProjection[];
   metadata?: Record<string, unknown>;
@@ -136,15 +149,15 @@ export interface ImagePlacementSlotState {
 
 export interface ImagePlacementSessionNotice {
   ok: false;
-  code: "image-missing" | "image-outside-frame" | "slot-not-found";
+  code: "image-missing" | "image-outside-frame" | "placement-not-found";
   level: "error" | "warning";
   message: string;
-  slotIds: string[];
+  placementIds: string[];
   policy: "free" | "warn" | "strict";
 }
 
 export interface ImageExportPlacementImageOptions {
-  slotIds?: string[];
+  placementIds?: string[];
   multiplier?: number;
   format?: "png" | "jpeg";
 }
@@ -155,7 +168,7 @@ export interface ImageExportPlacementImageResult {
   height: number;
   multiplier: number;
   format: "png" | "jpeg";
-  slotIds: string[];
+  placementIds: string[];
 }
 
 export interface ImagePlacementCapabilityImplementationOptions
@@ -183,7 +196,7 @@ interface SnapMatch {
 }
 
 interface ImagePlacementSessionDraft {
-  slotId: string;
+  placementId: string;
   image: ImagePlacementImageState | null;
 }
 
@@ -193,7 +206,7 @@ const IMAGE_OBJECT_STACK = 660;
 const IMAGE_OVERLAY_STACK = 800;
 const IMAGE_RENDER_SCOPE = "pooder.kit.image-placement";
 const IMAGE_RUNTIME_RENDER_SCOPE = "pooder.kit.image-placement.runtime";
-const IMAGE_ACTIVE_SLOT_CONTEXT_PREFIX = "image-placement.active-slot";
+const IMAGE_ACTIVE_PLACEMENT_CONTEXT_PREFIX = "image-placement.active-placement";
 const IMAGE_SESSION_CHANNEL = "image-placement";
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
 
@@ -241,6 +254,10 @@ function readMetadataSourceSrc(
       ? metadata.sourceSrc.trim()
       : "";
   return sourceSrc;
+}
+
+function isTemporaryImageSource(src: string): boolean {
+  return /^blob:/i.test(src) || /^data:/i.test(src);
 }
 
 function createCommittedImagePlacementTransform(
@@ -449,13 +466,60 @@ function normalizeSessionProjections(value: unknown): ImageSessionProjection[] {
     .filter((item): item is ImageSessionProjection => Boolean(item));
 }
 
+function normalizeCommitTarget(
+  value: unknown,
+  fallbackObjectId: string,
+): ImagePlacementCommitTarget {
+  return readCommitTarget(value) ?? { type: "document-object", objectId: fallbackObjectId };
+}
+
+function readCommitTarget(value: unknown): ImagePlacementCommitTarget | null {
+  if (isRecord(value)) {
+    const type = typeof value.type === "string" ? value.type.trim() : "";
+    if (type === "configurable-visual") {
+      const key = typeof value.key === "string" ? value.key.trim() : "";
+      const configKey = typeof value.configKey === "string"
+        ? value.configKey.trim()
+        : "";
+      if (key) {
+        return {
+          type: "configurable-visual",
+          key,
+          ...(configKey ? { configKey } : {}),
+        };
+      }
+    }
+    if (type === "document-object") {
+      const objectId = typeof value.objectId === "string"
+        ? value.objectId.trim()
+        : "";
+      if (objectId) return { type: "document-object", objectId };
+    }
+  }
+  return null;
+}
+
+function normalizeConfigurableVisualCommitTarget(
+  value: unknown,
+): ImagePlacementCommitTarget | null {
+  if (!isRecord(value)) return null;
+  const key = typeof value.key === "string" ? value.key.trim() : "";
+  if (!key) return null;
+  const configKey = typeof value.configKey === "string" ? value.configKey.trim() : "";
+  return {
+    type: "configurable-visual",
+    key,
+    ...(configKey ? { configKey } : {}),
+  };
+}
+
 function getImagePlacementData(element: SceneElement): Record<string, unknown> {
   const data = isRecord(element.data) ? element.data : {};
   const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
   return placement;
 }
 
-function getSlotFrame(element: SceneElement): FrameRect | null {
+function getPlacementFrame(element: SceneElement): FrameRect | null {
   const placement = getImagePlacementData(element);
   const rawFrame = isRecord(placement.frame) ? placement.frame : undefined;
   if (rawFrame) {
@@ -502,29 +566,35 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private readonly capabilityId: string;
   private readonly imageLayerId: string;
   private readonly overlayLayerId: string;
-  private readonly requestUploadCallback: ImagePlacementCapabilityOptions["requestUpload"];
+  private readonly beginSessionOnCanvasInteraction: boolean;
   private readonly sourceSizeCache = createSourceSizeCache((src) =>
     this.loadImageSize(src),
   );
   private workingImages = new Map<string, ImagePlacementImageState | null>();
+  private workingImageDraftsBySessionId = new Map<
+    string,
+    ImagePlacementImageState | null
+  >();
   private retainedWorkingImageBaselines = new Map<
     string,
     ImagePlacementImageState | null
   >();
-  private visibleWorkingSlotContextKeys = new Set<string>();
-  private pendingUploadSlotIds = new Set<string>();
-  private activeSlotId: string | null = null;
+  private visibleWorkingPlacementContextKeys = new Set<string>();
+  private pendingUploadPlacementIds = new Set<string>();
+  private sessionIdsByPlacementId = new Map<string, string>();
+  private activePlacementId: string | null = null;
+  private activeImageSessionId: string | null = null;
   private sessionNotice: ImagePlacementSessionNotice | null = null;
   private renderSeq = 0;
   private activeSnapX: SnapMatch | null = null;
   private activeSnapY: SnapMatch | null = null;
-  private movingSlotId: string | null = null;
+  private movingPlacementId: string | null = null;
   private hasRenderedSnapGuides = false;
   private canvasMouseUpHandler?: (event?: any) => void;
   private canvasObjectMovingHandler?: (event?: any) => void;
   private canvasBeforeRenderHandler?: (event?: any) => void;
   private canvasAfterRenderHandler?: (event?: any) => void;
-  private pendingCanvasSessionSlotId: string | null = null;
+  private pendingCanvasSessionPlacementId: string | null = null;
   private pendingCanvasSessionTarget: any = null;
   private pendingCanvasSessionTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
@@ -540,7 +610,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       options.layers?.overlayLayerId,
       DEFAULT_OVERLAY_LAYER_ID,
     );
-    this.requestUploadCallback = options.requestUpload;
+    this.beginSessionOnCanvasInteraction = options.beginSessionOnCanvasInteraction !== false;
   }
 
   activate(context: ExtensionContext) {
@@ -580,9 +650,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     clearRenderIntentSource(this.renderIntentService, IMAGE_RUNTIME_RENDER_SCOPE);
     this.clearPendingCanvasSession();
     this.workingImages.clear();
+    this.workingImageDraftsBySessionId.clear();
     this.retainedWorkingImageBaselines.clear();
-    this.activeSlotId = null;
-    this.clearWorkingSlotVisibilityContext();
+    this.sessionIdsByPlacementId.clear();
+    this.activePlacementId = null;
+    this.activeImageSessionId = null;
+    this.clearWorkingPlacementVisibilityContext();
     this.sourceSizeCache.clear();
     this.endMoveSnapInteraction();
     this.unbindCanvasInteractionHandlers();
@@ -600,8 +673,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return {
       capabilities: [
         createImagePlacementCapabilityDefinition(this.getImagePlacementFacade(), {
+          beginSessionOnCanvasInteraction: this.beginSessionOnCanvasInteraction,
           capabilityId: this.capabilityId,
-          requestUpload: this.requestUploadCallback,
           layers: {
             imageLayerId: this.imageLayerId,
             overlayLayerId: this.overlayLayerId,
@@ -639,48 +712,36 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!object.frame) return;
 
     const payload = isRecord(context.effect.payload) ? context.effect.payload : {};
-    const image = this.resolveDocumentImageState(context.document, object);
+    const fit =
+      payload.fit === "contain" || payload.fit === "stretch"
+        ? payload.fit
+        : "cover";
+    const sessionKey = this.normalizeSessionKey(payload.sessionKey, object.id);
+    const commitTarget = this.resolveDocumentObjectCommitTarget(object, payload);
+    const frame = {
+      left: object.frame.x,
+      top: object.frame.y,
+      width: object.frame.width,
+      height: object.frame.height,
+    };
     const committed = this.resolveDocumentCommittedImage(context.document, object);
+    const committedTransform = committed
+      ? createCommittedImagePlacementTransform(frame, committed.metadata)
+      : undefined;
     return {
       id: object.id,
       ...(committed
         ? {
             visual: { type: "image", replacement: committed },
-            placement: {
-              transform: createCommittedImagePlacementTransform(
-                {
-                  left: object.frame.x,
-                  top: object.frame.y,
-                  width: object.frame.width,
-                  height: object.frame.height,
-                },
-                committed.metadata,
-              ),
-            },
           }
         : {}),
       placement: {
-        ...(committed
-          ? {
-              transform: createCommittedImagePlacementTransform(
-                {
-                  left: object.frame.x,
-                  top: object.frame.y,
-                  width: object.frame.width,
-                  height: object.frame.height,
-                },
-                committed.metadata,
-              ),
-            }
-          : {}),
-        fit:
-          payload.fit === "contain" || payload.fit === "stretch"
-            ? payload.fit
-            : "cover",
+        fit,
+        ...(committedTransform ? { transform: committedTransform } : {}),
       },
       interaction: {
         session: {
-          sessionId: this.getImageSessionId(object.id),
+          sessionId: sessionKey,
           scope: {
             surfaceId: resolved.surface.id,
             subjectId: object.id,
@@ -689,23 +750,21 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           source: "render-graph",
           mode: "edit",
           payload: {
-            slotId: object.id,
-            fit:
-              payload.fit === "contain" || payload.fit === "stretch"
-                ? payload.fit
-                : "cover",
+            placementId: object.id,
+            sessionKey,
+            fit,
             accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
+            commitTarget,
           },
         },
         imagePlacement: {
           enabled: true,
-          slotId: object.id,
+          placementId: object.id,
+          sessionKey,
+          commitTarget,
           frame: object.frame,
-          fit:
-            payload.fit === "contain" || payload.fit === "stretch"
-              ? payload.fit
-              : "cover",
-          image: committed ?? image,
+          ...(committed ? { image: committed } : {}),
+          fit,
           accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
           ...(isRecord(payload.placeholder)
             ? { placeholder: payload.placeholder }
@@ -714,21 +773,35 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             payload.sessionProjections,
           ),
         },
-        ...(committed
-          ? {
-              selectable: false,
-              evented: true,
-            }
-          : {}),
+        evented: true,
+        selectable: false,
       },
       data: {
         id: object.id,
         layerId: resolved.layer.id,
-        slotId: object.id,
-        type: committed ? "image-placement-image" : "image-placement-slot",
-        ...(committed ? { source: "committed" } : {}),
+        placementId: object.id,
+        sessionKey,
+        commitTarget,
+        source: committed ? "committed" : "target",
+        type: committed ? "image-placement-image" : "image-placement-target",
       },
     };
+  }
+
+  private resolveDocumentObjectCommitTarget(
+    object: EditorImageObject,
+    payload: ImagePlacementEffectPayload,
+  ): ImagePlacementCommitTarget {
+    if (isRecord(payload.commitTarget)) {
+      return normalizeCommitTarget(payload.commitTarget, object.id);
+    }
+    const configurableVisualEffect = object.effects?.find((effect) =>
+      effect.type === "configurable-visual"
+    );
+    const configurableVisualTarget = normalizeConfigurableVisualCommitTarget(
+      configurableVisualEffect?.payload,
+    );
+    return configurableVisualTarget ?? { type: "document-object", objectId: object.id };
   }
 
   private findDocumentImageObject(document: EditorDocument, objectId: string):
@@ -793,50 +866,53 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getImagePlacementFacade(): ImagePlacementCapabilityApi {
     return {
-      applyImageOperation: (slotId, operation) =>
-        this.applyImageOperation(slotId, operation),
-      beginSession: (slotId) => this.beginSession(slotId),
-      clearImage: (slotId) => this.clearImage(slotId),
-      completeSession: (slotId) => this.completeSession(slotId),
-      exportPlacementImage: (options) => this.exportPlacementImage(options),
-      focusSlot: (slotId, options) => this.focusSlot(slotId, options),
+      applyOperation: (input, operation) => this.applyImageOperation(input, operation),
+      clearImage: (input) => this.clearImage(input),
+      commitSession: (input) => this.completeSession(input),
+      focusPlacement: (placementId, options) => this.focusPlacement(placementId, options),
       getViewState: () => this.getViewState(),
-      requestUpload: (slotId) => this.requestUpload(slotId),
-      resetSession: (slotId) => this.resetSession(slotId),
-      setImageSource: (slotId, source) => this.setImageSource(slotId, source),
-      setImageTransform: (slotId, updates) =>
-        this.setImageTransform(slotId, updates),
-      validatePlacement: (slotId) => this.validateSession(slotId),
-      validateSession: (slotId) => this.validateSession(slotId),
+      openSession: (input) => this.beginSession(input),
+      rollbackSession: async (input) => {
+        this.resetSession(input);
+        return { ok: true };
+      },
+      setSource: (input, source) => this.setImageSource(
+        input,
+        typeof source === "string" ? { src: source } : source,
+      ),
+      setTransform: (input, transform) => this.setImageTransform(input, transform),
+      validateSession: (input) => this.validateSession(input),
+      validatePlacement: (placementId) => this.validateSession(placementId),
+      refresh: () => this.updateImages(),
     };
   }
 
-  private getSlotElements(): SceneElement[] {
-    const graphSlots = this.getGraphSlotElements();
-    const sceneSlots = (this.sceneService?.listElements() ?? [])
+  private getPlacementElements(): SceneElement[] {
+    const graphPlacements = this.getGraphPlacementElements();
+    const scenePlacements = (this.sceneService?.listElements() ?? [])
       .filter((element) => getImagePlacementData(element).enabled === true)
       .sort((a, b) => a.order - b.order);
-    if (graphSlots.length === 0) return sceneSlots;
+    if (graphPlacements.length === 0) return scenePlacements;
 
-    const graphSlotIds = new Set(graphSlots.map((slot) => slot.id));
+    const graphPlacementIds = new Set(graphPlacements.map((placement) => placement.id));
     return [
-      ...graphSlots,
-      ...sceneSlots.filter((slot) => !graphSlotIds.has(slot.id)),
+      ...graphPlacements,
+      ...scenePlacements.filter((placement) => !graphPlacementIds.has(placement.id)),
     ].sort((a, b) => a.order - b.order);
   }
 
-  private getGraphSlotElements(): SceneElement[] {
+  private getGraphPlacementElements(): SceneElement[] {
     const graph = this.renderIntentService?.getGraph();
     if (!graph) return [];
     return graph.layers
       .flatMap((layer) =>
-        layer.nodes.map((node) => this.graphNodeToSlotElement(node)),
+        layer.nodes.map((node) => this.graphNodeToPlacementElement(node)),
       )
       .filter((element): element is SceneElement => Boolean(element))
       .sort((a, b) => a.order - b.order);
   }
 
-  private graphNodeToSlotElement(node: RenderGraphNode): SceneElement | null {
+  private graphNodeToPlacementElement(node: RenderGraphNode): SceneElement | null {
     const imagePlacement = isRecord(node.data.imagePlacement)
       ? node.data.imagePlacement
       : undefined;
@@ -852,9 +928,29 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       data: {
         id: node.subjectId,
         layerId: node.layerId,
-        slotId: node.subjectId,
-        type: "image-placement-slot",
-        imagePlacement,
+        placementId: node.subjectId,
+        type: "image-placement-target",
+        sessionKey:
+          typeof imagePlacement.sessionKey === "string"
+            ? imagePlacement.sessionKey
+            : node.subjectId,
+        imagePlacement: {
+          ...imagePlacement,
+          commitTarget:
+            readCommitTarget(imagePlacement.commitTarget) ??
+            normalizeConfigurableVisualCommitTarget(node.data.configurableVisual) ??
+            { type: "document-object", objectId: node.subjectId },
+          ...(node.visual?.src
+            ? {
+                image: {
+                  src: node.visual.src,
+                  ...(node.visual.metadata
+                    ? { metadata: node.visual.metadata }
+                    : {}),
+                },
+              }
+            : {}),
+        },
       },
       style: node.props,
       transform: {
@@ -868,77 +964,90 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
   }
 
-  private getSlotElement(slotId: string): SceneElement | undefined {
-    return this.getSlotElements().find((slot) => slot.id === slotId);
+  private getPlacementElement(placementId: string): SceneElement | undefined {
+    return this.getPlacementElements().find((placement) => placement.id === placementId);
   }
 
-  private getCommittedImage(slot: SceneElement): ImagePlacementImageState | null {
-    return normalizeImage(getImagePlacementData(slot).image);
+  private getCommittedImage(placement: SceneElement): ImagePlacementImageState | null {
+    return normalizeImage(getImagePlacementData(placement).image);
   }
 
-  private getEffectiveImage(slot: SceneElement): ImagePlacementImageState | null {
-    if (this.workingImages.has(slot.id)) {
-      return this.workingImages.get(slot.id) ?? null;
+  private getEffectiveImage(placement: SceneElement): ImagePlacementImageState | null {
+    if (this.workingImages.has(placement.id)) {
+      return this.workingImages.get(placement.id) ?? null;
     }
-    return this.getCommittedImage(slot);
+    return this.getCommittedImage(placement);
   }
 
-  private getSlotState(slot: SceneElement): ImagePlacementSlotState | null {
-    const frame = getSlotFrame(slot);
+  private getPlacementState(element: SceneElement): ImagePlacementState | null {
+    const frame = getPlacementFrame(element);
     if (!frame) return null;
-    const placement = getImagePlacementData(slot);
-    const fit = placement.fit === "contain" || placement.fit === "stretch"
-      ? placement.fit
+    const placementData = getImagePlacementData(element);
+    const fit = placementData.fit === "contain" || placementData.fit === "stretch"
+      ? placementData.fit
       : "cover";
-    const image = this.getEffectiveImage(slot);
+    const committedImage = this.getCommittedImage(element);
+    const image = this.getEffectiveImage(element);
+    const metadata = isRecord(element.metadata) ? { ...element.metadata } : undefined;
     return {
-      id: slot.id,
-      layerId: slot.layerId,
+      id: element.id,
+      layerId: element.layerId,
       frame,
       fit,
-      order: slot.order,
-      visible: slot.visible,
+      order: element.order,
+      visible: element.visible,
       image,
+      committedImage,
       hasImage: hasImageSource(image),
-      placeholderStyle: normalizePlaceholderStyle(placement.placeholder),
+      hasCommittedImage: hasImageSource(committedImage),
+      sessionKey: typeof placementData.sessionKey === "string"
+        ? placementData.sessionKey
+        : this.getFallbackImageSessionId(element.id),
+      commitTarget:
+        readCommitTarget(placementData.commitTarget) ??
+        normalizeConfigurableVisualCommitTarget(metadata?.configurableVisual) ??
+        { type: "document-object", objectId: element.id },
+      placeholderStyle: normalizePlaceholderStyle(placementData.placeholder),
       sessionProjections: normalizeSessionProjections(
-        placement.sessionProjections,
+        placementData.sessionProjections,
       ),
-      metadata: isRecord(slot.metadata) ? { ...slot.metadata } : undefined,
+      metadata,
     };
   }
 
-  private getSlotStates(): ImagePlacementSlotState[] {
-    return this.getSlotElements()
-      .map((slot) => this.getSlotState(slot))
-      .filter((slot): slot is ImagePlacementSlotState => Boolean(slot));
+  private getPlacementStates(): ImagePlacementState[] {
+    return this.getPlacementElements()
+      .map((placement) => this.getPlacementState(placement))
+      .filter((placement): placement is ImagePlacementState => Boolean(placement));
   }
 
-  private getCommittedSlotStates(): ImagePlacementSlotState[] {
-    return this.getSlotElements()
-      .map((slot) => {
-        const state = this.getSlotState(slot);
-        const image = this.getCommittedImage(slot);
+  private getCommittedPlacementStates(): ImagePlacementState[] {
+    return this.getPlacementElements()
+      .map((placement) => {
+        const state = this.getPlacementState(placement);
+        const image = this.getCommittedImage(placement);
         return state
           ? {
               ...state,
               image,
+              committedImage: image,
               hasImage: hasImageSource(image),
+              hasCommittedImage: hasImageSource(image),
             }
           : null;
       })
-      .filter((slot): slot is ImagePlacementSlotState => Boolean(slot));
+      .filter((placement): placement is ImagePlacementState => Boolean(placement));
   }
 
   private getViewState(): ImagePlacementViewState {
-    const slots = this.getSlotStates();
-    const focusedSlot =
-      slots.find((slot) => slot.id === this.activeSlotId) || null;
+    const placements = this.getPlacementStates();
+    const focusedPlacement =
+      placements.find((placement) => placement.id === this.activePlacementId) || null;
     return {
-      slots,
-      activeSlotId: this.activeSlotId,
-      focusedSlot,
-      hasAnyImage: slots.some((slot) => slot.hasImage),
+      placements,
+      activePlacementId: this.activePlacementId,
+      focusedPlacement,
+      hasAnyImage: placements.some((placement) => placement.hasImage),
       hasWorkingChanges: this.workingImages.size > 0,
       sessionNotice: this.sessionNotice,
     };
@@ -955,64 +1064,111 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.emitStateChange();
   }
 
-  private async beginSession(slotId: string) {
-    const slot = this.getSlotElement(slotId);
-    if (!slot) return { ok: false, reason: "slot-not-found" };
-    this.clearPendingCanvasSession(slotId);
-    if (this.activeSlotId === slotId && this.workingImages.has(slotId)) {
+  private normalizeSessionInput(
+    input?: ImagePlacementSessionInput | string,
+  ): { placementId: string; sessionId: string } {
+    const placementId = typeof input === "string"
+      ? input.trim()
+      : String(input?.placementId || "").trim();
+    const sessionId = typeof input === "object"
+      ? String(input.sessionId || "").trim()
+      : "";
+    return {
+      placementId,
+      sessionId: sessionId || this.getFallbackImageSessionId(placementId),
+    };
+  }
+
+  private getActiveSessionInput(input?: ImagePlacementSessionInput | string) {
+    if (input !== undefined) {
+      return this.normalizeSessionInput(input);
+    }
+
+    const placementId = this.activePlacementId || "";
+    const sessionId = placementId
+      ? this.sessionIdsByPlacementId.get(placementId) || this.activeImageSessionId || ""
+      : this.activeImageSessionId || "";
+
+    return {
+      placementId,
+      sessionId: sessionId || this.getFallbackImageSessionId(placementId),
+    };
+  }
+
+  private setWorkingImageDraft(
+    placementId: string,
+    sessionId: string,
+    image: ImagePlacementImageState | null,
+  ) {
+    this.workingImages.set(placementId, image);
+    this.workingImageDraftsBySessionId.set(sessionId, cloneImageState(image));
+  }
+
+  private async beginSession(input: ImagePlacementSessionInput | string) {
+    const { placementId, sessionId } = this.normalizeSessionInput(input);
+    const placement = this.getPlacementElement(placementId);
+    if (!placement) return { ok: false, reason: "placement-not-found" };
+    this.clearPendingCanvasSession(placementId);
+    const previousSessionId = this.sessionIdsByPlacementId.get(placementId);
+    if (
+      this.activePlacementId === placementId &&
+      previousSessionId === sessionId &&
+      this.workingImages.has(placementId)
+    ) {
+      this.sessionIdsByPlacementId.set(placementId, sessionId);
+      this.activeImageSessionId = sessionId;
       this.emitStateChange();
       return { ok: true };
     }
-    this.activeSlotId = slotId;
-    this.patchCommittedImageVisibilityForSlots();
-    if (!this.workingImages.has(slotId)) {
+    this.activePlacementId = placementId;
+    this.activeImageSessionId = sessionId;
+    this.sessionIdsByPlacementId.set(placementId, sessionId);
+    this.patchCommittedImageVisibilityForPlacements();
+    if (this.workingImageDraftsBySessionId.has(sessionId)) {
       this.workingImages.set(
-        slotId,
-        createEditableWorkingImage(this.getCommittedImage(slot)),
+        placementId,
+        cloneImageState(this.workingImageDraftsBySessionId.get(sessionId)),
+      );
+    } else if (!this.workingImages.has(placementId) || previousSessionId !== sessionId) {
+      this.setWorkingImageDraft(
+        placementId,
+        sessionId,
+        createEditableWorkingImage(this.getCommittedImage(placement)),
       );
     }
-    this.upsertImageSessionDraft(slotId, this.workingImages.get(slotId) ?? null);
-    this.sessionService?.focusSession(this.getImageSessionId(slotId));
-    this.syncWorkingSlotVisibilityContext();
+    this.upsertImageSessionDraft(placementId, this.workingImages.get(placementId) ?? null, sessionId);
+    this.sessionService?.focusSession(sessionId);
+    this.syncWorkingPlacementVisibilityContext();
     this.setSessionNotice(null);
     await this.updateImagesAsync();
     return { ok: true };
   }
 
-  private async requestUpload(slotId: string) {
-    if (this.pendingUploadSlotIds.has(slotId)) {
+  private async requestUpload(input: ImagePlacementSessionInput | string) {
+    const { placementId, sessionId } = this.normalizeSessionInput(input);
+    if (this.pendingUploadPlacementIds.has(placementId)) {
       return { ok: false, reason: "upload-pending" };
     }
-    const slot = this.getSlotStates().find((item) => item.id === slotId);
-    if (!slot) return { ok: false, reason: "slot-not-found" };
-    if (!this.requestUploadCallback) {
-      return { ok: false, reason: "upload-unavailable" };
-    }
-    this.pendingUploadSlotIds.add(slotId);
-    try {
-      await this.beginSession(slotId);
-      const source = await this.requestUploadCallback(slot);
-      if (!source?.src) return { ok: false, reason: "upload-cancelled" };
-      await this.setImageSource(slotId, source);
-      await this.applyImageOperation(slotId, { type: slot.fit === "contain" ? "contain" : "cover" });
-      this.retainWorkingImageBaseline(slotId);
-      this.focusSlot(slotId);
-      return { ok: true };
-    } finally {
-      this.pendingUploadSlotIds.delete(slotId);
-    }
+    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    if (!placement) return { ok: false, reason: "placement-not-found" };
+    void sessionId;
+    return { ok: false, reason: "upload-unavailable" };
   }
 
-  private async setImageSource(slotId: string, source: ImagePlacementSource) {
+  private async setImageSource(
+    input: ImagePlacementSessionInput | string,
+    source: ImagePlacementSource,
+  ) {
+    const { placementId, sessionId } = this.normalizeSessionInput(input);
     const src = String(source.src || "").trim();
     if (!src) return { ok: false, reason: "image-source-required" };
-    const slot = this.getSlotElement(slotId);
-    if (!slot) return { ok: false, reason: "slot-not-found" };
-    if (!this.workingImages.has(slotId)) {
-      await this.beginSession(slotId);
+    const placement = this.getPlacementElement(placementId);
+    if (!placement) return { ok: false, reason: "placement-not-found" };
+    if (!this.workingImages.has(placementId)) {
+      await this.beginSession({ placementId, sessionId });
     }
-    const current = this.workingImages.get(slotId) || this.getCommittedImage(slot) || {};
-    this.workingImages.set(slotId, {
+    const current = this.workingImages.get(placementId) || this.getCommittedImage(placement) || {};
+    this.setWorkingImageDraft(placementId, sessionId, {
       ...current,
       src,
       metadata: {
@@ -1029,27 +1185,28 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       angle: current.angle ?? 0,
       opacity: current.opacity ?? 1,
     });
-    this.upsertImageSessionDraft(slotId, this.workingImages.get(slotId) ?? null);
-    this.syncWorkingSlotVisibilityContext();
+    this.upsertImageSessionDraft(placementId, this.workingImages.get(placementId) ?? null, sessionId);
+    this.syncWorkingPlacementVisibilityContext();
     this.rememberSourceSizeFromMetadata(src, source.metadata);
-    if (!this.retainedWorkingImageBaselines.has(slotId)) {
-      this.retainWorkingImageBaseline(slotId);
+    if (!this.retainedWorkingImageBaselines.has(placementId)) {
+      this.retainWorkingImageBaseline(placementId);
     }
     await this.updateImagesAsync();
     return { ok: true };
   }
 
   private async setImageTransform(
-    slotId: string,
+    input: ImagePlacementSessionInput | string,
     updates: ImagePlacementTransformUpdates,
     options: { skipRender?: boolean } = {},
   ) {
-    const slot = this.getSlotElement(slotId);
-    if (!slot) return { ok: false, reason: "slot-not-found" };
-    if (!this.workingImages.has(slotId)) {
-      await this.beginSession(slotId);
+    const { placementId, sessionId } = this.normalizeSessionInput(input);
+    const placement = this.getPlacementElement(placementId);
+    if (!placement) return { ok: false, reason: "placement-not-found" };
+    if (!this.workingImages.has(placementId)) {
+      await this.beginSession({ placementId, sessionId });
     }
-    const current = this.workingImages.get(slotId) || this.getCommittedImage(slot) || {};
+    const current = this.workingImages.get(placementId) || this.getCommittedImage(placement) || {};
     const next: ImagePlacementImageState = { ...current };
     if (Number.isFinite(updates.left as number)) {
       next.left = clampNormalized(Number(updates.left));
@@ -1070,9 +1227,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ...(next.metadata ?? {}),
       transform: resolveImageTransformSnapshot(next),
     };
-    this.workingImages.set(slotId, next);
-    this.upsertImageSessionDraft(slotId, next);
-    this.syncWorkingSlotVisibilityContext();
+    this.setWorkingImageDraft(placementId, sessionId, next);
+    this.upsertImageSessionDraft(placementId, next, sessionId);
+    this.syncWorkingPlacementVisibilityContext();
     if (!options.skipRender) {
       this.updateImages();
     }
@@ -1080,68 +1237,84 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return { ok: true };
   }
 
-  private async applyImageOperation(slotId: string, operation: ImageOperation) {
-    const slot = this.getSlotStates().find((item) => item.id === slotId);
-    const image = slot?.image;
-    if (!slot) return { ok: false, reason: "slot-not-found" };
+  private async applyImageOperation(
+    input: ImagePlacementSessionInput | string,
+    operation: ImageOperation,
+  ) {
+    const { placementId, sessionId } = this.normalizeSessionInput(input);
+    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    const image = placement?.image;
+    if (!placement) return { ok: false, reason: "placement-not-found" };
     if (!image?.src) return { ok: false, reason: "image-missing" };
     const source = await this.ensureSourceSize(image.src);
     if (!source) return { ok: false, reason: "image-size-unavailable" };
     const area = resolveImageOperationArea({
-      frame: slot.frame,
-      viewport: slot.frame,
+      frame: placement.frame,
+      viewport: placement.frame,
       area: "area" in operation ? operation.area : undefined,
     });
     const updates = computeImageOperationUpdates({
-      frame: slot.frame,
+      frame: placement.frame,
       source,
       operation,
       area,
     });
-    return await this.setImageTransform(slotId, updates);
+    return await this.setImageTransform({ placementId, sessionId }, updates);
   }
 
-  private async clearImage(slotId: string) {
-    const slot = this.getSlotElement(slotId);
-    if (!slot) return { ok: false, reason: "slot-not-found" };
-    this.workingImages.set(slotId, null);
-    this.upsertImageSessionDraft(slotId, null);
-    this.syncWorkingSlotVisibilityContext();
+  private async clearImage(input: ImagePlacementSessionInput | string) {
+    const { placementId, sessionId } = this.normalizeSessionInput(input);
+    const placement = this.getPlacementElement(placementId);
+    if (!placement) return { ok: false, reason: "placement-not-found" };
+    this.setWorkingImageDraft(placementId, sessionId, null);
+    this.upsertImageSessionDraft(placementId, null, sessionId);
+    this.syncWorkingPlacementVisibilityContext();
     this.updateImages();
     this.emitStateChange();
     return { ok: true };
   }
 
-  private resetSession(slotId?: string) {
-    this.clearPendingCanvasSession(slotId);
-    this.resolveSessionTargetIds(slotId).forEach((id) => {
-      void this.sessionService?.cancelSession(this.getImageSessionId(id), {
-        slotId: id,
+  private resetSession(input?: ImagePlacementSessionInput | string) {
+    const { placementId, sessionId } = this.getActiveSessionInput(input);
+    this.clearPendingCanvasSession(placementId);
+    this.resolveSessionTargetIds(placementId).forEach((id) => {
+      const targetSessionId = id === placementId
+        ? sessionId
+        : this.sessionIdsByPlacementId.get(id) || this.getFallbackImageSessionId(id);
+      void this.sessionService?.cancelSession(targetSessionId, {
+        placementId: id,
       });
+      this.sessionIdsByPlacementId.delete(id);
+      this.workingImageDraftsBySessionId.delete(targetSessionId);
     });
-    if (slotId) {
-      this.restoreOrDeleteWorkingImage(slotId);
-      if (this.activeSlotId === slotId) this.activeSlotId = null;
+    if (placementId) {
+      this.restoreOrDeleteWorkingImage(placementId);
+      if (this.activePlacementId === placementId) {
+        this.activePlacementId = null;
+        this.activeImageSessionId = null;
+      }
     } else {
       Array.from(this.workingImages.keys()).forEach((id) =>
         this.restoreOrDeleteWorkingImage(id),
       );
-      this.activeSlotId = null;
+      this.activePlacementId = null;
+      this.activeImageSessionId = null;
     }
-    this.syncWorkingSlotVisibilityContext();
+    this.syncWorkingPlacementVisibilityContext();
     this.setSessionNotice(null);
     this.updateImages();
   }
 
-  private async validateSession(slotId?: string) {
+  private async validateSession(input?: ImagePlacementSessionInput | string) {
+    const { placementId } = this.getActiveSessionInput(input);
     const policy = this.getPlacementPolicy();
-    const targetIds = this.resolveSessionTargetIds(slotId);
+    const targetIds = this.resolveSessionTargetIds(placementId);
     await this.syncWorkingImageTransformsFromCanvas(targetIds);
     const targetIdSet = new Set(targetIds);
-    const slots = this.getSlotStates().filter((slot) => targetIdSet.has(slot.id));
-    const missing = slots.filter((slot) => !slot.image?.src);
+    const placements = this.getPlacementStates().filter((placement) => targetIdSet.has(placement.id));
+    const missing = placements.filter((placement) => !placement.image?.src);
     if (missing.length) {
-      const notice = this.createNotice("image-missing", missing.map((slot) => slot.id), {
+      const notice = this.createNotice("image-missing", missing.map((placement) => placement.id), {
         level: "error",
         policy,
       });
@@ -1155,13 +1328,13 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     }
 
     const outside: string[] = [];
-    for (const slot of slots) {
-      const image = slot.image;
+    for (const placement of placements) {
+      const image = placement.image;
       if (!image?.src) continue;
       const source = await this.ensureSourceSize(image.src);
       if (!source) continue;
       const result = validateImagePlacement({
-        frame: slot.frame,
+        frame: placement.frame,
         source,
         placement: {
           left: image.left ?? 0.5,
@@ -1170,7 +1343,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           angle: image.angle ?? 0,
         },
       });
-      if (!result.ok) outside.push(slot.id);
+      if (!result.ok) outside.push(placement.id);
     }
     if (outside.length) {
       const notice = this.createNotice("image-outside-frame", outside, {
@@ -1187,18 +1360,25 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return { ok: true as const };
   }
 
-  private async completeSession(slotId?: string) {
-    const validation = await this.validateSession(slotId);
-    if ("ok" in validation && validation.ok === true) {
-      const targetIds = this.resolveSessionTargetIds(slotId);
+  private async completeSession(input?: ImagePlacementSessionInput | string) {
+    const { placementId, sessionId } = this.getActiveSessionInput(input);
+    const targetIds = this.resolveSessionTargetIds(placementId);
+    if (
+      targetIds.length > 0 &&
+      targetIds.every((id) => this.workingImages.has(id) && !this.workingImages.get(id)?.src)
+    ) {
       const commitResult = await this.commitWorkingImagesAsCropped(targetIds);
       if (!commitResult.ok) return commitResult;
-      if (!slotId || this.activeSlotId === slotId) this.activeSlotId = null;
-      targetIds.forEach((id) => {
-        void this.sessionService?.commitSession(this.getImageSessionId(id));
-      });
-      this.sessionService?.focusSession(null);
-      this.syncWorkingSlotVisibilityContext();
+      await this.finishCommittedSessions(placementId, sessionId, targetIds);
+      await this.updateImagesAsync();
+      this.emitStateChange();
+      return { ok: true };
+    }
+    const validation = await this.validateSession({ placementId, sessionId });
+    if ("ok" in validation && validation.ok === true) {
+      const commitResult = await this.commitWorkingImagesAsCropped(targetIds);
+      if (!commitResult.ok) return commitResult;
+      await this.finishCommittedSessions(placementId, sessionId, targetIds);
       await this.updateImagesAsync();
       this.emitStateChange();
       return { ok: true };
@@ -1206,49 +1386,73 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return validation;
   }
 
-  private resolveSessionTargetIds(slotId?: string): string[] {
-    if (slotId) return [slotId];
-    if (this.activeSlotId && this.workingImages.has(this.activeSlotId)) {
-      return [this.activeSlotId];
+  private async finishCommittedSessions(
+    placementId: string,
+    sessionId: string,
+    targetIds: readonly string[],
+  ): Promise<void> {
+    if (!placementId || this.activePlacementId === placementId) {
+      this.activePlacementId = null;
+      this.activeImageSessionId = null;
+    }
+    await Promise.all(targetIds.map(async (id) => {
+      const targetSessionId = id === placementId
+        ? sessionId
+        : this.sessionIdsByPlacementId.get(id) || this.getFallbackImageSessionId(id);
+      await this.sessionService?.commitSession(targetSessionId);
+      this.sessionIdsByPlacementId.delete(id);
+      this.workingImageDraftsBySessionId.delete(targetSessionId);
+    }));
+    this.sessionService?.focusSession(null);
+    this.syncWorkingPlacementVisibilityContext();
+  }
+
+  private resolveSessionTargetIds(placementId?: string): string[] {
+    if (placementId) return [placementId];
+    if (this.activePlacementId && this.workingImages.has(this.activePlacementId)) {
+      return [this.activePlacementId];
     }
     return Array.from(this.workingImages.keys());
   }
 
-  private async commitWorkingImagesAsCropped(slotIds: string[]) {
+  private async commitWorkingImagesAsCropped(placementIds: string[]) {
     if (!this.exportService) {
       return { ok: false, reason: "scene-export-unavailable" };
     }
 
     await this.updateImagesAsync();
 
-    for (const slotId of slotIds) {
-      if (!this.workingImages.has(slotId)) continue;
-      const slot = this.getSlotStates().find((item) => item.id === slotId);
-      if (!slot) return { ok: false, reason: "slot-not-found" };
-      const image = this.workingImages.get(slotId);
+    for (const placementId of placementIds) {
+      if (!this.workingImages.has(placementId)) continue;
+      const placement = this.getPlacementStates().find((item) => item.id === placementId);
+      if (!placement) return { ok: false, reason: "placement-not-found" };
+      const image = this.workingImages.get(placementId);
       if (!image?.src) {
-        this.commitSlotImage(slotId, null);
+        this.commitPlacementImage(placementId, null);
         continue;
       }
 
       let croppedImage: ImageExportPlacementImageResult;
       try {
-        croppedImage = await this.exportCroppedSlotImage(slot);
+        croppedImage = await this.exportCroppedPlacementImage(placement);
       } catch {
         return { ok: false, reason: "image-crop-export-failed" };
       }
 
       const croppedSrc = croppedImage.url || image.src;
       const sourceSrc = readMetadataSourceSrc(image.metadata) || image.src;
+      const committedSourceSrc = isTemporaryImageSource(sourceSrc) ? "" : sourceSrc;
       const sourceTransform = resolveImageTransformSnapshot(image);
-      const sourceMetadata = isRecord(image.metadata?.source)
+      const rawSourceMetadata = isRecord(image.metadata?.source)
         ? image.metadata.source
         : {};
+      const sourceMetadata = { ...rawSourceMetadata };
+      delete sourceMetadata.src;
       this.sourceSizeCache.rememberSourceSize(croppedSrc, {
         width: croppedImage.width,
         height: croppedImage.height,
       });
-      this.commitSlotImage(slotId, {
+      this.commitPlacementImage(placementId, {
         ...image,
         src: croppedSrc,
         left: 0.5,
@@ -1259,7 +1463,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           ...stripDerivedImageMetadata(image.metadata),
           source: {
             ...sourceMetadata,
-            src: sourceSrc,
+            ...(committedSourceSrc ? { src: committedSourceSrc } : {}),
           },
           transform: sourceTransform,
           derived: {
@@ -1277,18 +1481,18 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return { ok: true };
   }
 
-  private async exportCroppedSlotImage(
-    slot: ImagePlacementSlotState,
+  private async exportCroppedPlacementImage(
+    placement: ImagePlacementState,
   ): Promise<ImageExportPlacementImageResult> {
     if (!this.exportService) {
       throw new Error("SceneExportService not initialized");
     }
     const result = await this.exportService.exportImage({
-      crop: { type: "sceneRect", rect: slot.frame },
+      crop: { type: "sceneRect", rect: placement.frame },
       format: "png",
       includeHidden: true,
       multiplier: 2,
-      sourceElementIds: [this.getWorkingImageNodeId(slot.id)],
+      sourceElementIds: [this.getWorkingImageNodeId(placement.id)],
       sourceLayerIds: [`image.session.image`],
     });
     return {
@@ -1297,32 +1501,41 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       height: result.height,
       multiplier: result.multiplier,
       format: result.format,
-      slotIds: [slot.id],
+      placementIds: [placement.id],
     };
   }
 
-  private commitSlotImage(
-    slotId: string,
+  private commitPlacementImage(
+    placementId: string,
     image: ImagePlacementImageState | null,
   ) {
-    const slot = this.getSlotElement(slotId);
-    if (this.renderIntentService && slot) {
-      const data = isRecord(slot.data) ? slot.data : {};
-      const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
-      const frame = getSlotFrame(slot);
+    const placementState = this.getPlacementElement(placementId)
+      ? this.getPlacementState(this.getPlacementElement(placementId)!)
+      : null;
+    const commitTarget =
+      placementState?.commitTarget ?? { type: "document-object" as const, objectId: placementId };
+    if (commitTarget.type === "configurable-visual") {
+      this.commitConfigurableVisualImage(commitTarget, image);
+    }
+
+    const placement = this.getPlacementElement(placementId);
+    if (this.renderIntentService && placement) {
+      const data = isRecord(placement.data) ? placement.data : {};
+      const placementData = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+      const frame = getPlacementFrame(placement);
       const committedTransform = image
         ? createCommittedImagePlacementTransform(frame, image.metadata)
         : undefined;
       this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
-        id: slotId,
+        id: commitTarget.type === "document-object" ? commitTarget.objectId : placementId,
         subject: {
           kind: "object",
           surfaceId:
-            typeof slot.metadata?.documentSurfaceId === "string"
-              ? slot.metadata.documentSurfaceId
+            typeof placement.metadata?.documentSurfaceId === "string"
+              ? placement.metadata.documentSurfaceId
               : "legacy",
-          layerId: slot.layerId,
-          objectId: slotId,
+          layerId: placement.layerId,
+          objectId: commitTarget.type === "document-object" ? commitTarget.objectId : placementId,
           objectType: "image",
         },
         visual: {
@@ -1344,15 +1557,15 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           ...(committedTransform ? { transform: committedTransform } : {}),
         },
         ordering: {
-          layerId: slot.layerId,
-          objectOrder: slot.order,
+          layerId: placement.layerId,
+          objectOrder: placement.order,
         },
         export: {
-          visibility: this.getCommittedImageVisibility(slotId),
+          visibility: this.getCommittedImageVisibility(placementId),
         },
         interaction: {
           imagePlacement: {
-            ...placement,
+            ...placementData,
             image: image ?? undefined,
           },
           ...(image
@@ -1365,7 +1578,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ...(image
           ? {
               data: {
-                slotId,
+                placementId,
                 source: "committed",
                 type: "image-placement-image",
               },
@@ -1374,11 +1587,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       });
     }
     if (this.sceneService) {
-      const sceneSlot = this.sceneService.getElement(slotId);
-      if (sceneSlot) {
-        const data = isRecord(sceneSlot.data) ? sceneSlot.data : {};
+      const scenePlacement = this.sceneService.getElement(placementId);
+      if (scenePlacement) {
+        const data = isRecord(scenePlacement.data) ? scenePlacement.data : {};
         const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
-        this.sceneService.updateElement(slotId, {
+        this.sceneService.updateElement(placementId, {
           data: {
             ...data,
             imagePlacement: {
@@ -1389,40 +1602,75 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         });
       }
     }
-    this.recordImageSessionCommitArtifacts(slotId, image);
-    this.workingImages.delete(slotId);
-    this.retainedWorkingImageBaselines.delete(slotId);
-    this.syncWorkingSlotVisibilityContext();
+    this.recordImageSessionCommitArtifacts(placementId, image);
+    this.workingImages.delete(placementId);
+    this.workingImageDraftsBySessionId.delete(
+      this.sessionIdsByPlacementId.get(placementId) ||
+        this.getFallbackImageSessionId(placementId),
+    );
+    this.retainedWorkingImageBaselines.delete(placementId);
+    this.syncWorkingPlacementVisibilityContext();
   }
 
-  private retainWorkingImageBaseline(slotId: string) {
-    if (!this.workingImages.has(slotId)) return;
+  private commitConfigurableVisualImage(
+    target: Extract<ImagePlacementCommitTarget, { type: "configurable-visual" }>,
+    image: ImagePlacementImageState | null,
+  ) {
+    const configurableVisual = this.getConfigurableVisualFacade();
+    if (!configurableVisual) return;
+    if (!image?.src) {
+      configurableVisual.clearCommittedVisual({
+        ...(target.configKey ? { configKey: target.configKey } : {}),
+        key: target.key,
+      });
+      return;
+    }
+    configurableVisual.setCommittedVisual({
+      ...(target.configKey ? { configKey: target.configKey } : {}),
+      key: target.key,
+      src: image.src,
+      opacity: image.opacity,
+      metadata: image.metadata,
+    });
+  }
+
+  private getConfigurableVisualFacade(): ConfigurableVisualCapabilityApi | null {
+    const registry = this.context?.services.get<CapabilityRegistryService>(
+      CAPABILITY_REGISTRY_SERVICE,
+    );
+    return registry
+      ?.getFacade<ConfigurableVisualCapabilityApi>(CONFIGURABLE_VISUAL_CAPABILITY_ID) ??
+      null;
+  }
+
+  private retainWorkingImageBaseline(placementId: string) {
+    if (!this.workingImages.has(placementId)) return;
     this.retainedWorkingImageBaselines.set(
-      slotId,
-      cloneImageState(this.workingImages.get(slotId)),
+      placementId,
+      cloneImageState(this.workingImages.get(placementId)),
     );
   }
 
-  private restoreOrDeleteWorkingImage(slotId: string) {
-    if (!this.retainedWorkingImageBaselines.has(slotId)) {
-      this.workingImages.delete(slotId);
+  private restoreOrDeleteWorkingImage(placementId: string) {
+    if (!this.retainedWorkingImageBaselines.has(placementId)) {
+      this.workingImages.delete(placementId);
       return;
     }
-    const baseline = cloneImageState(this.retainedWorkingImageBaselines.get(slotId));
+    const baseline = cloneImageState(this.retainedWorkingImageBaselines.get(placementId));
     if (baseline) {
-      this.workingImages.set(slotId, baseline);
+      this.workingImages.set(placementId, baseline);
     } else {
-      this.workingImages.delete(slotId);
+      this.workingImages.delete(placementId);
     }
   }
 
-  private getCommittedImageVisibility(slotId: string): VisibilityExpr {
-    const slot = this.getSlotElement(slotId);
-    const slotState = slot ? this.getSlotState(slot) : null;
-    const surfaceId = slotState ? this.resolveSlotSurfaceId(slotState) : null;
+  private getCommittedImageVisibility(placementId: string): VisibilityExpr {
+    const placement = this.getPlacementElement(placementId);
+    const placementState = placement ? this.getPlacementState(placement) : null;
+    const surfaceId = placementState ? this.resolvePlacementSurfaceId(placementState) : null;
     const scope = {
       ...(surfaceId && surfaceId !== "legacy" ? { surfaceId } : {}),
-      subjectId: slotId,
+      subjectId: placementId,
       channel: IMAGE_SESSION_CHANNEL,
     };
     return {
@@ -1431,40 +1679,40 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
   }
 
-  private patchCommittedImageVisibilityForSlots(slotIds?: string[]) {
+  private patchCommittedImageVisibilityForPlacements(placementIds?: string[]) {
     const targetIds =
-      slotIds ??
-      this.getCommittedSlotStates()
-        .filter((slot) => slot.hasImage)
-        .map((slot) => slot.id);
-    targetIds.forEach((slotId) => this.patchCommittedImageVisibility(slotId));
+      placementIds ??
+      this.getCommittedPlacementStates()
+        .filter((placement) => placement.hasImage)
+        .map((placement) => placement.id);
+    targetIds.forEach((placementId) => this.patchCommittedImageVisibility(placementId));
   }
 
-  private patchCommittedImageVisibility(slotId: string) {
-    const slot = this.getSlotElement(slotId);
-    if (!slot || !this.renderIntentService) return;
-    const data = isRecord(slot.data) ? slot.data : {};
-    const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
-    const image = this.getCommittedImage(slot);
-    const frame = getSlotFrame(slot);
+  private patchCommittedImageVisibility(placementId: string) {
+    const placement = this.getPlacementElement(placementId);
+    if (!placement || !this.renderIntentService) return;
+    const data = isRecord(placement.data) ? placement.data : {};
+    const placementData = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+    const image = this.getCommittedImage(placement);
+    const frame = getPlacementFrame(placement);
     const committedTransform = image
       ? createCommittedImagePlacementTransform(frame, image.metadata)
       : undefined;
     this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
-      id: slotId,
+      id: placementId,
       subject: {
         kind: "object",
         surfaceId:
-          typeof slot.metadata?.documentSurfaceId === "string"
-            ? slot.metadata.documentSurfaceId
+          typeof placement.metadata?.documentSurfaceId === "string"
+            ? placement.metadata.documentSurfaceId
             : "legacy",
-        layerId: slot.layerId,
-        objectId: slotId,
+        layerId: placement.layerId,
+        objectId: placementId,
         objectType: "image",
       },
       ordering: {
-        layerId: slot.layerId,
-        objectOrder: slot.order,
+        layerId: placement.layerId,
+        objectOrder: placement.order,
       },
       placement: {
         frame: {
@@ -1476,7 +1724,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ...(committedTransform ? { transform: committedTransform } : {}),
       },
       export: {
-        visibility: this.getCommittedImageVisibility(slotId),
+        visibility: this.getCommittedImageVisibility(placementId),
       },
       visual: image
         ? {
@@ -1489,7 +1737,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         : undefined,
       interaction: {
         imagePlacement: {
-          ...placement,
+          ...placementData,
           image: image ?? undefined,
         },
         ...(image
@@ -1502,7 +1750,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ...(image
         ? {
             data: {
-              slotId,
+              placementId,
               source: "committed",
               type: "image-placement-image",
             },
@@ -1511,60 +1759,60 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     });
   }
 
-  private getWorkingSlotVisibilityContextKey(slotId: string): string {
-    return `${this.capabilityId}.${IMAGE_ACTIVE_SLOT_CONTEXT_PREFIX}.${slotId}`;
+  private getWorkingPlacementVisibilityContextKey(placementId: string): string {
+    return `${this.capabilityId}.${IMAGE_ACTIVE_PLACEMENT_CONTEXT_PREFIX}.${placementId}`;
   }
 
-  private syncWorkingSlotVisibilityContext() {
+  private syncWorkingPlacementVisibilityContext() {
     if (!this.renderIntentService) return;
     const nextKeys = new Set<string>();
-    this.workingImages.forEach((_image, slotId) => {
-      nextKeys.add(this.getWorkingSlotVisibilityContextKey(slotId));
+    this.workingImages.forEach((_image, placementId) => {
+      nextKeys.add(this.getWorkingPlacementVisibilityContextKey(placementId));
     });
 
     nextKeys.forEach((key) => {
       this.renderIntentService?.setVisibilityContextValue(key, true);
     });
-    this.visibleWorkingSlotContextKeys.forEach((key) => {
+    this.visibleWorkingPlacementContextKeys.forEach((key) => {
       if (nextKeys.has(key)) return;
       this.renderIntentService?.deleteVisibilityContextValue(key);
     });
-    this.visibleWorkingSlotContextKeys = nextKeys;
+    this.visibleWorkingPlacementContextKeys = nextKeys;
   }
 
-  private clearWorkingSlotVisibilityContext() {
-    this.visibleWorkingSlotContextKeys.forEach((key) => {
+  private clearWorkingPlacementVisibilityContext() {
+    this.visibleWorkingPlacementContextKeys.forEach((key) => {
       this.renderIntentService?.deleteVisibilityContextValue(key);
     });
-    this.visibleWorkingSlotContextKeys.clear();
+    this.visibleWorkingPlacementContextKeys.clear();
   }
 
-  private focusSlot(
-    slotId: string | null,
+  private focusPlacement(
+    placementId: string | null,
     options: { syncCanvasSelection?: boolean; skipRender?: boolean } = {},
   ) {
-    const slot = slotId ? this.getSlotElement(slotId) : undefined;
-    if (slotId && !slot) {
-      return { ok: false, reason: "slot-not-found" as const };
+    const placement = placementId ? this.getPlacementElement(placementId) : undefined;
+    if (placementId && !placement) {
+      return { ok: false, reason: "placement-not-found" as const };
     }
-    this.activeSlotId = slotId;
-    this.syncWorkingSlotVisibilityContext();
+    this.activePlacementId = placementId;
+    this.syncWorkingPlacementVisibilityContext();
     if (options.syncCanvasSelection !== false && this.canvasService) {
-      if (!slotId) {
+      if (!placementId) {
         this.canvasService.discardActiveObject();
       } else {
         const obj =
-          this.canvasService.getObject(this.getWorkingImageNodeId(slotId), `image.session.image`) ||
-          this.canvasService.getObject(`image:${slotId}`, slot?.layerId) ||
-          this.canvasService.getObject(`image:${slotId}`, this.overlayLayerId) ||
-          this.canvasService.getObject(`image:${slotId}`, this.imageLayerId) ||
-          this.canvasService.getObject(`upload:${slotId}`, this.overlayLayerId);
+          this.canvasService.getObject(this.getWorkingImageNodeId(placementId), `image.session.image`) ||
+          this.canvasService.getObject(`image:${placementId}`, placement?.layerId) ||
+          this.canvasService.getObject(`image:${placementId}`, this.overlayLayerId) ||
+          this.canvasService.getObject(`image:${placementId}`, this.imageLayerId) ||
+          this.canvasService.getObject(`upload:${placementId}`, this.overlayLayerId);
         if (obj) this.canvasService.setActiveObject(obj as any);
       }
     }
     if (!options.skipRender) this.updateImages();
     this.emitStateChange();
-    return { ok: true, id: slotId };
+    return { ok: true, id: placementId };
   }
 
   private async exportPlacementImage(
@@ -1574,24 +1822,24 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       throw new Error("SceneExportService not initialized");
     }
     await this.updateImagesAsync();
-    const requestedSlotIds = options.slotIds?.length
-      ? new Set(options.slotIds)
+    const requestedPlacementIds = options.placementIds?.length
+      ? new Set(options.placementIds)
       : null;
-    const slots = this.getSlotStates().filter((slot) => {
-      if (requestedSlotIds) return requestedSlotIds.has(slot.id);
-      return slot.hasImage;
+    const placements = this.getPlacementStates().filter((placement) => {
+      if (requestedPlacementIds) return requestedPlacementIds.has(placement.id);
+      return placement.hasImage;
     });
-    const slotIds = slots.map((slot) => slot.id);
-    if (!slotIds.length) throw new Error("image-ids-required");
+    const placementIds = placements.map((placement) => placement.id);
+    if (!placementIds.length) throw new Error("image-ids-required");
     const sourceLayerIds = Array.from(
-      new Set(slots.map((slot) => slot.layerId || this.imageLayerId)),
+      new Set(placements.map((placement) => placement.layerId || this.imageLayerId)),
     );
     const result = await this.exportService.exportImage({
       crop: { type: "sceneRect", rect: this.getSurfaceFrameRect() },
       format: options.format === "jpeg" ? "jpeg" : "png",
       includeHidden: true,
       multiplier: Math.max(1, options.multiplier ?? 2),
-      sourceElementIds: slotIds.map((id) => `image:${id}`),
+      sourceElementIds: placementIds.map((id) => `image:${id}`),
       sourceLayerIds: sourceLayerIds.length ? sourceLayerIds : [this.imageLayerId],
     });
     return {
@@ -1600,13 +1848,13 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       height: result.height,
       multiplier: result.multiplier,
       format: result.format,
-      slotIds,
+      placementIds,
     };
   }
 
   private createNotice(
     code: ImagePlacementSessionNotice["code"],
-    slotIds: string[],
+    placementIds: string[],
     options: {
       level?: ImagePlacementSessionNotice["level"];
       policy?: ImagePlacementPolicy;
@@ -1618,7 +1866,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       code,
       level: options.level || (policy === "strict" ? "error" : "warning"),
       message: code,
-      slotIds,
+      placementIds,
       policy,
     };
   }
@@ -1638,88 +1886,155 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const selected = Array.isArray(event?.selected)
       ? event.selected[0]
       : event?.target;
+    this.logCanvasSessionEvent("selection", {
+      target: this.getCanvasTargetDebugData(selected),
+    });
     this.beginSessionFromCanvasTarget(selected);
   };
 
   private onMouseDown = (event: any) => {
+    this.logCanvasSessionEvent("mouse-down", {
+      target: this.getCanvasTargetDebugData(event?.target),
+    });
     this.beginSessionFromCanvasTarget(event?.target);
   };
 
-  private beginSessionFromCanvasTarget(target: any) {
-    const selected = target;
-    const slotId = selected?.data?.slotId;
-    if (typeof slotId !== "string") return;
-    this.activeSlotId = slotId;
-    if (this.workingImages.has(slotId)) {
-      this.emitStateChange();
-      this.emitCanvasSessionOpen(slotId, selected);
-      return;
-    }
-    this.scheduleCanvasSession(slotId, selected);
+  private logCanvasSessionEvent(event: string, detail: Record<string, unknown>) {
+    console.debug?.("[pooder:image-placement:session]", event, detail);
   }
 
-  private scheduleCanvasSession(slotId: string, target?: any) {
-    this.pendingCanvasSessionSlotId = slotId;
+  private getCanvasTargetDebugData(target: any): Record<string, unknown> {
+    const data = isRecord(target?.data) ? target.data : {};
+    const session = isRecord(data.session) ? data.session : {};
+    const payload = isRecord(session.payload) ? session.payload : {};
+    const imagePlacement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+    return {
+      dataId: data.id,
+      dataType: data.type,
+      evented: target?.evented,
+      imagePlacementId: imagePlacement.placementId,
+      layerId: data.layerId,
+      placementId: data.placementId,
+      renderLayerId: data.renderLayerId,
+      renderNodeId: data.renderNodeId,
+      selectable: target?.selectable,
+      sessionPlacementId: payload.placementId,
+      subjectId: data.subjectId,
+    };
+  }
+
+  private getCanvasTargetPlacementId(target: any): string {
+    const data = isRecord(target?.data) ? target.data : {};
+    const session = isRecord(data.session) ? data.session : {};
+    const payload = isRecord(session.payload) ? session.payload : {};
+    const imagePlacement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+    const type = typeof data.type === "string" ? data.type.trim() : "";
+    const placementId =
+      typeof data.placementId === "string"
+        ? data.placementId
+        : typeof payload.placementId === "string"
+          ? payload.placementId
+          : typeof imagePlacement.placementId === "string"
+            ? imagePlacement.placementId
+            : type.startsWith("image-placement-") && typeof data.subjectId === "string"
+              ? data.subjectId
+              : "";
+    return placementId.trim();
+  }
+
+  private beginSessionFromCanvasTarget(target: any) {
+    const selected = target;
+    const placementId = this.getCanvasTargetPlacementId(selected);
+    if (!placementId) {
+      this.logCanvasSessionEvent("ignore-target-without-placement", {
+        target: this.getCanvasTargetDebugData(selected),
+      });
+      return;
+    }
+    this.activePlacementId = placementId;
+    this.activeImageSessionId = null;
+    this.logCanvasSessionEvent("request-open", {
+      placementId,
+      target: this.getCanvasTargetDebugData(selected),
+    });
+    this.emitStateChange();
+    this.emitCanvasSessionOpen(placementId, selected);
+  }
+
+  private scheduleCanvasSession(placementId: string, target?: any) {
+    this.pendingCanvasSessionPlacementId = placementId;
     this.pendingCanvasSessionTarget = target ?? null;
     if (this.pendingCanvasSessionTimer !== null) return;
 
     this.pendingCanvasSessionTimer = globalThis.setTimeout(() => {
-      const nextSlotId = this.pendingCanvasSessionSlotId;
+      const nextPlacementId = this.pendingCanvasSessionPlacementId;
       const nextTarget = this.pendingCanvasSessionTarget;
-      this.pendingCanvasSessionSlotId = null;
+      this.pendingCanvasSessionPlacementId = null;
       this.pendingCanvasSessionTarget = null;
       this.pendingCanvasSessionTimer = null;
 
-      if (!nextSlotId) return;
-      if (this.activeSlotId === nextSlotId && this.workingImages.has(nextSlotId)) {
+      if (!nextPlacementId) return;
+      if (this.activePlacementId === nextPlacementId && this.workingImages.has(nextPlacementId)) {
         this.emitStateChange();
-        this.emitCanvasSessionOpen(nextSlotId, nextTarget);
+        this.emitCanvasSessionOpen(nextPlacementId, nextTarget);
         return;
       }
 
-      void this.beginSession(nextSlotId).then((result) => {
+      void this.beginSession(nextPlacementId).then((result) => {
         if (result.ok) {
-          this.emitCanvasSessionOpen(nextSlotId, nextTarget);
+          this.emitCanvasSessionOpen(nextPlacementId, nextTarget);
         }
       });
     }, 0);
   }
 
-  private emitCanvasSessionOpen(slotId: string, target?: any) {
-    const slot = this.getSlotStates().find((item) => item.id === slotId);
-    if (!slot) return;
+  private emitCanvasSessionOpen(placementId: string, target?: any) {
+    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    if (!placement) {
+      this.logCanvasSessionEvent("skip-open-placement-not-found", {
+        placementId,
+        target: this.getCanvasTargetDebugData(target),
+      });
+      return;
+    }
+    this.logCanvasSessionEvent("emit-open", {
+      placementId,
+      sessionKey: placement.sessionKey,
+      surfaceId: this.resolvePlacementSurfaceId(placement),
+    });
     this.context?.eventBus.emit("image:session:open", {
-      sessionId: this.getImageSessionId(slotId),
-      slotId,
+      sessionId: placement.sessionKey,
+      sessionKey: placement.sessionKey,
+      placementId,
       source: "canvas",
       scope: {
-        surfaceId: this.resolveSlotSurfaceId(slot),
-        subjectId: slot.id,
+        surfaceId: this.resolvePlacementSurfaceId(placement),
+        subjectId: placement.id,
         channel: IMAGE_SESSION_CHANNEL,
       },
       targetData: isRecord(target?.data) ? { ...target.data } : {},
     });
   }
 
-  private clearPendingCanvasSession(slotId?: string) {
-    if (slotId && this.pendingCanvasSessionSlotId !== slotId) return;
+  private clearPendingCanvasSession(placementId?: string) {
+    if (placementId && this.pendingCanvasSessionPlacementId !== placementId) return;
     if (this.pendingCanvasSessionTimer !== null) {
       globalThis.clearTimeout(this.pendingCanvasSessionTimer);
     }
-    this.pendingCanvasSessionSlotId = null;
+    this.pendingCanvasSessionPlacementId = null;
     this.pendingCanvasSessionTarget = null;
     this.pendingCanvasSessionTimer = null;
   }
 
   private onSelectionCleared = () => {
-    const pendingSlotId = this.pendingCanvasSessionSlotId;
+    const pendingPlacementId = this.pendingCanvasSessionPlacementId;
     this.clearPendingCanvasSession();
     if (
-      pendingSlotId &&
-      this.activeSlotId === pendingSlotId &&
-      !this.workingImages.has(pendingSlotId)
+      pendingPlacementId &&
+      this.activePlacementId === pendingPlacementId &&
+      !this.workingImages.has(pendingPlacementId)
     ) {
-      this.activeSlotId = null;
+      this.activePlacementId = null;
     }
     this.endMoveSnapInteraction();
     this.emitStateChange();
@@ -1731,8 +2046,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       const target = this.getActiveImageTarget(event?.target);
       if (
         target &&
-        typeof target?.data?.slotId === "string" &&
-        target.data.slotId === this.movingSlotId
+        typeof target?.data?.placementId === "string" &&
+        target.data.placementId === this.movingPlacementId
       ) {
         this.applyMoveSnapToTarget(target);
       }
@@ -1777,7 +2092,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!target) return null;
     if (target?.data?.type !== "image-placement-image") return null;
     if (target?.data?.source !== "working") return null;
-    if (typeof target?.data?.slotId !== "string") return null;
+    if (typeof target?.data?.placementId !== "string") return null;
     return target;
   }
 
@@ -1898,7 +2213,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private endMoveSnapInteraction() {
-    this.movingSlotId = null;
+    this.movingPlacementId = null;
     this.clearSnapPreview();
   }
 
@@ -1907,12 +2222,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     y: SnapMatch | null;
   } {
     if (!this.canvasService) return { x: null, y: null };
-    const slotId = target?.data?.slotId;
-    const slot = this.getSlotStates().find((item) => item.id === slotId);
-    if (!slot) return { x: null, y: null };
+    const placementId = target?.data?.placementId;
+    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    if (!placement) return { x: null, y: null };
     const matches = this.computeMoveSnapMatches(
       this.getTargetBoundsScene(target),
-      slot.frame,
+      placement.frame,
     );
     const deltaScreenX = this.canvasService.toScreenLength(matches.x?.deltaScene ?? 0);
     const deltaScreenY = this.canvasService.toScreenLength(matches.y?.deltaScene ?? 0);
@@ -1929,16 +2244,16 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private handleCanvasObjectMoving(event: any) {
     const target = this.getActiveImageTarget(event?.target);
     if (!target || !this.canvasService) return;
-    const slotId = target.data.slotId;
-    const slot = this.getSlotStates().find((item) => item.id === slotId);
-    if (!slot) {
+    const placementId = target.data.placementId;
+    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    if (!placement) {
       this.endMoveSnapInteraction();
       return;
     }
-    this.movingSlotId = slotId;
+    this.movingPlacementId = placementId;
     const matches = this.computeMoveSnapMatches(
       this.getTargetBoundsScene(target),
-      slot.frame,
+      placement.frame,
     );
     this.updateSnapMatchState(matches.x, matches.y);
   }
@@ -1972,12 +2287,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!this.canvasService || (!this.activeSnapX && !this.activeSnapY)) {
       return;
     }
-    const guideSlotId = this.movingSlotId || this.activeSlotId;
-    const slot = guideSlotId
-      ? this.getSlotStates().find((item) => item.id === guideSlotId)
+    const guidePlacementId = this.movingPlacementId || this.activePlacementId;
+    const placement = guidePlacementId
+      ? this.getPlacementStates().find((item) => item.id === guidePlacementId)
       : null;
-    if (!slot) return;
-    const frame = slot.frame;
+    if (!placement) return;
+    const frame = placement.frame;
     const frameScreen = this.canvasService.toScreenRect(frame);
     let drew = false;
 
@@ -2009,52 +2324,52 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private onObjectModified = (event: any) => {
     const target = event?.target;
-    const slotId = this.getWorkingImageTargetSlotId(target);
-    if (!slotId) return;
-    if (this.movingSlotId === slotId) {
+    const placementId = this.getWorkingImageTargetPlacementId(target);
+    if (!placementId) return;
+    if (this.movingPlacementId === placementId) {
       this.applyMoveSnapToTarget(target);
     }
     this.endMoveSnapInteraction();
     void this.syncWorkingImageTransformFromTarget(target);
   };
 
-  private async syncWorkingImageTransformsFromCanvas(slotIds: readonly string[]) {
-    for (const slotId of slotIds) {
-      const target = this.getWorkingImageCanvasTarget(slotId);
+  private async syncWorkingImageTransformsFromCanvas(placementIds: readonly string[]) {
+    for (const placementId of placementIds) {
+      const target = this.getWorkingImageCanvasTarget(placementId);
       if (target) {
         await this.syncWorkingImageTransformFromTarget(target);
       }
     }
   }
 
-  private getWorkingImageCanvasTarget(slotId: string): any | null {
-    const normalizedSlotId = String(slotId || "").trim();
-    if (!normalizedSlotId || !this.workingImages.has(normalizedSlotId)) return null;
+  private getWorkingImageCanvasTarget(placementId: string): any | null {
+    const normalizedPlacementId = String(placementId || "").trim();
+    if (!normalizedPlacementId || !this.workingImages.has(normalizedPlacementId)) return null;
     const layerId = `image.session.image`;
     const target =
-      this.canvasService?.getObject(this.getWorkingImageNodeId(normalizedSlotId), layerId) ||
+      this.canvasService?.getObject(this.getWorkingImageNodeId(normalizedPlacementId), layerId) ||
       this.canvasService?.getActiveObject();
-    return this.getWorkingImageTargetSlotId(target) === normalizedSlotId ? target : null;
+    return this.getWorkingImageTargetPlacementId(target) === normalizedPlacementId ? target : null;
   }
 
-  private getWorkingImageTargetSlotId(target: any): string | null {
-    const slotId = target?.data?.slotId;
+  private getWorkingImageTargetPlacementId(target: any): string | null {
+    const placementId = target?.data?.placementId;
     if (
-      typeof slotId !== "string" ||
+      typeof placementId !== "string" ||
       target?.data?.type !== "image-placement-image" ||
       target?.data?.source !== "working"
     ) {
       return null;
     }
-    return slotId;
+    return placementId;
   }
 
   private async syncWorkingImageTransformFromTarget(target: any) {
-    const slotId = this.getWorkingImageTargetSlotId(target);
-    const slot = slotId
-      ? this.getSlotStates().find((item) => item.id === slotId)
+    const placementId = this.getWorkingImageTargetPlacementId(target);
+    const placement = placementId
+      ? this.getPlacementStates().find((item) => item.id === placementId)
       : null;
-    if (!slot || !this.canvasService || !slotId) return;
+    if (!placement || !this.canvasService || !placementId) return;
     const rawCenter = typeof target.getCenterPoint === "function"
       ? target.getCenterPoint()
       : { x: finiteNumber(target.left, 0), y: finiteNumber(target.top, 0) };
@@ -2066,24 +2381,24 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       width: finiteNumber(target.width, 1),
       height: finiteNumber(target.height, 1),
     };
-    const image = this.workingImages.get(slotId) || slot.image;
+    const image = this.workingImages.get(placementId) || placement.image;
     if (image?.src) {
       this.sourceSizeCache.rememberSourceSize(image.src, source);
     }
     const objectScaling = typeof target.getObjectScaling === "function"
       ? target.getObjectScaling()
       : null;
-    const coverScale = getCoverScaleFromRect(slot.frame, source);
+    const coverScale = getCoverScaleFromRect(placement.frame, source);
     const sceneScale = this.canvasService.getSceneScale();
     const objectScale = finiteNumber(
       objectScaling?.x,
       finiteNumber(target.scaleX, 1),
     ) / Math.max(0.0001, sceneScale);
     await this.setImageTransform(
-      slotId,
+      placementId,
       {
-        left: (center.x - slot.frame.left) / Math.max(1, slot.frame.width),
-        top: (center.y - slot.frame.top) / Math.max(1, slot.frame.height),
+        left: (center.x - placement.frame.left) / Math.max(1, placement.frame.width),
+        top: (center.y - placement.frame.top) / Math.max(1, placement.frame.height),
         scale: objectScale / Math.max(0.0001, coverScale),
         angle: finiteNumber(target.angle, 0),
       },
@@ -2092,22 +2407,22 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private buildWorkingImageSpecs(): RenderObjectSpec[] {
-    return this.getSlotStates()
-      .filter((slot) => this.shouldRenderWorkingImageSlot(slot.id) && slot.image?.src)
-      .map((slot) => this.buildImageSpec(slot, { committed: false }))
+    return this.getPlacementStates()
+      .filter((placement) => this.shouldRenderWorkingImagePlacement(placement.id) && placement.image?.src)
+      .map((placement) => this.buildImageSpec(placement, { committed: false }))
       .filter((spec): spec is RenderObjectSpec => Boolean(spec));
   }
 
   private buildSessionProjectionSpecs(
-    placement: ImageSessionProjectionPlacement,
+    projectionPlacement: ImageSessionProjectionPlacement,
   ) {
-    return this.getSlotStates()
-      .filter((slot) => this.shouldRenderWorkingSlot(slot.id))
-      .flatMap((slot) =>
-        (slot.sessionProjections ?? [])
-          .filter((projection) => projection.placement === placement)
+    return this.getPlacementStates()
+      .filter((placement) => this.shouldRenderWorkingPlacement(placement.id))
+      .flatMap((placement) =>
+        (placement.sessionProjections ?? [])
+          .filter((projection) => projection.placement === projectionPlacement)
           .map((projection) => ({
-            id: `${slot.id}.${projection.id}`,
+            id: `${placement.id}.${projection.id}`,
             sourceLayerIds: projection.sourceLayerIds,
             sourceSubjectIds: projection.sourceElementIds,
             opacity: projection.opacity,
@@ -2117,45 +2432,45 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       );
   }
 
-  private shouldRenderWorkingSlot(slotId: string): boolean {
-    return this.workingImages.has(slotId);
+  private shouldRenderWorkingPlacement(placementId: string): boolean {
+    return this.workingImages.has(placementId);
   }
 
-  private shouldRenderWorkingImageSlot(slotId: string): boolean {
-    return this.workingImages.has(slotId);
+  private shouldRenderWorkingImagePlacement(placementId: string): boolean {
+    return this.workingImages.has(placementId);
   }
 
   private buildImageSpec(
-    slot: ImagePlacementSlotState,
+    placement: ImagePlacementState,
     options: { committed: boolean },
   ): RenderObjectSpec | null {
-    const image = slot.image;
+    const image = placement.image;
     if (!image?.src) return null;
     const source = this.sourceSizeCache.getSourceSize(image.src) || {
-      width: slot.frame.width,
-      height: slot.frame.height,
+      width: placement.frame.width,
+      height: placement.frame.height,
     };
     const scale =
-      getCoverScaleFromRect(slot.frame, source) * Math.max(0.05, image.scale ?? 1);
+      getCoverScaleFromRect(placement.frame, source) * Math.max(0.05, image.scale ?? 1);
     return {
-      id: options.committed ? `image:${slot.id}` : this.getWorkingImageNodeId(slot.id),
-      subjectId: slot.id,
+      id: options.committed ? `image:${placement.id}` : this.getWorkingImageNodeId(placement.id),
+      subjectId: placement.id,
       type: "image",
       src: image.src,
       space: "scene",
       data: {
-        id: slot.id,
-        layerId: slot.layerId || this.imageLayerId,
+        id: placement.id,
+        layerId: placement.layerId || this.imageLayerId,
         type: "image-placement-image",
-        slotId: slot.id,
+        placementId: placement.id,
         source: options.committed ? "committed" : "working",
-        session: this.createImagePlacementSessionData(slot, {
+        session: this.createImagePlacementSessionData(placement, {
           source: options.committed ? "image-placement-committed" : "image-placement-working",
         }),
       },
       props: {
-        left: slot.frame.left + (image.left ?? 0.5) * slot.frame.width,
-        top: slot.frame.top + (image.top ?? 0.5) * slot.frame.height,
+        left: placement.frame.left + (image.left ?? 0.5) * placement.frame.width,
+        top: placement.frame.top + (image.top ?? 0.5) * placement.frame.height,
         originX: "center",
         originY: "center",
         scaleX: scale,
@@ -2236,31 +2551,31 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private buildUploadSpecs(): RenderObjectSpec[] {
-    return this.getSlotStates()
-      .filter((slot) => !slot.image?.src)
-      .flatMap((slot): RenderObjectSpec[] => {
-        const style = slot.placeholderStyle ?? {};
+    return this.getPlacementStates()
+      .filter((placement) => !placement.image?.src)
+      .flatMap((placement): RenderObjectSpec[] => {
+        const style = placement.placeholderStyle ?? {};
         const label = style.label ?? "+";
         const specs: RenderObjectSpec[] = [
           {
-            id: `upload:${slot.id}`,
-            subjectId: slot.id,
+            id: `upload:${placement.id}`,
+            subjectId: placement.id,
             type: "rect",
             space: "scene",
             data: {
-              id: slot.id,
+              id: placement.id,
               layerId: this.imageLayerId,
               type: "image-placement-upload",
-              slotId: slot.id,
-              session: this.createImagePlacementSessionData(slot, {
+              placementId: placement.id,
+              session: this.createImagePlacementSessionData(placement, {
                 source: "image-placement-upload",
               }),
             },
             props: {
-              left: slot.frame.left,
-              top: slot.frame.top,
-              width: slot.frame.width,
-              height: slot.frame.height,
+              left: placement.frame.left,
+              top: placement.frame.top,
+              width: placement.frame.width,
+              height: placement.frame.height,
               originX: "left",
               originY: "top",
               fill: style.fill ?? "rgba(22, 119, 255, 0.08)",
@@ -2282,26 +2597,26 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ];
         if (label) {
           specs.push({
-            id: `upload-label:${slot.id}`,
-            subjectId: slot.id,
+            id: `upload-label:${placement.id}`,
+            subjectId: placement.id,
             type: "text",
             space: "scene",
             data: {
               type: "image-placement-upload-label",
-              slotId: slot.id,
-              session: this.createImagePlacementSessionData(slot, {
+              placementId: placement.id,
+              session: this.createImagePlacementSessionData(placement, {
                 source: "image-placement-upload",
               }),
             },
             props: {
-              left: slot.frame.left + slot.frame.width / 2,
-              top: slot.frame.top + slot.frame.height / 2,
+              left: placement.frame.left + placement.frame.width / 2,
+              top: placement.frame.top + placement.frame.height / 2,
               originX: "center",
               originY: "center",
               text: label,
               fontSize:
                 style.labelFontSize ??
-                Math.max(18, Math.min(slot.frame.width, slot.frame.height) * 0.16),
+                Math.max(18, Math.min(placement.frame.width, placement.frame.height) * 0.16),
               fill: style.labelFill ?? style.stroke ?? "#1677ff",
               ...(style.labelFontFamily ? { fontFamily: style.labelFontFamily } : {}),
               selectable: false,
@@ -2321,8 +2636,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!this.canvasService) return;
     const seq = ++this.renderSeq;
     const imageSources = new Set<string>();
-    [...this.getSlotStates(), ...this.getCommittedSlotStates()].forEach((slot) => {
-      if (slot.image?.src) imageSources.add(slot.image.src);
+    [...this.getPlacementStates(), ...this.getCommittedPlacementStates()].forEach((placement) => {
+      if (placement.image?.src) imageSources.add(placement.image.src);
     });
     await Promise.all(
       Array.from(imageSources).map((src) => this.ensureSourceSize(src)),
@@ -2401,23 +2716,29 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       });
   }
 
-  private getImageSessionId(slotId: string): string {
-    return `${IMAGE_SESSION_CHANNEL}:${String(slotId || "").trim()}`;
+  private getFallbackImageSessionId(placementId: string): string {
+    return `${IMAGE_SESSION_CHANNEL}:${String(placementId || "").trim()}`;
   }
 
-  private getWorkingImageNodeId(slotId: string): string {
-    return `session-image:${this.getImageSessionId(slotId)}`;
+  private normalizeSessionKey(value: unknown, fallback: string): string {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    return normalized || this.getFallbackImageSessionId(fallback);
+  }
+
+  private getWorkingImageNodeId(placementId: string): string {
+    return `session-image:${this.getFallbackImageSessionId(placementId)}`;
   }
 
   private upsertImageSessionDraft(
-    slotId: string,
+    placementId: string,
     image: ImagePlacementImageState | null,
+    sessionId = this.sessionIdsByPlacementId.get(placementId) ||
+      this.getFallbackImageSessionId(placementId),
   ) {
-    const slot = this.getSlotStates().find((item) => item.id === slotId);
-    if (!slot || !this.sessionService) return;
-    const sessionId = this.getImageSessionId(slotId);
+    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    if (!placement || !this.sessionService) return;
     const draft: ImagePlacementSessionDraft = {
-      slotId,
+      placementId,
       image: cloneImageState(image),
     };
     const existing = this.sessionService.getSession(sessionId);
@@ -2428,8 +2749,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.sessionService.createSession({
       sessionId,
       scope: {
-        surfaceId: this.resolveSlotSurfaceId(slot),
-        subjectId: slot.id,
+        surfaceId: this.resolvePlacementSurfaceId(placement),
+        subjectId: placement.id,
         channel: IMAGE_SESSION_CHANNEL,
       },
       draft,
@@ -2438,11 +2759,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private recordImageSessionCommitArtifacts(
-    slotId: string,
+    placementId: string,
     image: ImagePlacementImageState | null,
   ) {
     if (!this.sessionService) return;
-    const sessionId = this.getImageSessionId(slotId);
+    const sessionId = this.sessionIdsByPlacementId.get(placementId) ||
+      this.getFallbackImageSessionId(placementId);
     if (!this.sessionService.getSession(sessionId)) return;
     const artifacts: SessionArtifact[] = [
       {
@@ -2472,27 +2794,28 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private createImagePlacementSessionData(
-    slot: ImagePlacementSlotState,
+    placement: ImagePlacementState,
     options: { source: string },
   ) {
     return {
-      sessionId: this.getImageSessionId(slot.id),
+      sessionId: this.sessionIdsByPlacementId.get(placement.id) ||
+        this.getFallbackImageSessionId(placement.id),
       scope: {
-        surfaceId: this.resolveSlotSurfaceId(slot),
-        subjectId: slot.id,
+        surfaceId: this.resolvePlacementSurfaceId(placement),
+        subjectId: placement.id,
         channel: IMAGE_SESSION_CHANNEL,
       },
       source: options.source,
       mode: "edit",
       payload: {
-        slotId: slot.id,
-        fit: slot.fit,
+        placementId: placement.id,
+        fit: placement.fit,
       },
     };
   }
 
-  private resolveSlotSurfaceId(slot: ImagePlacementSlotState): string | null {
-    const metadata = isRecord(slot.metadata) ? slot.metadata : {};
+  private resolvePlacementSurfaceId(placement: ImagePlacementState): string | null {
+    const metadata = isRecord(placement.metadata) ? placement.metadata : {};
     const subject = isRecord(metadata.subject) ? metadata.subject : {};
     const surfaceId =
       typeof metadata.documentSurfaceId === "string"

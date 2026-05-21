@@ -19,8 +19,10 @@ import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   createConfigurableVisualCapabilityDefinition,
   normalizeConfigurableVisualConfigKey,
+  type ConfigurableVisualClearInput,
   type ConfigurableVisualCapabilityApi,
   type ConfigurableVisualCapabilityOptions,
+  type ConfigurableVisualCommitInput,
 } from "./capability";
 import {
   createEmptyConfigurableVisualConfig,
@@ -161,8 +163,10 @@ export class ConfigurableVisualCapabilityExtension implements ExtensionDefinitio
 
   private getConfigurableVisualFacade(): ConfigurableVisualCapabilityApi {
     return {
+      clearCommittedVisual: (input) => this.clearCommittedVisual(input),
       getConfig: (configKey) => this.getConfig(configKey),
       refresh: () => this.refresh(),
+      setCommittedVisual: (input) => this.setCommittedVisual(input),
     };
   }
 
@@ -170,6 +174,53 @@ export class ConfigurableVisualCapabilityExtension implements ExtensionDefinitio
     return this.context?.services.get<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
+  }
+
+  private setCommittedVisual(input: ConfigurableVisualCommitInput): void {
+    const configService = this.getConfigService();
+    if (!configService) return;
+
+    const configKey =
+      normalizeConfigurableVisualConfigKey(input.configKey) ||
+      DEFAULT_CONFIG_KEY;
+    const key = normalizeConfigurableVisualConfigKey(input.key);
+    const src = typeof input.src === "string" ? input.src.trim() : "";
+    if (!configKey || !key) return;
+
+    const current = this.getConfig(configKey);
+    configService.update(configKey, {
+      ...current,
+      [key]: {
+        ...(current[key] ?? {}),
+        ...(input.metadata ?? {}),
+        enabled: input.enabled ?? Boolean(src),
+        ...(typeof input.opacity === "number" ? { opacity: input.opacity } : {}),
+        src,
+      },
+    });
+    this.refresh();
+  }
+
+  private clearCommittedVisual(input: ConfigurableVisualClearInput): void {
+    const configService = this.getConfigService();
+    if (!configService) return;
+
+    const configKey =
+      normalizeConfigurableVisualConfigKey(input.configKey) ||
+      DEFAULT_CONFIG_KEY;
+    const key = normalizeConfigurableVisualConfigKey(input.key);
+    if (!configKey || !key) return;
+
+    const current = this.getConfig(configKey);
+    configService.update(configKey, {
+      ...current,
+      [key]: {
+        ...(current[key] ?? {}),
+        enabled: false,
+        src: "",
+      },
+    });
+    this.refresh();
   }
 
   private applyRuntimePatches(): void {
