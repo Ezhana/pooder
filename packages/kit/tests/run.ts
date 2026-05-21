@@ -1995,15 +1995,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   await driver.beginSession("placement");
   const renderGraph = renderIntentService.getGraph();
   const imageLayer = renderGraph.layers.find((layer) => layer.id === "artwork");
-  const imageSessionLayer = renderGraph.layers.find(
-    (layer) => layer.id === "image.session.image",
-  );
-  const sessionLayer = renderGraph.layers.find(
-    (layer) => layer.id === "image.session.controls",
-  );
-  const sessionOverlayLayer = renderGraph.layers.find(
-    (layer) => layer.id === "image.session.overlay",
-  );
+  const sessionSceneId =
+    "pooder.kit.image-placement.session:image-placement:placement";
+  const sessionScene = scene.getScene(sessionSceneId);
   const committedImageNode = imageLayer?.nodes.find(
     (node: any) => node.id === "image:placement",
   );
@@ -2013,38 +2007,40 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "committed image object should carry graph visibility while its working session is active",
   );
   assertEqual(
-    imageSessionLayer?.stack,
-    800,
-    "image session working object should render above business document layers",
+    sessionScene?.renderable,
+    true,
+    "image session should create a renderable transient scene",
   );
-  const sessionImage = imageSessionLayer?.nodes.find(
-    (node: any) => node.id === "session-image:image-placement:placement",
+  const sessionImage = scene.getElement(
+    "session-image:image-placement:placement",
+    { sceneId: sessionSceneId },
   );
   assert(sessionImage, "image session should render a separate working object");
   const sessionImageNode = sessionImage!;
   assertEqual(
-    sessionImageNode.props.selectable,
+    sessionImageNode.style?.selectable,
     true,
     "session image should be selectable",
   );
   assertEqual(
-    sessionImageNode.props.lockUniScaling,
+    sessionImageNode.style?.lockUniScaling,
     true,
     "session image should keep aspect ratio while scaling",
   );
   assertEqual(
-    sessionImageNode.props.lockRotation,
+    sessionImageNode.style?.lockRotation,
     false,
     "session image should support rotation",
   );
   assert(
-    sessionLayer?.nodes.some((node: any) => node.id === "image.cropShapeHatch"),
+    Boolean(scene.getElement("image.cropShapeHatch", { sceneId: sessionSceneId })),
     "image session should render dieline hatch overlay",
   );
   assert(
-    sessionOverlayLayer?.nodes.some((node) =>
-      node.id.startsWith("projection:pooder.kit.image-placement.runtime.projection.above.placement.business-helper"),
-    ),
+    scene.listElements({ layerId: "image.session.overlay" }, { sceneId: sessionSceneId })
+      .some((element) =>
+        element.id.startsWith("projection:placement:business-helper"),
+      ),
     "image session should project declared business helpers above the working image",
   );
   const snapTarget = {
@@ -2198,10 +2194,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "completed placement committed image should be visible after the image session is committed",
   );
   assert(
-    !graph.layers
-      .find((layer) => layer.id === "image.session.image")
-      ?.nodes.some((node: any) => node.id === "session-image:image-placement:placement"),
-    "completed placement should clear the framework session image layer",
+    !scene.getScene(sessionSceneId),
+    "completed placement should remove the framework session scene",
   );
   await driver.exportPlacementImage({ placementIds: ["placement"] });
   assertDeepEqual(
@@ -2497,11 +2491,12 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     "resetting after upload should restore the upload baseline transform",
   );
   await driver.beginSession("placement-b");
-  let imageSessionLayer = renderIntentService
-    .getGraph()
-    .layers.find((layer) => layer.id === "image.session.image");
   assert(
-    imageSessionLayer?.nodes.some((node: any) => node.id === "session-image:image-placement:placement-a"),
+    Boolean(
+      scene.getElement("session-image:image-placement:placement-a", {
+        sceneId: "pooder.kit.image-placement.session:image-placement:placement-a",
+      }),
+    ),
     "uploaded working image should remain visible after focusing another placement",
   );
 
@@ -2509,13 +2504,17 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     src: "/upload-placement-b.png",
     metadata: { width: 100, height: 100 },
   });
-  imageSessionLayer = renderIntentService
-    .getGraph()
-    .layers.find((layer) => layer.id === "image.session.image");
-  const workingObjectIds = imageSessionLayer?.nodes.map((node: any) => node.id) ?? [];
   assert(
-    workingObjectIds.includes("session-image:image-placement:placement-a") &&
-      workingObjectIds.includes("session-image:image-placement:placement-b"),
+    Boolean(
+      scene.getElement("session-image:image-placement:placement-a", {
+        sceneId: "pooder.kit.image-placement.session:image-placement:placement-a",
+      }),
+    ) &&
+      Boolean(
+        scene.getElement("session-image:image-placement:placement-b", {
+          sceneId: "pooder.kit.image-placement.session:image-placement:placement-b",
+        }),
+      ),
     "multiple uploaded working images should render together before commit",
   );
   assert(

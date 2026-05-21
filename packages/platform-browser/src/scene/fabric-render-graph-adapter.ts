@@ -1,5 +1,6 @@
 import {
   RENDER_INTENT_SERVICE,
+  SCENE_SERVICE,
   SESSION_SERVICE,
   computeDragInteraction,
   evaluateVisibilityExpr,
@@ -12,6 +13,10 @@ import {
   type RenderGraphNode,
   type RenderIntentDragConstraint,
   type RenderObjectSpec,
+  type SceneElement,
+  type SceneLayer,
+  type SceneRecord,
+  type SceneService,
   type Service,
   type ServiceContext,
   type VisibilityLayerState,
@@ -48,10 +53,12 @@ type FabricRenderTargetCanvasService = CanvasService & {
 
 export class FabricRenderGraphAdapter implements Service {
   private renderIntentService?: RenderIntentService;
+  private sceneService?: SceneService;
   private canvasService?: FabricRenderTargetCanvasService;
   private sessionService?: SessionService;
   private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
+  private sceneSubscription?: { dispose(): void };
   private canvasObjectMovingHandler?: (event?: any) => void;
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
@@ -67,7 +74,9 @@ export class FabricRenderGraphAdapter implements Service {
 
   init(context: ServiceContext) {
     this.graphSubscription?.dispose();
+    this.sceneSubscription?.dispose();
     this.renderIntentService = context.get(RENDER_INTENT_SERVICE);
+    this.sceneService = context.get(SCENE_SERVICE);
     this.canvasService = context.get(CANVAS_SERVICE) as
       | FabricRenderTargetCanvasService
       | undefined;
@@ -81,6 +90,9 @@ export class FabricRenderGraphAdapter implements Service {
     }
 
     this.graphSubscription = this.renderIntentService.onDidChange(() => {
+      this.requestSync();
+    });
+    this.sceneSubscription = this.sceneService?.onDidChange(() => {
       this.requestSync();
     });
     this.canvasObjectMovingHandler = (event?: any) => {
@@ -100,9 +112,12 @@ export class FabricRenderGraphAdapter implements Service {
       );
     }
     this.graphSubscription?.dispose();
+    this.sceneSubscription?.dispose();
     this.graphSubscription = undefined;
+    this.sceneSubscription = undefined;
     this.canvasObjectMovingHandler = undefined;
     this.renderIntentService = undefined;
+    this.sceneService = undefined;
     this.canvasService = undefined;
     this.sessionService = undefined;
     this.eventBus = undefined;
@@ -234,6 +249,33 @@ export class FabricRenderGraphAdapter implements Service {
       });
     });
 
+    const graphOrderOffset = graph.layers.length * 1_000_000;
+    this.getRenderableScenes().forEach((scene, sceneIndex) => {
+      const sceneLayers = this.sceneService!.listLayers({ sceneId: scene.id });
+      sceneLayers.forEach((layer, layerIndex) => {
+        if (layer.visible === false) return;
+        const elements = this.sceneService!.listElements(
+          { layerId: layer.id },
+          { sceneId: scene.id },
+        );
+        elements.forEach((element, elementIndex) => {
+          if (element.visible === false) return;
+          const spec = this.toSceneRenderObjectSpec(scene, layer, element);
+          if (!spec) return;
+          items.push({
+            key: `scene:${scene.id}:${element.id}`,
+            layerId: layer.id,
+            order:
+              graphOrderOffset +
+              sceneIndex * 1_000_000 +
+              layerIndex * 10_000 +
+              elementIndex,
+            spec,
+          });
+        });
+      });
+    });
+
     await canvas.reconcileRenderGraphDrawList(items, effects, { render: false });
     canvas.requestRenderAll();
   }
@@ -315,6 +357,19 @@ export class FabricRenderGraphAdapter implements Service {
         exists: true,
         objectCount: layer.nodes.length,
         visibleObjectCount: visibleNodes.length,
+      });
+    });
+    this.getRenderableScenes().forEach((scene) => {
+      this.sceneService?.listLayers({ sceneId: scene.id }).forEach((layer) => {
+        const elements =
+          this.sceneService?.listElements({ layerId: layer.id }, { sceneId: scene.id }) ??
+          [];
+        const visibleNodes = elements.filter((element) => element.visible !== false);
+        layers.set(layer.id, {
+          exists: true,
+          objectCount: elements.length,
+          visibleObjectCount: visibleNodes.length,
+        });
       });
     });
 
@@ -405,6 +460,55 @@ export class FabricRenderGraphAdapter implements Service {
       space: node.coordinateSpace,
       data: commonData,
       props: commonProps,
+    };
+  }
+
+  private getRenderableScenes(): SceneRecord[] {
+    return (
+      this.sceneService
+        ?.listScenes()
+        .filter((scene) => scene.renderable && scene.visible !== false) ?? []
+    );
+  }
+
+  private toSceneRenderObjectSpec(
+    scene: SceneRecord,
+    layer: SceneLayer,
+    element: SceneElement,
+  ): RenderObjectSpec | null {
+    const renderProps = isRecord(element.data?.renderProps)
+      ? element.data.renderProps
+      : {};
+    const props = {
+      ...element.style,
+      ...element.transform,
+      ...renderProps,
+      ...(element.type === "rect" ? { width: element.width, height: element.height } : {}),
+      ...(element.type === "path" ? { pathData: element.path } : {}),
+      ...(element.type === "text" ? { text: element.text } : {}),
+      visible: scene.visible !== false && layer.visible !== false && element.visible !== false,
+    };
+    const exportKeys = [
+      element.id,
+      ...normalizeIds(element.data?.exportKeys),
+    ];
+    const data = {
+      ...element.data,
+      sceneId: scene.id,
+      sceneElementId: element.id,
+      layerId: layer.id,
+      renderLayerId: layer.id,
+      renderNodeId: `scene:${scene.id}:${element.id}`,
+      subjectId: element.id,
+      exportKeys,
+    };
+    return {
+      id: element.id,
+      type: element.type,
+      ...(element.type === "image" ? { src: element.src } : {}),
+      space: element.data?.renderSpace === "screen" ? "screen" : "scene",
+      data,
+      props,
     };
   }
 

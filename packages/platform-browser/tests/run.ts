@@ -1,5 +1,5 @@
 import type { Service } from "@pooder/core";
-import { Pooder, RENDER_INTENT_SERVICE } from "@pooder/core";
+import { Pooder, RENDER_INTENT_SERVICE, SCENE_SERVICE } from "@pooder/core";
 import {
   attachBrowserHost,
   BrowserSceneExportService,
@@ -342,6 +342,64 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
     "art",
     "clip should target graph subject ids",
   );
+
+  await runtime.dispose();
+}
+
+async function testFabricRenderGraphAdapterRendersRenderableScenes() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  const scene = runtime.services.getOrThrow(SCENE_SERVICE);
+  scene.addLayer({ id: "headless" });
+  scene.addElement({
+    id: "headless-rect",
+    layerId: "headless",
+    type: "rect",
+    width: 1,
+    height: 1,
+  });
+  scene.addScene({ id: "session-scene", renderable: true, transient: true });
+  scene.addLayer({ id: "session-layer" }, { sceneId: "session-scene" });
+  scene.addElement(
+    {
+      id: "session-rect",
+      layerId: "session-layer",
+      type: "rect",
+      width: 10,
+      height: 12,
+      style: { fill: "red" },
+      data: { exportKeys: ["session-export"] },
+    },
+    { sceneId: "session-scene" },
+  );
+
+  await adapter.flush();
+  const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  assert(last, "adapter should reconcile scene content");
+  assertDeepEqual(
+    last.items.map((item) => item.key),
+    ["scene:session-scene:session-rect"],
+    "adapter should render only renderable scenes from SceneService",
+  );
+  assertEqual(
+    last.items[0]?.spec.data?.sceneId,
+    "session-scene",
+    "rendered scene object should expose its scene id",
+  );
+  assertDeepEqual(
+    last.items[0]?.spec.data?.exportKeys,
+    ["session-rect", "session-export"],
+    "rendered scene object should expose element export keys",
+  );
+
+  scene.removeScene("session-scene");
+  await adapter.flush();
+  const cleared = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  assertEqual(cleared?.items.length, 0, "removing a renderable scene should clear it");
 
   await runtime.dispose();
 }
@@ -892,6 +950,10 @@ async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["registers render graph adapter in browser host", testAttachRegistersRenderGraphAdapter],
     ["builds graph adapter draw list", testFabricRenderGraphAdapterBuildsDrawList],
+    [
+      "renders renderable SceneService scenes",
+      testFabricRenderGraphAdapterRendersRenderableScenes,
+    ],
     [
       "uses derived image dimensions for committed replacements",
       testFabricRenderGraphAdapterUsesDerivedImageDimensions,

@@ -23,6 +23,7 @@ import {
   type RenderIntentTransform,
   type RenderIntentService,
   type SceneElement,
+  type SceneElementInput,
   type SceneExportService,
   type SceneLayoutService,
   type SceneService,
@@ -206,6 +207,11 @@ const IMAGE_OBJECT_STACK = 660;
 const IMAGE_OVERLAY_STACK = 800;
 const IMAGE_RENDER_SCOPE = "pooder.kit.image-placement";
 const IMAGE_RUNTIME_RENDER_SCOPE = "pooder.kit.image-placement.runtime";
+const IMAGE_SESSION_SCENE_PREFIX = "pooder.kit.image-placement.session";
+const IMAGE_SESSION_UNDERLAY_LAYER_ID = "image.session.underlay";
+const IMAGE_SESSION_IMAGE_LAYER_ID = "image.session.image";
+const IMAGE_SESSION_OVERLAY_LAYER_ID = "image.session.overlay";
+const IMAGE_SESSION_CONTROLS_LAYER_ID = "image.session.controls";
 const IMAGE_ACTIVE_PLACEMENT_CONTEXT_PREFIX = "image-placement.active-placement";
 const IMAGE_SESSION_CHANNEL = "image-placement";
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
@@ -582,9 +588,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private visibleWorkingPlacementContextKeys = new Set<string>();
   private pendingUploadPlacementIds = new Set<string>();
   private sessionIdsByPlacementId = new Map<string, string>();
+  private sessionSceneIdsBySessionId = new Map<string, string>();
   private activePlacementId: string | null = null;
   private activeImageSessionId: string | null = null;
   private sessionNotice: ImagePlacementSessionNotice | null = null;
+  private isPublishingImageSessionScenes = false;
   private renderSeq = 0;
   private activeSnapX: SnapMatch | null = null;
   private activeSnapY: SnapMatch | null = null;
@@ -631,7 +639,15 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.sessionService = context.services.get<SessionService>(SESSION_SERVICE);
 
     this.sceneSubscription?.dispose();
-    this.sceneSubscription = this.sceneService?.onDidChange(() => this.updateImages());
+    this.sceneSubscription = this.sceneService?.onDidChange((event) => {
+      if (
+        this.isPublishingImageSessionScenes ||
+        this.isImageSessionSceneChange(event)
+      ) {
+        return;
+      }
+      this.updateImages();
+    });
     this.subscriptions.on(context.eventBus, "selection:created", this.onSelectionChanged);
     this.subscriptions.on(context.eventBus, "selection:updated", this.onSelectionChanged);
     this.subscriptions.on(context.eventBus, "selection:cleared", this.onSelectionCleared);
@@ -652,7 +668,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.workingImages.clear();
     this.workingImageDraftsBySessionId.clear();
     this.retainedWorkingImageBaselines.clear();
+    this.clearAllSessionScenes();
     this.sessionIdsByPlacementId.clear();
+    this.sessionSceneIdsBySessionId.clear();
     this.activePlacementId = null;
     this.activeImageSessionId = null;
     this.clearWorkingPlacementVisibilityContext();
@@ -1117,12 +1135,14 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     ) {
       this.sessionIdsByPlacementId.set(placementId, sessionId);
       this.activeImageSessionId = sessionId;
+      this.ensureImageSessionScene(placementId, sessionId);
       this.emitStateChange();
       return { ok: true };
     }
     this.activePlacementId = placementId;
     this.activeImageSessionId = sessionId;
     this.sessionIdsByPlacementId.set(placementId, sessionId);
+    this.ensureImageSessionScene(placementId, sessionId);
     this.patchCommittedImageVisibilityForPlacements();
     if (this.workingImageDraftsBySessionId.has(sessionId)) {
       this.workingImages.set(
@@ -1284,6 +1304,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       void this.sessionService?.cancelSession(targetSessionId, {
         placementId: id,
       });
+      this.removeImageSessionScene(targetSessionId);
       this.sessionIdsByPlacementId.delete(id);
       this.workingImageDraftsBySessionId.delete(targetSessionId);
     });
@@ -1400,6 +1421,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ? sessionId
         : this.sessionIdsByPlacementId.get(id) || this.getFallbackImageSessionId(id);
       await this.sessionService?.commitSession(targetSessionId);
+      this.removeImageSessionScene(targetSessionId);
       this.sessionIdsByPlacementId.delete(id);
       this.workingImageDraftsBySessionId.delete(targetSessionId);
     }));
@@ -1493,7 +1515,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       includeHidden: true,
       multiplier: 2,
       sourceElementIds: [this.getWorkingImageNodeId(placement.id)],
-      sourceLayerIds: [`image.session.image`],
+      sourceLayerIds: [IMAGE_SESSION_IMAGE_LAYER_ID],
     });
     return {
       url: result.url,
@@ -1949,6 +1971,14 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.logCanvasSessionEvent("ignore-target-without-placement", {
         target: this.getCanvasTargetDebugData(selected),
       });
+      return;
+    }
+    if (this.activePlacementId === placementId && this.workingImages.has(placementId)) {
+      this.logCanvasSessionEvent("ignore-active-session-target", {
+        placementId,
+        target: this.getCanvasTargetDebugData(selected),
+      });
+      this.emitStateChange();
       return;
     }
     this.activePlacementId = placementId;
@@ -2518,6 +2548,345 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     });
   }
 
+  private getImageSessionSceneId(sessionId: string): string {
+    const normalized = String(sessionId || "").trim() || IMAGE_SESSION_CHANNEL;
+    return `${IMAGE_SESSION_SCENE_PREFIX}:${normalized}`;
+  }
+
+  private isImageSessionSceneId(sceneId: string): boolean {
+    return String(sceneId || "").startsWith(`${IMAGE_SESSION_SCENE_PREFIX}:`);
+  }
+
+  private isImageSessionSceneChange(event: {
+    scenes?: { added: string[]; updated: string[]; removed: string[] };
+    sceneChanges?: Record<string, unknown>;
+  }): boolean {
+    const sceneIds = [
+      ...(event.scenes?.added ?? []),
+      ...(event.scenes?.updated ?? []),
+      ...(event.scenes?.removed ?? []),
+      ...Object.keys(event.sceneChanges ?? {}),
+    ];
+    return sceneIds.length > 0 && sceneIds.every((id) => this.isImageSessionSceneId(id));
+  }
+
+  private ensureImageSessionScene(placementId: string, sessionId: string): string | null {
+    if (!this.sceneService) return null;
+    const sceneId = this.getImageSessionSceneId(sessionId);
+    if (!this.sceneService.getScene(sceneId)) {
+      const wasPublishing = this.isPublishingImageSessionScenes;
+      this.isPublishingImageSessionScenes = true;
+      try {
+        this.sceneService.ensureScene({
+          id: sceneId,
+          order: IMAGE_OVERLAY_STACK,
+          renderable: true,
+          transient: true,
+          visible: true,
+          metadata: {
+            channel: IMAGE_SESSION_CHANNEL,
+            placementId,
+            sessionId,
+            source: this.id,
+          },
+        });
+      } finally {
+        this.isPublishingImageSessionScenes = wasPublishing;
+      }
+    }
+    this.sessionSceneIdsBySessionId.set(sessionId, sceneId);
+    return sceneId;
+  }
+
+  private removeImageSessionScene(sessionId: string) {
+    const sceneId = this.sessionSceneIdsBySessionId.get(sessionId);
+    if (!sceneId) return;
+    if (this.sceneService?.getScene(sceneId)) {
+      const wasPublishing = this.isPublishingImageSessionScenes;
+      this.isPublishingImageSessionScenes = true;
+      try {
+        this.sceneService.removeScene(sceneId);
+      } finally {
+        this.isPublishingImageSessionScenes = wasPublishing;
+      }
+    }
+    this.sessionSceneIdsBySessionId.delete(sessionId);
+  }
+
+  private clearAllSessionScenes() {
+    Array.from(this.sessionSceneIdsBySessionId.values()).forEach((sceneId) => {
+      if (this.sceneService?.getScene(sceneId)) {
+        this.sceneService.removeScene(sceneId);
+      }
+    });
+  }
+
+  private publishImageSessionScenes() {
+    if (!this.sceneService) return;
+    const wasPublishing = this.isPublishingImageSessionScenes;
+    this.isPublishingImageSessionScenes = true;
+    try {
+      this.sceneService.transaction(() => {
+        const renderedSceneIds = new Set<string>();
+        this.getPlacementStates()
+          .filter((placement) => this.shouldRenderWorkingPlacement(placement.id))
+          .forEach((placement) => {
+            const sessionId =
+              this.sessionIdsByPlacementId.get(placement.id) ||
+              this.getFallbackImageSessionId(placement.id);
+            const sceneId = this.ensureImageSessionScene(placement.id, sessionId);
+            if (!sceneId) return;
+            renderedSceneIds.add(sceneId);
+            this.sceneService!.clearScene(sceneId);
+            this.addImageSessionSceneLayers(sceneId);
+            this.buildImageSessionSceneSpecs(placement).forEach(({ layerId, spec }, index) => {
+              const element = this.renderSpecToSceneElement(spec, layerId, index);
+              if (element) this.sceneService!.addElement(element, { sceneId });
+            });
+          });
+
+        Array.from(this.sessionSceneIdsBySessionId.entries()).forEach(([sessionId, sceneId]) => {
+          if (!renderedSceneIds.has(sceneId)) {
+            if (this.sceneService?.getScene(sceneId)) {
+              this.sceneService.removeScene(sceneId);
+            }
+            this.sessionSceneIdsBySessionId.delete(sessionId);
+          }
+        });
+      });
+    } finally {
+      this.isPublishingImageSessionScenes = wasPublishing;
+    }
+  }
+
+  private addImageSessionSceneLayers(sceneId: string) {
+    [
+      [IMAGE_SESSION_UNDERLAY_LAYER_ID, 0],
+      [IMAGE_SESSION_IMAGE_LAYER_ID, 1],
+      [IMAGE_SESSION_OVERLAY_LAYER_ID, 2],
+      [IMAGE_SESSION_CONTROLS_LAYER_ID, 3],
+    ].forEach(([id, order]) => {
+      this.sceneService!.addLayer({ id: String(id), order: Number(order) }, { sceneId });
+    });
+  }
+
+  private buildImageSessionSceneSpecs(
+    placement: ImagePlacementState,
+  ): Array<{ layerId: string; spec: RenderObjectSpec }> {
+    const specs: Array<{ layerId: string; spec: RenderObjectSpec }> = [];
+    specs.push(
+      ...this.buildSessionProjectionSceneSpecs(
+        placement,
+        "below",
+        IMAGE_SESSION_UNDERLAY_LAYER_ID,
+      ),
+    );
+    const imageSpec = this.buildImageSpec(placement, { committed: false });
+    if (imageSpec) {
+      specs.push({ layerId: IMAGE_SESSION_IMAGE_LAYER_ID, spec: imageSpec });
+    }
+    specs.push(
+      ...this.buildSessionProjectionSceneSpecs(
+        placement,
+        "above",
+        IMAGE_SESSION_OVERLAY_LAYER_ID,
+      ),
+    );
+    if (placement.id === this.activePlacementId) {
+      specs.push(
+        ...this.buildSessionProjectionSceneSpecs(
+          placement,
+          "controls",
+          IMAGE_SESSION_CONTROLS_LAYER_ID,
+        ),
+      );
+      this.buildSessionOverlaySpecs().forEach((spec) => {
+        specs.push({ layerId: IMAGE_SESSION_CONTROLS_LAYER_ID, spec });
+      });
+    }
+    return specs;
+  }
+
+  private buildSessionProjectionSceneSpecs(
+    placement: ImagePlacementState,
+    projectionPlacement: ImageSessionProjectionPlacement,
+    layerId: string,
+  ): Array<{ layerId: string; spec: RenderObjectSpec }> {
+    const projections = (placement.sessionProjections ?? []).filter(
+      (projection) => projection.placement === projectionPlacement,
+    );
+    if (!projections.length) return [];
+    const sourceNodes = this.getProjectionSourceNodes();
+    return projections.flatMap((projection) =>
+      sourceNodes
+        .filter((node) => this.matchesSessionProjectionSource(node, projection))
+        .map((node, index) => {
+          const spec = this.graphNodeToSessionProjectionSpec(
+            placement,
+            projection,
+            node,
+            index,
+          );
+          return spec ? { layerId, spec } : null;
+        })
+        .filter((item): item is { layerId: string; spec: RenderObjectSpec } =>
+          Boolean(item),
+        ),
+    );
+  }
+
+  private getProjectionSourceNodes(): RenderGraphNode[] {
+    const graph = this.renderIntentService?.getGraph();
+    if (!graph) return [];
+    return graph.layers
+      .flatMap((layer) => layer.nodes)
+      .filter((node) => !node.projection);
+  }
+
+  private matchesSessionProjectionSource(
+    node: RenderGraphNode,
+    projection: ImageSessionProjection,
+  ): boolean {
+    const layerIds = new Set(projection.sourceLayerIds ?? []);
+    const subjectIds = new Set(projection.sourceElementIds ?? []);
+    return layerIds.has(node.layerId) || subjectIds.has(node.subjectId);
+  }
+
+  private graphNodeToSessionProjectionSpec(
+    placement: ImagePlacementState,
+    projection: ImageSessionProjection,
+    node: RenderGraphNode,
+    index: number,
+  ): RenderObjectSpec | null {
+    if (node.type === "image" && !node.visual?.src) return null;
+    const opacity = Number(projection.opacity);
+    const sourceOpacity = Number(node.props.opacity);
+    const resolvedOpacity = Number.isFinite(opacity)
+      ? Math.max(0, Math.min(1, opacity)) *
+        (Number.isFinite(sourceOpacity) ? sourceOpacity : 1)
+      : node.props.opacity;
+    return {
+      id: `projection:${placement.id}:${projection.id}:${node.id}:${index}`,
+      subjectId: node.subjectId,
+      type: node.type,
+      ...(node.visual?.src ? { src: node.visual.src } : {}),
+      space: node.coordinateSpace,
+      data: {
+        ...node.data,
+        placementId: placement.id,
+        projectionId: projection.id,
+        projectionSourceNodeId: node.id,
+        projectionSourceSubjectId: node.subjectId,
+        source: "projection",
+        type: "session-projection",
+      },
+      props: {
+        ...node.props,
+        ...this.resolveGraphNodePlacementProps(node),
+        ...(resolvedOpacity !== undefined ? { opacity: resolvedOpacity } : {}),
+        selectable: projection.interactive === true,
+        evented: projection.interactive === true,
+        hasControls: projection.interactive === true,
+        hasBorders: projection.interactive === true,
+      },
+    };
+  }
+
+  private resolveGraphNodePlacementProps(
+    node: RenderGraphNode,
+  ): Record<string, unknown> {
+    const frame = node.frame;
+    const transform = node.transform ?? {};
+    const hasTransformLeft = Number.isFinite(transform.left);
+    const hasTransformTop = Number.isFinite(transform.top);
+    const metadata = isRecord(node.visual?.metadata) ? node.visual.metadata : undefined;
+    const derived = isRecord(metadata?.derived) ? metadata.derived : undefined;
+    const imageWidth = finitePositiveNumber(derived?.width ?? metadata?.width);
+    const imageHeight = finitePositiveNumber(derived?.height ?? metadata?.height);
+
+    if (node.type === "image" && frame && imageWidth && imageHeight) {
+      return {
+        ...transform,
+        left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
+        top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
+        originX: hasTransformLeft ? transform.originX : "center",
+        originY: hasTransformTop ? transform.originY : "center",
+        scaleX: transform.scaleX ?? frame.width / imageWidth,
+        scaleY: transform.scaleY ?? frame.height / imageHeight,
+      };
+    }
+
+    return {
+      ...transform,
+      ...(frame
+        ? {
+            left: hasTransformLeft ? transform.left : frame.x,
+            top: hasTransformTop ? transform.top : frame.y,
+            width: frame.width,
+            height: frame.height,
+            originX: hasTransformLeft ? transform.originX : "left",
+            originY: hasTransformTop ? transform.originY : "top",
+          }
+        : {}),
+    };
+  }
+
+  private renderSpecToSceneElement(
+    spec: RenderObjectSpec,
+    layerId: string,
+    order: number,
+  ): SceneElementInput | null {
+    const props = { ...(spec.props || {}) };
+    const data = {
+      ...(spec.data || {}),
+      layerId,
+      renderSpace: spec.space || "scene",
+      exportKeys: Array.from(
+        new Set(
+          [spec.id, spec.subjectId, ...(spec.exportKeys ?? [])]
+            .map((id) => String(id || "").trim())
+            .filter((id) => id.length > 0),
+        ),
+      ),
+    };
+    const common = {
+      id: spec.id,
+      layerId,
+      order,
+      visible: props.visible !== false,
+      data,
+      style: props,
+    };
+    if (spec.type === "image") {
+      if (!spec.src) return null;
+      return {
+        ...common,
+        type: "image",
+        src: spec.src,
+        width: finitePositiveNumber(props.width) ?? undefined,
+        height: finitePositiveNumber(props.height) ?? undefined,
+      };
+    }
+    if (spec.type === "path") {
+      const path = String((props as any).pathData || (props as any).path || "").trim();
+      if (!path) return null;
+      return { ...common, type: "path", path };
+    }
+    if (spec.type === "rect") {
+      return {
+        ...common,
+        type: "rect",
+        width: finiteNumber(props.width, 1),
+        height: finiteNumber(props.height, 1),
+      };
+    }
+    return {
+      ...common,
+      type: "text",
+      text: String((props as any).text ?? ""),
+    };
+  }
+
   private getDielineGeometry() {
     const registry = this.context?.services.get<CapabilityRegistryService>(
       CAPABILITY_REGISTRY_SERVICE,
@@ -2650,6 +3019,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private publishRuntimeRenderIntents() {
     const renderIntentService = this.renderIntentService;
     if (!renderIntentService) return;
+    this.publishImageSessionScenes();
     clearRenderIntentSource(renderIntentService, IMAGE_RUNTIME_RENDER_SCOPE);
 
     patchRenderObjectSpecs(renderIntentService, this.buildUploadSpecs(), {
@@ -2659,61 +3029,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       layerOrder: 0,
       channel: "overlay",
     });
-    patchRenderObjectSpecs(renderIntentService, this.buildWorkingImageSpecs(), {
-      sourceId: IMAGE_RUNTIME_RENDER_SCOPE,
-      layerId: `image.session.image`,
-      stack: IMAGE_OVERLAY_STACK,
-      layerOrder: 1,
-      channel: "overlay",
-      visibility: {
-        op: "anySessionActive",
-        scope: { channel: IMAGE_SESSION_CHANNEL },
-      },
-    });
-    patchRenderObjectSpecs(renderIntentService, this.buildSessionOverlaySpecs(), {
-      sourceId: IMAGE_RUNTIME_RENDER_SCOPE,
-      layerId: `image.session.controls`,
-      stack: IMAGE_OVERLAY_STACK,
-      layerOrder: 3,
-      channel: "overlay",
-      visibility: {
-        op: "anySessionActive",
-        scope: { channel: IMAGE_SESSION_CHANNEL },
-      },
-    });
 
-    (
-      [
-        ["below", `image.session.underlay`, 0],
-        ["above", `image.session.overlay`, 2],
-        ["controls", `image.session.controls`, 3],
-      ] as const
-    ).forEach(([placement, layerId, order]) => {
-      this.buildSessionProjectionSpecs(placement).forEach((projection, index) => {
-        renderIntentService.patchIntent(IMAGE_RUNTIME_RENDER_SCOPE, {
-          id: `${IMAGE_RUNTIME_RENDER_SCOPE}.projection.${placement}.${projection.id}`,
-          subject: {
-            kind: "layer",
-            surfaceId: "legacy",
-            layerId,
-          },
-          ordering: {
-            layerId,
-            stack: IMAGE_OVERLAY_STACK,
-            layerOrder: order,
-            objectOrder: index,
-            channel: "overlay",
-          },
-          projection,
-          export: {
-            visibility: {
-              op: "anySessionActive",
-              scope: { channel: IMAGE_SESSION_CHANNEL },
-            },
-          },
-        });
-      });
-      });
   }
 
   private getFallbackImageSessionId(placementId: string): string {

@@ -1053,6 +1053,88 @@ async function testRemovingSceneLayerRemovesScopedElements() {
   });
 }
 
+async function testSceneServiceManagesMultipleScenes() {
+  await withRuntime(async (runtime) => {
+    const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    const changes: SceneChangeEvent[] = [];
+    scene.onDidChange((event) => changes.push(event));
+
+    scene.addLayer({ id: "shared" });
+    scene.addElement({
+      id: "shared-element",
+      layerId: "shared",
+      type: "rect",
+      width: 10,
+      height: 10,
+    });
+    scene.addScene({ id: "session", renderable: true, transient: true });
+    scene.addLayer({ id: "shared" }, { sceneId: "session" });
+    scene.addElement(
+      {
+        id: "shared-element",
+        layerId: "shared",
+        type: "rect",
+        width: 20,
+        height: 20,
+      },
+      { sceneId: "session" },
+    );
+
+    assertEqual(
+      (scene.getElement("shared-element") as any)?.width,
+      10,
+      "default scene element should remain independent",
+    );
+    assertEqual(
+      (scene.getElement("shared-element", { sceneId: "session" }) as any)?.width,
+      20,
+      "scoped scene element should support duplicate ids",
+    );
+    assertEqual(
+      scene.getScene("session")?.renderable,
+      true,
+      "scene metadata should describe renderability",
+    );
+    assert(
+      Boolean(changes.some((change) => change.scenes?.added.includes("session"))),
+      "scene changes should report scene additions",
+    );
+    assert(
+      Boolean(changes.some((change) => change.sceneChanges?.session?.elements.added.includes("shared-element"))),
+      "scene changes should report scoped element additions",
+    );
+    assertEqual(scene.removeScene("session"), true);
+    assertEqual(scene.getScene("session"), undefined);
+    assertEqual((scene.getElement("shared-element") as any)?.width, 10);
+  });
+}
+
+async function testSceneTransactionRollsBackMultipleScenes() {
+  await withRuntime(async (runtime) => {
+    const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    try {
+      scene.transaction(() => {
+        scene.addScene({ id: "session", transient: true });
+        scene.addLayer({ id: "layer" }, { sceneId: "session" });
+        scene.addElement(
+          {
+            id: "rect",
+            layerId: "layer",
+            type: "rect",
+            width: 10,
+            height: 10,
+          },
+          { sceneId: "session" },
+        );
+        throw new Error("rollback");
+      });
+    } catch {
+      // Expected rollback path.
+    }
+    assertEqual(scene.getScene("session"), undefined);
+  });
+}
+
 async function testSessionsWithoutTools() {
   await withRuntime(async (runtime) => {
     const sessions = runtime.services.getOrThrow<SessionService>(
@@ -2099,6 +2181,11 @@ async function main() {
     [
       "removing a scene layer removes scoped elements",
       testRemovingSceneLayerRemovesScopedElements,
+    ],
+    ["manages multiple scoped scenes", testSceneServiceManagesMultipleScenes],
+    [
+      "rolls back multi-scene transactions",
+      testSceneTransactionRollsBackMultipleScenes,
     ],
     [
       "manages sessions without registered tools",

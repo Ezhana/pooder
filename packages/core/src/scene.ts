@@ -1,6 +1,9 @@
 export type LayerId = string;
 export type ElementId = string;
+export type SceneId = string;
 export type SceneElementType = "image" | "path" | "rect" | "text";
+
+export const DEFAULT_SCENE_ID = "default";
 
 export type SceneMetadata = Record<string, unknown>;
 export type SceneElementData = Record<string, unknown>;
@@ -39,6 +42,36 @@ export interface SceneLayerPatch {
   order?: number;
   visible?: boolean;
   metadata?: SceneMetadata;
+}
+
+export interface SceneRecord {
+  id: SceneId;
+  order: number;
+  visible: boolean;
+  renderable: boolean;
+  transient: boolean;
+  metadata?: SceneMetadata;
+}
+
+export interface SceneInput {
+  id: SceneId;
+  order?: number;
+  visible?: boolean;
+  renderable?: boolean;
+  transient?: boolean;
+  metadata?: SceneMetadata;
+}
+
+export interface ScenePatch {
+  order?: number;
+  visible?: boolean;
+  renderable?: boolean;
+  transient?: boolean;
+  metadata?: SceneMetadata;
+}
+
+export interface SceneScopeOptions {
+  sceneId?: SceneId;
 }
 
 export interface SceneElementBase {
@@ -110,12 +143,30 @@ export interface SceneElementPatch {
 }
 
 export interface SceneElementQuery {
+  sceneId?: SceneId;
   layerId?: LayerId;
   type?: SceneElementType;
   visible?: boolean;
 }
 
 export interface SceneChangeSet {
+  scenes?: {
+    added: SceneId[];
+    updated: SceneId[];
+    removed: SceneId[];
+  };
+  sceneChanges?: Record<SceneId, {
+    layers: {
+      added: LayerId[];
+      updated: LayerId[];
+      removed: LayerId[];
+    };
+    elements: {
+      added: ElementId[];
+      updated: ElementId[];
+      removed: ElementId[];
+    };
+  }>;
   layers: {
     added: LayerId[];
     updated: LayerId[];
