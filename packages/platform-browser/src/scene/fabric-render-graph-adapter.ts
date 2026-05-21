@@ -1,7 +1,6 @@
 import {
   RENDER_INTENT_SERVICE,
   SESSION_SERVICE,
-  WORKBENCH_SERVICE,
   computeDragInteraction,
   evaluateVisibilityExpr,
   type CanvasService,
@@ -16,7 +15,6 @@ import {
   type Service,
   type ServiceContext,
   type VisibilityLayerState,
-  type WorkbenchService,
   type SessionService,
   type RenderIntentService,
 } from "@pooder/core";
@@ -51,7 +49,6 @@ type FabricRenderTargetCanvasService = CanvasService & {
 export class FabricRenderGraphAdapter implements Service {
   private renderIntentService?: RenderIntentService;
   private canvasService?: FabricRenderTargetCanvasService;
-  private workbenchService?: WorkbenchService;
   private sessionService?: SessionService;
   private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
@@ -74,7 +71,6 @@ export class FabricRenderGraphAdapter implements Service {
     this.canvasService = context.get(CANVAS_SERVICE) as
       | FabricRenderTargetCanvasService
       | undefined;
-    this.workbenchService = context.get(WORKBENCH_SERVICE);
     this.sessionService = context.get(SESSION_SERVICE);
     this.eventBus = context.eventBus;
 
@@ -108,7 +104,6 @@ export class FabricRenderGraphAdapter implements Service {
     this.canvasObjectMovingHandler = undefined;
     this.renderIntentService = undefined;
     this.canvasService = undefined;
-    this.workbenchService = undefined;
     this.sessionService = undefined;
     this.eventBus = undefined;
     this.syncRequested = false;
@@ -182,7 +177,6 @@ export class FabricRenderGraphAdapter implements Service {
   private attachRuntimeVisibilityEvents() {
     const eventBus = this.eventBus;
     if (!eventBus) return;
-    eventBus.on("tool:activated", this.onRuntimeVisibilityChange);
     eventBus.on("session:change", this.onRuntimeVisibilityChange);
     eventBus.on("scene:layout:change", this.onRuntimeVisibilityChange);
   }
@@ -190,7 +184,6 @@ export class FabricRenderGraphAdapter implements Service {
   private detachRuntimeVisibilityEvents() {
     const eventBus = this.eventBus;
     if (!eventBus) return;
-    eventBus.off("tool:activated", this.onRuntimeVisibilityChange);
     eventBus.off("session:change", this.onRuntimeVisibilityChange);
     eventBus.off("scene:layout:change", this.onRuntimeVisibilityChange);
   }
@@ -326,7 +319,6 @@ export class FabricRenderGraphAdapter implements Service {
     });
 
     return this.requireRenderIntentService().createVisibilityEvalContext({
-      activeToolId: this.workbenchService?.activeToolId ?? null,
       getLayerState: (layerId: string) => layers.get(layerId),
       isSessionActive: (sessionId: string) =>
         this.sessionService?.isSessionActive(sessionId) ?? false,

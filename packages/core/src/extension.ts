@@ -7,7 +7,6 @@ import CapabilityRegistryService from "./services/CapabilityRegistryService";
 import CommandService from "./services/CommandService";
 import ConfigurationService from "./services/ConfigurationService";
 import { RenderIntentCompilerRegistryService } from "./render-intent";
-import ToolRegistryService from "./services/ToolRegistryService";
 
 export interface ExtensionActivationSpec {
   requiresExtensions?: string[];
@@ -55,7 +54,6 @@ interface NormalizedExtensionContributions {
   renderIntentCompilers: NonNullable<
     ExtensionContributions["renderIntentCompilers"]
   >;
-  tools: NonNullable<ExtensionContributions["tools"]>;
 }
 
 interface ExtensionRecord {
@@ -74,7 +72,6 @@ interface ExtensionManagerDependencies {
   configurationService: ConfigurationService;
   commandService: CommandService;
   renderIntentCompilerRegistry: RenderIntentCompilerRegistryService;
-  toolRegistry: ToolRegistryService;
 }
 
 class ExtensionManager {
@@ -84,7 +81,6 @@ class ExtensionManager {
   private readonly configurationService: ConfigurationService;
   private readonly commandService: CommandService;
   private readonly renderIntentCompilerRegistry: RenderIntentCompilerRegistryService;
-  private readonly toolRegistry: ToolRegistryService;
   private readonly records = new Map<string, ExtensionRecord>();
   private registrationOrder = 0;
 
@@ -99,7 +95,6 @@ class ExtensionManager {
     this.commandService = dependencies.commandService;
     this.renderIntentCompilerRegistry =
       dependencies.renderIntentCompilerRegistry;
-    this.toolRegistry = dependencies.toolRegistry;
   }
 
   register(extension: ExtensionDefinition): ExtensionStateSnapshot {
@@ -119,7 +114,6 @@ class ExtensionManager {
         configurations: [],
         commands: [],
         renderIntentCompilers: [],
-        tools: [],
       });
       this.records.set(extension.id, record);
       this.applyState(record, "failed", {
@@ -250,7 +244,6 @@ class ExtensionManager {
       renderIntentCompilers: [
         ...(contributions?.renderIntentCompilers ?? []),
       ],
-      tools: [...(contributions?.tools ?? [])],
     };
   }
 
@@ -346,10 +339,6 @@ class ExtensionManager {
             compiler,
           ),
         );
-      });
-
-      record.contributions.tools.forEach((tool) => {
-        disposables.push(this.toolRegistry.registerTool(tool));
       });
 
       return disposables;

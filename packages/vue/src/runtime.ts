@@ -93,11 +93,6 @@ export interface PooderRuntimeLike {
     ): { dispose(): void };
     update(key: string, value: any): void;
   };
-  readonly workbench: {
-    activate(id: string | null): Promise<any>;
-    deactivate(): Promise<any>;
-    readonly activeToolId: string | null;
-  };
 }
 
 export const POODER_RUNTIME_KEY: InjectionKey<PooderRuntimeLike> = Symbol(

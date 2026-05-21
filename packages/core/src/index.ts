@@ -22,8 +22,6 @@ import {
   RenderIntentCompilerRegistryService,
   RenderIntentService,
   SceneService,
-  ToolRegistryService,
-  WorkbenchService,
   SessionService,
 } from "./services";
 import { ExtensionContext } from "./context";
@@ -119,14 +117,6 @@ type RuntimeConfigApi = {
   ): Disposable;
 };
 
-type RuntimeWorkbenchApi = {
-  activate(
-    id: string | null,
-  ): Promise<Awaited<ReturnType<WorkbenchService["activate"]>>>;
-  deactivate(): Promise<Awaited<ReturnType<WorkbenchService["deactivate"]>>>;
-  readonly activeToolId: string | null;
-};
-
 type RuntimeSessionsApi = {
   create: SessionService["createSession"];
   update: SessionService["updateSession"];
@@ -167,12 +157,7 @@ export class Pooder {
   private readonly renderIntentCompilerRegistryService =
     new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
-  private readonly toolRegistryService = new ToolRegistryService();
   private readonly sessionService = new SessionService();
-  private readonly workbenchService = new WorkbenchService({
-    eventBus: this.eventBus,
-    toolRegistry: this.toolRegistryService,
-  });
   private readonly extensionManager: ExtensionManager;
 
   readonly services: RuntimeServicesApi;
@@ -180,7 +165,6 @@ export class Pooder {
   readonly commands: RuntimeCommandsApi;
   readonly capabilities: RuntimeCapabilitiesApi;
   readonly config: RuntimeConfigApi;
-  readonly workbench: RuntimeWorkbenchApi;
   readonly sessions: RuntimeSessionsApi;
 
   constructor() {
@@ -206,12 +190,6 @@ export class Pooder {
       this.sessionService,
       CORE_SERVICE_TOKENS.SESSION,
     );
-    this.registerService(
-      this.toolRegistryService,
-      CORE_SERVICE_TOKENS.TOOL_REGISTRY,
-    );
-    this.registerService(this.workbenchService, CORE_SERVICE_TOKENS.WORKBENCH);
-
     const context: ExtensionContext = {
       eventBus: this.eventBus,
       services: {
@@ -232,7 +210,6 @@ export class Pooder {
       configurationService: this.configurationService,
       commandService: this.commandService,
       renderIntentCompilerRegistry: this.renderIntentCompilerRegistryService,
-      toolRegistry: this.toolRegistryService,
     });
 
     this.services = {
@@ -286,16 +263,6 @@ export class Pooder {
       onAnyChange: (callback) => this.configurationService.onAnyChange(callback),
       onDefinitionsChange: (callback) =>
         this.configurationService.onDefinitionsChange(callback),
-    };
-
-    this.workbench = {
-      activate: (id) => this.workbenchService.activate(id),
-      deactivate: () => this.workbenchService.deactivate(),
-      get activeToolId() {
-        return context.services
-          .getOrThrow(CORE_SERVICE_TOKENS.WORKBENCH)
-          .activeToolId;
-      },
     };
 
     this.sessions = {
