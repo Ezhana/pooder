@@ -2373,13 +2373,11 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   canvasService.canvas.getObjects = () => [canvasTarget] as any;
   canvasService.setActiveObject(canvasTarget);
   exportService.exportImage = async (options: Record<string, any>) => {
-    const graph = runtime.services
-      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
-      .getGraph();
-    const sessionNode = graph.layers
-      .find((layer) => layer.id === "image.session.image")
-      ?.nodes.find((node) => node.id === "session-image:image-placement:placement");
-    renderedSessionScale = Number(sessionNode?.props.scaleX || 0);
+    const sessionNode = scene.getElement(
+      "session-image:image-placement:placement",
+      { sceneId: "pooder.kit.image-placement.session:image-placement:placement" },
+    );
+    renderedSessionScale = Number(sessionNode?.style?.scaleX || 0);
     return FakeSceneExportService.prototype.exportImage.call(exportService, options);
   };
 
