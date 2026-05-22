@@ -91,7 +91,12 @@ class FakeCanvasService {
     return point;
   }
 
-  toSceneRect(rect: { left: number; top: number; width: number; height: number }) {
+  toSceneRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) {
     return rect;
   }
 
@@ -135,6 +140,7 @@ class FakeFabricObject {
 
   async clone() {
     return new FakeFabricObject(this.type, {
+      ...this,
       data: { ...this.data },
       visible: this.visible,
     });
@@ -195,7 +201,7 @@ function createCanvasServiceForReconcileTests() {
     updateContainer() {},
   };
   service.createFabricObject = async (spec: any) => {
-    const obj = new FakeFabricObject(spec.type);
+    const obj = new FakeFabricObject(spec.type, { src: spec.src });
     obj.set({
       ...(spec.props || {}),
       data: { ...(spec.data || {}), id: spec.id },
@@ -279,13 +285,23 @@ function testAttachRegistersRenderGraphAdapter() {
     [{ contentRect: { height: 240, width: 480 } } as ResizeObserverEntry],
     {} as ResizeObserver,
   );
-  assertEqual(canvasService.resizeCalls[0]?.width, 480, "resize width forwards");
+  assertEqual(
+    canvasService.resizeCalls[0]?.width,
+    480,
+    "resize width forwards",
+  );
 
   attachment.dispose();
   assert(disconnected, "dispose should disconnect resize observer");
   assert(!registered.has(CANVAS_SERVICE), "canvas service should unregister");
-  assert(!registered.has(SCENE_LAYOUT_SERVICE), "layout service should unregister");
-  assert(!registered.has(SCENE_EXPORT_SERVICE), "export service should unregister");
+  assert(
+    !registered.has(SCENE_LAYOUT_SERVICE),
+    "layout service should unregister",
+  );
+  assert(
+    !registered.has(SCENE_EXPORT_SERVICE),
+    "export service should unregister",
+  );
   assert(
     !registered.has(FABRIC_RENDER_GRAPH_ADAPTER),
     "graph adapter should unregister",
@@ -299,18 +315,30 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   runtime.services.register(canvas as any, CANVAS_SERVICE);
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
 
-  const renderIntentService = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  const renderIntentService = runtime.services.getOrThrow(
+    RENDER_INTENT_SERVICE,
+  );
   renderIntentService.setDocumentIntents([
     {
       id: "background",
-      subject: { kind: "object", surfaceId: "s1", layerId: "bg", objectId: "bg" },
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "bg",
+        objectId: "bg",
+      },
       visual: { type: "rect" },
       ordering: { layerId: "bg", stack: 0, layerOrder: 0 },
       props: { width: 10, height: 10 },
     },
     {
       id: "art",
-      subject: { kind: "object", surfaceId: "s1", layerId: "art", objectId: "art" },
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "art",
+      },
       visual: { type: "rect" },
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
       props: { width: 5, height: 5 },
@@ -335,7 +363,11 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
   assert(last, "adapter should reconcile");
   assertEqual(last.items.length, 2, "adapter should draw visible nodes");
-  assertEqual(last.items[0]?.layerId, "bg", "draw list should keep layer order");
+  assertEqual(
+    last.items[0]?.layerId,
+    "bg",
+    "draw list should keep layer order",
+  );
   assertEqual(last.effects.length, 1, "adapter should forward clip effects");
   assertEqual(
     last.effects[0]?.targetSubjectIds?.[0],
@@ -399,7 +431,11 @@ async function testFabricRenderGraphAdapterRendersRenderableScenes() {
   scene.removeScene("session-scene");
   await adapter.flush();
   const cleared = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
-  assertEqual(cleared?.items.length, 0, "removing a renderable scene should clear it");
+  assertEqual(
+    cleared?.items.length,
+    0,
+    "removing a renderable scene should clear it",
+  );
 
   await runtime.dispose();
 }
@@ -411,7 +447,9 @@ async function testFabricRenderGraphAdapterUsesDerivedImageDimensions() {
   runtime.services.register(canvas as any, CANVAS_SERVICE);
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
 
-  const renderIntentService = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  const renderIntentService = runtime.services.getOrThrow(
+    RENDER_INTENT_SERVICE,
+  );
   renderIntentService.setDocumentIntents([
     {
       id: "slot",
@@ -487,7 +525,12 @@ async function testFabricRenderGraphAdapterResyncsOnLayoutChange() {
   runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
     {
       id: "art",
-      subject: { kind: "object", surfaceId: "s1", layerId: "art", objectId: "art" },
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "art",
+      },
       visual: { type: "rect" },
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
       props: { width: 5, height: 5 },
@@ -517,14 +560,22 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
   await adapter.flush();
 
   const states: ReturnType<FabricRenderGraphAdapter["getSyncState"]>[] = [];
-  const stop = adapter.onSyncStateChange((state) => {
-    states.push(state);
-  }, { immediate: true });
+  const stop = adapter.onSyncStateChange(
+    (state) => {
+      states.push(state);
+    },
+    { immediate: true },
+  );
 
   runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
     {
       id: "background",
-      subject: { kind: "object", surfaceId: "s1", layerId: "bg", objectId: "bg" },
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "bg",
+        objectId: "bg",
+      },
       visual: { type: "rect" },
       ordering: { layerId: "bg", stack: 0, layerOrder: 0 },
       props: { width: 10, height: 10 },
@@ -539,7 +590,11 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
   await adapter.flush();
   const finalState = states[states.length - 1];
   assert(finalState, "adapter should report a final sync state");
-  assertEqual(finalState.loading, false, "adapter should report idle after flush");
+  assertEqual(
+    finalState.loading,
+    false,
+    "adapter should report idle after flush",
+  );
   assertEqual(finalState.pending, 0, "adapter should clear pending sync count");
   assert(
     finalState.generation > 0,
@@ -624,7 +679,11 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
   };
 
   canvas.emitCanvasEvent("object:moving", { target });
-  assertEqual(target.left, 90, "rect drag constraints should clamp graph objects");
+  assertEqual(
+    target.left,
+    90,
+    "rect drag constraints should clamp graph objects",
+  );
 
   const reference = {
     left: 10,
@@ -721,7 +780,11 @@ async function testProjectionSuppressesSourceInGraphOnly() {
   await adapter.flush();
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
   assert(last, "projection should reconcile");
-  assertEqual(last.items.length, 1, "source node should be omitted from draw list");
+  assertEqual(
+    last.items.length,
+    1,
+    "source node should be omitted from draw list",
+  );
   assert(
     last.items[0]?.key.startsWith("projection:"),
     "projection node should be drawn",
@@ -769,8 +832,15 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
     [],
   );
 
-  assert(!canvas.objects.includes(stale), "stale graph object should be removed");
-  assertEqual(canvas.objects.length, 1, "only current graph object should remain");
+  assert(
+    !canvas.objects.includes(stale),
+    "stale graph object should be removed",
+  );
+  assertEqual(
+    canvas.objects.length,
+    1,
+    "only current graph object should remain",
+  );
   assertEqual(
     canvas.objects[0]?.clipPath,
     undefined,
@@ -815,6 +885,61 @@ async function testCanvasReconcileAppliesClipPath() {
   );
 }
 
+async function testCanvasReconcileAppliesImageClipPath() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+  await service.reconcileRenderGraphDrawList(
+    [
+      {
+        key: "art-node",
+        layerId: "art",
+        order: 0,
+        spec: {
+          id: "art-node",
+          type: "rect",
+          props: { width: 10, height: 10 },
+          data: { subjectId: "art-subject" },
+        },
+      },
+    ],
+    [
+      {
+        key: "clip.art",
+        source: {
+          id: "clip-source",
+          type: "image",
+          src: "data:image/png;base64,dieline",
+          space: "screen",
+          props: { left: 1, top: 2, width: 100, height: 80 },
+        },
+        targetSubjectIds: ["art-subject"],
+      },
+    ],
+  );
+
+  const clipPath = canvas.objects[0]?.clipPath as any;
+  assert(clipPath, "image clip path should be attached");
+  assertEqual(
+    clipPath.type,
+    "image",
+    "clip path should preserve image source type",
+  );
+  assertEqual(
+    clipPath.src,
+    "data:image/png;base64,dieline",
+    "clip path should preserve image source url",
+  );
+  assertEqual(
+    clipPath.left,
+    1,
+    "clip path should preserve image positioning props",
+  );
+  assertEqual(
+    clipPath.absolutePositioned,
+    true,
+    "image clip path should be absolute-positioned like other clip sources",
+  );
+}
+
 async function testSceneExportMatchesRenderGraphNodeIds() {
   const source = {
     data: {
@@ -854,14 +979,21 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
     getObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: { left: number; top: number; width: number; height: number }) =>
-      rect,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
   };
   service.sceneLayoutService = {};
   service.createExportCanvas = () => exportCanvas;
 
   const result = await service.exportImage({
-    crop: { type: "sceneRect", rect: { left: 0, top: 0, width: 100, height: 80 } },
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
     includeHidden: true,
     sourceElementIds: ["session-image:slot"],
     sourceLayerIds: ["image.user.session.image"],
@@ -919,8 +1051,12 @@ async function testSceneExportUsesCutFrameCrop() {
     getObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: { left: number; top: number; width: number; height: number }) =>
-      rect,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
   };
   service.sceneLayoutService = {
     getLayout: () => ({
@@ -942,8 +1078,16 @@ async function testSceneExportUsesCutFrameCrop() {
     cutRect,
     "frame export should crop from scene layout cut rect",
   );
-  assertEqual(result.width, cutRect.width * 2, "frame export width should use cut crop");
-  assertEqual(result.height, cutRect.height * 2, "frame export height should use cut crop");
+  assertEqual(
+    result.width,
+    cutRect.width * 2,
+    "frame export width should use cut crop",
+  );
+  assertEqual(
+    result.height,
+    cutRect.height * 2,
+    "frame export height should use cut crop",
+  );
 }
 
 async function testSceneExportClearsClipPathByDefault() {
@@ -986,14 +1130,21 @@ async function testSceneExportClearsClipPathByDefault() {
     getObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: { left: number; top: number; width: number; height: number }) =>
-      rect,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
   };
   service.sceneLayoutService = {};
   service.createExportCanvas = () => exportCanvas;
 
   await service.exportImage({
-    crop: { type: "sceneRect", rect: { left: 0, top: 0, width: 100, height: 80 } },
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
     sourceLayerIds: ["image.user"],
   });
 
@@ -1045,14 +1196,21 @@ async function testSceneExportPreservesClipPathWhenRequested() {
     getObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: { left: number; top: number; width: number; height: number }) =>
-      rect,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
   };
   service.sceneLayoutService = {};
   service.createExportCanvas = () => exportCanvas;
 
   await service.exportImage({
-    crop: { type: "sceneRect", rect: { left: 0, top: 0, width: 100, height: 80 } },
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
     preserveClipPaths: true,
     sourceLayerIds: ["image.user"],
   });
@@ -1066,8 +1224,14 @@ async function testSceneExportPreservesClipPathWhenRequested() {
 
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
-    ["registers render graph adapter in browser host", testAttachRegistersRenderGraphAdapter],
-    ["builds graph adapter draw list", testFabricRenderGraphAdapterBuildsDrawList],
+    [
+      "registers render graph adapter in browser host",
+      testAttachRegistersRenderGraphAdapter,
+    ],
+    [
+      "builds graph adapter draw list",
+      testFabricRenderGraphAdapterBuildsDrawList,
+    ],
     [
       "renders renderable SceneService scenes",
       testFabricRenderGraphAdapterRendersRenderableScenes,
@@ -1076,17 +1240,48 @@ async function main() {
       "uses derived image dimensions for committed replacements",
       testFabricRenderGraphAdapterUsesDerivedImageDimensions,
     ],
-    ["resyncs graph adapter on layout change", testFabricRenderGraphAdapterResyncsOnLayoutChange],
-    ["reports graph adapter sync state", testFabricRenderGraphAdapterReportsSyncState],
-    ["preserves graph coordinate space", testFabricRenderGraphAdapterPreservesScreenSpace],
-    ["constrains render graph object dragging", testFabricRenderGraphAdapterConstrainsDragging],
-    ["projects without mutating source Fabric objects", testProjectionSuppressesSourceInGraphOnly],
-    ["reconciles stale objects and clip cleanup", testCanvasReconcileRemovesStaleObjectsAndClearsClip],
+    [
+      "resyncs graph adapter on layout change",
+      testFabricRenderGraphAdapterResyncsOnLayoutChange,
+    ],
+    [
+      "reports graph adapter sync state",
+      testFabricRenderGraphAdapterReportsSyncState,
+    ],
+    [
+      "preserves graph coordinate space",
+      testFabricRenderGraphAdapterPreservesScreenSpace,
+    ],
+    [
+      "constrains render graph object dragging",
+      testFabricRenderGraphAdapterConstrainsDragging,
+    ],
+    [
+      "projects without mutating source Fabric objects",
+      testProjectionSuppressesSourceInGraphOnly,
+    ],
+    [
+      "reconciles stale objects and clip cleanup",
+      testCanvasReconcileRemovesStaleObjectsAndClearsClip,
+    ],
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],
-    ["exports by render graph node ids", testSceneExportMatchesRenderGraphNodeIds],
-    ["exports frame crops from scene layout cut rect", testSceneExportUsesCutFrameCrop],
-    ["clears export clip paths by default", testSceneExportClearsClipPathByDefault],
-    ["preserves export clip paths when requested", testSceneExportPreservesClipPathWhenRequested],
+    ["applies graph image clip paths", testCanvasReconcileAppliesImageClipPath],
+    [
+      "exports by render graph node ids",
+      testSceneExportMatchesRenderGraphNodeIds,
+    ],
+    [
+      "exports frame crops from scene layout cut rect",
+      testSceneExportUsesCutFrameCrop,
+    ],
+    [
+      "clears export clip paths by default",
+      testSceneExportClearsClipPathByDefault,
+    ],
+    [
+      "preserves export clip paths when requested",
+      testSceneExportPreservesClipPathWhenRequested,
+    ],
   ];
 
   for (const [name, run] of tests) {

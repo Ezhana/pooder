@@ -22,9 +22,7 @@ import {
   computeSceneLayout,
   readSizeState,
 } from "../../shared/scene/scene-layout-model";
-import {
-  buildDielineClipSourceSpec,
-} from "../dieline/renderBuilder";
+import { buildDielineClipSourceSpec } from "../dieline/renderBuilder";
 import { readDielineState } from "../dieline/model";
 import {
   CLIP_CAPABILITY_ID,
@@ -68,21 +66,25 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   }
 
   activate(context: ExtensionContext) {
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
-    this.sceneService = context.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    this.sceneService =
+      context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
 
     this.sceneSubscription?.dispose();
-    this.sceneSubscription = this.sceneService.onDidChange(() => this.refresh());
+    this.sceneSubscription = this.sceneService.onDidChange(() =>
+      this.refresh(),
+    );
     this.configSubscription?.dispose();
-    this.configSubscription = this.configService.onAnyChange(() => this.refresh());
+    this.configSubscription = this.configService.onAnyChange(() =>
+      this.refresh(),
+    );
     this.refresh();
   }
 
@@ -246,6 +248,30 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
           pathData,
           fill: "#000000",
           stroke: null,
+          originX: "left",
+          originY: "top",
+          selectable: false,
+          evented: false,
+          excludeFromExport: true,
+        },
+      };
+    }
+
+    if (source.type === "image") {
+      const src = String(source.src || "").trim();
+      if (!src) return null;
+      return {
+        id: `clip.${element.id}.image-source`,
+        type: "image",
+        src,
+        space: source.space ?? "scene",
+        data: {
+          id: `clip.${element.id}.image-source`,
+          type: "clip-effect",
+          effect: "clipPath",
+        },
+        props: {
+          ...(source.props || {}),
           originX: "left",
           originY: "top",
           selectable: false,

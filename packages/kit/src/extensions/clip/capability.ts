@@ -1,10 +1,20 @@
-import type { CapabilityDefinition } from "@pooder/core";
+import type {
+  CapabilityDefinition,
+  RenderCoordinateSpace,
+  RenderProps,
+} from "@pooder/core";
 
 export const CLIP_CAPABILITY_ID = "pooder.kit.clip";
 
 export type ClipSource =
   | { type: "dieline"; configNamespace?: string }
-  | { type: "path"; pathData: string; space?: "scene" | "screen" };
+  | {
+      type: "image";
+      src: string;
+      space?: RenderCoordinateSpace;
+      props?: RenderProps;
+    }
+  | { type: "path"; pathData: string; space?: RenderCoordinateSpace };
 
 export interface ClipEffectPayload {
   enabled?: boolean;
@@ -24,9 +34,7 @@ export interface ClipCapabilityApi {
   refresh(): void;
 }
 
-export function normalizeClipEffectPayload(
-  value: unknown,
-): ClipEffectMetadata {
+export function normalizeClipEffectPayload(value: unknown): ClipEffectMetadata {
   const payload = isRecord(value) ? value : {};
   return {
     enabled: payload.enabled !== false,
@@ -56,6 +64,17 @@ function normalizeClipSource(value: unknown): ClipSource {
       const pathData = String(value.pathData || "").trim();
       const space = value.space === "screen" ? "screen" : "scene";
       return { type: "path", pathData, space };
+    }
+
+    if (value.type === "image") {
+      const src = String(value.src || "").trim();
+      const space = value.space === "screen" ? "screen" : "scene";
+      return {
+        type: "image",
+        src,
+        space,
+        ...(isRecord(value.props) ? { props: { ...value.props } } : {}),
+      };
     }
 
     if (value.type === "dieline") {

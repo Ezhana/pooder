@@ -63,6 +63,7 @@ import {
 import {
   CLIP_CAPABILITY_ID,
   ClipCapabilityExtension,
+  normalizeClipEffectPayload,
 } from "../src/extensions/clip";
 import {
   RULER_CAPABILITY_ID,
@@ -167,10 +168,12 @@ function imagePlacementCommittedVisibility(placementId: string) {
   };
 }
 
-type ImagePlacementSessionInput = string | {
-  placementId: string;
-  sessionId?: string;
-};
+type ImagePlacementSessionInput =
+  | string
+  | {
+      placementId: string;
+      sessionId?: string;
+    };
 
 type ImagePlacementTestDriver = {
   beginSession(input: ImagePlacementSessionInput): Promise<unknown>;
@@ -197,13 +200,18 @@ type ImagePlacementTestDriver = {
   resetSession(input?: ImagePlacementSessionInput): void;
 };
 
-function getImagePlacementTestDriver(extension: unknown): ImagePlacementTestDriver {
+function getImagePlacementTestDriver(
+  extension: unknown,
+): ImagePlacementTestDriver {
   return extension as ImagePlacementTestDriver;
 }
 
 class FakeCanvasService {
   private activeObject: any = null;
-  private readonly eventHandlers = new Map<string, Set<(event?: any) => void>>();
+  private readonly eventHandlers = new Map<
+    string,
+    Set<(event?: any) => void>
+  >();
 
   canvas = {
     width: 800,
@@ -256,7 +264,9 @@ class FakeCanvasService {
     return this.canvas.getObjects().find((object: any) => {
       if (object?.data?.id !== id) return false;
       if (!passId) return true;
-      return object?.data?.passId === passId || object?.data?.layerId === passId;
+      return (
+        object?.data?.passId === passId || object?.data?.layerId === passId
+      );
     });
   }
 
@@ -314,8 +324,10 @@ class FakeCanvasService {
     this.viewport.layout.scale = 1;
     this.viewport.layout.width = options.widthMm;
     this.viewport.layout.height = options.heightMm;
-    this.viewport.layout.offsetX = (options.containerWidth - options.widthMm) / 2;
-    this.viewport.layout.offsetY = (options.containerHeight - options.heightMm) / 2;
+    this.viewport.layout.offsetX =
+      (options.containerWidth - options.widthMm) / 2;
+    this.viewport.layout.offsetY =
+      (options.containerHeight - options.heightMm) / 2;
     return this.viewport.layout;
   }
 
@@ -878,6 +890,26 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     ["app.mockup", "app.art"],
     "mockup export should trim, filter, and dedupe caller ids",
   );
+  assertDeepEqual(
+    normalizeClipEffectPayload({
+      source: {
+        type: "image",
+        src: " data:image/png;base64,dieline ",
+        space: "screen",
+        props: { left: 1, top: 2, width: 100, height: 80 },
+      },
+    }),
+    {
+      enabled: true,
+      source: {
+        type: "image",
+        src: "data:image/png;base64,dieline",
+        space: "screen",
+        props: { left: 1, top: 2, width: 100, height: 80 },
+      },
+    },
+    "clip effect should normalize image clip sources",
+  );
   assertEqual(
     normalizeWhiteInkConfigNamespace(" storefrontWhiteInk "),
     "storefrontWhiteInk",
@@ -910,9 +942,12 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
   );
 
   const definitions = [
-    createImagePlacementCapabilityDefinition({} as ImagePlacementCapabilityApi, {
-      capabilityId: "custom.image",
-    }),
+    createImagePlacementCapabilityDefinition(
+      {} as ImagePlacementCapabilityApi,
+      {
+        capabilityId: "custom.image",
+      },
+    ),
     createDielineGeometryCapabilityDefinition(
       {} as DielineGeometryCapabilityApi,
       { capabilityId: "custom.dieline" },
@@ -1193,7 +1228,10 @@ async function testMockupExportCapabilityExtension() {
 async function testKitCapabilityFactoriesDoNotRegisterTools() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.services.register(new FakeSceneExportService() as any, SCENE_EXPORT_SERVICE);
+  runtime.services.register(
+    new FakeSceneExportService() as any,
+    SCENE_EXPORT_SERVICE,
+  );
   runtime.services
     .getOrThrow<CommandService>(COMMAND_SERVICE)
     .registerCommand("getSceneGeometry", () => ({
@@ -1430,7 +1468,12 @@ async function testApplyKitEditorDocument() {
                 },
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
-                  { type: "clip", payload: { source: { type: "path", pathData: "M0 0L1 0L1 1Z" } } },
+                  {
+                    type: "clip",
+                    payload: {
+                      source: { type: "path", pathData: "M0 0L1 0L1 1Z" },
+                    },
+                  },
                 ],
                 frame: { x: 10, y: 20, width: 30, height: 40 },
               },
@@ -1438,7 +1481,9 @@ async function testApplyKitEditorDocument() {
                 id: "white-source",
                 type: "image",
                 src: "/photo.png",
-                effects: [{ type: "white-ink", payload: { src: "/white.png" } }],
+                effects: [
+                  { type: "white-ink", payload: { src: "/white.png" } },
+                ],
                 frame: { x: 0, y: 0, width: 10, height: 10 },
               },
             ],
@@ -1528,7 +1573,10 @@ async function testApplyKitEditorDocument() {
   );
   assertDeepEqual(
     committedGraphNode?.data.clip,
-    { enabled: true, source: { type: "path", pathData: "M0 0L1 0L1 1Z", space: "scene" } },
+    {
+      enabled: true,
+      source: { type: "path", pathData: "M0 0L1 0L1 1Z", space: "scene" },
+    },
     "clip effect should write normalized clip metadata into RenderIntent data",
   );
   const clipEffect = committedGraphNode?.effects.find(
@@ -1545,9 +1593,11 @@ async function testApplyKitEditorDocument() {
     "clip render intent should resolve object-level target ids",
   );
   assertEqual(
-    (renderGraph.layers
-      .flatMap((layer) => layer.nodes)
-      .find((node) => node.data.type === "feature")?.data.feature as any)?.id,
+    (
+      renderGraph.layers
+        .flatMap((layer) => layer.nodes)
+        .find((node) => node.data.type === "feature")?.data.feature as any
+    )?.id,
     "hole",
     "feature effect should compile to declarative render graph data",
   );
@@ -1557,9 +1607,12 @@ async function testApplyKitEditorDocument() {
     "document apply should import document config",
   );
   assert(
-    renderGraph.layers.flatMap((layer) => layer.nodes).some(
-      (node) => node.data.type === "white-ink" && node.visual?.src === "/white.png",
-    ),
+    renderGraph.layers
+      .flatMap((layer) => layer.nodes)
+      .some(
+        (node) =>
+          node.data.type === "white-ink" && node.visual?.src === "/white.png",
+      ),
     "white ink effect should compile to a RenderIntent graph node",
   );
 
@@ -1819,7 +1872,10 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
       },
     ],
   });
-  assert(optionalResult.ok, "optional missing capabilities should apply document");
+  assert(
+    optionalResult.ok,
+    "optional missing capabilities should apply document",
+  );
   assert(
     optionalResult.diagnostics.some(
       (item) =>
@@ -1938,8 +1994,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   assert(
     throwResult.diagnostics.some(
       (item) =>
-        item.code === "effect-compile-failed" &&
-        item.severity === "warning",
+        item.code === "effect-compile-failed" && item.severity === "warning",
     ),
     "warn compiler failures should return warning diagnostics",
   );
@@ -2097,8 +2152,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       },
     },
   });
-  const renderIntentService =
-    runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
   renderIntentService.setDocumentIntents([
     {
       id: "front-business-helper",
@@ -2166,11 +2222,17 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "session image should support rotation",
   );
   assert(
-    Boolean(scene.getElement("image.cropShapeHatch", { sceneId: sessionSceneId })),
+    Boolean(
+      scene.getElement("image.cropShapeHatch", { sceneId: sessionSceneId }),
+    ),
     "image session should render dieline hatch overlay",
   );
   assert(
-    scene.listElements({ layerId: "image.session.overlay" }, { sceneId: sessionSceneId })
+    scene
+      .listElements(
+        { layerId: "image.session.overlay" },
+        { sceneId: sessionSceneId },
+      )
       .some((element) =>
         element.id.startsWith("projection:placement:business-helper"),
       ),
@@ -2217,7 +2279,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     getCenterPoint: () => ({ x: 220, y: 216 }),
     getObjectScaling: () => ({ x: 1, y: 1 }),
   };
-  await (imageExtension as any).syncWorkingImageTransformFromTarget(movedTarget);
+  await (imageExtension as any).syncWorkingImageTransformFromTarget(
+    movedTarget,
+  );
   const movedSessionImage = scene.getElement(
     "session-image:image-placement:placement",
     { sceneId: sessionSceneId },
@@ -2240,8 +2304,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     top: 0.4,
   });
   await driver.completeSession();
-  const committedImage = (scene.getElement("placement")?.data as any)?.imagePlacement
-    ?.image;
+  const committedImage = (scene.getElement("placement")?.data as any)
+    ?.imagePlacement?.image;
   assertEqual(
     committedImage.src,
     "data:image/png;base64,cropped-placement",
@@ -2280,7 +2344,10 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertDeepEqual(
     exportService.calls[0]?.crop,
-    { type: "sceneRect", rect: { left: 100, top: 120, width: 200, height: 160 } },
+    {
+      type: "sceneRect",
+      rect: { left: 100, top: 120, width: 200, height: 160 },
+    },
     "complete session should crop the working image by the placement frame",
   );
   assertDeepEqual(
@@ -2298,7 +2365,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
   const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
-  const artworkGraphLayer = graph.layers.find((layer) => layer.id === "artwork");
+  const artworkGraphLayer = graph.layers.find(
+    (layer) => layer.id === "artwork",
+  );
   const committedGraphNode = artworkGraphLayer?.nodes.find(
     (node) => node.id === "image:placement",
   );
@@ -2308,7 +2377,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "completed placement should render through the graph anchored business layer",
   );
   assert(
-    committedGraphNode?.visual?.src === "data:image/png;base64,cropped-placement",
+    committedGraphNode?.visual?.src ===
+      "data:image/png;base64,cropped-placement",
     "completed placement should write the processed production image node",
   );
   assertDeepEqual(
@@ -2540,15 +2610,20 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   exportService.exportImage = async (options: Record<string, any>) => {
     const sessionNode = scene.getElement(
       "session-image:image-placement:placement",
-      { sceneId: "pooder.kit.image-placement.session:image-placement:placement" },
+      {
+        sceneId: "pooder.kit.image-placement.session:image-placement:placement",
+      },
     );
     renderedSessionScale = Number(sessionNode?.style?.scaleX || 0);
-    return FakeSceneExportService.prototype.exportImage.call(exportService, options);
+    return FakeSceneExportService.prototype.exportImage.call(
+      exportService,
+      options,
+    );
   };
 
   await driver.completeSession("placement");
-  const committedImage = (scene.getElement("placement")?.data as any)?.imagePlacement
-    ?.image;
+  const committedImage = (scene.getElement("placement")?.data as any)
+    ?.imagePlacement?.image;
   assertDeepEqual(
     committedImage.metadata?.transform,
     {
@@ -2631,8 +2706,9 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
   const driver = getImagePlacementTestDriver(imageExtension);
-  const renderIntentService =
-    runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
 
   await driver.setImageSource("placement-a", {
     src: "/upload-placement-a.png",
@@ -2657,7 +2733,8 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
   assert(
     Boolean(
       scene.getElement("session-image:image-placement:placement-a", {
-        sceneId: "pooder.kit.image-placement.session:image-placement:placement-a",
+        sceneId:
+          "pooder.kit.image-placement.session:image-placement:placement-a",
       }),
     ),
     "uploaded working image should remain visible after focusing another placement",
@@ -2670,12 +2747,14 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
   assert(
     Boolean(
       scene.getElement("session-image:image-placement:placement-a", {
-        sceneId: "pooder.kit.image-placement.session:image-placement:placement-a",
+        sceneId:
+          "pooder.kit.image-placement.session:image-placement:placement-a",
       }),
     ) &&
       Boolean(
         scene.getElement("session-image:image-placement:placement-b", {
-          sceneId: "pooder.kit.image-placement.session:image-placement:placement-b",
+          sceneId:
+            "pooder.kit.image-placement.session:image-placement:placement-b",
         }),
       ),
     "multiple uploaded working images should render together before commit",
@@ -2688,7 +2767,10 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
   );
 
   await driver.beginSession("committed-placement");
-  await driver.setImageTransform("committed-placement", { scale: 1.5, left: 0.2 });
+  await driver.setImageTransform("committed-placement", {
+    scale: 1.5,
+    left: 0.2,
+  });
   driver.resetSession("committed-placement");
   const restoredPlacement = facade
     .getViewState()
@@ -2794,8 +2876,8 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
   );
 
   await driver.completeSession(sessionInput);
-  const committedImage = (scene.getElement("placement")?.data as any)?.imagePlacement
-    ?.image;
+  const committedImage = (scene.getElement("placement")?.data as any)
+    ?.imagePlacement?.image;
   assertEqual(
     committedImage.src,
     "data:image/png;base64,business-session",
@@ -2831,9 +2913,11 @@ async function testImagePlacementCanvasPressCanOnlyRequestSession() {
     },
   });
 
-  runtime.extensions.register(createImagePlacementCapability({
-    beginSessionOnCanvasInteraction: false,
-  }));
+  runtime.extensions.register(
+    createImagePlacementCapability({
+      beginSessionOnCanvasInteraction: false,
+    }),
+  );
   await runtime.extensions.flushActivation();
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
@@ -2918,7 +3002,10 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
     (item) => item.id === "dieline-overlay",
   );
   const dielineNode = dielineLayer?.nodes[0];
-  assert(dielineLayer, "dieline render intent should expose the dieline overlay layer");
+  assert(
+    dielineLayer,
+    "dieline render intent should expose the dieline overlay layer",
+  );
 
   const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
   const context = {
@@ -3320,7 +3407,9 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
     CONFIGURABLE_VISUAL_CAPABILITY_ID,
   );
   if (!facade) {
-    throw new Error("configurable visual capability facade should be registered");
+    throw new Error(
+      "configurable visual capability facade should be registered",
+    );
   }
 
   assertDeepEqual(
@@ -3688,8 +3777,9 @@ async function testFeatureCapabilityDefinition() {
 
   await runtime.extensions.flushActivation();
 
-  const facade =
-    runtime.capabilities.get<FeatureCapabilityApi>(FEATURE_CAPABILITY_ID);
+  const facade = runtime.capabilities.get<FeatureCapabilityApi>(
+    FEATURE_CAPABILITY_ID,
+  );
   if (!facade) {
     throw new Error("feature capability facade should be registered");
   }
