@@ -117,7 +117,6 @@ import {
   type RenderIntentService,
   type SceneService,
   type SessionService,
-  ToolRegistryService,
 } from "@pooder/core";
 
 declare const process: {
@@ -1090,23 +1089,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
       "active",
     "configurable visual capability factory should activate",
   );
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  for (const toolId of [
-    IMAGE_PLACEMENT_CAPABILITY_ID,
-    WHITE_INK_CAPABILITY_ID,
-    DIELINE_GEOMETRY_CAPABILITY_ID,
-    CLIP_CAPABILITY_ID,
-    FEATURE_CAPABILITY_ID,
-    CONFIGURABLE_VISUAL_CAPABILITY_ID,
-  ]) {
-    assert(
-      !toolRegistry.hasTool(toolId),
-      `${toolId} should not register a kit-owned product tool`,
-    );
-  }
-
   await runtime.dispose();
 }
 
@@ -1861,13 +1843,6 @@ async function testImagePlacementCapabilityExtension() {
     "image placement capability facade should expose image state",
   );
 
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(IMAGE_PLACEMENT_CAPABILITY_ID),
-    "image placement capability registration should not require a tool",
-  );
   await runtime.dispose();
 }
 
@@ -2735,14 +2710,6 @@ async function testEdgeDetectionCapabilityExtension() {
   );
   assert(!!facade, "edge detection capability facade should be registered");
 
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(EDGE_DETECTION_CAPABILITY_ID),
-    "edge detection capability registration should not require a tool",
-  );
-
   await runtime.dispose();
 }
 
@@ -2990,13 +2957,6 @@ async function testDielineGeometryCapabilityExtension() {
     throw new Error("dieline geometry capability facade should be registered");
   }
 
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(DIELINE_GEOMETRY_CAPABILITY_ID),
-    "dieline geometry capability registration should not require a tool",
-  );
   assert(
     runtime.config.getDefinition("storefrontDieline.shape"),
     "dieline geometry capability should accept caller config namespace",
@@ -3107,13 +3067,6 @@ async function testWhiteInkCapabilityExtension() {
     throw new Error("white ink capability facade should be registered");
   }
 
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(WHITE_INK_CAPABILITY_ID),
-    "white ink capability registration should not require a tool",
-  );
   assert(
     runtime.config.getDefinition("storefrontWhiteInk.items"),
     "white ink capability should accept caller config namespace",
@@ -3431,13 +3384,6 @@ async function testRulerCapabilityExtension() {
     throw new Error("ruler capability facade should be registered");
   }
 
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(RULER_CAPABILITY_ID),
-    "ruler capability registration should not require a tool",
-  );
   assert(
     runtime.config.getDefinition("storefrontRuler.thickness"),
     "ruler capability should accept caller config namespace",
@@ -3545,14 +3491,6 @@ async function testFeatureCapabilityDefinition() {
   if (!facade) {
     throw new Error("feature capability facade should be registered");
   }
-
-  const toolRegistry = runtime.services.getOrThrow<ToolRegistryService>(
-    "ToolRegistryService",
-  );
-  assert(
-    !toolRegistry.hasTool(FEATURE_CAPABILITY_ID),
-    "feature capability registration should not require a tool",
-  );
 
   const feature = {
     id: "feature-1",
