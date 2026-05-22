@@ -2043,6 +2043,38 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "image session should snap a moving image edge to the placement edge",
   );
 
+  const movedTarget = {
+    data: {
+      placementId: "placement",
+      source: "working",
+      type: "image-placement-image",
+    },
+    left: 220,
+    top: 216,
+    width: 200,
+    height: 160,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint: () => ({ x: 220, y: 216 }),
+    getObjectScaling: () => ({ x: 1, y: 1 }),
+  };
+  await (imageExtension as any).syncWorkingImageTransformFromTarget(movedTarget);
+  const movedSessionImage = scene.getElement(
+    "session-image:image-placement:placement",
+    { sceneId: sessionSceneId },
+  );
+  assertEqual(
+    movedSessionImage?.style?.left,
+    220,
+    "dragged image session object should update the transient scene before session sync",
+  );
+  assertEqual(
+    movedSessionImage?.style?.top,
+    216,
+    "dragged image session object should keep its moved y position in the transient scene",
+  );
+
   await driver.setImageTransform("placement", {
     angle: 22,
     left: 0.6,

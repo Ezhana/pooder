@@ -1248,6 +1248,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       transform: resolveImageTransformSnapshot(next),
     };
     this.setWorkingImageDraft(placementId, sessionId, next);
+    this.publishImageSessionScenes();
     this.upsertImageSessionDraft(placementId, next, sessionId);
     this.syncWorkingPlacementVisibilityContext();
     if (!options.skipRender) {
