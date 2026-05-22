@@ -164,7 +164,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         });
 
         clone.set({
-          clipPath: undefined,
+          ...(options.preserveClipPaths === true ? {} : { clipPath: undefined }),
           originX: "center",
           originY: "center",
           left: (sceneCenter.x - crop.left) * multiplier,

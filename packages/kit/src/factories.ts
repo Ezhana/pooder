@@ -5,6 +5,7 @@ import { DielineGeometryCapabilityExtension } from "./extensions/dieline";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImagePlacementCapabilityExtension } from "./extensions/image";
+import { MockupExportCapabilityExtension } from "./extensions/mockup-export";
 import { RulerCapabilityExtension } from "./extensions/ruler";
 import { WhiteInkCapabilityExtension } from "./extensions/white-ink";
 
@@ -35,6 +36,10 @@ export const createFeatureCapability = (
 export const createImagePlacementCapability = (
   options?: ConstructorParameters<typeof ImagePlacementCapabilityExtension>[0],
 ) => new ImagePlacementCapabilityExtension(options);
+
+export const createMockupExportCapability = (
+  options?: ConstructorParameters<typeof MockupExportCapabilityExtension>[0],
+) => new MockupExportCapabilityExtension(options);
 
 export const createRulerCapability = (
   options?: ConstructorParameters<typeof RulerCapabilityExtension>[0],

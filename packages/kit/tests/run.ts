@@ -42,6 +42,13 @@ import {
   normalizeDesignExportLayerIds,
   type DesignExportCapabilityApi,
 } from "../src/extensions/design-export";
+import {
+  MOCKUP_EXPORT_CAPABILITY_ID,
+  MockupExportCapabilityExtension,
+  createMockupExportCapabilityDefinition,
+  normalizeMockupExportIds,
+  type MockupExportCapabilityApi,
+} from "../src/extensions/mockup-export";
 import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
 import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config";
 import {
@@ -88,6 +95,7 @@ import {
   createFeatureCapability,
   createConfigurableVisualCapability,
   createImagePlacementCapability,
+  createMockupExportCapability,
   createWhiteInkCapability,
 } from "../src/factories";
 import {
@@ -865,6 +873,11 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     ["legacy.image"],
     "design export should use fallback layer ids",
   );
+  assertDeepEqual(
+    normalizeMockupExportIds([" app.mockup ", "", "app.mockup", "app.art"]),
+    ["app.mockup", "app.art"],
+    "mockup export should trim, filter, and dedupe caller ids",
+  );
   assertEqual(
     normalizeWhiteInkConfigNamespace(" storefrontWhiteInk "),
     "storefrontWhiteInk",
@@ -907,6 +920,9 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     createDesignExportCapabilityDefinition({} as DesignExportCapabilityApi, {
       capabilityId: "custom.export",
     }),
+    createMockupExportCapabilityDefinition({} as MockupExportCapabilityApi, {
+      capabilityId: "custom.mockup-export",
+    }),
     createWhiteInkCapabilityDefinition({} as WhiteInkCapabilityApi, {
       capabilityId: "custom.white-ink",
     }),
@@ -924,6 +940,7 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
       "custom.image",
       "custom.dieline",
       "custom.export",
+      "custom.mockup-export",
       "custom.white-ink",
       "custom.ruler",
       "custom.feature",
@@ -1039,9 +1056,144 @@ async function testDesignExportCapabilityExtension() {
   await runtime.dispose();
 }
 
+async function testMockupExportCapabilityExtension() {
+  const runtime = new Pooder();
+  const commandService =
+    runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
+  const exportService = new FakeSceneExportService();
+
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 4, top: 5, width: 120, height: 90 },
+    format: "png",
+    height: 90,
+    multiplier: 1,
+    sourceElementIds: ["mockup-element"],
+    sourceLayerIds: ["base", "artwork", "overlay"],
+    url: "data:image/png;base64,mockup",
+    width: 120,
+  };
+
+  runtime.extensions.register(new MockupExportCapabilityExtension());
+  runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
+  await runtime.extensions.flushActivation();
+
+  assertEqual(
+    runtime.extensions.getState(MOCKUP_EXPORT_CAPABILITY_ID)?.state,
+    "active",
+    "mockup export capability should activate",
+  );
+  assertEqual(
+    commandService.getCommand("exportMockup"),
+    undefined,
+    "mockup export capability should not register legacy exportMockup",
+  );
+
+  const facade = runtime.capabilities.get<MockupExportCapabilityApi>(
+    MOCKUP_EXPORT_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("mockup export capability facade should be registered");
+  }
+
+  const result = await facade.exportMockup({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 4, top: 5, width: 120, height: 90 },
+    },
+    format: "png",
+    includeHidden: true,
+    multiplier: 1,
+    sourceElementIds: [" mockup-element "],
+    sourceLayerIds: [" base ", "artwork", "overlay", "artwork"],
+  });
+  const lastCall = exportService.calls[exportService.calls.length - 1];
+
+  assertDeepEqual(
+    lastCall.sourceLayerIds,
+    ["base", "artwork", "overlay"],
+    "mockup export capability should delegate caller layer ids",
+  );
+  assertDeepEqual(
+    lastCall.sourceElementIds,
+    ["mockup-element"],
+    "mockup export capability should delegate caller element ids",
+  );
+  assertDeepEqual(
+    lastCall.crop,
+    { type: "sceneRect", rect: { left: 4, top: 5, width: 120, height: 90 } },
+    "mockup export capability should delegate explicit crop",
+  );
+  assertEqual(
+    lastCall.includeHidden,
+    true,
+    "mockup export capability should delegate includeHidden",
+  );
+  assertEqual(
+    lastCall.preserveClipPaths,
+    true,
+    "mockup export capability should preserve clip paths by default",
+  );
+  assertEqual(
+    result.url,
+    "data:image/png;base64,mockup",
+    "mockup export capability should map platform export url",
+  );
+  assertDeepEqual(
+    result.layerIds,
+    ["base", "artwork", "overlay"],
+    "mockup export capability should map platform layer ids",
+  );
+  assertDeepEqual(
+    result.crop,
+    { left: 4, top: 5, width: 120, height: 90 },
+    "mockup export capability should map platform crop",
+  );
+
+  await facade.exportMockup({ preserveClipPaths: false });
+  const defaultCall = exportService.calls[exportService.calls.length - 1];
+  assertDeepEqual(
+    defaultCall.crop,
+    { type: "frame", frame: "cut" },
+    "mockup export capability should default to cut frame crop",
+  );
+  assertEqual(
+    defaultCall.preserveClipPaths,
+    false,
+    "mockup export capability should allow callers to disable clip path preservation",
+  );
+
+  exportService.error = new Error("browser-scene-export-empty");
+  try {
+    await facade.exportMockup();
+    throw new Error("mockup export should throw for empty source exports");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "mockup-export-empty",
+      "mockup export capability should map empty source errors",
+    );
+  }
+
+  exportService.error = new Error("browser-scene-export-failed");
+  try {
+    await facade.exportMockup();
+    throw new Error("mockup export should throw for failed exports");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "mockup-export-failed",
+      "mockup export capability should map platform export failures",
+    );
+  }
+
+  await runtime.dispose();
+}
+
 async function testKitCapabilityFactoriesDoNotRegisterTools() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  runtime.services.register(new FakeSceneExportService() as any, SCENE_EXPORT_SERVICE);
   runtime.services
     .getOrThrow<CommandService>(COMMAND_SERVICE)
     .registerCommand("getSceneGeometry", () => ({
@@ -1060,6 +1212,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
   runtime.extensions.register(createConfigurableVisualCapability());
+  runtime.extensions.register(createMockupExportCapability());
   await runtime.extensions.flushActivation();
 
   assert(
@@ -1088,6 +1241,11 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     runtime.extensions.getState(CONFIGURABLE_VISUAL_CAPABILITY_ID)?.state ===
       "active",
     "configurable visual capability factory should activate",
+  );
+  assert(
+    runtime.extensions.getState(MOCKUP_EXPORT_CAPABILITY_ID)?.state ===
+      "active",
+    "mockup export capability factory should activate",
   );
   await runtime.dispose();
 }
@@ -3613,6 +3771,7 @@ async function main() {
   testContributionCompatibility();
   testKitCapabilityContractDefinitionsAndNormalization();
   await testDesignExportCapabilityExtension();
+  await testMockupExportCapabilityExtension();
   await testKitCapabilityFactoriesDoNotRegisterTools();
   testCreateKitCapabilitiesForDocument();
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();

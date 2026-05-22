@@ -286,6 +286,7 @@ export interface SceneExportOptions {
   sourceElementIds?: readonly string[];
   crop?: SceneExportCrop;
   includeHidden?: boolean;
+  preserveClipPaths?: boolean;
 }
 
 export interface SceneExportResult {

@@ -946,6 +946,124 @@ async function testSceneExportUsesCutFrameCrop() {
   assertEqual(result.height, cutRect.height * 2, "frame export height should use cut crop");
 }
 
+async function testSceneExportClearsClipPathByDefault() {
+  const exportCanvas = {
+    objects: [] as any[],
+    add(object: any) {
+      this.objects.push(object);
+    },
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,ok";
+    },
+  };
+  const source = {
+    data: {
+      exportKeys: ["element"],
+      layerId: "image.user",
+    },
+    visible: true,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 50, y: 40 };
+    },
+    async clone() {
+      return {
+        clipPath: { id: "clip" },
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    getObjects: () => [source],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: { left: number; top: number; width: number; height: number }) =>
+      rect,
+  };
+  service.sceneLayoutService = {};
+  service.createExportCanvas = () => exportCanvas;
+
+  await service.exportImage({
+    crop: { type: "sceneRect", rect: { left: 0, top: 0, width: 100, height: 80 } },
+    sourceLayerIds: ["image.user"],
+  });
+
+  assertEqual(
+    exportCanvas.objects[0]?.clipPath,
+    undefined,
+    "export should clear clip paths by default",
+  );
+}
+
+async function testSceneExportPreservesClipPathWhenRequested() {
+  const clipPath = { id: "clip" };
+  const exportCanvas = {
+    objects: [] as any[],
+    add(object: any) {
+      this.objects.push(object);
+    },
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,ok";
+    },
+  };
+  const source = {
+    data: {
+      exportKeys: ["element"],
+      layerId: "image.user",
+    },
+    visible: true,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 50, y: 40 };
+    },
+    async clone() {
+      return {
+        clipPath,
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    getObjects: () => [source],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: { left: number; top: number; width: number; height: number }) =>
+      rect,
+  };
+  service.sceneLayoutService = {};
+  service.createExportCanvas = () => exportCanvas;
+
+  await service.exportImage({
+    crop: { type: "sceneRect", rect: { left: 0, top: 0, width: 100, height: 80 } },
+    preserveClipPaths: true,
+    sourceLayerIds: ["image.user"],
+  });
+
+  assertEqual(
+    exportCanvas.objects[0]?.clipPath,
+    clipPath,
+    "export should preserve clip paths when requested",
+  );
+}
+
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["registers render graph adapter in browser host", testAttachRegistersRenderGraphAdapter],
@@ -967,6 +1085,8 @@ async function main() {
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],
     ["exports by render graph node ids", testSceneExportMatchesRenderGraphNodeIds],
     ["exports frame crops from scene layout cut rect", testSceneExportUsesCutFrameCrop],
+    ["clears export clip paths by default", testSceneExportClearsClipPathByDefault],
+    ["preserves export clip paths when requested", testSceneExportPreservesClipPathWhenRequested],
   ];
 
   for (const [name, run] of tests) {

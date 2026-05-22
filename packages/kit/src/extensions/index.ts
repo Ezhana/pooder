@@ -6,5 +6,6 @@ export * from "./image";
 export * from "./dieline";
 export * from "./feature";
 export * from "./mirror";
+export * from "./mockup-export";
 export * from "./ruler";
 export * from "./white-ink";
