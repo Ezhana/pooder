@@ -17,6 +17,7 @@ import {
   SCENE_LAYOUT_SERVICE,
 } from "./tokens";
 import type { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
+import { applyAlphaMask, renderOutputMask } from "./output-mask";
 
 export type BrowserSceneExportFormat = SceneExportFormat;
 export type BrowserSceneExportFrame = "cut" | "trim" | "bleed";
@@ -45,6 +46,13 @@ interface ExportCanvasLike {
 
 function normalizeFormat(format: unknown): BrowserSceneExportFormat {
   return format === "jpeg" ? "jpeg" : "png";
+}
+
+function normalizeOutputMaskMode(mode: unknown): "alpha" | "outline" | "shape" {
+  if (mode === "alpha" || mode === "outline" || mode === "shape") {
+    return mode;
+  }
+  throw new Error("browser-scene-export-output-mask-mode-unsupported");
 }
 
 function normalizeMultiplier(multiplier: unknown): number {
@@ -83,6 +91,15 @@ function readExportKeys(object: any): string[] {
   const keys = object?.data?.exportKeys;
   if (!Array.isArray(keys)) return [];
   return normalizeIds(keys);
+}
+
+function readOutputMaskKeys(object: any): string[] {
+  return normalizeIds([
+    object?.data?.outputMaskKey,
+    ...(Array.isArray(object?.data?.outputMaskKeys)
+      ? object.data.outputMaskKeys
+      : []),
+  ]);
 }
 
 function cloneRect(rect: BrowserSceneExportRect): BrowserSceneExportRect {
@@ -125,7 +142,8 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const canvasService = this.requireCanvasService();
     await this.renderGraphAdapter?.flush();
 
-    const format = normalizeFormat(options.format);
+    const outputMask = options.outputMask;
+    const format = outputMask ? "png" : normalizeFormat(options.format);
     const multiplier = normalizeMultiplier(options.multiplier);
     const sourceLayerIds = normalizeIds(options.sourceLayerIds);
     const sourceElementIds = normalizeIds(options.sourceElementIds);
@@ -187,7 +205,17 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       }
 
       exportCanvas.renderAll();
-      const url = exportCanvas.toDataURL({ format, multiplier: 1 });
+      const exportedUrl = exportCanvas.toDataURL({ format, multiplier: 1 });
+      const url = outputMask
+        ? await this.applyOutputMask(exportedUrl, {
+            crop,
+            height,
+            multiplier,
+            outputMask,
+            sceneScale: scaleBase,
+            width,
+          })
+        : exportedUrl;
       if (!url) {
         throw new Error("browser-scene-export-failed");
       }
@@ -231,6 +259,59 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       }
       return true;
     });
+  }
+
+  private async applyOutputMask(
+    sourceUrl: string,
+    options: {
+      crop: BrowserSceneExportRect;
+      height: number;
+      multiplier: number;
+      outputMask: NonNullable<BrowserSceneExportOptions["outputMask"]>;
+      sceneScale: number;
+      width: number;
+    },
+  ): Promise<string> {
+    const sourceKey = String(options.outputMask.sourceKey || "").trim();
+    if (!sourceKey) {
+      throw new Error("browser-scene-export-output-mask-source-key-required");
+    }
+
+    const source = this.resolveOutputMaskSource(sourceKey);
+    const mode = normalizeOutputMaskMode(options.outputMask.mode || "alpha");
+    const maskCanvas = await renderOutputMask({
+      canvasService: this.requireCanvasService(),
+      crop: options.crop,
+      height: options.height,
+      mode,
+      multiplier: options.multiplier,
+      sceneScale: options.sceneScale,
+      source,
+      width: options.width,
+    });
+
+    return applyAlphaMask({
+      height: options.height,
+      maskCanvas,
+      sourceUrl,
+      width: options.width,
+    });
+  }
+
+  private resolveOutputMaskSource(sourceKey: string): FabricObject {
+    const source = this.getCanvasObjects(true).find((object: any) =>
+      readOutputMaskKeys(object).includes(sourceKey),
+    );
+
+    if (!source) {
+      throw new Error("browser-scene-export-output-mask-source-missing");
+    }
+
+    if ((source as any)?.visible === false) {
+      throw new Error("browser-scene-export-output-mask-source-hidden");
+    }
+
+    return source;
   }
 
   private getCanvasObjects(includeHidden: boolean): FabricObject[] {

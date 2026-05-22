@@ -2,6 +2,7 @@ import type {
   CanvasRect,
   CapabilityDefinition,
   SceneExportCrop,
+  SceneExportOutputMask,
   SceneExportOptions,
 } from "@pooder/core";
 
@@ -12,6 +13,7 @@ export type MockupExportFormat = "png" | "jpeg";
 export interface MockupExportOptions
   extends Omit<SceneExportOptions, "format"> {
   format?: MockupExportFormat;
+  outputMask?: SceneExportOutputMask;
 }
 
 export interface MockupExportResult {

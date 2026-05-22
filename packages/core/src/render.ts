@@ -279,6 +279,13 @@ export type SceneExportCrop =
   | { type: "elementBounds"; elementIds?: readonly string[] }
   | { type: "frame"; frame: SceneExportFrame };
 
+export type SceneExportOutputMaskMode = "alpha" | "outline" | "shape";
+
+export interface SceneExportOutputMask {
+  sourceKey: string;
+  mode?: SceneExportOutputMaskMode;
+}
+
 export interface SceneExportOptions {
   format?: SceneExportFormat;
   multiplier?: number;
@@ -287,6 +294,7 @@ export interface SceneExportOptions {
   crop?: SceneExportCrop;
   includeHidden?: boolean;
   preserveClipPaths?: boolean;
+  outputMask?: SceneExportOutputMask;
 }
 
 export interface SceneExportResult {

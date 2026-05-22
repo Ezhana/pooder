@@ -1198,6 +1198,33 @@ async function testMockupExportCapabilityExtension() {
     "mockup export capability should allow callers to disable clip path preservation",
   );
 
+  await facade.exportMockup({
+    format: "jpeg",
+    outputMask: { mode: "outline", sourceKey: " templateFrame " },
+  });
+  const maskCall = exportService.calls[exportService.calls.length - 1];
+  assertEqual(
+    maskCall.format,
+    "png",
+    "mockup export capability should force png when output mask is requested",
+  );
+  assertDeepEqual(
+    maskCall.outputMask,
+    { sourceKey: "templateFrame", mode: "outline" },
+    "mockup export capability should delegate normalized output mask options",
+  );
+
+  try {
+    await facade.exportMockup({ outputMask: { sourceKey: "" } as any });
+    throw new Error("mockup export should throw for empty output mask source key");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "mockup-export-output-mask-source-key-required",
+      "mockup export capability should reject empty output mask source keys",
+    );
+  }
+
   exportService.error = new Error("browser-scene-export-empty");
   try {
     await facade.exportMockup();
@@ -1219,6 +1246,20 @@ async function testMockupExportCapabilityExtension() {
       error instanceof Error ? error.message : "",
       "mockup-export-failed",
       "mockup export capability should map platform export failures",
+    );
+  }
+
+  exportService.error = new Error("browser-scene-export-output-mask-source-missing");
+  try {
+    await facade.exportMockup({
+      outputMask: { sourceKey: "templateFrame" },
+    });
+    throw new Error("mockup export should throw for missing output mask source");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "mockup-export-output-mask-source-missing",
+      "mockup export capability should map platform output mask failures",
     );
   }
 

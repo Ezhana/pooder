@@ -93,6 +93,17 @@ const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [WHITE_INK_CAPABILITY_ID]: () => createWhiteInkCapability(),
 };
 
+function normalizeOutputMaskKeys(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : [value];
+  return Array.from(
+    new Set(
+      values
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
 export function createKitCapabilitiesForDocument(
   value: unknown,
 ): ExtensionDefinition[] {
@@ -268,6 +279,9 @@ function createObjectRenderIntentDraft(
   const objectOrder = object.order ?? index;
   const layerOrder = layer.order ?? 0;
   const interactionLocked = object.interaction?.locked ?? object.locked;
+  const outputMaskKeys = normalizeOutputMaskKeys(
+    object.metadata?.outputMaskKeys ?? object.metadata?.outputMaskKey,
+  );
   const interaction = {
     selectable: object.interaction?.selectable ?? interactionLocked !== true,
     evented: object.interaction?.evented ?? interactionLocked !== true,
@@ -320,6 +334,7 @@ function createObjectRenderIntentDraft(
       documentLayerRole: layer.role,
       locked: interactionLocked,
       exportable: object.exportable,
+      ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
     },
   } satisfies Omit<RenderIntentDraft, "visual">;
 

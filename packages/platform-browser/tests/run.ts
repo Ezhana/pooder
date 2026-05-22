@@ -9,6 +9,9 @@ import {
   FabricRenderGraphAdapter,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  applyAlphaMaskData,
+  createBoundaryOutputMaskAlpha,
+  createFittedEllipseOutputMaskAlpha,
 } from "../src";
 import type {
   FabricRenderTargetClipEffect,
@@ -1222,8 +1225,286 @@ async function testSceneExportPreservesClipPathWhenRequested() {
   );
 }
 
+function testOutputMaskAlphaHelpers() {
+  const target = new Uint8ClampedArray([
+    10,
+    20,
+    30,
+    255,
+    40,
+    50,
+    60,
+    128,
+  ]);
+  const masked = applyAlphaMaskData(target, new Uint8ClampedArray([255, 0]));
+
+  assertEqual(masked[3], 255, "alpha mask should keep covered pixels opaque");
+  assertEqual(masked[7], 0, "alpha mask should clear uncovered pixels");
+}
+
+function testOutputMaskOutlineHelpers() {
+  const width = 5;
+  const height = 5;
+  const data = new Uint8ClampedArray(width * height * 4);
+  const setAlpha = (x: number, y: number) => {
+    data[(y * width + x) * 4 + 3] = 255;
+  };
+
+  for (let index = 1; index <= 3; index += 1) {
+    setAlpha(index, 1);
+    setAlpha(index, 3);
+    setAlpha(1, index);
+    setAlpha(3, index);
+  }
+
+  const alpha = createBoundaryOutputMaskAlpha(data, width, height);
+  assertEqual(alpha?.[2 * width + 2], 255, "outline mask should fill interior");
+  assertEqual(alpha?.[0], 0, "outline mask should leave outside transparent");
+}
+
+function testOutputMaskEllipseHelper() {
+  const width = 7;
+  const height = 7;
+  const data = new Uint8ClampedArray(width * height * 4);
+  const setAlpha = (x: number, y: number) => {
+    data[(y * width + x) * 4 + 3] = 255;
+  };
+
+  setAlpha(3, 1);
+  setAlpha(1, 3);
+  setAlpha(5, 3);
+  setAlpha(3, 5);
+
+  const alpha = createFittedEllipseOutputMaskAlpha(data, width, height);
+  assertEqual(alpha?.[3 * width + 3], 255, "ellipse mask should fill center");
+  assertEqual(alpha?.[0], 0, "ellipse mask should leave outside transparent");
+}
+
+async function testSceneExportAppliesOutputMask() {
+  const source = {
+    data: {
+      exportKeys: ["element"],
+      layerId: "image.user",
+    },
+    visible: true,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 50, y: 40 };
+    },
+    async clone() {
+      return {
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  };
+  const exportCanvas = {
+    objects: [] as any[],
+    add(object: any) {
+      this.objects.push(object);
+    },
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,raw";
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  let outputMaskCall: any;
+  service.canvasService = {
+    getObjects: () => [source],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
+  };
+  service.sceneLayoutService = {};
+  service.createExportCanvas = () => exportCanvas;
+  service.applyOutputMask = async (url: string, options: any) => {
+    outputMaskCall = { options, url };
+    return "data:image/png;base64,masked";
+  };
+
+  const result = await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+    format: "jpeg",
+    outputMask: { mode: "outline", sourceKey: "templateFrame" },
+    sourceLayerIds: ["image.user"],
+  });
+
+  assertEqual(
+    result.format,
+    "png",
+    "scene export should force png when output mask is requested",
+  );
+  assertEqual(
+    result.url,
+    "data:image/png;base64,masked",
+    "scene export should return the masked output url",
+  );
+  assertEqual(
+    outputMaskCall?.url,
+    "data:image/png;base64,raw",
+    "scene export should mask the rendered export image",
+  );
+  assertDeepEqual(
+    outputMaskCall?.options.crop,
+    { left: 0, top: 0, width: 100, height: 80 },
+    "scene export should pass resolved crop to output mask",
+  );
+}
+
+async function testSceneExportRejectsMissingOutputMaskSource() {
+  const source = {
+    data: {
+      exportKeys: ["element"],
+      layerId: "image.user",
+    },
+    visible: true,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 50, y: 40 };
+    },
+    async clone() {
+      return {
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  };
+  const exportCanvas = {
+    add() {},
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,raw";
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    getObjects: () => [source],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
+  };
+  service.sceneLayoutService = {};
+  service.createExportCanvas = () => exportCanvas;
+
+  try {
+    await service.exportImage({
+      crop: {
+        type: "sceneRect",
+        rect: { left: 0, top: 0, width: 100, height: 80 },
+      },
+      outputMask: { sourceKey: "templateFrame" },
+      sourceLayerIds: ["image.user"],
+    });
+    throw new Error("scene export should throw for missing output mask source");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "browser-scene-export-output-mask-source-missing",
+      "scene export should reject missing output mask source keys",
+    );
+  }
+}
+
+async function testSceneExportRejectsHiddenOutputMaskSource() {
+  const source = {
+    data: {
+      exportKeys: ["element"],
+      layerId: "image.user",
+    },
+    visible: true,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 50, y: 40 };
+    },
+    async clone() {
+      return {
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  };
+  const hiddenMask = {
+    data: { outputMaskKeys: ["templateFrame"] },
+    visible: false,
+  };
+  const exportCanvas = {
+    add() {},
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,raw";
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    getObjects: () => [source, hiddenMask],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
+  };
+  service.sceneLayoutService = {};
+  service.createExportCanvas = () => exportCanvas;
+
+  try {
+    await service.exportImage({
+      crop: {
+        type: "sceneRect",
+        rect: { left: 0, top: 0, width: 100, height: 80 },
+      },
+      outputMask: { sourceKey: "templateFrame" },
+      sourceLayerIds: ["image.user"],
+    });
+    throw new Error("scene export should throw for hidden output mask source");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "browser-scene-export-output-mask-source-hidden",
+      "scene export should reject hidden output mask sources",
+    );
+  }
+}
+
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
+    ["applies alpha mask data", testOutputMaskAlphaHelpers],
+    ["fills outline output masks", testOutputMaskOutlineHelpers],
+    ["fits ellipse output masks", testOutputMaskEllipseHelper],
     [
       "registers render graph adapter in browser host",
       testAttachRegistersRenderGraphAdapter,
@@ -1281,6 +1562,15 @@ async function main() {
     [
       "preserves export clip paths when requested",
       testSceneExportPreservesClipPathWhenRequested,
+    ],
+    ["applies output masks during scene export", testSceneExportAppliesOutputMask],
+    [
+      "rejects missing output mask source",
+      testSceneExportRejectsMissingOutputMaskSource,
+    ],
+    [
+      "rejects hidden output mask source",
+      testSceneExportRejectsHiddenOutputMaskSource,
     ],
   ];
 

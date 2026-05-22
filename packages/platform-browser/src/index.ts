@@ -1,6 +1,7 @@
 export * from "./browser-scene-export-service";
 export { default as CanvasService } from "./canvas-service";
 export * from "./host";
+export * from "./output-mask";
 export * from "./scene-layout-service";
 export * from "./render-spec";
 export * from "./scene/fabric-render-graph-adapter";
