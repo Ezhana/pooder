@@ -153,8 +153,8 @@ function imagePlacementCommittedVisibility(placementId: string) {
   return {
     op: "not",
     expr: {
-      op: "sessionScopeActive",
-      scope: { subjectId: placementId, channel: "image-placement" },
+      op: "contextTruthy",
+      key: `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-placement.${placementId}`,
     },
   };
 }
@@ -3352,6 +3352,18 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     }),
     true,
     "configurable visual image placement commit should be visible after the session is committed",
+  );
+  sessions.createSession({
+    sessionId: "stale-image-placement-session",
+    scope: { channel: "image-placement", subjectId: "front.image.user" },
+  });
+  assertEqual(
+    evaluateVisibilityExpr(committedGraphNode?.visibility, {
+      getContextValue: () => undefined,
+      isSessionScopeActive: (scope) => sessions.hasActiveSession({ scope }),
+    }),
+    true,
+    "configurable visual image placement commit should ignore stale active sessions once working state is gone",
   );
 
   await runtime.dispose();

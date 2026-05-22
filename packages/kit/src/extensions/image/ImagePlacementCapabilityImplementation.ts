@@ -1687,17 +1687,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private getCommittedImageVisibility(placementId: string): VisibilityExpr {
-    const placement = this.getPlacementElement(placementId);
-    const placementState = placement ? this.getPlacementState(placement) : null;
-    const surfaceId = placementState ? this.resolvePlacementSurfaceId(placementState) : null;
-    const scope = {
-      ...(surfaceId && surfaceId !== "legacy" ? { surfaceId } : {}),
-      subjectId: placementId,
-      channel: IMAGE_SESSION_CHANNEL,
-    };
     return {
       op: "not",
-      expr: { op: "sessionScopeActive", scope },
+      expr: {
+        op: "contextTruthy",
+        key: this.getWorkingPlacementVisibilityContextKey(placementId),
+      },
     };
   }
 
@@ -1908,42 +1903,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const selected = Array.isArray(event?.selected)
       ? event.selected[0]
       : event?.target;
-    this.logCanvasSessionEvent("selection", {
-      target: this.getCanvasTargetDebugData(selected),
-    });
     this.beginSessionFromCanvasTarget(selected);
   };
 
   private onMouseDown = (event: any) => {
-    this.logCanvasSessionEvent("mouse-down", {
-      target: this.getCanvasTargetDebugData(event?.target),
-    });
     this.beginSessionFromCanvasTarget(event?.target);
   };
-
-  private logCanvasSessionEvent(event: string, detail: Record<string, unknown>) {
-    console.debug?.("[pooder:image-placement:session]", event, detail);
-  }
-
-  private getCanvasTargetDebugData(target: any): Record<string, unknown> {
-    const data = isRecord(target?.data) ? target.data : {};
-    const session = isRecord(data.session) ? data.session : {};
-    const payload = isRecord(session.payload) ? session.payload : {};
-    const imagePlacement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
-    return {
-      dataId: data.id,
-      dataType: data.type,
-      evented: target?.evented,
-      imagePlacementId: imagePlacement.placementId,
-      layerId: data.layerId,
-      placementId: data.placementId,
-      renderLayerId: data.renderLayerId,
-      renderNodeId: data.renderNodeId,
-      selectable: target?.selectable,
-      sessionPlacementId: payload.placementId,
-      subjectId: data.subjectId,
-    };
-  }
 
   private getCanvasTargetPlacementId(target: any): string {
     const data = isRecord(target?.data) ? target.data : {};
@@ -1968,25 +1933,14 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const selected = target;
     const placementId = this.getCanvasTargetPlacementId(selected);
     if (!placementId) {
-      this.logCanvasSessionEvent("ignore-target-without-placement", {
-        target: this.getCanvasTargetDebugData(selected),
-      });
       return;
     }
     if (this.activePlacementId === placementId && this.workingImages.has(placementId)) {
-      this.logCanvasSessionEvent("ignore-active-session-target", {
-        placementId,
-        target: this.getCanvasTargetDebugData(selected),
-      });
       this.emitStateChange();
       return;
     }
     this.activePlacementId = placementId;
     this.activeImageSessionId = null;
-    this.logCanvasSessionEvent("request-open", {
-      placementId,
-      target: this.getCanvasTargetDebugData(selected),
-    });
     this.emitStateChange();
     this.emitCanvasSessionOpen(placementId, selected);
   }
@@ -2021,17 +1975,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private emitCanvasSessionOpen(placementId: string, target?: any) {
     const placement = this.getPlacementStates().find((item) => item.id === placementId);
     if (!placement) {
-      this.logCanvasSessionEvent("skip-open-placement-not-found", {
-        placementId,
-        target: this.getCanvasTargetDebugData(target),
-      });
       return;
     }
-    this.logCanvasSessionEvent("emit-open", {
-      placementId,
-      sessionKey: placement.sessionKey,
-      surfaceId: this.resolvePlacementSurfaceId(placement),
-    });
     this.context?.eventBus.emit("image:session:open", {
       sessionId: placement.sessionKey,
       sessionKey: placement.sessionKey,
