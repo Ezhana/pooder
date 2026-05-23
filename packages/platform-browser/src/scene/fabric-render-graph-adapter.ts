@@ -218,9 +218,6 @@ export class FabricRenderGraphAdapter implements Service {
     const effects: FabricRenderTargetClipEffect[] = [];
 
     graph.layers.forEach((layer, layerIndex) => {
-      const layerVisible =
-        layer.visible !== false &&
-        evaluateVisibilityExpr(undefined, visibility);
       layer.effects.forEach((effect, index) => {
         const normalized = this.toClipEffect(effect, `layer:${layer.id}:${index}`, visibility);
         if (normalized) effects.push(normalized);
@@ -236,7 +233,6 @@ export class FabricRenderGraphAdapter implements Service {
           if (normalized) effects.push(normalized);
         });
 
-        if (!layerVisible || !node.visible) return;
         if (!evaluateVisibilityExpr(node.visibility, visibility)) return;
         const spec = this.toRenderObjectSpec(layer, node);
         if (!spec) return;

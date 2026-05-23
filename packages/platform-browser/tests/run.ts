@@ -360,18 +360,45 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
         ],
       },
     },
+    {
+      id: "hidden-export",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "hidden-export",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", stack: 10, layerOrder: 1 },
+      export: { visible: false, tags: ["mockup"] },
+      props: { width: 7, height: 8 },
+    },
   ]);
 
   await adapter.flush();
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
   assert(last, "adapter should reconcile");
-  assertEqual(last.items.length, 2, "adapter should draw visible nodes");
+  assertEqual(
+    last.items.length,
+    3,
+    "adapter should reconcile hidden exportable nodes",
+  );
   assertEqual(
     last.items[0]?.layerId,
     "bg",
     "draw list should keep layer order",
   );
   assertEqual(last.effects.length, 1, "adapter should forward clip effects");
+  assertEqual(
+    last.items[2]?.spec.props.visible,
+    false,
+    "hidden graph nodes should stay hidden on the live canvas",
+  );
+  assertDeepEqual(
+    last.items[2]?.spec.data?.exportTags,
+    ["mockup"],
+    "hidden graph nodes should keep export tags for scene export",
+  );
   assertEqual(
     last.effects[0]?.targetSubjectIds?.[0],
     "art",
