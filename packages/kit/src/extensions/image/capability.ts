@@ -16,12 +16,13 @@ export interface ImagePlacementLayerOptions {
 }
 
 export type ImageSessionProjectionPlacement = "below" | "above" | "controls";
+export type ImageSessionProjectionSurfaceScope = "same-surface" | "all";
 
 export interface ImageSessionProjection {
   id: string;
-  sourceLayerIds?: string[];
-  sourceElementIds?: string[];
+  sourceTags: string[];
   placement: ImageSessionProjectionPlacement;
+  surfaceScope?: ImageSessionProjectionSurfaceScope;
   opacity?: number;
   interactive?: boolean;
   hideSource?: boolean;

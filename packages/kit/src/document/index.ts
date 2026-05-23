@@ -104,6 +104,17 @@ function normalizeOutputMaskKeys(value: unknown): string[] {
   );
 }
 
+function normalizeImageSessionProjectionTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
 export function createKitCapabilitiesForDocument(
   value: unknown,
 ): ExtensionDefinition[] {
@@ -282,6 +293,12 @@ function createObjectRenderIntentDraft(
   const outputMaskKeys = normalizeOutputMaskKeys(
     object.metadata?.outputMaskKeys ?? object.metadata?.outputMaskKey,
   );
+  const imageSessionProjectionTags = Array.from(
+    new Set([
+      ...normalizeImageSessionProjectionTags(layer.metadata?.imageSessionProjectionTags),
+      ...normalizeImageSessionProjectionTags(object.metadata?.imageSessionProjectionTags),
+    ]),
+  );
   const interaction = {
     selectable: object.interaction?.selectable ?? interactionLocked !== true,
     evented: object.interaction?.evented ?? interactionLocked !== true,
@@ -335,6 +352,7 @@ function createObjectRenderIntentDraft(
       locked: interactionLocked,
       exportable: object.exportable,
       ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
+      ...(imageSessionProjectionTags.length ? { imageSessionProjectionTags } : {}),
     },
   } satisfies Omit<RenderIntentDraft, "visual">;
 

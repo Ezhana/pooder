@@ -1453,6 +1453,7 @@ async function testApplyKitEditorDocument() {
           {
             id: "front-template",
             role: "background",
+            metadata: { imageSessionProjectionTags: ["template-overlay", "shared"] },
             objects: [
               {
                 id: "front-bg",
@@ -1465,6 +1466,7 @@ async function testApplyKitEditorDocument() {
                 id: "front-template-image",
                 type: "image",
                 src: "/template.png",
+                metadata: { imageSessionProjectionTags: ["object-overlay", "shared"] },
                 frame: { x: 0, y: 0, width: 100, height: 120 },
                 effects: [
                   {
@@ -1573,6 +1575,19 @@ async function testApplyKitEditorDocument() {
     backgroundGraphNode?.props.fill,
     "#eeeeee",
     "document apply should render background layers through ordinary objects",
+  );
+  assertDeepEqual(
+    backgroundGraphNode?.data.imageSessionProjectionTags,
+    ["template-overlay", "shared"],
+    "document apply should write layer-level image session projection tags into render graph data",
+  );
+  const templateImageGraphNode = renderGraph.layers
+    .find((layer) => layer.id === "front-template")
+    ?.nodes.find((node) => node.id === "front-template-image");
+  assertDeepEqual(
+    templateImageGraphNode?.data.imageSessionProjectionTags,
+    ["template-overlay", "shared", "object-overlay"],
+    "document apply should merge object-level image session projection tags with layer tags",
   );
   const committedGraphNode = renderGraph.layers
     .find((layer) => layer.id === "front-artwork")
@@ -2185,25 +2200,38 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         sessionProjections: [
           {
             id: "business-helper",
-            sourceLayerIds: ["front.business-helper"],
+            sourceTags: ["business-helper"],
             placement: "above",
             interactive: false,
           },
           {
             id: "hidden-helper",
-            sourceLayerIds: ["front.hidden-helper"],
+            sourceTags: ["hidden-helper"],
             placement: "above",
             interactive: false,
           },
           {
             id: "conditional-hidden-helper",
-            sourceLayerIds: ["front.conditional-hidden-helper"],
+            sourceTags: ["conditional-hidden-helper"],
             placement: "above",
             interactive: false,
           },
           {
             id: "conditional-visible-helper",
-            sourceLayerIds: ["front.conditional-visible-helper"],
+            sourceTags: ["conditional-visible-helper"],
+            placement: "above",
+            interactive: false,
+          },
+          {
+            id: "global-helper",
+            sourceTags: ["global-helper"],
+            surfaceScope: "all",
+            placement: "above",
+            interactive: false,
+          },
+          {
+            id: "ignored-helper",
+            sourceLayerIds: ["front.ignored-helper"],
             placement: "above",
             interactive: false,
           },
@@ -2226,8 +2254,26 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-business-helper",
       },
       visual: { type: "rect" },
+      data: { imageSessionProjectionTags: ["business-helper"] },
       ordering: {
         layerId: "front.business-helper",
+        stack: 500,
+        layerOrder: 0,
+      },
+      props: { width: 10, height: 10 },
+    },
+    {
+      id: "back-business-helper",
+      subject: {
+        kind: "object",
+        surfaceId: "back",
+        layerId: "back.business-helper",
+        objectId: "back-business-helper",
+      },
+      visual: { type: "rect" },
+      data: { imageSessionProjectionTags: ["business-helper"] },
+      ordering: {
+        layerId: "back.business-helper",
         stack: 500,
         layerOrder: 0,
       },
@@ -2242,6 +2288,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-hidden-helper",
       },
       visual: { type: "rect" },
+      data: { imageSessionProjectionTags: ["hidden-helper"] },
       ordering: {
         layerId: "front.hidden-helper",
         stack: 500,
@@ -2259,6 +2306,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-conditional-hidden-helper",
       },
       visual: { type: "rect" },
+      data: { imageSessionProjectionTags: ["conditional-hidden-helper"] },
       ordering: {
         layerId: "front.conditional-hidden-helper",
         stack: 500,
@@ -2276,12 +2324,47 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-conditional-visible-helper",
       },
       visual: { type: "rect" },
+      data: { imageSessionProjectionTags: ["conditional-visible-helper"] },
       ordering: {
         layerId: "front.conditional-visible-helper",
         stack: 500,
         layerOrder: 0,
       },
       export: { visibility: { op: "contextTruthy", key: "show.visible-helper" } },
+      props: { width: 10, height: 10 },
+    },
+    {
+      id: "back-global-helper",
+      subject: {
+        kind: "object",
+        surfaceId: "back",
+        layerId: "back.global-helper",
+        objectId: "back-global-helper",
+      },
+      visual: { type: "rect" },
+      data: { imageSessionProjectionTags: ["global-helper"] },
+      ordering: {
+        layerId: "back.global-helper",
+        stack: 500,
+        layerOrder: 0,
+      },
+      props: { width: 10, height: 10 },
+    },
+    {
+      id: "front-ignored-helper",
+      subject: {
+        kind: "object",
+        surfaceId: "legacy",
+        layerId: "front.ignored-helper",
+        objectId: "front-ignored-helper",
+      },
+      visual: { type: "rect" },
+      data: { imageSessionProjectionTags: ["ignored-helper"] },
+      ordering: {
+        layerId: "front.ignored-helper",
+        stack: 500,
+        layerOrder: 0,
+      },
       props: { width: 10, height: 10 },
     },
   ]);
@@ -2355,6 +2438,15 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const conditionalVisibleProjection = overlayElements.find((element) =>
     element.id.startsWith("projection:placement:conditional-visible-helper"),
   );
+  const crossSurfaceBusinessProjection = overlayElements.find((element) =>
+    element.id.includes("back-business-helper"),
+  );
+  const globalProjection = overlayElements.find((element) =>
+    element.id.startsWith("projection:placement:global-helper"),
+  );
+  const ignoredProjection = overlayElements.find((element) =>
+    element.id.startsWith("projection:placement:ignored-helper"),
+  );
   assert(
     Boolean(visibleProjection),
     "image session should project declared business helpers above the working image",
@@ -2378,6 +2470,20 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     conditionalVisibleProjection?.visible,
     true,
     "image session should snapshot true visibility expressions onto projection elements",
+  );
+  assertEqual(
+    crossSurfaceBusinessProjection,
+    undefined,
+    "image session tag projections should default to the placement surface",
+  );
+  assert(
+    Boolean(globalProjection),
+    "image session tag projections should allow cross-surface sources when requested",
+  );
+  assertEqual(
+    ignoredProjection,
+    undefined,
+    "image session should ignore legacy projection configs without source tags",
   );
   const snapTarget = {
     data: {

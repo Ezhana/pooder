@@ -57,6 +57,7 @@ import {
   type ImagePlacementSessionInput,
   type ImageSessionProjection,
   type ImageSessionProjectionPlacement,
+  type ImageSessionProjectionSurfaceScope,
   type ImagePlacementViewState,
 } from "./capability";
 import {
@@ -444,21 +445,26 @@ function normalizeSessionProjectionPlacement(
   return value === "below" || value === "controls" ? value : "above";
 }
 
+function normalizeSessionProjectionSurfaceScope(
+  value: unknown,
+): ImageSessionProjectionSurfaceScope {
+  return value === "all" ? "all" : "same-surface";
+}
+
 function normalizeSessionProjections(value: unknown): ImageSessionProjection[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((item, index): ImageSessionProjection | null => {
       if (!isRecord(item)) return null;
-      const sourceLayerIds = normalizeStringList(item.sourceLayerIds);
-      const sourceElementIds = normalizeStringList(item.sourceElementIds);
-      if (!sourceLayerIds.length && !sourceElementIds.length) return null;
+      const sourceTags = normalizeStringList(item.sourceTags);
+      if (!sourceTags.length) return null;
       const id = String(item.id || `projection-${index + 1}`).trim();
       const opacity = finiteNumber(item.opacity, Number.NaN);
       return {
         id: id || `projection-${index + 1}`,
         placement: normalizeSessionProjectionPlacement(item.placement),
-        ...(sourceLayerIds.length ? { sourceLayerIds } : {}),
-        ...(sourceElementIds.length ? { sourceElementIds } : {}),
+        sourceTags,
+        surfaceScope: normalizeSessionProjectionSurfaceScope(item.surfaceScope),
         ...(Number.isFinite(opacity)
           ? { opacity: Math.max(0, Math.min(1, opacity)) }
           : {}),
@@ -2647,7 +2653,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const sourceNodes = this.getProjectionSourceNodes();
     return projections.flatMap((projection) =>
       sourceNodes
-        .filter((node) => this.matchesSessionProjectionSource(node, projection))
+        .filter((node) => this.matchesSessionProjectionSource(placement, node, projection))
         .map((node, index) => {
           const spec = this.graphNodeToSessionProjectionSpec(
             placement,
@@ -2670,12 +2676,20 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private matchesSessionProjectionSource(
+    placement: ImagePlacementState,
     node: RenderGraphNode,
     projection: ImageSessionProjection,
   ): boolean {
-    const layerIds = new Set(projection.sourceLayerIds ?? []);
-    const subjectIds = new Set(projection.sourceElementIds ?? []);
-    return layerIds.has(node.layerId) || subjectIds.has(node.subjectId);
+    if (projection.surfaceScope !== "all" && node.surfaceId !== this.getPlacementSurfaceId(placement)) {
+      return false;
+    }
+    const sourceTags = new Set(projection.sourceTags);
+    const nodeTags = normalizeStringList(node.data.imageSessionProjectionTags);
+    return nodeTags.some((tag) => sourceTags.has(tag));
+  }
+
+  private getPlacementSurfaceId(placement: ImagePlacementState): string {
+    return String(placement.metadata?.documentSurfaceId || "").trim() || "legacy";
   }
 
   private graphNodeToSessionProjectionSpec(
