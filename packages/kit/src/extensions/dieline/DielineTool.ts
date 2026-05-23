@@ -376,7 +376,8 @@ export class DielineTool implements ExtensionDefinition {
   private hasImageItems(): boolean {
     if (!this.canvasService) return false;
     return this.imageClipLayerIds.some(
-      (layerId) => this.canvasService!.getObjects({ layerId }).length > 0,
+      (layerId) =>
+        this.canvasService!.selectObjects({ layerIds: [layerId] }).length > 0,
     );
   }
 

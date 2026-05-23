@@ -4,6 +4,7 @@ import {
   Service,
   ServiceContext,
   type CanvasObjectLike,
+  type CanvasObjectSelector,
   type CanvasService as CanvasServiceContract,
   type CanvasSize,
   type CanvasViewportLayout,
@@ -156,33 +157,18 @@ export default class CanvasService implements Service, CanvasServiceContract {
     return this.viewport.layout;
   }
 
-  getObjects(query: {
-    layerId?: string;
-    id?: string;
-    type?: string;
-    includeHidden?: boolean;
-    predicate?: (object: CanvasObjectLike) => boolean;
-  } = {}): CanvasObjectLike[] {
+  selectObjects(selector: CanvasObjectSelector = {}): CanvasObjectLike[] {
     return (this.canvas.getObjects() as CanvasObjectLike[]).filter((obj: any) => {
-      if (!query.includeHidden && obj?.visible === false) return false;
-      if (query.layerId !== undefined && obj?.data?.layerId !== query.layerId) {
-        return false;
-      }
-      if (query.id !== undefined && obj?.data?.id !== query.id) return false;
-      if (query.type !== undefined && obj?.data?.type !== query.type) return false;
-      return query.predicate ? query.predicate(obj) : true;
+      return this.matchesObjectSelector(obj, selector);
     });
   }
 
-  getObject(id: string, layerId?: string): FabricObject | undefined {
-    const normalizedId = String(id || "").trim();
-    if (!normalizedId) return undefined;
-
-    return this.canvas.getObjects().find((obj: any) => {
-      if (obj?.data?.id !== normalizedId) return false;
-      if (!layerId) return true;
-      return obj?.data?.layerId === layerId;
-    }) as FabricObject | undefined;
+  selectOneObject(selector: CanvasObjectSelector): FabricObject | undefined {
+    const objects = this.selectObjects(selector);
+    if (objects.length > 1) {
+      throw new Error("canvas-selector-ambiguous");
+    }
+    return objects[0] as FabricObject | undefined;
   }
 
   getActiveObject(): CanvasObjectLike | undefined {
@@ -536,6 +522,60 @@ export default class CanvasService implements Service, CanvasServiceContract {
       });
 
     objects.forEach((object, index) => this.moveObjectInCanvas(object, index));
+  }
+
+  private normalizeSelectorValues(value?: readonly string[]): Set<string> | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const values = Array.from(
+      new Set(
+        value
+          .map((item) => String(item || "").trim())
+          .filter((item) => item.length > 0),
+      ),
+    );
+    return values.length ? new Set(values) : undefined;
+  }
+
+  private matchesObjectSelector(
+    object: CanvasObjectLike,
+    selector: CanvasObjectSelector,
+  ): boolean {
+    if (selector.visible !== undefined && object?.visible !== selector.visible) {
+      return false;
+    }
+    const data = object?.data ?? {};
+    const ids = this.normalizeSelectorValues(selector.ids);
+    if (ids && !ids.has(String(data.id || "").trim())) return false;
+    const layerIds = this.normalizeSelectorValues(selector.layerIds);
+    if (layerIds && !layerIds.has(String(data.layerId || data.passId || "").trim())) {
+      return false;
+    }
+    const subjectIds = this.normalizeSelectorValues(selector.subjectIds);
+    if (subjectIds && !subjectIds.has(String(data.subjectId || data.subject?.objectId || data.subject?.layerId || data.subject?.surfaceId || "").trim())) {
+      return false;
+    }
+    const renderIntentIds = this.normalizeSelectorValues(selector.renderIntentIds);
+    if (renderIntentIds && !renderIntentIds.has(String(data.renderIntentId || "").trim())) {
+      return false;
+    }
+    const types = this.normalizeSelectorValues(selector.types);
+    if (types && !types.has(String(data.type || object?.type || "").trim())) {
+      return false;
+    }
+    const tags = this.normalizeSelectorValues(selector.tags);
+    if (tags) {
+      const objectTags = Array.isArray(data.tags) ? data.tags : [];
+      if (!objectTags.some((tag: unknown) => tags.has(String(tag || "").trim()))) {
+        return false;
+      }
+    }
+    if (selector.data) {
+      const matchesData = Object.entries(selector.data).every(
+        ([key, expected]) => data?.[key] === expected,
+      );
+      if (!matchesData) return false;
+    }
+    return true;
   }
 
   private toSpaceRect(

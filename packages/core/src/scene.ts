@@ -28,6 +28,7 @@ export interface SceneLayer {
   id: LayerId;
   order: number;
   visible: boolean;
+  tags?: string[];
   metadata?: SceneMetadata;
 }
 
@@ -35,12 +36,14 @@ export interface SceneLayerInput {
   id: LayerId;
   order?: number;
   visible?: boolean;
+  tags?: string[];
   metadata?: SceneMetadata;
 }
 
 export interface SceneLayerPatch {
   order?: number;
   visible?: boolean;
+  tags?: string[];
   metadata?: SceneMetadata;
 }
 
@@ -80,6 +83,7 @@ export interface SceneElementBase {
   type: SceneElementType;
   order: number;
   visible: boolean;
+  tags?: string[];
   metadata?: SceneMetadata;
   data?: SceneElementData;
   style?: SceneElementStyle;
@@ -131,6 +135,7 @@ export interface SceneElementPatch {
   layerId?: LayerId;
   order?: number;
   visible?: boolean;
+  tags?: string[];
   metadata?: SceneMetadata;
   data?: SceneElementData;
   style?: SceneElementStyle;
@@ -142,11 +147,23 @@ export interface SceneElementPatch {
   text?: string;
 }
 
-export interface SceneElementQuery {
+export interface SceneLayerSelector {
   sceneId?: SceneId;
-  layerId?: LayerId;
-  type?: SceneElementType;
+  ids?: readonly LayerId[];
+  layerIds?: readonly LayerId[];
   visible?: boolean;
+  tags?: readonly string[];
+  metadata?: SceneMetadata;
+}
+
+export interface SceneElementSelector {
+  sceneId?: SceneId;
+  ids?: readonly ElementId[];
+  layerIds?: readonly LayerId[];
+  types?: readonly SceneElementType[];
+  visible?: boolean;
+  tags?: readonly string[];
+  metadata?: SceneMetadata;
 }
 
 export interface SceneChangeSet {

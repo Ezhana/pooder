@@ -248,24 +248,39 @@ class FakeCanvasService {
 
   requestRenderAll() {}
 
-  getObjects(options: any = {}) {
+  selectObjects(options: any = {}) {
     const objects = this.canvas.getObjects();
     return objects.filter((object: any) => {
-      if (options.layerId && object.layerId !== options.layerId) return false;
-      if (options.type && object.type !== options.type) return false;
-      if (options.predicate && !options.predicate(object)) return false;
+      const data = object?.data ?? {};
+      const layerId = data.layerId ?? data.passId ?? object.layerId;
+      const type = data.type ?? object.type;
+      if (options.visible !== undefined && object?.visible !== options.visible) {
+        return false;
+      }
+      if (options.layerIds?.length && !options.layerIds.includes(layerId)) {
+        return false;
+      }
+      if (options.ids?.length && !options.ids.includes(data.id)) {
+        return false;
+      }
+      if (options.types?.length && !options.types.includes(type)) {
+        return false;
+      }
+      if (options.data) {
+        return Object.entries(options.data).every(
+          ([key, expected]) => data[key] === expected,
+        );
+      }
       return true;
     });
   }
 
-  getObject(id: string, passId?: string) {
-    return this.canvas.getObjects().find((object: any) => {
-      if (object?.data?.id !== id) return false;
-      if (!passId) return true;
-      return (
-        object?.data?.passId === passId || object?.data?.layerId === passId
-      );
-    });
+  selectOneObject(options: any) {
+    const objects = this.selectObjects(options);
+    if (objects.length > 1) {
+      throw new Error("canvas-selector-ambiguous");
+    }
+    return objects[0];
   }
 
   getActiveObject() {
@@ -391,7 +406,6 @@ class FakeSceneExportService {
       layerIds: [],
       elementIds: [],
       tags: [],
-      layerRoles: [],
     },
     url: "data:image/png;base64,test",
     width: 100,
@@ -994,7 +1008,6 @@ async function testDesignExportCapabilityExtension() {
       layerIds: ["app.design"],
       elementIds: ["element-1"],
       tags: ["design"],
-      layerRoles: ["content"],
     },
     url: "data:image/png;base64,capability",
     width: 90,
@@ -1063,7 +1076,6 @@ async function testDesignExportCapabilityExtension() {
       layerIds: ["app.design"],
       elementIds: ["element-1"],
       tags: ["design"],
-      layerRoles: ["content"],
     },
     "design export capability should map platform source result",
   );
@@ -1105,7 +1117,6 @@ async function testMockupExportCapabilityExtension() {
       layerIds: ["base", "artwork", "overlay"],
       elementIds: ["mockup-element"],
       tags: ["mockup"],
-      layerRoles: ["overlay"],
     },
     url: "data:image/png;base64,mockup",
     width: 120,
@@ -1184,7 +1195,6 @@ async function testMockupExportCapabilityExtension() {
       layerIds: ["base", "artwork", "overlay"],
       elementIds: ["mockup-element"],
       tags: ["mockup"],
-      layerRoles: ["overlay"],
     },
     "mockup export capability should map platform source result",
   );
@@ -1462,8 +1472,7 @@ async function testApplyKitEditorDocument() {
           {
             id: "front-template",
             role: "background",
-            exportTags: ["legacy-layer"],
-            metadata: { imageSessionProjectionTags: ["template-overlay", "shared"] },
+            tags: ["template-overlay", "shared"],
             objects: [
               {
                 id: "front-bg",
@@ -1476,11 +1485,7 @@ async function testApplyKitEditorDocument() {
                 id: "front-template-image",
                 type: "image",
                 src: "/template.png",
-                exportTags: ["legacy-object"],
-                metadata: {
-                  exportTags: [" mockup ", "mockup", ""],
-                  imageSessionProjectionTags: ["object-overlay", "shared"],
-                },
+                tags: [" mockup ", "object-overlay", "shared", "mockup", ""],
                 frame: { x: 0, y: 0, width: 100, height: 120 },
                 effects: [
                   {
@@ -1570,12 +1575,12 @@ async function testApplyKitEditorDocument() {
   );
   const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
   assertEqual(
-    scene.getLayer("front-artwork"),
+    scene.selectOneLayer({ ids: ["front-artwork"] }),
     undefined,
     "document apply should not write SceneService layers",
   );
   assertEqual(
-    scene.getElement("front-placement"),
+    scene.selectOneElement({ ids: ["front-placement"] }),
     undefined,
     "document apply should not write SceneService elements",
   );
@@ -1591,22 +1596,22 @@ async function testApplyKitEditorDocument() {
     "document apply should render background layers through ordinary objects",
   );
   assertDeepEqual(
-    backgroundGraphNode?.data.imageSessionProjectionTags,
+    backgroundGraphNode?.tags,
     ["template-overlay", "shared"],
-    "document apply should write layer-level image session projection tags into render graph data",
+    "document apply should write layer-level tags into render graph tags",
   );
   const templateImageGraphNode = renderGraph.layers
     .find((layer) => layer.id === "front-template")
     ?.nodes.find((node) => node.id === "front-template-image");
   assertDeepEqual(
-    templateImageGraphNode?.data.imageSessionProjectionTags,
-    ["template-overlay", "shared", "object-overlay"],
-    "document apply should merge object-level image session projection tags with layer tags",
+    templateImageGraphNode?.tags,
+    ["template-overlay", "shared", "mockup", "object-overlay"],
+    "document apply should merge object tags with layer tags",
   );
   assertDeepEqual(
-    templateImageGraphNode?.exportTags,
-    ["mockup"],
-    "document apply should read export tags from object metadata only",
+    templateImageGraphNode?.data.tags,
+    ["template-overlay", "shared", "mockup", "object-overlay"],
+    "document apply should expose canonical tags in render graph data",
   );
   const committedGraphNode = renderGraph.layers
     .find((layer) => layer.id === "front-artwork")
@@ -1922,7 +1927,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   assert(
     !strictRuntime.services
       .getOrThrow<SceneService>(SCENE_SERVICE)
-      .getLayer("front-artwork"),
+      .selectOneLayer({ ids: ["front-artwork"] }),
     "strict missing capability should not write scene",
   );
   await strictRuntime.dispose();
@@ -1968,7 +1973,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   assert(
     !optionalRuntime.services
       .getOrThrow<SceneService>(SCENE_SERVICE)
-      .getLayer("front-artwork"),
+      .selectOneLayer({ ids: ["front-artwork"] }),
     "optional missing capabilities should not write scene",
   );
   await optionalRuntime.dispose();
@@ -2148,7 +2153,6 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       layerIds: ["image.user"],
       elementIds: ["placement"],
       tags: [],
-      layerRoles: [],
     },
     url: "data:image/png;base64,cropped-placement",
     width: 400,
@@ -2277,7 +2281,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-business-helper",
       },
       visual: { type: "rect" },
-      data: { imageSessionProjectionTags: ["business-helper"] },
+      export: { tags: ["business-helper"] },
       ordering: {
         layerId: "front.business-helper",
         stack: 500,
@@ -2294,7 +2298,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "back-business-helper",
       },
       visual: { type: "rect" },
-      data: { imageSessionProjectionTags: ["business-helper"] },
+      export: { tags: ["business-helper"] },
       ordering: {
         layerId: "back.business-helper",
         stack: 500,
@@ -2311,13 +2315,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-hidden-helper",
       },
       visual: { type: "rect" },
-      data: { imageSessionProjectionTags: ["hidden-helper"] },
       ordering: {
         layerId: "front.hidden-helper",
         stack: 500,
         layerOrder: 0,
       },
-      export: { visible: false },
+      export: { visible: false, tags: ["hidden-helper"] },
       props: { width: 10, height: 10 },
     },
     {
@@ -2329,13 +2332,15 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-conditional-hidden-helper",
       },
       visual: { type: "rect" },
-      data: { imageSessionProjectionTags: ["conditional-hidden-helper"] },
       ordering: {
         layerId: "front.conditional-hidden-helper",
         stack: 500,
         layerOrder: 0,
       },
-      export: { visibility: { op: "contextTruthy", key: "show.hidden-helper" } },
+      export: {
+        tags: ["conditional-hidden-helper"],
+        visibility: { op: "contextTruthy", key: "show.hidden-helper" },
+      },
       props: { width: 10, height: 10 },
     },
     {
@@ -2347,13 +2352,15 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-conditional-visible-helper",
       },
       visual: { type: "rect" },
-      data: { imageSessionProjectionTags: ["conditional-visible-helper"] },
       ordering: {
         layerId: "front.conditional-visible-helper",
         stack: 500,
         layerOrder: 0,
       },
-      export: { visibility: { op: "contextTruthy", key: "show.visible-helper" } },
+      export: {
+        tags: ["conditional-visible-helper"],
+        visibility: { op: "contextTruthy", key: "show.visible-helper" },
+      },
       props: { width: 10, height: 10 },
     },
     {
@@ -2365,7 +2372,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "back-global-helper",
       },
       visual: { type: "rect" },
-      data: { imageSessionProjectionTags: ["global-helper"] },
+      export: { tags: ["global-helper"] },
       ordering: {
         layerId: "back.global-helper",
         stack: 500,
@@ -2382,7 +2389,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         objectId: "front-ignored-helper",
       },
       visual: { type: "rect" },
-      data: { imageSessionProjectionTags: ["ignored-helper"] },
+      export: { tags: ["ignored-helper"] },
       ordering: {
         layerId: "front.ignored-helper",
         stack: 500,
@@ -2418,10 +2425,10 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     true,
     "image session should create a renderable transient scene",
   );
-  const sessionImage = scene.getElement(
-    "session-image:image-placement:placement",
-    { sceneId: sessionSceneId },
-  );
+  const sessionImage = scene.selectOneElement({
+    ids: ["session-image:image-placement:placement"],
+    sceneId: sessionSceneId,
+  });
   assert(sessionImage, "image session should render a separate working object");
   const sessionImageNode = sessionImage!;
   assertEqual(
@@ -2441,14 +2448,17 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assert(
     Boolean(
-      scene.getElement("image.cropShapeHatch", { sceneId: sessionSceneId }),
+      scene.selectOneElement({
+        ids: ["image.cropShapeHatch"],
+        sceneId: sessionSceneId,
+      }),
     ),
     "image session should render dieline hatch overlay",
   );
-  const overlayElements = scene.listElements(
-    { layerId: "image.session.overlay" },
-    { sceneId: sessionSceneId },
-  );
+  const overlayElements = scene.selectElements({
+    layerIds: ["image.session.overlay"],
+    sceneId: sessionSceneId,
+  });
   const visibleProjection = overlayElements.find((element) =>
     element.id.startsWith("projection:placement:business-helper"),
   );
@@ -2552,10 +2562,10 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   await (imageExtension as any).syncWorkingImageTransformFromTarget(
     movedTarget,
   );
-  const movedSessionImage = scene.getElement(
-    "session-image:image-placement:placement",
-    { sceneId: sessionSceneId },
-  );
+  const movedSessionImage = scene.selectOneElement({
+    ids: ["session-image:image-placement:placement"],
+    sceneId: sessionSceneId,
+  });
   assertEqual(
     movedSessionImage?.style?.left,
     220,
@@ -2574,7 +2584,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     top: 0.4,
   });
   await driver.completeSession();
-  const committedImage = (scene.getElement("placement")?.data as any)
+  const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
     ?.imagePlacement?.image;
   assertEqual(
     committedImage.src,
@@ -2818,7 +2828,6 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
       layerIds: ["image.user"],
       elementIds: ["placement"],
       tags: [],
-      layerRoles: [],
     },
     url: "data:image/png;base64,cropped-placement",
     width: 400,
@@ -2882,12 +2891,10 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   canvasService.canvas.getObjects = () => [canvasTarget] as any;
   canvasService.setActiveObject(canvasTarget);
   exportService.exportImage = async (options: Record<string, any>) => {
-    const sessionNode = scene.getElement(
-      "session-image:image-placement:placement",
-      {
-        sceneId: "pooder.kit.image-placement.session:image-placement:placement",
-      },
-    );
+    const sessionNode = scene.selectOneElement({
+      ids: ["session-image:image-placement:placement"],
+      sceneId: "pooder.kit.image-placement.session:image-placement:placement",
+    });
     renderedSessionScale = Number(sessionNode?.style?.scaleX || 0);
     return FakeSceneExportService.prototype.exportImage.call(
       exportService,
@@ -2896,7 +2903,7 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   };
 
   await driver.completeSession("placement");
-  const committedImage = (scene.getElement("placement")?.data as any)
+  const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
     ?.imagePlacement?.image;
   assertDeepEqual(
     committedImage.metadata?.transform,
@@ -3006,7 +3013,8 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
   await driver.beginSession("placement-b");
   assert(
     Boolean(
-      scene.getElement("session-image:image-placement:placement-a", {
+      scene.selectOneElement({
+        ids: ["session-image:image-placement:placement-a"],
         sceneId:
           "pooder.kit.image-placement.session:image-placement:placement-a",
       }),
@@ -3020,13 +3028,15 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
   });
   assert(
     Boolean(
-      scene.getElement("session-image:image-placement:placement-a", {
+      scene.selectOneElement({
+        ids: ["session-image:image-placement:placement-a"],
         sceneId:
           "pooder.kit.image-placement.session:image-placement:placement-a",
       }),
     ) &&
       Boolean(
-        scene.getElement("session-image:image-placement:placement-b", {
+        scene.selectOneElement({
+          ids: ["session-image:image-placement:placement-b"],
           sceneId:
             "pooder.kit.image-placement.session:image-placement:placement-b",
         }),
@@ -3083,7 +3093,6 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
       layerIds: ["artwork"],
       elementIds: ["placement"],
       tags: [],
-      layerRoles: [],
     },
     url: "data:image/png;base64,business-session",
     width: 100,
@@ -3154,7 +3163,7 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
   );
 
   await driver.completeSession(sessionInput);
-  const committedImage = (scene.getElement("placement")?.data as any)
+  const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
     ?.imagePlacement?.image;
   assertEqual(
     committedImage.src,
@@ -3555,16 +3564,16 @@ async function testDielineGeometryCapabilityExtension() {
   );
   const sceneService = runtime.services.getOrThrow(SCENE_SERVICE);
   assert(
-    sceneService.getLayer("app.dieline"),
+    sceneService.selectOneLayer({ ids: ["app.dieline"] }),
     "dieline geometry should create the caller-owned target layer",
   );
   assertEqual(
-    sceneService.getElement("app.dieline.path")?.type,
+    sceneService.selectOneElement({ ids: ["app.dieline.path"] })?.type,
     "path",
     "dieline geometry should create a scene path element",
   );
   assertEqual(
-    sceneService.getElement("app.dieline.path")?.style?.stroke,
+    sceneService.selectOneElement({ ids: ["app.dieline.path"] })?.style?.stroke,
     "#123456",
     "dieline geometry should preserve caller-owned path style",
   );
@@ -3583,7 +3592,7 @@ async function testDielineGeometryCapabilityExtension() {
     "dieline geometry should update existing caller-owned path elements",
   );
   assertEqual(
-    sceneService.listElements({ layerId: "app.dieline" }).length,
+    sceneService.selectElements({ layerIds: ["app.dieline"] }).length,
     1,
     "dieline geometry upsert should not duplicate path elements",
   );
@@ -3825,7 +3834,6 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
       layerIds: ["image.session.image"],
       elementIds: ["front.image.user"],
       tags: [],
-      layerRoles: [],
     },
     url: "data:image/png;base64,committed-configurable-placement",
     width: 100,

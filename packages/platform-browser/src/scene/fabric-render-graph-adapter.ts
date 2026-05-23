@@ -247,13 +247,13 @@ export class FabricRenderGraphAdapter implements Service {
 
     const graphOrderOffset = graph.layers.length * 1_000_000;
     this.getRenderableScenes().forEach((scene, sceneIndex) => {
-      const sceneLayers = this.sceneService!.listLayers({ sceneId: scene.id });
+      const sceneLayers = this.sceneService!.selectLayers({ sceneId: scene.id });
       sceneLayers.forEach((layer, layerIndex) => {
         if (layer.visible === false) return;
-        const elements = this.sceneService!.listElements(
-          { layerId: layer.id },
-          { sceneId: scene.id },
-        );
+        const elements = this.sceneService!.selectElements({
+          sceneId: scene.id,
+          layerIds: [layer.id],
+        });
         elements.forEach((element, elementIndex) => {
           if (element.visible === false) return;
           const spec = this.toSceneRenderObjectSpec(scene, layer, element);
@@ -309,12 +309,9 @@ export class FabricRenderGraphAdapter implements Service {
     if (!canvas) return null;
     const normalized = String(objectId || "").trim();
     if (!normalized) return null;
-    const target = canvas.getObjects({
-      includeHidden: true,
-      predicate: (object: any) =>
-        object?.data?.renderTarget === FABRIC_RENDER_GRAPH_TARGET &&
-        (object?.data?.subject?.objectId === normalized ||
-          object?.data?.subjectId === normalized),
+    const target = canvas.selectObjects({
+      data: { renderTarget: FABRIC_RENDER_GRAPH_TARGET },
+      subjectIds: [normalized],
     })[0];
     return target ? this.getTargetSceneBounds(target) : null;
   }
@@ -356,9 +353,12 @@ export class FabricRenderGraphAdapter implements Service {
       });
     });
     this.getRenderableScenes().forEach((scene) => {
-      this.sceneService?.listLayers({ sceneId: scene.id }).forEach((layer) => {
+      this.sceneService?.selectLayers({ sceneId: scene.id }).forEach((layer) => {
         const elements =
-          this.sceneService?.listElements({ layerId: layer.id }, { sceneId: scene.id }) ??
+          this.sceneService?.selectElements({
+            sceneId: scene.id,
+            layerIds: [layer.id],
+          }) ??
           [];
         const visibleNodes = elements.filter((element) => element.visible !== false);
         layers.set(layer.id, {
@@ -414,7 +414,7 @@ export class FabricRenderGraphAdapter implements Service {
       renderNodeId: node.id,
       subjectId: node.subjectId,
       exportKeys: node.exportKeys,
-      exportTags: node.exportTags,
+      tags: node.tags,
     };
 
     if (node.type === "image") {

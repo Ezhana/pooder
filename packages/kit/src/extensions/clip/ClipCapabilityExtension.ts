@@ -202,7 +202,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     if (!this.sceneService) return [];
 
     return this.sceneService
-      .listElements()
+      .selectElements()
       .map((element) => this.buildClipEffectForElement(element))
       .filter((effect): effect is RenderEffectSpec => Boolean(effect));
   }

@@ -70,10 +70,11 @@ class FakeCanvasService {
     });
   }
 
-  getObjects(query: any = {}) {
+  selectObjects(selector: any = {}) {
     return this.objects.filter((object) => {
-      if (!query.includeHidden && object?.visible === false) return false;
-      if (query.predicate && !query.predicate(object)) return false;
+      if (selector.visible !== undefined && object?.visible !== selector.visible) {
+        return false;
+      }
       return true;
     });
   }
@@ -395,7 +396,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
     "hidden graph nodes should stay hidden on the live canvas",
   );
   assertDeepEqual(
-    last.items[2]?.spec.data?.exportTags,
+    last.items[2]?.spec.data?.tags,
     ["mockup"],
     "hidden graph nodes should keep export tags for scene export",
   );
@@ -918,8 +919,7 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
   const source = {
     data: {
       exportKeys: ["session-image:slot"],
-      exportTags: ["mockup", "design"],
-      documentLayerRole: "content",
+      tags: ["mockup", "design"],
       layerId: "image.user.session.image",
     },
     visible: false,
@@ -952,7 +952,7 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
   };
   const service = new BrowserSceneExportService() as any;
   service.canvasService = {
-    getObjects: () => [source],
+    selectObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
     toSceneRect: (rect: {
@@ -974,7 +974,6 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
       elementIds: ["session-image:slot"],
       layerIds: ["image.user.session.image"],
       tags: ["mockup"],
-      layerRoles: ["content"],
     },
   });
 
@@ -1009,8 +1008,7 @@ async function testSceneExportCombinesSourceSelectorDimensions() {
     data: {
       exportKeys: [id],
       layerId: "image.user",
-      documentLayerRole: "content",
-      exportTags: ["mockup"],
+      tags: ["mockup"],
       ...data,
     },
     visible: options.visible ?? true,
@@ -1044,10 +1042,10 @@ async function testSceneExportCombinesSourceSelectorDimensions() {
   };
   const service = new BrowserSceneExportService() as any;
   service.canvasService = {
-    getObjects: () => [
+    selectObjects: () => [
       createSource("match", {}),
-      createSource("wrong-tag", { exportTags: ["design"] }),
-      createSource("wrong-role", { documentLayerRole: "overlay" }),
+      createSource("wrong-tag", { tags: ["design"] }),
+      createSource("wrong-layer", { layerId: "image.overlay" }),
       createSource("excluded", {}, { excludeFromExport: true }),
     ],
     getSceneScale: () => 1,
@@ -1067,10 +1065,8 @@ async function testSceneExportCombinesSourceSelectorDimensions() {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
-    includeHidden: true,
     source: {
       layerIds: ["image.user"],
-      layerRoles: ["content"],
       tags: ["mockup"],
     },
   });
@@ -1124,7 +1120,7 @@ async function testSceneExportUsesCutFrameCrop() {
   const service = new BrowserSceneExportService() as any;
   const cutRect = { left: 125, top: 75, width: 300, height: 180 };
   service.canvasService = {
-    getObjects: () => [source],
+    selectObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
     toSceneRect: (rect: {
@@ -1203,7 +1199,7 @@ async function testSceneExportClearsClipPathByDefault() {
   };
   const service = new BrowserSceneExportService() as any;
   service.canvasService = {
-    getObjects: () => [source],
+    selectObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
     toSceneRect: (rect: {
@@ -1269,7 +1265,7 @@ async function testSceneExportPreservesClipPathWhenRequested() {
   };
   const service = new BrowserSceneExportService() as any;
   service.canvasService = {
-    getObjects: () => [source],
+    selectObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
     toSceneRect: (rect: {
@@ -1390,7 +1386,7 @@ async function testSceneExportAppliesOutputMask() {
   const service = new BrowserSceneExportService() as any;
   let outputMaskCall: any;
   service.canvasService = {
-    getObjects: () => [source],
+    selectObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
     toSceneRect: (rect: {
@@ -1472,7 +1468,7 @@ async function testSceneExportRejectsMissingOutputMaskSource() {
   };
   const service = new BrowserSceneExportService() as any;
   service.canvasService = {
-    getObjects: () => [source],
+    selectObjects: () => [source],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
     toSceneRect: (rect: {
@@ -1541,7 +1537,7 @@ async function testSceneExportRejectsHiddenOutputMaskSource() {
   };
   const service = new BrowserSceneExportService() as any;
   service.canvasService = {
-    getObjects: () => [source, hiddenMask],
+    selectObjects: () => [source, hiddenMask],
     getSceneScale: () => 1,
     toScenePoint: (point: { x: number; y: number }) => point,
     toSceneRect: (rect: {

@@ -914,7 +914,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getPlacementElements(): SceneElement[] {
     const graphPlacements = this.getGraphPlacementElements();
-    const scenePlacements = (this.sceneService?.listElements() ?? [])
+    const scenePlacements = (this.sceneService?.selectElements() ?? [])
       .filter((element) => getImagePlacementData(element).enabled === true)
       .sort((a, b) => a.order - b.order);
     if (graphPlacements.length === 0) return scenePlacements;
@@ -1619,7 +1619,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       });
     }
     if (this.sceneService) {
-      const scenePlacement = this.sceneService.getElement(placementId);
+      const scenePlacement = this.sceneService.selectOneElement({
+        ids: [placementId],
+      });
       if (scenePlacement) {
         const data = isRecord(scenePlacement.data) ? scenePlacement.data : {};
         const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
@@ -1828,12 +1830,35 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       if (!placementId) {
         this.canvasService.discardActiveObject();
       } else {
-        const obj =
-          this.canvasService.getObject(this.getWorkingImageNodeId(placementId), `image.session.image`) ||
-          this.canvasService.getObject(`image:${placementId}`, placement?.layerId) ||
-          this.canvasService.getObject(`image:${placementId}`, this.overlayLayerId) ||
-          this.canvasService.getObject(`image:${placementId}`, this.imageLayerId) ||
-          this.canvasService.getObject(`upload:${placementId}`, this.overlayLayerId);
+        const candidates = this.canvasService.selectObjects({
+          ids: [
+            this.getWorkingImageNodeId(placementId),
+            `image:${placementId}`,
+            `upload:${placementId}`,
+          ],
+          layerIds: [
+            `image.session.image`,
+            ...(placement?.layerId ? [placement.layerId] : []),
+            this.overlayLayerId,
+            this.imageLayerId,
+          ],
+        });
+        const preferredIds = [
+          this.getWorkingImageNodeId(placementId),
+          `image:${placementId}`,
+          `upload:${placementId}`,
+        ];
+        const preferredLayerIds = [
+          `image.session.image`,
+          placement?.layerId,
+          this.overlayLayerId,
+          this.imageLayerId,
+        ].filter((id): id is string => Boolean(id));
+        const obj = candidates.find((candidate: any) => {
+          const data = candidate?.data ?? {};
+          return preferredIds.includes(String(data.id || "").trim()) &&
+            preferredLayerIds.includes(String(data.layerId || "").trim());
+        });
         if (obj) this.canvasService.setActiveObject(obj as any);
       }
     }
@@ -2334,7 +2359,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!normalizedPlacementId || !this.workingImages.has(normalizedPlacementId)) return null;
     const layerId = `image.session.image`;
     const target =
-      this.canvasService?.getObject(this.getWorkingImageNodeId(normalizedPlacementId), layerId) ||
+      this.canvasService?.selectOneObject({
+        ids: [this.getWorkingImageNodeId(normalizedPlacementId)],
+        layerIds: [layerId],
+      }) ||
       this.canvasService?.getActiveObject();
     return this.getWorkingImageTargetPlacementId(target) === normalizedPlacementId ? target : null;
   }
@@ -2688,7 +2716,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       return false;
     }
     const sourceTags = new Set(projection.sourceTags);
-    const nodeTags = normalizeStringList(node.data.imageSessionProjectionTags);
+    const nodeTags = normalizeStringList(node.tags);
     return nodeTags.some((tag) => sourceTags.has(tag));
   }
 

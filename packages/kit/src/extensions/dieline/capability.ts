@@ -73,7 +73,7 @@ export function upsertScenePathElement(
   );
 
   return sceneService.transaction(() => {
-    if (!sceneService.getLayer(layerId)) {
+    if (!sceneService.selectOneLayer({ ids: [layerId] })) {
       sceneService.addLayer({
         id: layerId,
         metadata: { owner: "pooder.kit.dieline-geometry" },
@@ -89,7 +89,7 @@ export function upsertScenePathElement(
       data: { type: "dieline" },
     };
 
-    if (sceneService.getElement(elementId)) {
+    if (sceneService.selectOneElement({ ids: [elementId] })) {
       return sceneService.updateElement(elementId, patch);
     }
 

@@ -83,10 +83,10 @@ class FakeLayoutCanvasService implements CanvasService {
       height,
     };
   }
-  getObjects() {
+  selectObjects() {
     return [];
   }
-  getObject() {
+  selectOneObject() {
     return undefined;
   }
   getActiveObject() {
@@ -856,10 +856,10 @@ async function testSceneLayersAndElements() {
     scene.updateLayer("background", { visible: true });
 
     assertDeepEqual(
-      scene.listLayers().map((layer) => layer.id),
+      scene.selectLayers().map((layer) => layer.id),
       ["background", "artwork"],
     );
-    assertEqual(scene.getLayer("background")?.visible, true);
+    assertEqual(scene.selectOneLayer({ ids: ["background"] })?.visible, true);
 
     scene.addElement({
       id: "image-1",
@@ -897,20 +897,119 @@ async function testSceneLayersAndElements() {
       metadata: { selected: true },
     });
 
-    assertEqual(scene.getElement("image-1")?.type, "image");
-    assertEqual(scene.getElement("image-1")?.metadata?.selected, true);
+    assertEqual(scene.selectOneElement({ ids: ["image-1"] })?.type, "image");
+    assertEqual(
+      scene.selectOneElement({ ids: ["image-1"] })?.metadata?.selected,
+      true,
+    );
     assertDeepEqual(
-      scene.listElements({ layerId: "artwork" }).map((element) => element.id),
+      scene.selectElements({ layerIds: ["artwork"] }).map((element) => element.id),
       ["image-1", "path-1", "text-1"],
     );
     assertDeepEqual(
-      scene.listElements({ type: "path", visible: false }).map(
+      scene.selectElements({ types: ["path"], visible: false }).map(
         (element) => element.id,
       ),
       ["path-1"],
     );
     assertEqual(scene.removeElement("path-1"), true);
-    assertEqual(scene.getElement("path-1"), undefined);
+    assertEqual(scene.selectOneElement({ ids: ["path-1"] }), undefined);
+  });
+}
+
+async function testSceneSelectors() {
+  await withRuntime(async (runtime) => {
+    const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+
+    scene.addLayer({
+      id: "background",
+      order: 1,
+      tags: [" base ", "print", ""],
+      metadata: { owner: "system", role: "background" },
+    });
+    scene.addLayer({
+      id: "artwork",
+      order: 2,
+      tags: ["print", "design"],
+      metadata: { owner: "app", role: "content" },
+    });
+    scene.addLayer({
+      id: "overlay",
+      order: 3,
+      visible: false,
+      tags: ["helper"],
+      metadata: { owner: "app", role: "overlay" },
+    });
+    scene.addElement({
+      id: "bg-rect",
+      layerId: "background",
+      type: "rect",
+      width: 100,
+      height: 100,
+      tags: ["base"],
+      metadata: { locked: true },
+    });
+    scene.addElement({
+      id: "photo",
+      layerId: "artwork",
+      type: "image",
+      src: "photo.png",
+      tags: ["mockup", "design"],
+      metadata: { selected: true },
+    });
+    scene.addElement({
+      id: "guide",
+      layerId: "overlay",
+      type: "path",
+      path: "M 0 0 L 1 1",
+      visible: false,
+      tags: ["helper"],
+      metadata: { selected: true },
+    });
+
+    assertDeepEqual(
+      scene.selectLayers().map((layer) => layer.id),
+      ["background", "artwork", "overlay"],
+      "empty layer selector should return the ordered layer set",
+    );
+    assertDeepEqual(
+      scene.selectLayers({ tags: ["design", "missing"], metadata: { owner: "app" } })
+        .map((layer) => layer.id),
+      ["artwork"],
+      "layer selector should AND fields and match any requested tag",
+    );
+    assertDeepEqual(
+      scene.selectElements().map((element) => element.id),
+      ["bg-rect", "photo", "guide"],
+      "empty element selector should return the ordered element set",
+    );
+    assertDeepEqual(
+      scene
+        .selectElements({
+          layerIds: ["artwork", "overlay"],
+          types: ["image", "path"],
+          visible: false,
+          tags: ["helper", "mockup"],
+          metadata: { selected: true },
+        })
+        .map((element) => element.id),
+      ["guide"],
+      "element selector should AND fields and match array dimensions by any value",
+    );
+    assertEqual(
+      scene.selectOneElement({ ids: ["missing"] }),
+      undefined,
+      "selectOneElement should return undefined for no results",
+    );
+    assertEqual(
+      scene.selectOneLayer({ ids: ["artwork"] })?.metadata?.role,
+      "content",
+      "selectOneLayer should return one matching layer",
+    );
+    assertThrows(
+      () => scene.selectOneElement({ metadata: { selected: true } }),
+      "scene-selector-ambiguous",
+    );
   });
 }
 
@@ -924,7 +1023,7 @@ async function testSceneServiceContractValidatesAndClonesState() {
     scene.addLayer({ id: "target", order: 2 });
 
     layer.metadata!.owner = "mutated";
-    assertEqual(scene.getLayer("source")?.metadata?.owner, "app");
+    assertEqual(scene.selectOneLayer({ ids: ["source"] })?.metadata?.owner, "app");
 
     const rect = scene.addElement({
       id: "rect",
@@ -942,7 +1041,7 @@ async function testSceneServiceContractValidatesAndClonesState() {
     rect.style!.fill = "blue";
     rect.transform!.left = 99;
 
-    const stored = scene.getElement("rect");
+    const stored = scene.selectOneElement({ ids: ["rect"] });
     assertEqual(stored?.metadata?.selected, false);
     assertEqual(stored?.data?.role, "shape");
     assertEqual(stored?.style?.fill, "red");
@@ -954,10 +1053,10 @@ async function testSceneServiceContractValidatesAndClonesState() {
       metadata: { selected: true },
     });
     assertDeepEqual(
-      scene.listElements({ layerId: "target" }).map((element) => element.id),
+      scene.selectElements({ layerIds: ["target"] }).map((element) => element.id),
       ["rect"],
     );
-    assertEqual(scene.getElement("rect")?.metadata?.selected, true);
+    assertEqual(scene.selectOneElement({ ids: ["rect"] })?.metadata?.selected, true);
 
     assertThrows(
       () => scene.addLayer({ id: "source" }),
@@ -1011,7 +1110,7 @@ async function testSceneTransactionsBatchAndRollback() {
     assertDeepEqual(changes[0].layers.added, ["content"]);
     assertDeepEqual(changes[0].elements.added, ["rect-1"]);
     assertDeepEqual(changes[0].elements.updated, ["rect-1"]);
-    assertEqual(scene.getElement("rect-1")?.type, "rect");
+    assertEqual(scene.selectOneElement({ ids: ["rect-1"] })?.type, "rect");
 
     try {
       scene.transaction(() => {
@@ -1028,8 +1127,8 @@ async function testSceneTransactionsBatchAndRollback() {
       // Expected rollback path.
     }
 
-    assertEqual(scene.getLayer("rollback"), undefined);
-    assertEqual(scene.getElement("text-1"), undefined);
+    assertEqual(scene.selectOneLayer({ ids: ["rollback"] }), undefined);
+    assertEqual(scene.selectOneElement({ ids: ["text-1"] }), undefined);
     assertEqual(changes.length, 1);
   });
 }
@@ -1047,8 +1146,8 @@ async function testRemovingSceneLayerRemovesScopedElements() {
     });
 
     assertEqual(scene.removeLayer("temporary"), true);
-    assertEqual(scene.getLayer("temporary"), undefined);
-    assertEqual(scene.getElement("temporary-text"), undefined);
+    assertEqual(scene.selectOneLayer({ ids: ["temporary"] }), undefined);
+    assertEqual(scene.selectOneElement({ ids: ["temporary-text"] }), undefined);
   });
 }
 
@@ -1080,12 +1179,17 @@ async function testSceneServiceManagesMultipleScenes() {
     );
 
     assertEqual(
-      (scene.getElement("shared-element") as any)?.width,
+      (scene.selectOneElement({ ids: ["shared-element"] }) as any)?.width,
       10,
       "default scene element should remain independent",
     );
     assertEqual(
-      (scene.getElement("shared-element", { sceneId: "session" }) as any)?.width,
+      (
+        scene.selectOneElement({
+          ids: ["shared-element"],
+          sceneId: "session",
+        }) as any
+      )?.width,
       20,
       "scoped scene element should support duplicate ids",
     );
@@ -1104,7 +1208,10 @@ async function testSceneServiceManagesMultipleScenes() {
     );
     assertEqual(scene.removeScene("session"), true);
     assertEqual(scene.getScene("session"), undefined);
-    assertEqual((scene.getElement("shared-element") as any)?.width, 10);
+    assertEqual(
+      (scene.selectOneElement({ ids: ["shared-element"] }) as any)?.width,
+      10,
+    );
   });
 }
 
@@ -1584,7 +1691,7 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
       "render intent export keys should include the render node id",
     );
     assertDeepEqual(
-      node?.exportTags,
+      node?.tags,
       ["design", "mockup"],
       "render intent export tags should normalize into graph node state",
     );
@@ -1936,6 +2043,7 @@ async function main() {
       testCapabilityRegistryContractUsesDefensiveCopiesAndEvents,
     ],
     ["manages headless scene layers and elements", testSceneLayersAndElements],
+    ["selects scene layers and elements", testSceneSelectors],
     [
       "validates and clones headless scene contract state",
       testSceneServiceContractValidatesAndClonesState,

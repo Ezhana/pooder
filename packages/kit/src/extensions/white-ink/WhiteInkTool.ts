@@ -806,8 +806,8 @@ export class WhiteInkTool implements ExtensionDefinition {
 
   private getImageObjects(): any[] {
     if (!this.canvasService) return [];
-    return this.canvasService.getObjects({
-      predicate: (obj: any) => this.sourceLayerIds.includes(obj?.data?.layerId),
+    return this.canvasService.selectObjects({
+      layerIds: this.sourceLayerIds,
     }) as any[];
   }
 

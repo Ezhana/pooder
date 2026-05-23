@@ -4,12 +4,9 @@ import {
   ExtensionDefinition,
 } from "@pooder/core";
 import {
-  SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
-  type SceneLayer,
   SceneExportService,
   type SceneExportSourceSelector,
-  type SceneService,
 } from "@pooder/core";
 import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import {
@@ -33,14 +30,6 @@ const DEFAULT_EXPORT_LAYER_IDS = [
   KIT_LEGACY_LAYER_PRESET.whiteInkObject,
 ] as const;
 
-function isDefaultExportSceneLayer(layer: SceneLayer): boolean {
-  const metadata = layer.metadata ?? {};
-  const role = typeof metadata.documentLayerRole === "string"
-    ? metadata.documentLayerRole.trim()
-    : "";
-  return role !== "guide" && role !== "overlay";
-}
-
 export interface DesignExportExtensionOptions
   extends DesignExportCapabilityOptions {
   id?: string;
@@ -57,7 +46,6 @@ export class DesignExportExtension implements ExtensionDefinition {
   };
 
   private exportService?: SceneExportService;
-  private sceneService?: SceneService;
   private readonly capabilityId: string;
   private readonly configuredSource?: SceneExportSourceSelector;
   private readonly contributeLegacyCommands: boolean;
@@ -74,7 +62,6 @@ export class DesignExportExtension implements ExtensionDefinition {
     this.exportService = context.services.getOrThrow<SceneExportService>(
       SCENE_EXPORT_SERVICE,
     );
-    this.sceneService = context.services.get<SceneService>(SCENE_SERVICE);
   }
 
   contribute(): ExtensionContributions {
@@ -96,13 +83,8 @@ export class DesignExportExtension implements ExtensionDefinition {
 
   private resolveDefaultSource(): SceneExportSourceSelector {
     if (this.configuredSource) return this.configuredSource;
-    const sceneLayerIds = this.sceneService
-      ?.listLayers()
-      .filter(isDefaultExportSceneLayer)
-      .map((layer) => layer.id)
-      .filter((id) => id.length > 0) ?? [];
     return {
-      layerIds: sceneLayerIds.length > 0 ? sceneLayerIds : DEFAULT_EXPORT_LAYER_IDS,
+      layerIds: DEFAULT_EXPORT_LAYER_IDS,
     };
   }
 

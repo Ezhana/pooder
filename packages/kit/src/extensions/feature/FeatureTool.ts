@@ -1106,7 +1106,8 @@ export class FeatureTool implements ExtensionDefinition {
   private hasImageItems(): boolean {
     if (!this.canvasService) return false;
     return this.imageClipLayerIds.some(
-      (layerId) => this.canvasService!.getObjects({ layerId }).length > 0,
+      (layerId) =>
+        this.canvasService!.selectObjects({ layerIds: [layerId] }).length > 0,
     );
   }
 
@@ -1423,10 +1424,9 @@ export class FeatureTool implements ExtensionDefinition {
 
   private syncMarkerVisualObjectsToCenter(index: number, center: MarkerPoint) {
     if (!this.canvasService) return;
-    const markers = this.canvasService.getObjects({
-      type: "feature-marker",
-      predicate: (obj: any) => this.toFeatureIndex(obj?.data?.index) === index,
-    });
+    const markers = this.canvasService
+      .selectObjects({ types: ["feature-marker"] })
+      .filter((obj: any) => this.toFeatureIndex(obj?.data?.index) === index);
 
     markers.forEach((marker: any) => {
       const offsetX = Number(marker?.data?.markerOffsetX || 0);
@@ -1442,9 +1442,9 @@ export class FeatureTool implements ExtensionDefinition {
   private enforceConstraints() {
     if (!this.canvasService || !this.currentGeometry) return;
 
-    const handles = this.canvasService.getObjects({
-      type: "feature-marker",
-      predicate: (obj: any) => obj?.data?.markerRole === "handle",
+    const handles = this.canvasService.selectObjects({
+      types: ["feature-marker"],
+      data: { markerRole: "handle" },
     });
 
     handles.forEach((marker: any) => {

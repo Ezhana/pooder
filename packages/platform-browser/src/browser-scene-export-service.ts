@@ -94,11 +94,7 @@ function readExportKeys(object: any): string[] {
 }
 
 function readExportTags(object: any): string[] {
-  return normalizeIds(object?.data?.exportTags);
-}
-
-function readLayerRole(object: any): string {
-  return String(object?.data?.documentLayerRole || "").trim();
+  return normalizeIds(object?.data?.tags);
 }
 
 function readOutputMaskKeys(object: any): string[] {
@@ -124,7 +120,7 @@ function normalizeSourceSelector(source: BrowserSceneExportOptions["source"]) {
     layerIds: normalizeIds(source?.layerIds),
     elementIds: normalizeIds(source?.elementIds),
     tags: normalizeIds(source?.tags),
-    layerRoles: normalizeIds(source?.layerRoles),
+    visible: typeof source?.visible === "boolean" ? source.visible : undefined,
   };
 }
 
@@ -184,7 +180,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const exportedLayerIds = new Set<string>();
     const exportedElementIds = new Set<string>();
     const exportedTags = new Set<string>();
-    const exportedLayerRoles = new Set<string>();
 
     try {
       for (const source of sourceObjects as any[]) {
@@ -216,10 +211,8 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
         const layerId = readLayerId(source);
         const elementId = readElementId(source);
-        const layerRole = readLayerRole(source);
         if (layerId) exportedLayerIds.add(layerId);
         if (elementId) exportedElementIds.add(elementId);
-        if (layerRole) exportedLayerRoles.add(layerRole);
         readExportTags(source).forEach((tag) => exportedTags.add(tag));
       }
 
@@ -249,7 +242,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
           layerIds: Array.from(exportedLayerIds),
           elementIds: Array.from(exportedElementIds),
           tags: Array.from(exportedTags),
-          layerRoles: Array.from(exportedLayerRoles),
         },
         crop: cloneRect(crop),
       };
@@ -263,19 +255,19 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       layerIds: string[];
       elementIds: string[];
       tags: string[];
-      layerRoles: string[];
+      visible?: boolean;
     };
   }): FabricObject[] {
     const layerIdSet = new Set(options.source.layerIds);
     const elementIdSet = new Set(options.source.elementIds);
     const tagSet = new Set(options.source.tags);
-    const layerRoleSet = new Set(options.source.layerRoles);
     const hasLayerFilter = layerIdSet.size > 0;
     const hasElementFilter = elementIdSet.size > 0;
     const hasTagFilter = tagSet.size > 0;
-    const hasLayerRoleFilter = layerRoleSet.size > 0;
 
-    return this.getCanvasObjects(true).filter((object: any) => {
+    return this.getCanvasObjects({
+      visible: options.source.visible,
+    }).filter((object: any) => {
       if (object?.excludeFromExport === true) return false;
       if (hasLayerFilter && !layerIdSet.has(readLayerId(object))) {
         return false;
@@ -290,9 +282,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         hasTagFilter &&
         !readExportTags(object).some((tag) => tagSet.has(tag))
       ) {
-        return false;
-      }
-      if (hasLayerRoleFilter && !layerRoleSet.has(readLayerRole(object))) {
         return false;
       }
       return true;
@@ -337,7 +326,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
   }
 
   private resolveOutputMaskSource(sourceKey: string): FabricObject {
-    const source = this.getCanvasObjects(true).find((object: any) =>
+    const source = this.getCanvasObjects({}).find((object: any) =>
       readOutputMaskKeys(object).includes(sourceKey),
     );
 
@@ -352,13 +341,15 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     return source;
   }
 
-  private getCanvasObjects(includeHidden: boolean): FabricObject[] {
+  private getCanvasObjects(selector: { visible?: boolean }): FabricObject[] {
     const canvasService = this.requireCanvasService() as any;
-    if (typeof canvasService.getObjects === "function") {
-      return canvasService.getObjects({ includeHidden }) as FabricObject[];
+    if (typeof canvasService.selectObjects === "function") {
+      return canvasService.selectObjects({
+        visible: selector.visible,
+      }) as FabricObject[];
     }
     return (canvasService.canvas?.getObjects?.() || []).filter((object: any) => {
-      return includeHidden || object?.visible !== false;
+      return selector.visible === undefined || object?.visible === selector.visible;
     }) as FabricObject[];
   }
 

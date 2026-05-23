@@ -5,12 +5,13 @@ import type {
   SceneElement,
   SceneElementInput,
   SceneElementPatch,
-  SceneElementQuery,
+  SceneElementSelector,
   SceneId,
   SceneInput,
   SceneLayer,
   SceneLayerInput,
   SceneLayerPatch,
+  SceneLayerSelector,
   ScenePatch,
   SceneRecord,
   SceneScopeOptions,
@@ -158,6 +159,7 @@ export default class SceneService implements Service {
       id,
       order: layer.order ?? scene.layersById.size,
       visible: layer.visible ?? true,
+      tags: this.normalizeTags(layer.tags),
       metadata: this.cloneRecord(layer.metadata),
     };
 
@@ -182,6 +184,10 @@ export default class SceneService implements Service {
       ...current,
       order: patch.order ?? current.order,
       visible: patch.visible ?? current.visible,
+      tags:
+        patch.tags === undefined
+          ? this.cloneTags(current.tags)
+          : this.normalizeTags(patch.tags),
       metadata:
         patch.metadata === undefined
           ? this.cloneRecord(current.metadata)
@@ -200,10 +206,10 @@ export default class SceneService implements Service {
       return false;
     }
 
-    const removedElementIds = this.listElements(
-      { layerId },
-      { sceneId: scene.record.id },
-    ).map((element) => element.id);
+    const removedElementIds = this.selectElements({
+      sceneId: scene.record.id,
+      layerIds: [layerId],
+    }).map((element) => element.id);
     removedElementIds.forEach((elementId) => {
       scene.elementsById.delete(elementId);
       this.recordElementChange(scene.record.id, "removed", elementId);
@@ -214,15 +220,19 @@ export default class SceneService implements Service {
     return true;
   }
 
-  getLayer(id: LayerId, options: SceneScopeOptions = {}): SceneLayer | undefined {
-    const layer = this.getSceneStore(options.sceneId).layersById.get(id);
-    return layer ? this.cloneLayer(layer) : undefined;
-  }
-
-  listLayers(options: SceneScopeOptions = {}): SceneLayer[] {
-    return Array.from(this.getSceneStore(options.sceneId).layersById.values())
+  selectLayers(selector: SceneLayerSelector = {}): SceneLayer[] {
+    return Array.from(this.getSceneStore(selector.sceneId).layersById.values())
+      .filter((layer) => this.matchesLayerSelector(layer, selector))
       .map((layer) => this.cloneLayer(layer))
       .sort(this.compareOrderedItems);
+  }
+
+  selectOneLayer(selector: SceneLayerSelector): SceneLayer | undefined {
+    const layers = this.selectLayers(selector);
+    if (layers.length > 1) {
+      throw new Error("scene-selector-ambiguous");
+    }
+    return layers[0];
   }
 
   addElement(
@@ -247,6 +257,7 @@ export default class SceneService implements Service {
       layerId,
       order: element.order ?? this.countLayerElements(scene.record.id, layerId),
       visible: element.visible ?? true,
+      tags: this.normalizeTags(element.tags),
     } as SceneElement);
 
     scene.elementsById.set(id, next);
@@ -282,6 +293,10 @@ export default class SceneService implements Service {
       layerId: nextLayerId,
       order: patch.order ?? current.order,
       visible: patch.visible ?? current.visible,
+      tags:
+        patch.tags === undefined
+          ? this.cloneTags(current.tags)
+          : this.normalizeTags(patch.tags),
       metadata:
         patch.metadata === undefined
           ? this.cloneRecord(current.metadata)
@@ -316,34 +331,23 @@ export default class SceneService implements Service {
     return true;
   }
 
-  getElement<TElement extends SceneElement = SceneElement>(
-    id: ElementId,
-    options: SceneScopeOptions = {},
-  ): TElement | undefined {
-    const element = this.getSceneStore(options.sceneId).elementsById.get(id);
-    return element ? (this.cloneElement(element) as TElement) : undefined;
+  selectElements<TElement extends SceneElement = SceneElement>(
+    selector: SceneElementSelector = {},
+  ): TElement[] {
+    return Array.from(this.getSceneStore(selector.sceneId).elementsById.values())
+      .filter((element) => this.matchesElementSelector(element, selector))
+      .map((element) => this.cloneElement(element) as TElement)
+      .sort(this.compareOrderedItems);
   }
 
-  listElements(
-    query: SceneElementQuery = {},
-    options: SceneScopeOptions = {},
-  ): SceneElement[] {
-    const sceneId = query.sceneId ?? options.sceneId;
-    return Array.from(this.getSceneStore(sceneId).elementsById.values())
-      .filter((element) => {
-        if (query.layerId !== undefined && element.layerId !== query.layerId) {
-          return false;
-        }
-        if (query.type !== undefined && element.type !== query.type) {
-          return false;
-        }
-        if (query.visible !== undefined && element.visible !== query.visible) {
-          return false;
-        }
-        return true;
-      })
-      .map((element) => this.cloneElement(element))
-      .sort(this.compareOrderedItems);
+  selectOneElement<TElement extends SceneElement = SceneElement>(
+    selector: SceneElementSelector,
+  ): TElement | undefined {
+    const elements = this.selectElements<TElement>(selector);
+    if (elements.length > 1) {
+      throw new Error("scene-selector-ambiguous");
+    }
+    return elements[0];
   }
 
   transaction<T>(run: SceneTransaction<T>): T {
@@ -521,6 +525,7 @@ export default class SceneService implements Service {
   private cloneLayer(layer: SceneLayer): SceneLayer {
     return {
       ...layer,
+      tags: this.cloneTags(layer.tags),
       metadata: this.cloneRecord(layer.metadata),
     };
   }
@@ -530,6 +535,7 @@ export default class SceneService implements Service {
   ): TElement {
     return {
       ...element,
+      tags: this.cloneTags(element.tags),
       metadata: this.cloneRecord(element.metadata),
       data: this.cloneRecord(element.data),
       style: this.cloneRecord(element.style),
@@ -598,6 +604,81 @@ export default class SceneService implements Service {
 
   private cloneRecord<T extends object>(value?: T): T | undefined {
     return value ? ({ ...value } as T) : undefined;
+  }
+
+  private cloneTags(value?: readonly string[]): string[] | undefined {
+    return value ? value.slice() : undefined;
+  }
+
+  private normalizeTags(value?: readonly string[]): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const tags = Array.from(
+      new Set(
+        value
+          .map((item) => String(item || "").trim())
+          .filter((item) => item.length > 0),
+      ),
+    );
+    return tags.length ? tags : undefined;
+  }
+
+  private normalizeSelectorValues(value?: readonly string[]): Set<string> | undefined {
+    const values = this.normalizeTags(value);
+    return values?.length ? new Set(values) : undefined;
+  }
+
+  private matchesLayerSelector(
+    layer: SceneLayer,
+    selector: SceneLayerSelector,
+  ): boolean {
+    const ids = this.normalizeSelectorValues([
+      ...(selector.ids ?? []),
+      ...(selector.layerIds ?? []),
+    ]);
+    if (ids && !ids.has(layer.id)) return false;
+    if (selector.visible !== undefined && layer.visible !== selector.visible) {
+      return false;
+    }
+    if (!this.matchesTags(layer.tags, selector.tags)) return false;
+    if (!this.matchesMetadata(layer.metadata, selector.metadata)) return false;
+    return true;
+  }
+
+  private matchesElementSelector(
+    element: SceneElement,
+    selector: SceneElementSelector,
+  ): boolean {
+    const ids = this.normalizeSelectorValues(selector.ids);
+    if (ids && !ids.has(element.id)) return false;
+    const layerIds = this.normalizeSelectorValues(selector.layerIds);
+    if (layerIds && !layerIds.has(element.layerId)) return false;
+    const types = this.normalizeSelectorValues(selector.types);
+    if (types && !types.has(element.type)) return false;
+    if (selector.visible !== undefined && element.visible !== selector.visible) {
+      return false;
+    }
+    if (!this.matchesTags(element.tags, selector.tags)) return false;
+    if (!this.matchesMetadata(element.metadata, selector.metadata)) return false;
+    return true;
+  }
+
+  private matchesTags(
+    value: readonly string[] | undefined,
+    selectorValue: readonly string[] | undefined,
+  ): boolean {
+    const tags = this.normalizeSelectorValues(selectorValue);
+    if (!tags) return true;
+    return (value ?? []).some((tag) => tags.has(tag));
+  }
+
+  private matchesMetadata(
+    value: SceneLayer["metadata"] | undefined,
+    selectorValue: SceneLayerSelector["metadata"] | undefined,
+  ): boolean {
+    if (!selectorValue) return true;
+    return Object.entries(selectorValue).every(
+      ([key, expected]) => value?.[key] === expected,
+    );
   }
 
   private normalizeId(id: string, label: string): string {

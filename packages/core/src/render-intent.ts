@@ -169,7 +169,7 @@ export interface RenderGraphNode {
   effects: RenderEffectSpec[];
   visibility?: VisibilityExpr;
   visible: boolean;
-  exportTags: string[];
+  tags: string[];
   sortKey: RenderGraphSortKey;
 }
 
@@ -655,7 +655,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     visual: source.source,
     coordinateSpace: draft.coordinateSpace || "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
-    exportTags: normalizeIdList(draft.export?.tags),
+    tags: normalizeIdList(draft.export?.tags),
     frame: draft.placement?.frame,
     transform: draft.placement?.transform,
     props: {
@@ -671,6 +671,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       ...(draft.data ?? {}),
       renderIntentId: draft.id,
       subject: draft.subject,
+      tags: normalizeIdList(draft.export?.tags),
       ...(typeof draft.interaction?.locked === "boolean"
         ? { locked: draft.interaction.locked }
         : {}),

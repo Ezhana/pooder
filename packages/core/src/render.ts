@@ -227,12 +227,15 @@ export interface CanvasObjectLike {
   [key: string]: any;
 }
 
-export interface CanvasObjectQuery {
-  layerId?: string;
-  id?: string;
-  type?: string;
-  includeHidden?: boolean;
-  predicate?: (object: CanvasObjectLike) => boolean;
+export interface CanvasObjectSelector {
+  ids?: readonly string[];
+  layerIds?: readonly string[];
+  subjectIds?: readonly string[];
+  renderIntentIds?: readonly string[];
+  types?: readonly string[];
+  tags?: readonly string[];
+  visible?: boolean;
+  data?: Record<string, unknown>;
 }
 
 export interface CanvasService extends Service {
@@ -248,8 +251,8 @@ export interface CanvasService extends Service {
     offsetX?: number;
     offsetY?: number;
   }): CanvasViewportLayout | null;
-  getObjects(query?: CanvasObjectQuery): CanvasObjectLike[];
-  getObject(id: string, layerId?: string): CanvasObjectLike | undefined;
+  selectObjects(selector?: CanvasObjectSelector): CanvasObjectLike[];
+  selectOneObject(selector: CanvasObjectSelector): CanvasObjectLike | undefined;
   getActiveObject(): CanvasObjectLike | undefined;
   setActiveObject(object: CanvasObjectLike): boolean;
   discardActiveObject(): boolean;
@@ -290,14 +293,13 @@ export interface SceneExportSourceSelector {
   layerIds?: readonly string[];
   elementIds?: readonly string[];
   tags?: readonly string[];
-  layerRoles?: readonly string[];
+  visible?: boolean;
 }
 
 export interface SceneExportSourceResult {
   layerIds: string[];
   elementIds: string[];
   tags: string[];
-  layerRoles: string[];
 }
 
 export interface SceneExportOptions {

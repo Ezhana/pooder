@@ -54,14 +54,13 @@ function testNormalizeDefaults() {
           {
             id: "artwork",
             exportable: false,
+            tags: [" layer-tag ", "", "layer-tag"],
             objects: [
               {
                 id: "image-1",
                 type: "image",
                 exportable: false,
-                metadata: {
-                  exportTags: ["mockup", ""],
-                },
+                tags: [" mockup ", "", "mockup"],
                 frame: { x: 0, y: 0, width: 20, height: 20 },
                 effects: [
                   {
@@ -87,10 +86,10 @@ function testNormalizeDefaults() {
     true,
     "layer visibility should default",
   );
-  assertEqual(
-    "exportTags" in (doc.surfaces[0].layers[0] as unknown as Record<string, unknown>),
-    false,
-    "layer export tags should not be a top-level field",
+  assertDeepEqual(
+    doc.surfaces[0].layers[0].tags,
+    ["layer-tag"],
+    "layer tags should normalize",
   );
   assertEqual(
     "exportable" in (doc.surfaces[0].layers[0] as unknown as Record<string, unknown>),
@@ -103,9 +102,9 @@ function testNormalizeDefaults() {
     "object visibility should default",
   );
   assertDeepEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.metadata?.exportTags,
+    doc.surfaces[0].layers[0].objects?.[0]?.tags,
     ["mockup"],
-    "object metadata export tags should normalize",
+    "object tags should normalize",
   );
   assertEqual(
     "exportable" in (
