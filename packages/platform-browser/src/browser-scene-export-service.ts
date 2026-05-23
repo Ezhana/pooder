@@ -164,7 +164,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const multiplier = normalizeMultiplier(options.multiplier);
     const source = normalizeSourceSelector(options.source);
     const sourceObjects = this.getSourceObjects({
-      includeHidden: options.includeHidden,
       source,
     });
 
@@ -260,7 +259,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
   }
 
   private getSourceObjects(options: {
-    includeHidden?: boolean;
     source: {
       layerIds: string[];
       elementIds: string[];
@@ -277,9 +275,8 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const hasTagFilter = tagSet.size > 0;
     const hasLayerRoleFilter = layerRoleSet.size > 0;
 
-    return this.getCanvasObjects(options.includeHidden === true).filter((object: any) => {
+    return this.getCanvasObjects(true).filter((object: any) => {
       if (object?.excludeFromExport === true) return false;
-      if (!options.includeHidden && object?.visible === false) return false;
       if (hasLayerFilter && !layerIdSet.has(readLayerId(object))) {
         return false;
       }

@@ -895,7 +895,7 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
       documentLayerRole: "content",
       layerId: "image.user.session.image",
     },
-    visible: true,
+    visible: false,
     scaleX: 1,
     scaleY: 1,
     angle: 0,
@@ -943,7 +943,6 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
-    includeHidden: true,
     source: {
       elementIds: ["session-image:slot"],
       layerIds: ["image.user.session.image"],
@@ -956,6 +955,11 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
     exportCanvas.objects.length,
     1,
     "export should include objects matched by render graph node id",
+  );
+  assertEqual(
+    exportCanvas.objects[0]?.visible,
+    true,
+    "export should force matched clones visible",
   );
   assertEqual(
     result.source.elementIds[0],
