@@ -86,7 +86,6 @@ export interface EditorLayer {
   order?: number;
   visible?: boolean;
   locked?: boolean;
-  exportTags?: string[];
   objects?: EditorObject[];
   effects?: EditorEffect[];
   metadata?: Record<string, unknown>;
@@ -125,7 +124,6 @@ export interface EditorObjectBase {
   locked?: boolean;
   interaction?: EditorObjectInteraction;
   constraints?: EditorObjectConstraints;
-  exportTags?: string[];
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -260,6 +258,20 @@ function normalizeIdList(value: unknown): string[] | undefined {
     ),
   );
   return values.length ? values : undefined;
+}
+
+function normalizeObjectMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const metadata = cloneRecord(value);
+  const exportTags = normalizeIdList(metadata.exportTags);
+
+  if (exportTags) {
+    metadata.exportTags = exportTags;
+  } else {
+    delete metadata.exportTags;
+  }
+
+  return Object.keys(metadata).length ? metadata : undefined;
 }
 
 function normalizeFiniteNumber(value: unknown): number | undefined {
@@ -478,10 +490,9 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
     interaction: normalizeObjectInteraction(value.interaction),
     constraints: normalizeObjectConstraints(value.constraints),
-    exportTags: normalizeIdList(value.exportTags),
     transform: normalizeTransform(value.transform),
     style: isRecord(value.style) ? cloneRecord(value.style) : undefined,
-    metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
+    metadata: normalizeObjectMetadata(value.metadata),
     effects: normalizeEffects(value.effects),
     frame: normalizeRect(value.frame),
   };
@@ -531,7 +542,6 @@ function normalizeLayer(value: unknown, order: number): EditorLayer | null {
     order: normalizeFiniteNumber(value.order) ?? order,
     visible: typeof value.visible === "boolean" ? value.visible : true,
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
-    exportTags: normalizeIdList(value.exportTags),
     objects: objects?.length ? objects : undefined,
     effects: normalizeEffects(value.effects),
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,

@@ -347,7 +347,7 @@ function createObjectRenderIntentDraft(
     },
     export: {
       visible: (layer.visible ?? true) && (object.visible ?? true),
-      tags: normalizeExportTags(layer.exportTags, object.exportTags),
+      tags: normalizeExportTags(object.metadata?.exportTags),
     },
     props: {
       ...(object.style ?? {}),

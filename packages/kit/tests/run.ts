@@ -1462,6 +1462,7 @@ async function testApplyKitEditorDocument() {
           {
             id: "front-template",
             role: "background",
+            exportTags: ["legacy-layer"],
             metadata: { imageSessionProjectionTags: ["template-overlay", "shared"] },
             objects: [
               {
@@ -1475,7 +1476,11 @@ async function testApplyKitEditorDocument() {
                 id: "front-template-image",
                 type: "image",
                 src: "/template.png",
-                metadata: { imageSessionProjectionTags: ["object-overlay", "shared"] },
+                exportTags: ["legacy-object"],
+                metadata: {
+                  exportTags: [" mockup ", "mockup", ""],
+                  imageSessionProjectionTags: ["object-overlay", "shared"],
+                },
                 frame: { x: 0, y: 0, width: 100, height: 120 },
                 effects: [
                   {
@@ -1597,6 +1602,11 @@ async function testApplyKitEditorDocument() {
     templateImageGraphNode?.data.imageSessionProjectionTags,
     ["template-overlay", "shared", "object-overlay"],
     "document apply should merge object-level image session projection tags with layer tags",
+  );
+  assertDeepEqual(
+    templateImageGraphNode?.exportTags,
+    ["mockup"],
+    "document apply should read export tags from object metadata only",
   );
   const committedGraphNode = renderGraph.layers
     .find((layer) => layer.id === "front-artwork")
