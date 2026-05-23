@@ -11,7 +11,6 @@ import {
   SCENE_LAYOUT_SERVICE,
   applyAlphaMaskData,
   createBoundaryOutputMaskAlpha,
-  createFittedEllipseOutputMaskAlpha,
 } from "../src";
 import type {
   FabricRenderTargetClipEffect,
@@ -1331,22 +1330,34 @@ function testOutputMaskOutlineHelpers() {
   assertEqual(alpha?.[0], 0, "outline mask should leave outside transparent");
 }
 
-function testOutputMaskEllipseHelper() {
-  const width = 7;
+function testOutputMaskOutlinePreservesFrameShape() {
+  const width = 9;
   const height = 7;
   const data = new Uint8ClampedArray(width * height * 4);
   const setAlpha = (x: number, y: number) => {
     data[(y * width + x) * 4 + 3] = 255;
   };
 
-  setAlpha(3, 1);
-  setAlpha(1, 3);
-  setAlpha(5, 3);
-  setAlpha(3, 5);
+  for (let x = 0; x < width; x += 1) {
+    setAlpha(x, 0);
+    setAlpha(x, height - 1);
+  }
+  for (let y = 0; y < height; y += 1) {
+    setAlpha(0, y);
+    setAlpha(width - 1, y);
+  }
 
-  const alpha = createFittedEllipseOutputMaskAlpha(data, width, height);
-  assertEqual(alpha?.[3 * width + 3], 255, "ellipse mask should fill center");
-  assertEqual(alpha?.[0], 0, "ellipse mask should leave outside transparent");
+  const alpha = createBoundaryOutputMaskAlpha(data, width, height);
+  assertEqual(
+    alpha?.[1 * width + 1],
+    255,
+    "outline mask should preserve rectangular frame corners",
+  );
+  assertEqual(
+    alpha?.[3 * width + 4],
+    255,
+    "outline mask should fill the frame center",
+  );
 }
 
 async function testSceneExportAppliesOutputMask() {
@@ -1573,7 +1584,7 @@ async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["applies alpha mask data", testOutputMaskAlphaHelpers],
     ["fills outline output masks", testOutputMaskOutlineHelpers],
-    ["fits ellipse output masks", testOutputMaskEllipseHelper],
+    ["preserves outline output mask frame shapes", testOutputMaskOutlinePreservesFrameShape],
     [
       "registers render graph adapter in browser host",
       testAttachRegistersRenderGraphAdapter,

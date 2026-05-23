@@ -197,57 +197,6 @@ export function createBoundaryOutputMaskAlpha(
   return enclosedCount > 0 ? alpha : null;
 }
 
-export function createFittedEllipseOutputMaskAlpha(
-  data: Uint8ClampedArray,
-  width: number,
-  height: number,
-  alphaThreshold = OUTPUT_MASK_ALPHA_THRESHOLD,
-): Uint8ClampedArray | null {
-  if (width <= 0 || height <= 0 || data.length < width * height * 4) {
-    return null;
-  }
-
-  let left = width;
-  let right = -1;
-  let top = height;
-  let bottom = -1;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      if ((data[(y * width + x) * 4 + 3] ?? 0) <= alphaThreshold) {
-        continue;
-      }
-
-      left = Math.min(left, x);
-      right = Math.max(right, x);
-      top = Math.min(top, y);
-      bottom = Math.max(bottom, y);
-    }
-  }
-
-  if (right <= left || bottom <= top) return null;
-
-  const centerX = (left + right) / 2;
-  const centerY = (top + bottom) / 2;
-  const radiusX = (right - left) / 2;
-  const radiusY = (bottom - top) / 2;
-  const alpha = new Uint8ClampedArray(width * height);
-  let filledCount = 0;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const normalizedX = (x - centerX) / radiusX;
-      const normalizedY = (y - centerY) / radiusY;
-      if (normalizedX * normalizedX + normalizedY * normalizedY > 1) continue;
-
-      alpha[y * width + x] = 255;
-      filledCount += 1;
-    }
-  }
-
-  return filledCount > 0 ? alpha : null;
-}
-
 export function applyAlphaMaskData(
   data: Uint8ClampedArray,
   alpha: Uint8ClampedArray,
@@ -270,10 +219,7 @@ function toMaskAlpha(
   mode: SceneExportOutputMaskMode,
 ): Uint8ClampedArray | null {
   if (mode === "outline") {
-    return (
-      createFittedEllipseOutputMaskAlpha(data, width, height) ||
-      createBoundaryOutputMaskAlpha(data, width, height)
-    );
+    return createBoundaryOutputMaskAlpha(data, width, height);
   }
 
   return createAlphaMask(data, width, height);
