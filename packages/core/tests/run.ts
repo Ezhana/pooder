@@ -5,7 +5,6 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  TOOL_REGISTRY_SERVICE,
   buildSceneGeometry,
   computeSceneLayout,
   computeDragInteraction,
@@ -25,7 +24,6 @@ import {
   type SceneChangeEvent,
   type SceneService,
   type Service,
-  type ToolContribution,
   type SessionChangeEvent,
   type SessionService,
 } from "../src";
@@ -359,6 +357,9 @@ async function testActivationFailureDoesNotLeakDynamicContributions() {
                 capabilityUnregistrations += 1;
               },
             },
+            {
+              id: "bad.capability",
+            },
           ],
           commands: [
             {
@@ -367,13 +368,6 @@ async function testActivationFailureDoesNotLeakDynamicContributions() {
               title: "bad.command",
               handler: () => "bad",
             },
-          ],
-          tools: [
-            {
-              id: "",
-              name: "Broken Tool",
-              interaction: "instant",
-            } as ToolContribution,
           ],
         };
       },
@@ -456,10 +450,6 @@ async function testCapabilityContributionWithoutTool() {
         .getFacade<typeof facade>("pooder.test.capability-only")
         ?.describe(),
       "capability-ready",
-    );
-    assertEqual(
-      runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).listTools().length,
-      0,
     );
   });
 }
@@ -577,7 +567,7 @@ async function testRuntimeCapabilityFacadeApiThrowsForMissingFacade() {
   });
 }
 
-async function testCapabilityCanCoexistWithLegacyTool() {
+async function testCapabilityIgnoresLegacyToolContribution() {
   await withRuntime(async (runtime) => {
     runtime.extensions.register({
       id: "capability-with-tool",
@@ -608,14 +598,10 @@ async function testCapabilityCanCoexistWithLegacyTool() {
         .hasCapability("pooder.test.capability-with-tool"),
       true,
     );
-    assertEqual(
-      runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).hasTool("legacy.tool"),
-      true,
-    );
   });
 }
 
-async function testUnregisterCleansDefinitionsCommandsAndTools() {
+async function testUnregisterCleansDefinitionsCapabilitiesAndCommands() {
   await withRuntime(async (runtime) => {
     const cleanupExtension: ExtensionDefinition = {
       id: "cleanup",
@@ -663,10 +649,6 @@ async function testUnregisterCleansDefinitionsCommandsAndTools() {
       "cleanup",
     );
     assertEqual(
-      runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).hasTool("cleanup.tool"),
-      true,
-    );
-    assertEqual(
       runtime.services
         .getOrThrow(CAPABILITY_REGISTRY_SERVICE)
         .hasCapability("cleanup.capability"),
@@ -680,10 +662,6 @@ async function testUnregisterCleansDefinitionsCommandsAndTools() {
     assertEqual(
       runtime.services.getOrThrow(COMMAND_SERVICE).getCommand("cleanup.command"),
       undefined,
-    );
-    assertEqual(
-      runtime.services.getOrThrow(TOOL_REGISTRY_SERVICE).hasTool("cleanup.tool"),
-      false,
     );
     assertEqual(
       runtime.services
@@ -1503,7 +1481,7 @@ async function testSessionDirtyTrackerCanBlockLeave() {
   });
 }
 
-async function testWorkbenchDoesNotManageSessions() {
+async function testToolContributionDoesNotManageSessions() {
   await withRuntime(async (runtime) => {
     runtime.extensions.register({
       id: "tool-session-decoupled",
@@ -1526,13 +1504,11 @@ async function testWorkbenchDoesNotManageSessions() {
       SESSION_SERVICE,
     );
 
-    await runtime.workbench.activate("decoupled.session-tool");
-
     assertEqual(sessions.hasActiveSession(), false);
 
-    const result = await runtime.workbench.deactivate();
+    const result = await runtime.extensions.unregister("tool-session-decoupled");
 
-    assertEqual(result.ok, true);
+    assertEqual(result, true);
     assertEqual(sessions.hasActiveSession(), false);
   });
 }
@@ -2027,12 +2003,12 @@ async function main() {
       testRuntimeCapabilityFacadeApiThrowsForMissingFacade,
     ],
     [
-      "allows capabilities to coexist with legacy tools",
-      testCapabilityCanCoexistWithLegacyTool,
+      "ignores legacy tool contributions while registering capabilities",
+      testCapabilityIgnoresLegacyToolContribution,
     ],
     [
-      "unregister cleans up config definitions, capabilities, commands, and tools",
-      testUnregisterCleansDefinitionsCommandsAndTools,
+      "unregister cleans up config definitions, capabilities, and commands",
+      testUnregisterCleansDefinitionsCapabilitiesAndCommands,
     ],
     [
       "fails duplicate capability ids without leaking dynamic contributions",
@@ -2076,8 +2052,8 @@ async function main() {
       testSessionDirtyTrackerCanBlockLeave,
     ],
     [
-      "workbench does not manage sessions",
-      testWorkbenchDoesNotManageSessions,
+      "tool contribution does not manage sessions",
+      testToolContributionDoesNotManageSessions,
     ],
     [
       "keeps render intent runtime patches source scoped",

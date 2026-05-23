@@ -334,10 +334,11 @@ export default class SceneService implements Service {
   selectElements<TElement extends SceneElement = SceneElement>(
     selector: SceneElementSelector = {},
   ): TElement[] {
-    return Array.from(this.getSceneStore(selector.sceneId).elementsById.values())
+    const scene = this.getSceneStore(selector.sceneId);
+    return Array.from(scene.elementsById.values())
       .filter((element) => this.matchesElementSelector(element, selector))
+      .sort((left, right) => this.compareSceneElements(scene, left, right))
       .map((element) => this.cloneElement(element) as TElement)
-      .sort(this.compareOrderedItems);
   }
 
   selectOneElement<TElement extends SceneElement = SceneElement>(
@@ -694,5 +695,22 @@ export default class SceneService implements Service {
     right: T,
   ): number {
     return left.order - right.order || left.id.localeCompare(right.id);
+  }
+
+  private compareSceneElements(
+    scene: SceneStore,
+    left: SceneElement,
+    right: SceneElement,
+  ): number {
+    const leftLayerOrder =
+      scene.layersById.get(left.layerId)?.order ?? Number.MAX_SAFE_INTEGER;
+    const rightLayerOrder =
+      scene.layersById.get(right.layerId)?.order ?? Number.MAX_SAFE_INTEGER;
+
+    return (
+      leftLayerOrder - rightLayerOrder ||
+      left.order - right.order ||
+      left.id.localeCompare(right.id)
+    );
   }
 }
