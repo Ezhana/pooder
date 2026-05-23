@@ -286,11 +286,24 @@ export interface SceneExportOutputMask {
   mode?: SceneExportOutputMaskMode;
 }
 
+export interface SceneExportSourceSelector {
+  layerIds?: readonly string[];
+  elementIds?: readonly string[];
+  tags?: readonly string[];
+  layerRoles?: readonly string[];
+}
+
+export interface SceneExportSourceResult {
+  layerIds: string[];
+  elementIds: string[];
+  tags: string[];
+  layerRoles: string[];
+}
+
 export interface SceneExportOptions {
   format?: SceneExportFormat;
   multiplier?: number;
-  sourceLayerIds?: readonly string[];
-  sourceElementIds?: readonly string[];
+  source?: SceneExportSourceSelector;
   crop?: SceneExportCrop;
   includeHidden?: boolean;
   preserveClipPaths?: boolean;
@@ -303,8 +316,7 @@ export interface SceneExportResult {
   height: number;
   format: SceneExportFormat;
   multiplier: number;
-  sourceLayerIds: string[];
-  sourceElementIds: string[];
+  source: SceneExportSourceResult;
   crop: CanvasRect;
 }
 

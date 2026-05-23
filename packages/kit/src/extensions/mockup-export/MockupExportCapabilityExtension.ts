@@ -11,7 +11,6 @@ import {
 import {
   createMockupExportCapabilityDefinition,
   MOCKUP_EXPORT_CAPABILITY_ID,
-  normalizeMockupExportIds,
   type MockupExportCapabilityApi,
   type MockupExportCapabilityOptions,
   type MockupExportOptions,
@@ -74,8 +73,6 @@ export class MockupExportCapabilityExtension implements ExtensionDefinition {
       throw new Error("mockup-export-not-initialized");
     }
 
-    const sourceLayerIds = normalizeMockupExportIds(options.sourceLayerIds);
-    const sourceElementIds = normalizeMockupExportIds(options.sourceElementIds);
     const outputMask = this.normalizeOutputMask(options.outputMask);
     const format = outputMask ? "png" : options.format;
 
@@ -86,8 +83,6 @@ export class MockupExportCapabilityExtension implements ExtensionDefinition {
         crop: options.crop ?? { type: "frame", frame: "cut" },
         ...(outputMask ? { outputMask } : {}),
         preserveClipPaths: options.preserveClipPaths ?? true,
-        sourceLayerIds,
-        sourceElementIds,
       });
 
       return {
@@ -96,8 +91,7 @@ export class MockupExportCapabilityExtension implements ExtensionDefinition {
         height: result.height,
         format: result.format,
         multiplier: result.multiplier,
-        layerIds: result.sourceLayerIds,
-        sourceElementIds: result.sourceElementIds,
+        source: result.source,
         crop: result.crop,
       };
     } catch (error) {

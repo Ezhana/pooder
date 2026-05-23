@@ -4,6 +4,7 @@ import type {
   SceneExportCrop,
   SceneExportOutputMask,
   SceneExportOptions,
+  SceneExportSourceResult,
 } from "@pooder/core";
 
 export const MOCKUP_EXPORT_CAPABILITY_ID = "pooder.kit.mockup-export";
@@ -22,8 +23,7 @@ export interface MockupExportResult {
   height: number;
   format: MockupExportFormat;
   multiplier: number;
-  layerIds: string[];
-  sourceElementIds: string[];
+  source: SceneExportSourceResult;
   crop: CanvasRect;
 }
 
@@ -33,14 +33,6 @@ export interface MockupExportCapabilityOptions {
 
 export interface MockupExportCapabilityApi {
   exportMockup(options?: MockupExportOptions): Promise<MockupExportResult>;
-}
-
-export function normalizeMockupExportIds(values: unknown): string[] {
-  if (!Array.isArray(values)) return [];
-  const normalized = values
-    .map((value) => String(value || "").trim())
-    .filter((value) => value.length > 0);
-  return Array.from(new Set(normalized));
 }
 
 export function createMockupExportCapabilityDefinition(

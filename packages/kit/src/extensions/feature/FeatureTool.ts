@@ -410,10 +410,10 @@ export class FeatureTool implements ExtensionDefinition {
           strokeWidth: FEATURE_STROKE_WIDTH,
           selectable: false,
           evented: false,
+          excludeFromExport: true,
         },
         export: {
           visible: true,
-          exportable: false,
         },
         data: {
           type: "feature",

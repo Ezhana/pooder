@@ -891,6 +891,8 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
   const source = {
     data: {
       exportKeys: ["session-image:slot"],
+      exportTags: ["mockup", "design"],
+      documentLayerRole: "content",
       layerId: "image.user.session.image",
     },
     visible: true,
@@ -942,8 +944,12 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
     includeHidden: true,
-    sourceElementIds: ["session-image:slot"],
-    sourceLayerIds: ["image.user.session.image"],
+    source: {
+      elementIds: ["session-image:slot"],
+      layerIds: ["image.user.session.image"],
+      tags: ["mockup"],
+      layerRoles: ["content"],
+    },
   });
 
   assertEqual(
@@ -952,9 +958,101 @@ async function testSceneExportMatchesRenderGraphNodeIds() {
     "export should include objects matched by render graph node id",
   );
   assertEqual(
-    result.sourceElementIds[0],
+    result.source.elementIds[0],
     "session-image:slot",
     "export result should report render graph node id",
+  );
+  assertDeepEqual(
+    result.source.tags,
+    ["mockup", "design"],
+    "export result should report matched export tags",
+  );
+}
+
+async function testSceneExportCombinesSourceSelectorDimensions() {
+  const createSource = (
+    id: string,
+    data: Record<string, unknown>,
+    options: { excludeFromExport?: boolean; visible?: boolean } = {},
+  ) => ({
+    data: {
+      exportKeys: [id],
+      layerId: "image.user",
+      documentLayerRole: "content",
+      exportTags: ["mockup"],
+      ...data,
+    },
+    visible: options.visible ?? true,
+    excludeFromExport: options.excludeFromExport,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 20, y: 30 };
+    },
+    async clone() {
+      return {
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  });
+  const exportCanvas = {
+    objects: [] as any[],
+    add(object: any) {
+      this.objects.push(object);
+    },
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,ok";
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    getObjects: () => [
+      createSource("match", {}),
+      createSource("wrong-tag", { exportTags: ["design"] }),
+      createSource("wrong-role", { documentLayerRole: "overlay" }),
+      createSource("excluded", {}, { excludeFromExport: true }),
+    ],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
+  };
+  service.sceneLayoutService = {};
+  service.createExportCanvas = () => exportCanvas;
+
+  const result = await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+    includeHidden: true,
+    source: {
+      layerIds: ["image.user"],
+      layerRoles: ["content"],
+      tags: ["mockup"],
+    },
+  });
+
+  assertEqual(
+    exportCanvas.objects.length,
+    1,
+    "export should require every populated source selector dimension to match",
+  );
+  assertDeepEqual(
+    result.source.elementIds,
+    ["match"],
+    "export should report only objects that matched the combined selector",
   );
 }
 
@@ -1017,7 +1115,7 @@ async function testSceneExportUsesCutFrameCrop() {
   const result = await service.exportImage({
     crop: { type: "frame", frame: "cut" },
     includeHidden: true,
-    sourceLayerIds: ["image.user"],
+    source: { layerIds: ["image.user"] },
   });
 
   assertDeepEqual(
@@ -1092,7 +1190,7 @@ async function testSceneExportClearsClipPathByDefault() {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
-    sourceLayerIds: ["image.user"],
+    source: { layerIds: ["image.user"] },
   });
 
   assertEqual(
@@ -1159,7 +1257,7 @@ async function testSceneExportPreservesClipPathWhenRequested() {
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
     preserveClipPaths: true,
-    sourceLayerIds: ["image.user"],
+    source: { layerIds: ["image.user"] },
   });
 
   assertEqual(
@@ -1285,7 +1383,7 @@ async function testSceneExportAppliesOutputMask() {
     },
     format: "jpeg",
     outputMask: { mode: "outline", sourceKey: "templateFrame" },
-    sourceLayerIds: ["image.user"],
+    source: { layerIds: ["image.user"] },
   });
 
   assertEqual(
@@ -1363,7 +1461,7 @@ async function testSceneExportRejectsMissingOutputMaskSource() {
         rect: { left: 0, top: 0, width: 100, height: 80 },
       },
       outputMask: { sourceKey: "templateFrame" },
-      sourceLayerIds: ["image.user"],
+      source: { layerIds: ["image.user"] },
     });
     throw new Error("scene export should throw for missing output mask source");
   } catch (error) {
@@ -1432,7 +1530,7 @@ async function testSceneExportRejectsHiddenOutputMaskSource() {
         rect: { left: 0, top: 0, width: 100, height: 80 },
       },
       outputMask: { sourceKey: "templateFrame" },
-      sourceLayerIds: ["image.user"],
+      source: { layerIds: ["image.user"] },
     });
     throw new Error("scene export should throw for hidden output mask source");
   } catch (error) {
@@ -1490,6 +1588,10 @@ async function main() {
     [
       "exports by render graph node ids",
       testSceneExportMatchesRenderGraphNodeIds,
+    ],
+    [
+      "combines source selector dimensions",
+      testSceneExportCombinesSourceSelectorDimensions,
     ],
     [
       "exports frame crops from scene layout cut rect",

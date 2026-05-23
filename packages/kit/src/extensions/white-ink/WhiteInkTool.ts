@@ -415,7 +415,6 @@ export class WhiteInkTool implements ExtensionDefinition {
       },
       export: {
         visible: (payload as Record<string, unknown>).printEnabled !== false,
-        exportable: true,
       },
       data: {
         type: "white-ink",

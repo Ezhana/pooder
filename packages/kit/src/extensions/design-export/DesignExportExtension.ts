@@ -8,13 +8,13 @@ import {
   SCENE_EXPORT_SERVICE,
   type SceneLayer,
   SceneExportService,
+  type SceneExportSourceSelector,
   type SceneService,
 } from "@pooder/core";
 import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import {
   createDesignExportCapabilityDefinition,
   DESIGN_EXPORT_CAPABILITY_ID,
-  normalizeDesignExportLayerIds,
   type DesignExportCapabilityApi,
   type DesignExportCapabilityOptions,
   type ExportImageOptions,
@@ -35,7 +35,6 @@ const DEFAULT_EXPORT_LAYER_IDS = [
 
 function isDefaultExportSceneLayer(layer: SceneLayer): boolean {
   const metadata = layer.metadata ?? {};
-  if (metadata.exportable === false) return false;
   const role = typeof metadata.documentLayerRole === "string"
     ? metadata.documentLayerRole.trim()
     : "";
@@ -60,14 +59,14 @@ export class DesignExportExtension implements ExtensionDefinition {
   private exportService?: SceneExportService;
   private sceneService?: SceneService;
   private readonly capabilityId: string;
-  private readonly configuredLayerIds?: readonly string[];
+  private readonly configuredSource?: SceneExportSourceSelector;
   private readonly contributeLegacyCommands: boolean;
 
   constructor(options: DesignExportExtensionOptions = {}) {
     this.id = String(options.id || DESIGN_EXPORT_CAPABILITY_ID).trim() ||
       DESIGN_EXPORT_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || DESIGN_EXPORT_CAPABILITY_ID;
-    this.configuredLayerIds = options.layers?.sourceLayerIds;
+    this.configuredSource = options.source;
     this.contributeLegacyCommands = options.contributeCommands !== false;
   }
 
@@ -83,9 +82,7 @@ export class DesignExportExtension implements ExtensionDefinition {
       capabilities: [
         createDesignExportCapabilityDefinition(this.getDesignExportFacade(), {
           capabilityId: this.capabilityId,
-          layers: {
-            sourceLayerIds: this.resolveDefaultLayerIds(),
-          },
+          source: this.resolveDefaultSource(),
         }),
       ],
     };
@@ -97,14 +94,16 @@ export class DesignExportExtension implements ExtensionDefinition {
     return contributions;
   }
 
-  private resolveDefaultLayerIds(): readonly string[] {
-    if (this.configuredLayerIds) return this.configuredLayerIds;
+  private resolveDefaultSource(): SceneExportSourceSelector {
+    if (this.configuredSource) return this.configuredSource;
     const sceneLayerIds = this.sceneService
       ?.listLayers()
       .filter(isDefaultExportSceneLayer)
       .map((layer) => layer.id)
       .filter((id) => id.length > 0) ?? [];
-    return sceneLayerIds.length > 0 ? sceneLayerIds : DEFAULT_EXPORT_LAYER_IDS;
+    return {
+      layerIds: sceneLayerIds.length > 0 ? sceneLayerIds : DEFAULT_EXPORT_LAYER_IDS,
+    };
   }
 
   async exportImage(
@@ -114,16 +113,12 @@ export class DesignExportExtension implements ExtensionDefinition {
       throw new Error("design-export-not-initialized");
     }
 
-    const layerIds = normalizeDesignExportLayerIds(
-      options.sourceLayerIds ?? options.layerIds,
-      this.resolveDefaultLayerIds(),
-    );
     try {
       const result = await this.exportService.exportImage({
         ...options,
         crop: options.crop ?? { type: "frame", frame: "cut" },
         includeHidden: options.includeHidden ?? true,
-        sourceLayerIds: layerIds,
+        source: options.source ?? this.resolveDefaultSource(),
       });
 
       return {
@@ -132,8 +127,7 @@ export class DesignExportExtension implements ExtensionDefinition {
         height: result.height,
         format: result.format,
         multiplier: result.multiplier,
-        layerIds: result.sourceLayerIds,
-        sourceElementIds: result.sourceElementIds,
+        source: result.source,
         crop: result.crop,
       };
     } catch (error) {

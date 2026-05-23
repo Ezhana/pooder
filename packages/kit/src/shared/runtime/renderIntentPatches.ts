@@ -57,7 +57,6 @@ export function patchRenderObjectSpecs(
         keys: spec.exportKeys,
         visibility: spec.visibility ?? options.visibility,
         visible: spec.props?.visible !== false,
-        exportable: spec.props?.excludeFromExport !== true,
       },
       coordinateSpace: spec.space || "scene",
     });

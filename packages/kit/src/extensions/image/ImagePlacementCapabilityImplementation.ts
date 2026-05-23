@@ -1522,8 +1522,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       format: "png",
       includeHidden: true,
       multiplier: 2,
-      sourceElementIds: [this.getWorkingImageNodeId(placement.id)],
-      sourceLayerIds: [IMAGE_SESSION_IMAGE_LAYER_ID],
+      source: {
+        elementIds: [this.getWorkingImageNodeId(placement.id)],
+        layerIds: [IMAGE_SESSION_IMAGE_LAYER_ID],
+      },
     });
     return {
       url: result.url,
@@ -1864,8 +1866,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       format: options.format === "jpeg" ? "jpeg" : "png",
       includeHidden: true,
       multiplier: Math.max(1, options.multiplier ?? 2),
-      sourceElementIds: placementIds.map((id) => `image:${id}`),
-      sourceLayerIds: sourceLayerIds.length ? sourceLayerIds : [this.imageLayerId],
+      source: {
+        elementIds: placementIds.map((id) => `image:${id}`),
+        layerIds: sourceLayerIds.length ? sourceLayerIds : [this.imageLayerId],
+      },
     });
     return {
       url: result.url,

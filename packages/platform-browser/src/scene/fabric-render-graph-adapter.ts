@@ -410,7 +410,6 @@ export class FabricRenderGraphAdapter implements Service {
       ...node.props,
       ...this.resolvePlacementProps(node),
       visible: layer.visible && node.visible,
-      excludeFromExport: !node.exportable,
     };
     const commonData = {
       ...node.data,
@@ -419,6 +418,7 @@ export class FabricRenderGraphAdapter implements Service {
       renderNodeId: node.id,
       subjectId: node.subjectId,
       exportKeys: node.exportKeys,
+      exportTags: node.exportTags,
     };
 
     if (node.type === "image") {

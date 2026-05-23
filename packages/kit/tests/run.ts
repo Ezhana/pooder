@@ -39,14 +39,12 @@ import {
   DESIGN_EXPORT_CAPABILITY_ID,
   DesignExportCapabilityExtension,
   createDesignExportCapabilityDefinition,
-  normalizeDesignExportLayerIds,
   type DesignExportCapabilityApi,
 } from "../src/extensions/design-export";
 import {
   MOCKUP_EXPORT_CAPABILITY_ID,
   MockupExportCapabilityExtension,
   createMockupExportCapabilityDefinition,
-  normalizeMockupExportIds,
   type MockupExportCapabilityApi,
 } from "../src/extensions/mockup-export";
 import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
@@ -389,8 +387,12 @@ class FakeSceneExportService {
     format: "png",
     height: 80,
     multiplier: 1,
-    sourceElementIds: [],
-    sourceLayerIds: [],
+    source: {
+      layerIds: [],
+      elementIds: [],
+      tags: [],
+      layerRoles: [],
+    },
     url: "data:image/png;base64,test",
     width: 100,
   };
@@ -873,24 +875,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     "dieline geometry layer id should trim caller input",
   );
   assertDeepEqual(
-    normalizeDesignExportLayerIds(
-      [" app.artwork ", "", "app.artwork", "app.white"],
-      ["legacy.image"],
-    ),
-    ["app.artwork", "app.white"],
-    "design export should trim, filter, and dedupe caller layer ids",
-  );
-  assertDeepEqual(
-    normalizeDesignExportLayerIds(undefined, ["legacy.image"]),
-    ["legacy.image"],
-    "design export should use fallback layer ids",
-  );
-  assertDeepEqual(
-    normalizeMockupExportIds([" app.mockup ", "", "app.mockup", "app.art"]),
-    ["app.mockup", "app.art"],
-    "mockup export should trim, filter, and dedupe caller ids",
-  );
-  assertDeepEqual(
     normalizeClipEffectPayload({
       source: {
         type: "image",
@@ -1006,17 +990,19 @@ async function testDesignExportCapabilityExtension() {
     format: "png",
     height: 60,
     multiplier: 3,
-    sourceElementIds: ["element-1"],
-    sourceLayerIds: ["app.design"],
+    source: {
+      layerIds: ["app.design"],
+      elementIds: ["element-1"],
+      tags: ["design"],
+      layerRoles: ["content"],
+    },
     url: "data:image/png;base64,capability",
     width: 90,
   };
 
   runtime.extensions.register(
     new DesignExportCapabilityExtension({
-      layers: {
-        sourceLayerIds: ["app.design"],
-      },
+      source: { tags: ["design"] },
     }),
   );
   runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
@@ -1047,18 +1033,19 @@ async function testDesignExportCapabilityExtension() {
     },
     format: "png",
     multiplier: 3,
-    sourceElementIds: ["element-1"],
+    source: {
+      elementIds: ["element-1"],
+      layerIds: ["app.design"],
+    },
   });
   const lastCall = exportService.calls[exportService.calls.length - 1];
   assertDeepEqual(
-    lastCall.sourceLayerIds,
-    ["app.design"],
-    "design export capability should use caller default source layers",
-  );
-  assertDeepEqual(
-    lastCall.sourceElementIds,
-    ["element-1"],
-    "design export capability should delegate source element ids",
+    lastCall.source,
+    {
+      elementIds: ["element-1"],
+      layerIds: ["app.design"],
+    },
+    "design export capability should delegate caller source selector",
   );
   assertDeepEqual(
     lastCall.crop,
@@ -1071,9 +1058,14 @@ async function testDesignExportCapabilityExtension() {
     "design export capability should map platform export url",
   );
   assertDeepEqual(
-    result.sourceElementIds,
-    ["element-1"],
-    "design export capability should map platform source elements",
+    result.source,
+    {
+      layerIds: ["app.design"],
+      elementIds: ["element-1"],
+      tags: ["design"],
+      layerRoles: ["content"],
+    },
+    "design export capability should map platform source result",
   );
   assertDeepEqual(
     result.crop,
@@ -1082,10 +1074,16 @@ async function testDesignExportCapabilityExtension() {
   );
 
   await facade.exportImage();
+  const defaultDesignCall = exportService.calls[exportService.calls.length - 1];
   assertDeepEqual(
-    exportService.calls[exportService.calls.length - 1]?.crop,
+    defaultDesignCall.crop,
     { type: "frame", frame: "cut" },
     "design export capability should default to cut frame crop",
+  );
+  assertDeepEqual(
+    defaultDesignCall.source,
+    { tags: ["design"] },
+    "design export capability should use configured default source",
   );
 
   await runtime.dispose();
@@ -1103,8 +1101,12 @@ async function testMockupExportCapabilityExtension() {
     format: "png",
     height: 90,
     multiplier: 1,
-    sourceElementIds: ["mockup-element"],
-    sourceLayerIds: ["base", "artwork", "overlay"],
+    source: {
+      layerIds: ["base", "artwork", "overlay"],
+      elementIds: ["mockup-element"],
+      tags: ["mockup"],
+      layerRoles: ["overlay"],
+    },
     url: "data:image/png;base64,mockup",
     width: 120,
   };
@@ -1139,20 +1141,22 @@ async function testMockupExportCapabilityExtension() {
     format: "png",
     includeHidden: true,
     multiplier: 1,
-    sourceElementIds: [" mockup-element "],
-    sourceLayerIds: [" base ", "artwork", "overlay", "artwork"],
+    source: {
+      elementIds: ["mockup-element"],
+      layerIds: ["base", "artwork", "overlay"],
+      tags: ["mockup"],
+    },
   });
   const lastCall = exportService.calls[exportService.calls.length - 1];
 
   assertDeepEqual(
-    lastCall.sourceLayerIds,
-    ["base", "artwork", "overlay"],
-    "mockup export capability should delegate caller layer ids",
-  );
-  assertDeepEqual(
-    lastCall.sourceElementIds,
-    ["mockup-element"],
-    "mockup export capability should delegate caller element ids",
+    lastCall.source,
+    {
+      elementIds: ["mockup-element"],
+      layerIds: ["base", "artwork", "overlay"],
+      tags: ["mockup"],
+    },
+    "mockup export capability should delegate caller source selector",
   );
   assertDeepEqual(
     lastCall.crop,
@@ -1175,9 +1179,14 @@ async function testMockupExportCapabilityExtension() {
     "mockup export capability should map platform export url",
   );
   assertDeepEqual(
-    result.layerIds,
-    ["base", "artwork", "overlay"],
-    "mockup export capability should map platform layer ids",
+    result.source,
+    {
+      layerIds: ["base", "artwork", "overlay"],
+      elementIds: ["mockup-element"],
+      tags: ["mockup"],
+      layerRoles: ["overlay"],
+    },
+    "mockup export capability should map platform source result",
   );
   assertDeepEqual(
     result.crop,
@@ -2125,8 +2134,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     format: "png",
     height: 320,
     multiplier: 2,
-    sourceElementIds: ["placement"],
-    sourceLayerIds: ["image.user"],
+    source: {
+      layerIds: ["image.user"],
+      elementIds: ["placement"],
+      tags: [],
+      layerRoles: [],
+    },
     url: "data:image/png;base64,cropped-placement",
     width: 400,
   };
@@ -2598,12 +2611,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "complete session should crop the working image by the placement frame",
   );
   assertDeepEqual(
-    exportService.calls[0]?.sourceElementIds,
+    exportService.calls[0]?.source?.elementIds,
     ["session-image:image-placement:placement"],
     "complete session should export the active working placement image",
   );
   assertDeepEqual(
-    exportService.calls[0]?.sourceLayerIds,
+    exportService.calls[0]?.source?.layerIds,
     ["image.session.image"],
     "complete session should export the working image from the session pass",
   );
@@ -2681,12 +2694,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   await driver.exportPlacementImage({ placementIds: ["placement"] });
   assertDeepEqual(
-    exportService.calls[exportService.calls.length - 1]?.sourceLayerIds,
+    exportService.calls[exportService.calls.length - 1]?.source?.layerIds,
     ["artwork"],
     "placement image export should use the committed placement business layer",
   );
   assertDeepEqual(
-    exportService.calls[exportService.calls.length - 1]?.sourceElementIds,
+    exportService.calls[exportService.calls.length - 1]?.source?.elementIds,
     ["image:placement"],
     "placement image export should target the committed production image object",
   );
@@ -2791,8 +2804,12 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
     format: "png",
     height: 320,
     multiplier: 2,
-    sourceElementIds: ["placement"],
-    sourceLayerIds: ["image.user"],
+    source: {
+      layerIds: ["image.user"],
+      elementIds: ["placement"],
+      tags: [],
+      layerRoles: [],
+    },
     url: "data:image/png;base64,cropped-placement",
     width: 400,
   };
@@ -3052,8 +3069,12 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
     format: "png",
     height: 100,
     multiplier: 1,
-    sourceElementIds: ["placement"],
-    sourceLayerIds: ["artwork"],
+    source: {
+      layerIds: ["artwork"],
+      elementIds: ["placement"],
+      tags: [],
+      layerRoles: [],
+    },
     url: "data:image/png;base64,business-session",
     width: 100,
   };
@@ -3790,8 +3811,12 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     format: "png",
     height: 100,
     multiplier: 1,
-    sourceElementIds: ["front.image.user"],
-    sourceLayerIds: ["image.session.image"],
+    source: {
+      layerIds: ["image.session.image"],
+      elementIds: ["front.image.user"],
+      tags: [],
+      layerRoles: [],
+    },
     url: "data:image/png;base64,committed-configurable-placement",
     width: 100,
   };

@@ -1528,7 +1528,7 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
         coordinateSpace: "screen",
         placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
         ordering: { layerId: "artwork" },
-        export: { keys: ["image.export"] },
+        export: { keys: ["image.export"], tags: [" design ", "design", "mockup"] },
         props: { selectable: true, evented: false },
         data: { locked: false },
         interaction: {
@@ -1582,6 +1582,16 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
       node?.exportKeys,
       ["image", "image.export"],
       "render intent export keys should include the render node id",
+    );
+    assertDeepEqual(
+      node?.exportTags,
+      ["design", "mockup"],
+      "render intent export tags should normalize into graph node state",
+    );
+    assertEqual(
+      "exportable" in ((node ?? {}) as unknown as Record<string, unknown>),
+      false,
+      "render graph node should not expose exportable",
     );
   });
 }

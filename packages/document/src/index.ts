@@ -86,7 +86,7 @@ export interface EditorLayer {
   order?: number;
   visible?: boolean;
   locked?: boolean;
-  exportable?: boolean;
+  exportTags?: string[];
   objects?: EditorObject[];
   effects?: EditorEffect[];
   metadata?: Record<string, unknown>;
@@ -125,7 +125,7 @@ export interface EditorObjectBase {
   locked?: boolean;
   interaction?: EditorObjectInteraction;
   constraints?: EditorObjectConstraints;
-  exportable?: boolean;
+  exportTags?: string[];
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -248,6 +248,18 @@ function cloneRecord<T extends Record<string, unknown> | undefined>(
 
 function normalizeId(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeIdList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const values = Array.from(
+    new Set(
+      value
+        .map((item) => normalizeId(item))
+        .filter((item) => item.length > 0),
+    ),
+  );
+  return values.length ? values : undefined;
 }
 
 function normalizeFiniteNumber(value: unknown): number | undefined {
@@ -466,8 +478,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
     interaction: normalizeObjectInteraction(value.interaction),
     constraints: normalizeObjectConstraints(value.constraints),
-    exportable:
-      typeof value.exportable === "boolean" ? value.exportable : undefined,
+    exportTags: normalizeIdList(value.exportTags),
     transform: normalizeTransform(value.transform),
     style: isRecord(value.style) ? cloneRecord(value.style) : undefined,
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
@@ -520,8 +531,7 @@ function normalizeLayer(value: unknown, order: number): EditorLayer | null {
     order: normalizeFiniteNumber(value.order) ?? order,
     visible: typeof value.visible === "boolean" ? value.visible : true,
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
-    exportable:
-      typeof value.exportable === "boolean" ? value.exportable : true,
+    exportTags: normalizeIdList(value.exportTags),
     objects: objects?.length ? objects : undefined,
     effects: normalizeEffects(value.effects),
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,

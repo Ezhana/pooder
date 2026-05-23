@@ -115,6 +115,17 @@ function normalizeImageSessionProjectionTags(value: unknown): string[] {
   );
 }
 
+function normalizeExportTags(...values: unknown[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => (Array.isArray(value) ? value : []))
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
 export function createKitCapabilitiesForDocument(
   value: unknown,
 ): ExtensionDefinition[] {
@@ -336,7 +347,7 @@ function createObjectRenderIntentDraft(
     },
     export: {
       visible: (layer.visible ?? true) && (object.visible ?? true),
-      exportable: (layer.exportable ?? true) && (object.exportable ?? true),
+      tags: normalizeExportTags(layer.exportTags, object.exportTags),
     },
     props: {
       ...(object.style ?? {}),
@@ -350,7 +361,6 @@ function createObjectRenderIntentDraft(
       documentObjectType: object.type,
       documentLayerRole: layer.role,
       locked: interactionLocked,
-      exportable: object.exportable,
       ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
       ...(imageSessionProjectionTags.length ? { imageSessionProjectionTags } : {}),
     },

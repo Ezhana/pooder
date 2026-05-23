@@ -93,6 +93,14 @@ function readExportKeys(object: any): string[] {
   return normalizeIds(keys);
 }
 
+function readExportTags(object: any): string[] {
+  return normalizeIds(object?.data?.exportTags);
+}
+
+function readLayerRole(object: any): string {
+  return String(object?.data?.documentLayerRole || "").trim();
+}
+
 function readOutputMaskKeys(object: any): string[] {
   return normalizeIds([
     object?.data?.outputMaskKey,
@@ -108,6 +116,15 @@ function cloneRect(rect: BrowserSceneExportRect): BrowserSceneExportRect {
     top: rect.top,
     width: rect.width,
     height: rect.height,
+  };
+}
+
+function normalizeSourceSelector(source: BrowserSceneExportOptions["source"]) {
+  return {
+    layerIds: normalizeIds(source?.layerIds),
+    elementIds: normalizeIds(source?.elementIds),
+    tags: normalizeIds(source?.tags),
+    layerRoles: normalizeIds(source?.layerRoles),
   };
 }
 
@@ -145,12 +162,10 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const outputMask = options.outputMask;
     const format = outputMask ? "png" : normalizeFormat(options.format);
     const multiplier = normalizeMultiplier(options.multiplier);
-    const sourceLayerIds = normalizeIds(options.sourceLayerIds);
-    const sourceElementIds = normalizeIds(options.sourceElementIds);
+    const source = normalizeSourceSelector(options.source);
     const sourceObjects = this.getSourceObjects({
       includeHidden: options.includeHidden,
-      sourceElementIds,
-      sourceLayerIds,
+      source,
     });
 
     if (!sourceObjects.length) {
@@ -169,6 +184,8 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const exportCanvas = this.createExportCanvas(width, height);
     const exportedLayerIds = new Set<string>();
     const exportedElementIds = new Set<string>();
+    const exportedTags = new Set<string>();
+    const exportedLayerRoles = new Set<string>();
 
     try {
       for (const source of sourceObjects as any[]) {
@@ -200,8 +217,11 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
         const layerId = readLayerId(source);
         const elementId = readElementId(source);
+        const layerRole = readLayerRole(source);
         if (layerId) exportedLayerIds.add(layerId);
         if (elementId) exportedElementIds.add(elementId);
+        if (layerRole) exportedLayerRoles.add(layerRole);
+        readExportTags(source).forEach((tag) => exportedTags.add(tag));
       }
 
       exportCanvas.renderAll();
@@ -226,8 +246,12 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         height,
         format,
         multiplier,
-        sourceLayerIds: Array.from(exportedLayerIds),
-        sourceElementIds: Array.from(exportedElementIds),
+        source: {
+          layerIds: Array.from(exportedLayerIds),
+          elementIds: Array.from(exportedElementIds),
+          tags: Array.from(exportedTags),
+          layerRoles: Array.from(exportedLayerRoles),
+        },
         crop: cloneRect(crop),
       };
     } finally {
@@ -237,13 +261,21 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
   private getSourceObjects(options: {
     includeHidden?: boolean;
-    sourceLayerIds: string[];
-    sourceElementIds: string[];
+    source: {
+      layerIds: string[];
+      elementIds: string[];
+      tags: string[];
+      layerRoles: string[];
+    };
   }): FabricObject[] {
-    const layerIdSet = new Set(options.sourceLayerIds);
-    const elementIdSet = new Set(options.sourceElementIds);
+    const layerIdSet = new Set(options.source.layerIds);
+    const elementIdSet = new Set(options.source.elementIds);
+    const tagSet = new Set(options.source.tags);
+    const layerRoleSet = new Set(options.source.layerRoles);
     const hasLayerFilter = layerIdSet.size > 0;
     const hasElementFilter = elementIdSet.size > 0;
+    const hasTagFilter = tagSet.size > 0;
+    const hasLayerRoleFilter = layerRoleSet.size > 0;
 
     return this.getCanvasObjects(options.includeHidden === true).filter((object: any) => {
       if (object?.excludeFromExport === true) return false;
@@ -255,6 +287,15 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         hasElementFilter &&
         !readExportKeys(object).some((id) => elementIdSet.has(id))
       ) {
+        return false;
+      }
+      if (
+        hasTagFilter &&
+        !readExportTags(object).some((tag) => tagSet.has(tag))
+      ) {
+        return false;
+      }
+      if (hasLayerRoleFilter && !layerRoleSet.has(readLayerRole(object))) {
         return false;
       }
       return true;

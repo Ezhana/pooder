@@ -282,12 +282,12 @@ export class DielineTool implements ExtensionDefinition {
               fill: null,
               selectable: false,
               evented: false,
+              excludeFromExport: true,
             },
           }
         : {}),
       export: {
         visible: true,
-        exportable: false,
         visibility: this.resolveDielinePassVisibility(),
       },
       data: {

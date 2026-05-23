@@ -107,8 +107,8 @@ export interface RenderIntentInteractionAspect {
 }
 
 export interface RenderIntentExportAspect {
-  exportable?: boolean;
   keys?: readonly string[];
+  tags?: readonly string[];
   visible?: boolean;
   visibility?: VisibilityExpr;
 }
@@ -169,7 +169,7 @@ export interface RenderGraphNode {
   effects: RenderEffectSpec[];
   visibility?: VisibilityExpr;
   visible: boolean;
-  exportable: boolean;
+  exportTags: string[];
   sortKey: RenderGraphSortKey;
 }
 
@@ -655,6 +655,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     visual: source.source,
     coordinateSpace: draft.coordinateSpace || "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
+    exportTags: normalizeIdList(draft.export?.tags),
     frame: draft.placement?.frame,
     transform: draft.placement?.transform,
     props: {
@@ -686,7 +687,6 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     effects: draft.clipping?.effects?.map(cloneRecord) ?? [],
     visibility: cloneRecord(draft.export?.visibility),
     visible: draft.export?.visible !== false,
-    exportable: draft.export?.exportable !== false,
     sortKey: {
       layerOrder: draft.ordering.layerOrder ?? 0,
       objectOrder: draft.ordering.objectOrder ?? 0,
