@@ -2189,6 +2189,24 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
             placement: "above",
             interactive: false,
           },
+          {
+            id: "hidden-helper",
+            sourceLayerIds: ["front.hidden-helper"],
+            placement: "above",
+            interactive: false,
+          },
+          {
+            id: "conditional-hidden-helper",
+            sourceLayerIds: ["front.conditional-hidden-helper"],
+            placement: "above",
+            interactive: false,
+          },
+          {
+            id: "conditional-visible-helper",
+            sourceLayerIds: ["front.conditional-visible-helper"],
+            placement: "above",
+            interactive: false,
+          },
         ],
       },
     },
@@ -2196,6 +2214,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
     RENDER_INTENT_SERVICE,
   );
+  renderIntentService.setVisibilityContextValue("show.hidden-helper", false);
+  renderIntentService.setVisibilityContextValue("show.visible-helper", true);
   renderIntentService.setDocumentIntents([
     {
       id: "front-business-helper",
@@ -2211,6 +2231,57 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
         stack: 500,
         layerOrder: 0,
       },
+      props: { width: 10, height: 10 },
+    },
+    {
+      id: "front-hidden-helper",
+      subject: {
+        kind: "object",
+        surfaceId: "legacy",
+        layerId: "front.hidden-helper",
+        objectId: "front-hidden-helper",
+      },
+      visual: { type: "rect" },
+      ordering: {
+        layerId: "front.hidden-helper",
+        stack: 500,
+        layerOrder: 0,
+      },
+      export: { visible: false },
+      props: { width: 10, height: 10 },
+    },
+    {
+      id: "front-conditional-hidden-helper",
+      subject: {
+        kind: "object",
+        surfaceId: "legacy",
+        layerId: "front.conditional-hidden-helper",
+        objectId: "front-conditional-hidden-helper",
+      },
+      visual: { type: "rect" },
+      ordering: {
+        layerId: "front.conditional-hidden-helper",
+        stack: 500,
+        layerOrder: 0,
+      },
+      export: { visibility: { op: "contextTruthy", key: "show.hidden-helper" } },
+      props: { width: 10, height: 10 },
+    },
+    {
+      id: "front-conditional-visible-helper",
+      subject: {
+        kind: "object",
+        surfaceId: "legacy",
+        layerId: "front.conditional-visible-helper",
+        objectId: "front-conditional-visible-helper",
+      },
+      visual: { type: "rect" },
+      ordering: {
+        layerId: "front.conditional-visible-helper",
+        stack: 500,
+        layerOrder: 0,
+      },
+      export: { visibility: { op: "contextTruthy", key: "show.visible-helper" } },
       props: { width: 10, height: 10 },
     },
   ]);
@@ -2268,16 +2339,45 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     ),
     "image session should render dieline hatch overlay",
   );
+  const overlayElements = scene.listElements(
+    { layerId: "image.session.overlay" },
+    { sceneId: sessionSceneId },
+  );
+  const visibleProjection = overlayElements.find((element) =>
+    element.id.startsWith("projection:placement:business-helper"),
+  );
+  const hiddenProjection = overlayElements.find((element) =>
+    element.id.startsWith("projection:placement:hidden-helper"),
+  );
+  const conditionalHiddenProjection = overlayElements.find((element) =>
+    element.id.startsWith("projection:placement:conditional-hidden-helper"),
+  );
+  const conditionalVisibleProjection = overlayElements.find((element) =>
+    element.id.startsWith("projection:placement:conditional-visible-helper"),
+  );
   assert(
-    scene
-      .listElements(
-        { layerId: "image.session.overlay" },
-        { sceneId: sessionSceneId },
-      )
-      .some((element) =>
-        element.id.startsWith("projection:placement:business-helper"),
-      ),
+    Boolean(visibleProjection),
     "image session should project declared business helpers above the working image",
+  );
+  assertEqual(
+    visibleProjection?.visible,
+    true,
+    "image session should keep visible projection sources visible",
+  );
+  assertEqual(
+    hiddenProjection?.visible,
+    false,
+    "image session should keep statically hidden projection sources hidden",
+  );
+  assertEqual(
+    conditionalHiddenProjection?.visible,
+    false,
+    "image session should snapshot false visibility expressions onto projection elements",
+  );
+  assertEqual(
+    conditionalVisibleProjection?.visible,
+    true,
+    "image session should snapshot true visibility expressions onto projection elements",
   );
   const snapTarget = {
     data: {

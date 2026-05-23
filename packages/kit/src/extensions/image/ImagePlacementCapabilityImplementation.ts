@@ -11,6 +11,7 @@ import {
   SCENE_LAYOUT_SERVICE,
   SESSION_SERVICE,
   computeDragInteraction,
+  evaluateVisibilityExpr,
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
@@ -2389,25 +2390,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       .filter((spec): spec is RenderObjectSpec => Boolean(spec));
   }
 
-  private buildSessionProjectionSpecs(
-    projectionPlacement: ImageSessionProjectionPlacement,
-  ) {
-    return this.getPlacementStates()
-      .filter((placement) => this.shouldRenderWorkingPlacement(placement.id))
-      .flatMap((placement) =>
-        (placement.sessionProjections ?? [])
-          .filter((projection) => projection.placement === projectionPlacement)
-          .map((projection) => ({
-            id: `${placement.id}.${projection.id}`,
-            sourceLayerIds: projection.sourceLayerIds,
-            sourceSubjectIds: projection.sourceElementIds,
-            opacity: projection.opacity,
-            interactive: projection.interactive,
-            suppressSource: projection.hideSource,
-          })),
-      );
-  }
-
   private shouldRenderWorkingPlacement(placementId: string): boolean {
     return this.workingImages.has(placementId);
   }
@@ -2684,9 +2666,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private getProjectionSourceNodes(): RenderGraphNode[] {
     const graph = this.renderIntentService?.getGraph();
     if (!graph) return [];
-    return graph.layers
-      .flatMap((layer) => layer.nodes)
-      .filter((node) => !node.projection);
+    return graph.layers.flatMap((layer) => layer.nodes);
   }
 
   private matchesSessionProjectionSource(
@@ -2730,12 +2710,28 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ...node.props,
         ...this.resolveGraphNodePlacementProps(node),
         ...(resolvedOpacity !== undefined ? { opacity: resolvedOpacity } : {}),
+        visible: this.isSessionProjectionSourceVisible(node),
         selectable: projection.interactive === true,
         evented: projection.interactive === true,
         hasControls: projection.interactive === true,
         hasBorders: projection.interactive === true,
       },
     };
+  }
+
+  private isSessionProjectionSourceVisible(node: RenderGraphNode): boolean {
+    if (node.visible === false) return false;
+    const visibility = this.renderIntentService?.createVisibilityEvalContext({
+      isSessionActive: (sessionId: string) =>
+        this.sessionService?.isSessionActive(sessionId) ?? false,
+      isSessionScopeActive: (scope) =>
+        this.sessionService?.hasActiveSession({ scope }) ?? false,
+      isSessionFocused: (sessionId: string) =>
+        this.sessionService?.getFocusedSessionId() === sessionId,
+      hasAnyActiveSession: (scope) =>
+        this.sessionService?.hasActiveSession({ scope }) ?? false,
+    });
+    return evaluateVisibilityExpr(node.visibility, visibility ?? {});
   }
 
   private resolveGraphNodePlacementProps(

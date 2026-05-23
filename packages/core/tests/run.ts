@@ -12,7 +12,6 @@ import {
   containsPoint,
   containsRect,
   createRectSnapLines,
-  evaluateVisibilityExpr,
   intersectRects,
   mergeRenderIntentPatchDraft,
   normalizeRect,
@@ -1587,247 +1586,6 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
   });
 }
 
-async function testRenderIntentProjectionAndVisibilityContext() {
-  await withRuntime(async (runtime) => {
-    const intents = runtime.services.getOrThrow<RenderIntentService>(
-      RENDER_INTENT_SERVICE,
-    );
-    let changeCount = 0;
-    const subscription = intents.onDidChange(() => {
-      changeCount += 1;
-    });
-
-    intents.setDocumentIntents([
-      {
-        id: "source",
-        subject: {
-          kind: "object",
-          surfaceId: "front",
-          layerId: "artwork",
-          objectId: "source-subject",
-        },
-        visual: { type: "rect" },
-        ordering: { layerId: "artwork", objectOrder: 0 },
-        props: { width: 100, height: 80, opacity: 0.5 },
-      },
-      {
-        id: "projection",
-        subject: {
-          kind: "layer",
-          surfaceId: "front",
-          layerId: "overlay",
-        },
-        projection: {
-          sourceSubjectIds: ["source-subject"],
-          opacity: 0.4,
-          interactive: true,
-          suppressSource: true,
-        },
-        ordering: { layerId: "overlay", stack: 1, objectOrder: 0 },
-        export: { visibility: { op: "contextTruthy", key: "show.overlay" } },
-      },
-    ]);
-
-    const graph = intents.getGraph();
-    const sourceNode = graph.layers
-      .find((layer) => layer.id === "artwork")
-      ?.nodes.find((node) => node.id === "source");
-    const projectionNode = graph.layers
-      .find((layer) => layer.id === "overlay")
-      ?.nodes.find((node) => node.id.startsWith("projection:projection:source"));
-
-    assertEqual(sourceNode?.visible, false, "projection should suppress source in graph");
-    assertEqual(
-      projectionNode?.projection?.sourceSubjectId,
-      "source-subject",
-      "projection node should reference its source subject",
-    );
-    assertEqual(
-      projectionNode?.props.opacity,
-      0.2,
-      "projection opacity should compose with source opacity",
-    );
-    assertEqual(
-      projectionNode?.props.selectable,
-      true,
-      "interactive projections should become selectable draw nodes",
-    );
-    assertEqual(
-      intents.setVisibilityContextValue("show.overlay", true),
-      true,
-      "visibility context updates should report changes",
-    );
-    assertEqual(
-      intents.getVisibilityContextValue("show.overlay"),
-      true,
-      "visibility context should be stored on RenderIntentService",
-    );
-    assert(
-      changeCount >= 2,
-      "visibility context updates should notify graph subscribers",
-    );
-
-    subscription.dispose();
-  });
-}
-
-async function testRenderIntentProjectionPreservesSourceVisibility() {
-  await withRuntime(async (runtime) => {
-    const intents = runtime.services.getOrThrow<RenderIntentService>(
-      RENDER_INTENT_SERVICE,
-    );
-
-    intents.setDocumentIntents([
-      {
-        id: "hidden.source",
-        subject: {
-          kind: "object",
-          surfaceId: "front",
-          layerId: "template",
-          objectId: "hidden.source",
-        },
-        visual: { type: "image", src: "/hidden.png" },
-        ordering: { layerId: "template", stack: 1, objectOrder: 0 },
-        export: { visible: false },
-      },
-      {
-        id: "conditional.source",
-        subject: {
-          kind: "object",
-          surfaceId: "front",
-          layerId: "template",
-          objectId: "conditional.source",
-        },
-        visual: { type: "image", src: "/conditional.png" },
-        ordering: { layerId: "template", stack: 1, objectOrder: 1 },
-        export: { visibility: { op: "contextTruthy", key: "show.source" } },
-      },
-      {
-        id: "template.projection",
-        subject: {
-          kind: "layer",
-          surfaceId: "front",
-          layerId: "session.overlay",
-        },
-        projection: {
-          sourceLayerIds: ["template"],
-          suppressSource: true,
-        },
-        ordering: {
-          layerId: "session.overlay",
-          stack: 2,
-          objectOrder: 0,
-        },
-        export: { visibility: { op: "contextTruthy", key: "show.session" } },
-      },
-    ]);
-
-    const projectedNodes = intents
-      .getGraph()
-      .layers.find((layer) => layer.id === "session.overlay")
-      ?.nodes ?? [];
-    const hiddenProjection = projectedNodes.find(
-      (node) => node.projection?.sourceSubjectId === "hidden.source",
-    );
-    const conditionalProjection = projectedNodes.find(
-      (node) => node.projection?.sourceSubjectId === "conditional.source",
-    );
-
-    assertEqual(
-      hiddenProjection?.visible,
-      false,
-      "projection should not make an invisible source visible",
-    );
-    assertEqual(
-      conditionalProjection?.visibility?.op,
-      "all",
-      "projection should require both source and projection visibility",
-    );
-    assertEqual(
-      evaluateVisibilityExpr(conditionalProjection?.visibility, {
-        contextValues: { "show.source": true, "show.session": false },
-      }),
-      false,
-      "projection should hide when its own visibility context is false",
-    );
-    assertEqual(
-      evaluateVisibilityExpr(conditionalProjection?.visibility, {
-        contextValues: { "show.source": false, "show.session": true },
-      }),
-      false,
-      "projection should hide when the source visibility context is false",
-    );
-    assertEqual(
-      evaluateVisibilityExpr(conditionalProjection?.visibility, {
-        contextValues: { "show.source": true, "show.session": true },
-      }),
-      true,
-      "projection should show when both visibility contexts are true",
-    );
-  });
-}
-
-async function testRenderIntentProjectionPreservesSourceStacking() {
-  await withRuntime(async (runtime) => {
-    const intents = runtime.services.getOrThrow<RenderIntentService>(
-      RENDER_INTENT_SERVICE,
-    );
-
-    intents.setDocumentIntents([
-      {
-        id: "template.normal",
-        subject: {
-          kind: "object",
-          surfaceId: "front",
-          layerId: "template",
-          objectId: "template.normal",
-        },
-        visual: { type: "image", src: "/normal.png" },
-        ordering: { layerId: "template", stack: 1, objectOrder: 0 },
-      },
-      {
-        id: "template.frame",
-        subject: {
-          kind: "object",
-          surfaceId: "front",
-          layerId: "template",
-          objectId: "template.frame",
-        },
-        visual: { type: "image", src: "/frame.png" },
-        ordering: { layerId: "template", stack: 1, objectOrder: 1 },
-      },
-      {
-        id: "template.projection",
-        subject: {
-          kind: "layer",
-          surfaceId: "front",
-          layerId: "session.overlay",
-        },
-        projection: {
-          sourceLayerIds: ["template"],
-          suppressSource: true,
-        },
-        ordering: {
-          layerId: "session.overlay",
-          stack: 2,
-          objectOrder: 0,
-        },
-      },
-    ]);
-
-    const projectedSubjectIds = intents
-      .getGraph()
-      .layers.find((layer) => layer.id === "session.overlay")
-      ?.nodes.map((node) => node.projection?.sourceSubjectId);
-
-    assertDeepEqual(
-      projectedSubjectIds,
-      ["template.normal", "template.frame"],
-      "projection should preserve source layer stacking order",
-    );
-  });
-}
-
 async function testRenderIntentClipTargetsLayerAndSubject() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
@@ -1889,7 +1647,6 @@ async function testRenderIntentPatchMergeHelper() {
     },
     visual: { type: "image" as const, src: "/base.png" },
     placement: { frame: { x: 0, y: 0, width: 10, height: 20 } },
-    projection: { sourceLayerIds: ["base-layer"] },
     coordinateSpace: "scene" as const,
     ordering: { layerId: "artwork", layerOrder: 1, objectOrder: 2 },
     props: { opacity: 0.5 },
@@ -1898,14 +1655,13 @@ async function testRenderIntentPatchMergeHelper() {
   const basePatch = mergeRenderIntentPatchDraft([base], {
     id: "object",
     visual: { replacement: { src: "/replacement.png" } },
-    projection: { sourceSubjectIds: ["subject"] },
     props: { selectable: false },
   });
   assertEqual(basePatch.diagnostics.length, 0);
   assertEqual(basePatch.draft?.visual?.src, "/base.png");
   assertEqual(basePatch.draft?.visual?.replacement?.src, "/replacement.png");
-  assertDeepEqual(basePatch.draft?.projection?.sourceLayerIds, ["base-layer"]);
-  assertDeepEqual(basePatch.draft?.projection?.sourceSubjectIds, ["subject"]);
+  assertEqual(basePatch.draft?.props?.opacity, 0.5);
+  assertEqual(basePatch.draft?.props?.selectable, false);
   assertEqual(basePatch.draft?.coordinateSpace, "scene");
 
   const newIntentPatch = mergeRenderIntentPatchDraft([], {
@@ -2212,18 +1968,6 @@ async function main() {
     [
       "writes render intent interaction onto graph props and data",
       testRenderIntentInteractionAspectWritesGraphPropsAndData,
-    ],
-    [
-      "builds render intent projection nodes and visibility context",
-      testRenderIntentProjectionAndVisibilityContext,
-    ],
-    [
-      "preserves source visibility when projecting render intent nodes",
-      testRenderIntentProjectionPreservesSourceVisibility,
-    ],
-    [
-      "preserves source stacking when projecting render intent nodes",
-      testRenderIntentProjectionPreservesSourceStacking,
     ],
     [
       "keeps render intent clip targets graph-scoped",

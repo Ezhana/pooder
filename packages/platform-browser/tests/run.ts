@@ -745,62 +745,6 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
   await runtime.dispose();
 }
 
-async function testProjectionSuppressesSourceInGraphOnly() {
-  const runtime = new Pooder();
-  const canvas = new FakeCanvasService();
-  const adapter = new FabricRenderGraphAdapter();
-  const sourceFabricObject = new FakeFabricObject("rect", {
-    data: { id: "source" },
-    visible: true,
-  });
-
-  runtime.services.register(canvas as any, CANVAS_SERVICE);
-  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
-  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
-    {
-      id: "source",
-      subject: {
-        kind: "object",
-        surfaceId: "s1",
-        layerId: "art",
-        objectId: "source-subject",
-      },
-      visual: { type: "rect" },
-      ordering: { layerId: "art", stack: 0, objectOrder: 0 },
-      props: { width: 10, height: 10 },
-    },
-    {
-      id: "projection",
-      subject: { kind: "layer", surfaceId: "s1", layerId: "overlay" },
-      projection: {
-        sourceSubjectIds: ["source-subject"],
-        suppressSource: true,
-      },
-      ordering: { layerId: "overlay", stack: 1, objectOrder: 0 },
-    },
-  ]);
-
-  await adapter.flush();
-  const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
-  assert(last, "projection should reconcile");
-  assertEqual(
-    last.items.length,
-    1,
-    "source node should be omitted from draw list",
-  );
-  assert(
-    last.items[0]?.key.startsWith("projection:"),
-    "projection node should be drawn",
-  );
-  assertEqual(
-    sourceFabricObject.visible,
-    true,
-    "projection suppression should not mutate existing Fabric source objects",
-  );
-
-  await runtime.dispose();
-}
-
 async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
   const stale = new FakeFabricObject("rect", {
@@ -1536,10 +1480,6 @@ async function main() {
     [
       "constrains render graph object dragging",
       testFabricRenderGraphAdapterConstrainsDragging,
-    ],
-    [
-      "projects without mutating source Fabric objects",
-      testProjectionSuppressesSourceInGraphOnly,
     ],
     [
       "reconciles stale objects and clip cleanup",

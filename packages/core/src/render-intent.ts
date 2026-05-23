@@ -73,15 +73,6 @@ export interface RenderIntentClippingAspect {
   effects?: RenderEffectSpec[];
 }
 
-export interface RenderIntentProjectionAspect {
-  sourceLayerIds?: readonly string[];
-  sourceSubjectIds?: readonly string[];
-  sourceIntentIds?: readonly string[];
-  opacity?: number;
-  interactive?: boolean;
-  suppressSource?: boolean;
-}
-
 export interface RenderIntentInteractionSessionAspect {
   sessionId: string;
   scope?: SessionScope;
@@ -136,7 +127,6 @@ export interface RenderIntentDraft {
   subject: RenderIntentSubject;
   visual?: RenderIntentVisualAspect;
   placement?: RenderIntentPlacementAspect;
-  projection?: RenderIntentProjectionAspect;
   clipping?: RenderIntentClippingAspect;
   interaction?: RenderIntentInteractionAspect;
   export?: RenderIntentExportAspect;
@@ -177,11 +167,6 @@ export interface RenderGraphNode {
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
-  projection?: {
-    sourceNodeId: string;
-    sourceSubjectId: string;
-    suppressSource: boolean;
-  };
   visibility?: VisibilityExpr;
   visible: boolean;
   exportable: boolean;
@@ -539,8 +524,6 @@ export function createRenderGraph(
     }
   });
 
-  appendProjectionNodes(reducedDrafts, layerMap);
-
   const layers = Array.from(layerMap.values())
     .map((layer) => ({
       ...layer,
@@ -553,125 +536,6 @@ export function createRenderGraph(
     surfaceIds: Array.from(surfaceIds.values()),
     layers,
     diagnostics,
-  };
-}
-
-function appendProjectionNodes(
-  drafts: readonly RenderIntentDraft[],
-  layerMap: Map<string, RenderGraphLayer>,
-) {
-  const sourceNodes = Array.from(layerMap.values())
-    .sort(compareGraphLayers)
-    .flatMap((layer) => layer.nodes.slice().sort(compareGraphNodes));
-
-  drafts.forEach((draft) => {
-    const projection = draft.projection;
-    if (!projection) return;
-    const targetLayerId = draft.ordering.layerId;
-    if (!targetLayerId) return;
-    const targetLayer = layerMap.get(targetLayerId) || getOrCreateGraphLayer(layerMap, draft);
-    const sources = findProjectionSourceNodes(sourceNodes, projection);
-
-    sources.forEach((sourceNode, index) => {
-      targetLayer.nodes.push(createProjectionGraphNode(draft, sourceNode, index));
-      if (projection.suppressSource !== false) {
-        sourceNode.visible = false;
-      }
-    });
-  });
-}
-
-function findProjectionSourceNodes(
-  nodes: readonly RenderGraphNode[],
-  projection: RenderIntentProjectionAspect,
-): RenderGraphNode[] {
-  const layerIds = new Set(normalizeIdList(projection.sourceLayerIds));
-  const subjectIds = new Set(normalizeIdList(projection.sourceSubjectIds));
-  const intentIds = new Set(normalizeIdList(projection.sourceIntentIds));
-  if (!layerIds.size && !subjectIds.size && !intentIds.size) return [];
-
-  return nodes.filter((node) => {
-    if (node.projection) return false;
-    return (
-      layerIds.has(node.layerId) ||
-      subjectIds.has(node.subjectId) ||
-      intentIds.has(String(node.data.renderIntentId || ""))
-    );
-  });
-}
-
-function createProjectionGraphNode(
-  draft: RenderIntentDraft,
-  sourceNode: RenderGraphNode,
-  index: number,
-): RenderGraphNode {
-  const projection = draft.projection || {};
-  const opacity = Number(projection.opacity);
-  const sourceOpacity = Number(sourceNode.props.opacity);
-  const resolvedOpacity = Number.isFinite(opacity)
-    ? Math.max(0, Math.min(1, opacity)) *
-      (Number.isFinite(sourceOpacity) ? sourceOpacity : 1)
-    : sourceNode.props.opacity;
-  const interactive = projection.interactive === true;
-  const channel = draft.ordering.channel ?? "overlay";
-  const id = `projection:${draft.id}:${sourceNode.id}:${index}`;
-  const visibility = mergeVisibilityExprs(
-    sourceNode.visibility,
-    draft.export?.visibility,
-  );
-
-  return {
-    ...cloneRecord(sourceNode),
-    id,
-    layerId: draft.ordering.layerId,
-    surfaceId: draft.subject.surfaceId || sourceNode.surfaceId,
-    coordinateSpace: draft.coordinateSpace || sourceNode.coordinateSpace,
-    exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
-    props: {
-      ...sourceNode.props,
-      ...(resolvedOpacity !== undefined ? { opacity: resolvedOpacity } : {}),
-      selectable: interactive,
-      evented: interactive,
-      hasControls: interactive,
-      hasBorders: interactive,
-    },
-    data: {
-      ...sourceNode.data,
-      renderIntentId: draft.id,
-      projectionIntentId: draft.id,
-      projectionSourceNodeId: sourceNode.id,
-      projectionSourceSubjectId: sourceNode.subjectId,
-      source: "projection",
-      type: "session-projection",
-    },
-    projection: {
-      sourceNodeId: sourceNode.id,
-      sourceSubjectId: sourceNode.subjectId,
-      suppressSource: projection.suppressSource !== false,
-    },
-    visible: sourceNode.visible !== false && draft.export?.visible !== false,
-    visibility,
-    exportable:
-      sourceNode.exportable !== false && draft.export?.exportable !== false,
-    sortKey: {
-      layerOrder: draft.ordering.layerOrder ?? 0,
-      objectOrder: draft.ordering.objectOrder ?? 0,
-      channel,
-      channelOrder: CHANNEL_ORDER[channel],
-      subOrder: (draft.ordering.subOrder ?? 0) + index / 1_000_000,
-    },
-  };
-}
-
-function mergeVisibilityExprs(
-  source: VisibilityExpr | undefined,
-  projection: VisibilityExpr | undefined,
-): VisibilityExpr | undefined {
-  if (!source) return cloneRecord(projection);
-  if (!projection) return cloneRecord(source);
-  return {
-    op: "all",
-    exprs: [cloneRecord(source), cloneRecord(projection)],
   };
 }
 
@@ -738,7 +602,6 @@ function createDraftFromPatch(
     },
     visual: patch.visual,
     placement: patch.placement,
-    projection: patch.projection,
     clipping: patch.clipping,
     interaction: patch.interaction,
     export: patch.export,
@@ -877,7 +740,6 @@ function mergeDraft(
     subject: { ...base.subject, ...patch.subject },
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
-    projection: mergeOptionalRecord(base.projection, patch.projection),
     clipping: mergeOptionalRecord(base.clipping, patch.clipping),
     interaction: mergeOptionalRecord(base.interaction, patch.interaction),
     export: mergeOptionalRecord(base.export, patch.export),
@@ -897,7 +759,6 @@ function mergePatch(
     subject: { ...base.subject, ...(patch.subject ?? {}) },
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
-    projection: mergeOptionalRecord(base.projection, patch.projection),
     clipping: mergeOptionalRecord(base.clipping, patch.clipping),
     interaction: mergeOptionalRecord(base.interaction, patch.interaction),
     export: mergeOptionalRecord(base.export, patch.export),
