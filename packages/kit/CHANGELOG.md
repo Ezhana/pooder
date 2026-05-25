@@ -6,26 +6,19 @@
 
 - Added a typed `pooder.kit.image-placement` capability facade and a
   capability-only image placement extension that accepts caller-provided layer
-  ids and config namespaces while keeping `ImageTool` as the compatibility
-  wrapper.
+  ids and config namespaces.
 - Added typed `pooder.kit.edge-detection` and
   `pooder.kit.dieline-geometry` capability facades so callers can detect image
   edges, apply detected dieline paths, target caller-owned layers, and upsert
   scene path elements without invoking a kit-owned dieline tool.
-- Added a typed `pooder.kit.white-ink` capability facade and capability-only
-  white ink extension that accepts caller-provided source layer ids, render
-  layer ids, and config namespaces while keeping `WhiteInkTool` as the
-  compatibility wrapper.
-- Added typed `pooder.kit.template-overlay` and `pooder.kit.ruler`
-  capability facades with capability-only extensions so presentational helpers
-  can be enabled independently without registering kit-owned toolbar tools.
 - Added a typed `pooder.kit.design-export` capability facade and
   capability-only design export extension for layer, element, scene-rect, and
   frame exports while keeping the legacy `exportImage` command bridge.
 - Added a typed `pooder.kit.feature` capability facade and capability-only
   feature extension for feature geometry, constraints, placement, projection,
-  and session render support while keeping `FeatureTool` as the compatibility
-  wrapper.
+  and session render support.
+- Added a typed `pooder.kit.mirror` capability facade and object-level
+  document effect for horizontal and vertical mirror transforms.
 - Added `KIT_LEGACY_LAYER_PRESET` for callers that intentionally need the
   former storefront-oriented kit layer ids during migration.
 
@@ -37,40 +30,23 @@
 - Updated legacy dieline commands and workflow orchestration to delegate through
   typed edge detection, image placement, and dieline geometry facades when
   available, with command/config fallbacks preserved for compatibility.
-- Updated legacy white ink commands to delegate through the white ink
-  capability wrapper and made white ink settings namespace-aware for
-  capability-only use.
-- Updated legacy template overlay and ruler wrappers to
-  register typed capability facades while preserving existing command/config
-  compatibility. Capability-only variants accept caller-owned config
-  namespaces or layer ids where supported.
 - Updated the legacy design export wrapper to register the typed export facade
   while preserving the existing `exportImage` command behavior.
 - Updated the legacy feature wrapper to register the typed feature facade while
   preserving existing feature tool and command behavior.
-- Updated capability-only image and white ink sessions to honor app-owned
-  activation events so storefront workflows can call typed capability facades
-  without requiring kit-contributed workbench tools.
-- Marked `DielineWorkflowExtension` and `createDielineWorkflowExtension` as
-  compatibility surfaces after moving storefront dieline workflow orchestration
-  to app-owned typed capability composition.
-- Removed kit-owned product tool contributions from legacy image, white ink,
-  dieline, and feature compatibility wrappers while keeping capability,
+- Removed kit-owned product tool contributions from legacy image, dieline, and
+  feature compatibility wrappers while keeping capability,
   command bridge, config, and render producer contributions.
+- Replaced the viewport mirror helper with the object-level
+  `MirrorCapabilityExtension`.
 - Moved former app-specific default layer ids behind the explicit
   `KIT_LEGACY_LAYER_PRESET`; capability options should pass caller-owned layer
   ids through their `layers` option.
 
 ### Deprecated
 
-- Deprecated compatibility wrapper: `ImageTool` ->
-  `createImagePlacementCapability()`.
 - Deprecated compatibility wrapper: `createImageExtension` ->
   `createImagePlacementCapability()`.
-- Deprecated compatibility wrapper: `WhiteInkTool` ->
-  `createWhiteInkCapability()`.
-- Deprecated compatibility wrapper: `createWhiteInkExtension` ->
-  `createWhiteInkCapability()`.
 - Deprecated compatibility wrapper: `DielineTool` ->
   `createDielineGeometryCapability()`.
 - Deprecated compatibility wrapper: `createDielineExtension` ->
@@ -82,31 +58,19 @@
 ### Removed
 
 - Removed legacy `tools` contributions for `pooder.kit.image`,
-  `pooder.kit.white-ink`, `pooder.kit.dieline`, and `pooder.kit.feature` so
-  installing kit no longer adds product tools.
+  `pooder.kit.dieline`, and `pooder.kit.feature` so installing kit no longer
+  adds product tools.
 - Removed public compatibility factories `createImageExtension`,
-  `createWhiteInkExtension`, `createDielineExtension`,
-  `createFeatureExtension`, `createSizeExtension`, `createSizeCapability`, and
-  `createDielineWorkflowExtension`. Use `createImagePlacementCapability`,
-  `createWhiteInkCapability`, `createDielineGeometryCapability`,
-  and `createFeatureCapability` instead.
-- Removed public wrapper barrel exports for `ImageTool`, `WhiteInkTool`,
-  `DielineTool`, `FeatureTool`, and `SizeTool`.
-- Removed `pooder.kit.size`; scene sizing is now modeled by explicit
-  `scene.previewBounds`, `scene.productionFrame`, `scene.exportFrame`, and
-  `scene.viewportFocusFrame` frames.
-- Removed the legacy kit-owned `DielineWorkflowExtension`; applications should
-  compose export, edge detection, and dieline geometry through typed
-  capability facades.
-- Removed legacy `pooder.kit.background`; background artwork should be modeled
-  as ordinary document layers and objects.
+  `createDielineExtension`, and `createFeatureExtension`. Use
+  `createImagePlacementCapability`, `createDielineGeometryCapability`, and
+  `createFeatureCapability` instead.
+- Removed public wrapper barrel exports for legacy kit tools.
+- Removed legacy viewport mirror command/config support.
 
 ### Migration Examples
 
 - Replace `createImageExtension()` with
   `createImagePlacementCapability({ layers: { imageLayerId: "app.image" } })`.
-- Replace `createWhiteInkExtension()` with
-  `createWhiteInkCapability({ layers: { sourceLayerIds: ["app.image"] } })`.
 - Replace `createDielineExtension()` with
   `createDielineGeometryCapability({ layers: { targetLayerId: "app.dieline" } })`.
 - Use `KIT_LEGACY_LAYER_PRESET` only when intentionally preserving the former
@@ -116,8 +80,8 @@
 
 - Track the capability-first architecture migration. Kit is planned to stop
   contributing product tools and instead expose optional capabilities such as
-  image placement, edge detection, dieline geometry, white ink extraction,
-  template overlays, rulers, and export helpers. See
+  image placement, edge detection, dieline geometry, mirror transforms, and
+  export helpers. See
   `../../docs/architecture-migration-plan.md`.
 - Published the current kit tool coupling inventory for migration slice P0.S2.
   See `../../docs/kit-tool-coupling-inventory.md`.

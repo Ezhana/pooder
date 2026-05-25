@@ -9,7 +9,7 @@ to capability-first APIs.
 ## What Changed
 
 - Installing `@pooder/kit` no longer adds product toolbar tools for image,
-  white ink, dieline, feature, or size workflows.
+  dieline, or feature workflows.
 - Applications own toolbar catalogs, labels, icons, activation, session policy,
   and workflow orchestration.
 - Kit exposes typed capabilities and compatibility command bridges where they
@@ -22,15 +22,11 @@ to capability-first APIs.
 | Legacy surface | Replacement |
 | --- | --- |
 | `createImageExtension()` | `createImagePlacementCapability()` |
-| `createWhiteInkExtension()` | `createWhiteInkCapability()` |
 | `createDielineExtension()` | `createDielineGeometryCapability()` plus `createEdgeDetectionCapability()` when edge detection is needed |
 | `createFeatureExtension()` | `createFeatureCapability()` |
-| `createSizeExtension()` | `createSizeCapability()` |
-| `createDielineWorkflowExtension()` | App-owned workflow composition using design export, edge detection, and dieline geometry facades |
 
-The removed public wrapper barrels for `ImageTool`, `WhiteInkTool`,
-`DielineTool`, `FeatureTool`, and `SizeTool` should not be imported by new
-callers.
+The removed public wrapper barrels for legacy kit tools should not be imported
+by new callers.
 
 ## Before And After
 
@@ -39,7 +35,6 @@ Before, kit factories registered product tools and workflows:
 ```ts
 runtime.extensions.registerMany([
   createImageExtension(),
-  createWhiteInkExtension(),
   createDielineExtension(),
 ]);
 ```
@@ -51,10 +46,6 @@ runtime.extensions.registerMany([
   createImagePlacementCapability({
     configNamespace: "storefrontImage",
     layers: { imageLayerId: "app.image" },
-  }),
-  createWhiteInkCapability({
-    configNamespace: "storefrontWhiteInk",
-    layers: { sourceLayerIds: ["app.image"] },
   }),
   createEdgeDetectionCapability(),
   createDielineGeometryCapability({
@@ -84,8 +75,8 @@ for new app code.
 ## Layer Migration
 
 Old kit integrations often relied on fixed layer ids such as `image.user`,
-`white-ink.user`, `dieline-overlay`, or `feature-overlay`. New integrations
-should pass app-owned ids through capability options.
+`dieline-overlay`, or `feature-overlay`. New integrations should pass app-owned
+ids through capability options.
 
 ```ts
 createImagePlacementCapability({

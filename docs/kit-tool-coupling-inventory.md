@@ -1,290 +1,34 @@
-# Kit Tool Coupling Inventory
+# Kit Extension Inventory
 
-Status: P0.S2 inventory
+Status: current extension inventory
 Date: 2026-05-11
 
-This inventory was first published before the capability-first migration. It is
-primarily descriptive historical context, with the summary table updated as
-tool contributions are removed.
+This inventory reflects `packages/kit/src/extensions/` as it exists now. Older
+kit-owned product tools and removed compatibility surfaces are intentionally not
+listed here.
 
-P5.S3 update: deprecated kit wrapper factory exports and public wrapper barrels
-have been removed. Former storefront layer defaults are exposed only through
-the explicit `KIT_LEGACY_LAYER_PRESET`. The detailed sections still describe
-the original coupling unless they explicitly note a later migration slice.
+## Current Extension Summary
 
-## Ownership Labels
+| Extension | Capability id | Contributes `tools` | Primary behavior |
+| --- | --- | --- | --- |
+| `ClipCapabilityExtension` | `pooder.kit.clip` | No | Object-level clipping effect support |
+| `ConfigurableVisualCapabilityExtension` | `pooder.kit.configurable-visual` | No | Config-driven visual replacement patches |
+| `DesignExportCapabilityExtension` | `pooder.kit.design-export` | No | Design/image export facade |
+| `DielineGeometryCapabilityExtension` | `pooder.kit.dieline-geometry` | No | Dieline geometry, render, and scene path helpers |
+| `EdgeDetectionCapabilityExtension` | `pooder.kit.edge-detection` | No | Image edge detection facade |
+| `FeatureCapabilityExtension` | `pooder.kit.feature` | No | Feature geometry and render support |
+| `ImageMaskCapabilityExtension` | `pooder.kit.image-mask` | No | Image alpha/mask extraction |
+| `ImagePlacementCapabilityExtension` | `pooder.kit.image-placement` | No | Image placement state, sessions, transforms, and export |
+| `MirrorCapabilityExtension` | `pooder.kit.mirror` | No | Object-level mirror transform effect and runtime facade |
+| `SceneExportCapabilityExtension` | `pooder.kit.scene-export` | No | Scene/layer/element export facade |
 
-- Core contract: runtime abstractions that should move to or be represented by
-  `@pooder/core`.
-- Platform implementation: Fabric/browser rendering, export, interaction, or
-  scene adapter behavior owned by `@pooder/platform-browser`.
-- Kit capability: reusable optional behavior that belongs in `@pooder/kit`
-  after it no longer contributes product tools.
-- App workflow: storefront/product workflow semantics, toolbar identity,
-  labels, and orchestration that should be owned by applications.
-- Compatibility wrapper: legacy tool/factory/command shape kept during the
-  migration window.
+## Notes
 
-## Tool Contribution Summary
-
-| Extension | Contributes `tools` | Primary target |
-| --- | --- | --- |
-| `ImageTool` | Removed public wrapper; formerly `pooder.kit.image` | Image placement kit capability |
-| `WhiteInkTool` | Removed public wrapper; formerly `pooder.kit.white-ink` | White ink kit capability |
-| `DielineTool` | Removed public wrapper; formerly `pooder.kit.dieline` | Dieline geometry/render kit capability |
-| `FeatureTool` | Removed public wrapper; formerly `pooder.kit.feature` | Feature geometry kit capability; feature placement workflow moves to app |
-| `SizeTool` | Removed public wrapper; formerly `pooder.kit.size` | Size/session-independent scene config capability |
-| `TemplateOverlayTool` | No | Template overlay kit capability |
-| `DesignExportExtension` | No | Export kit/platform capability |
-| `DielineWorkflowExtension` | Removed | App workflow |
-| `MirrorCapabilityExtension` | No | Object mirror transform kit capability |
-| `FilmTool` | Removed | Superseded by dynamic scene/document layers |
-
-## `ImageTool`
-
-- Extension id: `pooder.kit.image`.
-- Tool: `pooder.kit.image`, label `Image`, `session` interaction, auto-begin
-  session, block leave policy, commit command `completeImages`, rollback command
-  `imageSessionReset`.
-- Commands: `addImage`, `upsertImage`, `applyImageOperation`,
-  `getImageViewState`, `setImageTransform`, `imageSessionReset`,
-  `validateImageSession`, `completeImages`, `exportUserCroppedImage`,
-  `focusImage`, `removeImage`, `updateImage`, `clearImages`, `bringToFront`,
-  `sendToBack`.
-- Config keys: `image.items`, `image.debug`, `image.control.*`,
-  `image.frame.*`, `image.session.placementPolicy`; also responds to
-  `size.*`.
-- Layers: `image.user`, `image-overlay`.
-- Events/listeners: listens to `tool:activated`, `object:modified`,
-  `selection:created`, `selection:updated`, `selection:cleared`,
-  `scene:layout:change`, `canvas:resized`, `scene:geometry:change`; emits
-  `image:session:notice`, `image:state:change`, `image:working:change`.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`,
-  `TOOL_SESSION_SERVICE`, `WORKBENCH_SERVICE`, Fabric controls, platform scene
-  layout and geometry helpers.
-- Coupling to migrate: hard-coded image layer ids, direct white ink session
-  visibility predicate, tool-session dirty tracking keyed by kit tool id,
-  toolbar label/interaction semantics, and command-only public surface.
-- Ownership: image item state, placement, snapping, validation, frame/session
-  overlay are kit capability; layer ids and workflow/session ids should become
-  caller inputs; render realization is platform implementation; the current
-  tool contribution and command names are compatibility wrapper; toolbar
-  meaning is app workflow.
-- Migration target: P3.S1 after core scene/session/capability contracts exist.
-
-## `WhiteInkTool`
-
-- Extension id: `pooder.kit.white-ink`.
-- Tool: `pooder.kit.white-ink`, label `White Ink`, `session` interaction,
-  auto-begin session, block leave policy, begin/rollback command
-  `resetWorkingWhiteInks`, commit command `completeWhiteInks`.
-- Commands: `addWhiteInk`, `upsertWhiteInk`, `getWhiteInks`,
-  `getWhiteInkSettings`, `setWhiteInkPrintEnabled`,
-  `setWhiteInkPreviewImageVisible`, `getWorkingWhiteInks`,
-  `setWorkingWhiteInk`, `updateWhiteInk`, `removeWhiteInk`, `clearWhiteInks`,
-  `resetWorkingWhiteInks`, `completeWhiteInks`, `setWhiteInkImage`.
-- Config keys: `whiteInk.items`, `whiteInk.printWithWhiteInk`,
-  `whiteInk.previewImageVisible`, `whiteInk.debug`; legacy read
-  `whiteInk.customMask`; also responds to `image.items` and `size.*`.
-- Layers: `white-ink.cover`, `white-ink.user`, `white-ink.overlay`; reads
-  `image.user` objects for source image placement.
-- Events/listeners: listens to `tool:activated`, `scene:layout:change`,
-  `object:added`, `object:modified`, `object:removed`,
-  `image:working:change`.
-- Dependencies: requires `pooder.kit.image`; uses `CANVAS_SERVICE`,
-  `CONFIGURATION_SERVICE`, `TOOL_SESSION_SERVICE`, `WORKBENCH_SERVICE`,
-  platform render specs, and image source size cache.
-- Coupling to migrate: hard dependency on image tool extension, hard-coded image
-  and white ink layer ids, tool activation as preview mode, session dirty
-  tracking keyed by kit tool id, and print/preview workflow semantics.
-- Ownership: mask generation, preview rendering, cover rendering, settings, and
-  white ink state are kit capability; selected source image/layer ownership and
-  toolbar workflow are app workflow; current tool/commands are compatibility
-  wrapper; browser rendering remains platform implementation.
-- Migration target: P3.S3.
-
-## `DielineTool`
-
-- Extension id: `pooder.kit.dieline`.
-- Tool: `pooder.kit.dieline`, label `Dieline`, `session` interaction,
-  manual begin, block leave policy.
-- Commands: `updateFeaturePosition`, `detectEdge`.
-- Config keys: `dieline.shape`, `dieline.radius`, `dieline.shapeStyle`,
-  `dieline.showBleedLines`, `dieline.strokeWidth`, `dieline.strokeColor`,
-  `dieline.dashLength`, `dieline.style`, `dieline.offsetStrokeWidth`,
-  `dieline.offsetStrokeColor`, `dieline.offsetDashLength`,
-  `dieline.offsetStyle`, `dieline.insideColor`, `dieline.features`; also reads
-  `dieline.pathData`, `dieline.customSourceWidthPx`,
-  `dieline.customSourceHeightPx`, `image.items`, and `size.*`.
-- Layers/effects: renders `dieline-overlay`; clips `image.user` through image
-  clip effects when no session is active.
-- Events/listeners: listens to config changes for `size.*` and `dieline.*`,
-  and `canvas:resized`.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`, platform scene
-  layout and geometry helpers, Fabric `Pattern`, image tracer command helper.
-- Coupling to migrate: edge detection is mixed with dieline mutation/rendering,
-  render visibility references image and white ink tool ids, image clipping
-  targets hard-coded image layer id, and feature positions live under
-  `dieline.features`.
-- Ownership: edge detection should become a pure kit capability; dieline
-  geometry/rendering is a layer-targeted kit capability; Fabric render effects
-  are platform implementation; current tool registration is compatibility
-  wrapper; toolbar/session semantics are app workflow.
-- Migration target: P3.S2.
-
-## `FeatureTool`
-
-- Extension id: `pooder.kit.feature`.
-- Tool: `pooder.kit.feature`, label `Feature`, `session` interaction, manual
-  begin, block leave policy, begin command `beginFeatureSession`, commit command
-  `completeFeatures`, rollback command `rollbackFeatureSession`.
-- Commands: `beginFeatureSession`, `addFeature`, `addHole`,
-  `addDoubleLayerHole`, `clearFeatures`, `rollbackFeatureSession`,
-  `resetWorkingFeatures`, `updateWorkingGroupPosition`, `completeFeatures`.
-- Config keys: reads and writes `dieline.features`; responds to `size.*` and
-  `dieline.*`; reads `image.items` when resolving feature behavior.
-- Layers/effects: renders `feature-overlay`; during an active feature session
-  hides/replaces `dieline-overlay`, renders `feature-dieline-overlay`, and clips
-  `image.user`.
-- Events/listeners: listens to `tool:activated`, `scene:geometry:change`,
-  Fabric `object:moving`, Fabric `object:modified`; emits
-  `feature:working:change`.
-- Dependencies: requires `pooder.kit.dieline`; uses `CANVAS_SERVICE`,
-  `CONFIGURATION_SERVICE`, `TOOL_SESSION_SERVICE`, `COMMAND_SERVICE`,
-  constraints, feature placement/completion helpers, and command
-  `getSceneGeometry`.
-- Coupling to migrate: feature editing is stored under dieline config,
-  workflow/session state is tied to a kit tool id, feature UI labels and
-  operations are product workflow concepts, and it depends on command bus access
-  to scene geometry.
-- Ownership: reusable feature geometry, constraints, and render support are kit
-  capability; placement workflow and toolbar affordances are app workflow;
-  scene geometry access should become a core/platform contract; current tool is
-  compatibility wrapper.
-- Migration target: P3.S6 and P4.S1/P4.S2.
-
-## `SizeTool`
-
-- Extension id: `pooder.kit.size`.
-- Tool: `pooder.kit.size`, label `Size`, `instant` interaction.
-- Commands: `getSizeState`, `updateSizeDimensions`,
-  `setSizeConstraintMode`, `setSizeDisplayUnit`, `setSizeCut`,
-  `getSelectedImageSize`.
-- Config keys: `size.unit`, `size.actualWidthMm`, `size.actualHeightMm`,
-  `size.constraintMode`, `size.aspectRatio`, `size.cutMode`,
-  `size.cutMarginMm`, `size.viewPadding`, `size.minMm`, `size.maxMm`,
-  `size.stepMm`.
-- Layers: no render layer; `getSelectedImageSize` reads `image.user` canvas
-  objects.
-- Events/listeners: emits `size:state:changed`.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`, platform size and
-  scene layout helpers.
-- Coupling to migrate: product-facing size tool registration and label, command
-  names, and selected-image lookup through hard-coded image layer id.
-- Ownership: unit conversion, size constraints, and scene size state are core or
-  platform contracts depending on final scene model; optional convenience
-  commands are kit capability; current tool contribution is compatibility
-  wrapper; toolbar workflow is app-owned.
-- Migration target: P3.S4 after P1/P2 scene contracts clarify ownership.
-
-## `TemplateOverlayTool`
-
-- Extension id: `pooder.kit.template-overlay`.
-- Tool: none.
-- Commands: `templateOverlay.getConfig`, `templateOverlay.replaceConfig`,
-  `templateOverlay.patchConfig`, `templateOverlay.clearConfig`.
-- Config keys: `templateOverlay.config` with slots `normal`, `frame`, `prod`,
-  `small`, `back`, `render`, optional clip config and `targetLayerIds`; also
-  responds to `size.*`.
-- Layers/effects: `template-overlay.normal`, `template-overlay.frame`,
-  `template-overlay.prod`, `template-overlay.small`,
-  `template-overlay.render`; clip effect defaults to target `image.user`.
-- Events/listeners: listens to `scene:layout:change`, `canvas:resized`, and
-  template/size config changes.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`, platform render
-  specs, Fabric image loading.
-- Coupling to migrate: default clip target is a hard-coded image layer id and
-  slot names encode current product overlay assumptions.
-- Ownership: template overlay config normalization and rendering are kit
-  capability; caller-owned target layers are required for new API; Fabric image
-  rendering is platform implementation.
-- Migration target: P3.S4.
-
-## `DesignExportExtension`
-
-- Extension id: `pooder.kit.design-export`.
-- Tool: none.
-- Commands: `exportImage`.
-- Config keys: no contributed config; uses size/surface frame configuration
-  through `resolveSurfaceFrameRect`.
-- Layers: defaults export source layers to `image.user` and `white-ink.user`;
-  accepts `layerIds` override.
-- Events/listeners: none.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`, Fabric canvas clone
-  and browser `document`.
-- Coupling to migrate: default exported layer ids are current product layers;
-  export works by inspecting Fabric objects directly.
-- Ownership: export facade/options are kit capability; Fabric export adapter is
-  platform implementation; `exportImage` command remains compatibility bridge.
-- Migration target: P3.S5, with platform support from P2.S4.
-
-## `DielineWorkflowExtension`
-
-- Extension id: `pooder.kit.dieline-workflow`.
-- Tool: none.
-- Commands: `detectDielineFromFrame`, `uploadAndDetectEdge`.
-- Config keys: writes `dieline.shape`, `dieline.pathData`,
-  `dieline.customSourceWidthPx`, `dieline.customSourceHeightPx`,
-  `size.cutMode`, `size.cutMarginMm`.
-- Layers: no direct render layer; orchestrates `exportUserCroppedImage`,
-  `detectEdge`, and `upsertImage`.
-- Events/listeners: none.
-- Dependencies: requires `pooder.kit.image` and `pooder.kit.dieline`; uses
-  `COMMAND_SERVICE` and `CONFIGURATION_SERVICE`.
-- Coupling to migrate: storefront workflow orchestration lives in kit and calls
-  legacy commands by string id.
-- Ownership: orchestration is app workflow or compatibility wrapper; edge
-  detection and dieline config application should become typed capabilities.
-- Migration target: P3.S2 and P4.S3.
-
-## `MirrorCapabilityExtension`
-
-- Extension id: `pooder.kit.mirror`.
-- Tool: none.
-- Commands: capability metadata references `setObjectMirror`,
-  `toggleObjectMirror`, `clearObjectMirror`, `getObjectMirror`, and
-  `refreshMirror`.
-- Config keys: none.
-- Layers: none; patches object render intent transforms.
-- Events/listeners: none.
-- Dependencies: `RENDER_INTENT_SERVICE`.
-- Ownership: object-level mirror effect compilation and runtime mirror facade
-  are kit capability concerns.
-- Migration target: object effect + facade long-term API.
-
-## `FilmTool`
-
-- Extension id: `pooder.kit.film`.
-- Tool: none.
-- Status: removed from `@pooder/kit`.
-- Removed compatibility surface: command `setFilmImage`, config keys
-  `film.url` and `film.opacity`, and legacy preset `filmOverlay`.
-- Replacement path: callers should create dynamic `SceneService` layers or
-  document layers and render ordinary image objects for background, reference,
-  or overlay imagery.
-- Rationale: the hard-coded `overlay` layer and viewport-cover behavior became
-  redundant after dynamic layer support moved layer ownership to callers.
-
-## Migration Readiness Notes
-
-- Unknown ownership blockers for P0.S2 are resolved: every current kit extension
-  with `Tool` naming or factory exposure has an owner and target.
-- App-specific tool ids currently leak through render visibility predicates:
-  `activeToolIn`, `sessionActive`, and `anySessionActive` are used in image,
-  dieline, feature, and tests. P2.S3 should replace these for new APIs.
-- Hard-coded layer ids are concentrated in `shared/constants/layers.ts`; later
-  capability APIs should accept caller-provided layer ids and keep these values
-  only as compatibility defaults.
-- Several public commands are string-only compatibility APIs. New capability
-  APIs should expose typed facades and bridge these command ids until the
-  deprecation/removal phases.
+- `DielineTool` and `FeatureTool` still exist as internal implementation bases
+  for their capability extensions, but they are not exported from the public
+  extension barrels and do not contribute product toolbar tools in the current
+  capability-first API.
+- Empty or removed extension directories are not part of the supported kit
+  extension surface.
+- Product toolbar catalogs, labels, ordering, activation, and workflow
+  orchestration belong to applications.

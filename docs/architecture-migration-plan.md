@@ -44,34 +44,23 @@ Completed:
   commands delegate through a compatibility bridge.
 - P3.S1 image placement capability has been added. Applications can resolve a
   typed `pooder.kit.image-placement` facade for image placement state,
-  transforms, validation, and export; the legacy `ImageTool` wrapper was kept
-  during the compatibility window and removed from public exports in P5.S3.
+  transforms, validation, and export.
 - P3.S2 edge detection and dieline geometry capabilities have been added.
   Applications can resolve typed `pooder.kit.edge-detection` and
   `pooder.kit.dieline-geometry` facades to detect image edges, apply detected
   paths, target caller-owned layers, and upsert scene path elements; legacy
   dieline commands and workflow wrappers were kept during the compatibility
   window.
-- P3.S3 white ink capability has been added. Applications can resolve a typed
-  `pooder.kit.white-ink` facade for white ink mask generation, print settings,
-  preview refresh, session state, and caller-owned source/target layers; the
-  legacy `WhiteInkTool` wrapper was kept during the compatibility window and
-  removed from public exports in P5.S3.
-- P3.S4 template overlay and size capabilities have been added.
-  Applications can resolve typed `pooder.kit.template-overlay`,
-  and `pooder.kit.size` facades, enable each capability independently, and
-  provide caller-owned config namespaces or layer ids where supported. Legacy
-  `pooder.kit.background` was removed after background artwork moved to
-  ordinary document layers and objects.
 - P3.S5 export capability has been added. Applications can resolve a typed
   `pooder.kit.design-export` facade for layer, element, scene-rect, and frame
   exports while the legacy `exportImage` command remains available as a
   compatibility bridge.
 - P3.S6 feature capability has been added. Applications can resolve a typed
   `pooder.kit.feature` facade for feature geometry, constraints, placement,
-  projection, and session render support; the legacy `FeatureTool` wrapper was
-  kept during the compatibility window and removed from public exports in
-  P5.S3.
+  projection, and session render support.
+- Object-level mirror capability has been added. Applications can resolve
+  `pooder.kit.mirror` or use document `mirror` effects to flip object render
+  transforms without viewport-level tool state.
 - P4.S1 storefront tool catalog has been added. Storefront customization now
   owns tool ids, labels, icons, visibility, session policies, workflow handler
   keys, and legacy kit id aliases while activity bar rendering reads app tool
@@ -82,22 +71,19 @@ Completed:
   kit-contributed workbench tools.
 - P4.S3 dieline workflow orchestration has moved to storefront. Storefront now
   owns the export-crop, edge-detection, and dieline-apply sequence through typed
-  kit capability facades; the legacy kit-owned `DielineWorkflowExtension` was
-  removed in P5.S3.
+  kit capability facades.
 - P4.S4 build and type verification has passed. Pooder package builds and
   storefront type/build integration checks now verify the migrated
   capability-first slices without a manual walkthrough.
 - P5.S1 legacy kit tool contribution exports have been deprecated. Legacy
-  `ImageTool`, `WhiteInkTool`, `DielineTool`, `FeatureTool`, `SizeTool`, and
-  their tool-registering factories now point callers to capability factories.
+  tool-registering factories now point callers to capability factories.
 - P5.S2 kit-owned business tool contributions have been removed. Legacy kit
   wrappers now contribute capabilities, command bridges, configuration
   definitions, and render producers without registering product tools.
 - P5.S3 major release cleanup has been completed. Kit no longer publicly
-  exports the deprecated image, white ink, dieline, feature, and size wrapper
-  factories or `*Tool` wrapper barrels, the legacy kit-owned dieline workflow
-  has been removed, and former storefront layer defaults are available through
-  the explicit `KIT_LEGACY_LAYER_PRESET`.
+  exports deprecated wrapper factories or `*Tool` wrapper barrels, and former
+  storefront layer defaults are available through the explicit
+  `KIT_LEGACY_LAYER_PRESET`.
 - P6.S1 contract tests have been added. Core scene and capability registry
   contracts, browser scene adapter layer/element mapping, and kit capability
   definition plus layer-targeted helper behavior are now covered by package
@@ -126,8 +112,8 @@ Resume instruction for a new thread:
 - `@pooder/platform-browser` owns the Fabric/browser implementation of core
   scene and render contracts.
 - `@pooder/kit` owns optional official capabilities such as image placement,
-  edge detection, dieline geometry, white ink extraction, template overlays,
-  and export helpers. It must not define product tools, toolbar items,
+  edge detection, dieline geometry, object mirror effects, and export helpers.
+  It must not define product tools, toolbar items,
   labels, or application workflow semantics.
 - Applications own product tools and workflows. For storefront customization,
   `image`, `whiteInk`, `dieline`, and `feature` are app-level concepts composed
@@ -135,9 +121,8 @@ Resume instruction for a new thread:
 
 ## Compatibility Rules
 
-- Keep current `createImageExtension`, `createWhiteInkExtension`,
-  `createDielineExtension`, and similar factory exports as compatibility
-  wrappers until the deprecation phase.
+- Keep compatibility bridge behavior only where it still exists in the current
+  extension surface.
 - New capability APIs must be typed and namespaced. Avoid string-only command
   contracts for new public APIs unless they are explicitly bridged for runtime
   interoperability.
@@ -178,14 +163,8 @@ Deliverables:
 
 Known starting points:
 
-- `ImageTool`
-- `WhiteInkTool`
-- `DielineTool`
-- `FeatureTool`
-- `SizeTool`
-- `TemplateOverlayTool`
-- `DesignExportExtension`
-- `DielineWorkflowExtension`
+- Current `packages/kit/src/extensions/` capability extension directories.
+- Internal implementation bases that still exist under those directories.
 
 Acceptance:
 
@@ -325,8 +304,7 @@ Acceptance:
 
 ## Phase 3 - Kit Capability Extraction
 
-Goal: turn current `kit` tools into reusable capabilities with compatibility
-wrappers.
+Goal: expose current `kit` behavior as reusable capabilities.
 
 ### Slice P3.S1 - Image Placement Capability
 
@@ -335,12 +313,10 @@ Deliverables:
 - Extract image item state, placement, snapping, controls, validation, and
   session overlay into an image placement capability.
 - Accept caller layer ids and config namespace.
-- Keep `ImageTool` as a wrapper around the capability.
 
 Acceptance:
 
 - Storefront can place images through the capability facade.
-- Legacy image commands and tool activation still work.
 
 ### Slice P3.S2 - Edge Detection And Dieline Geometry Capabilities
 
@@ -349,38 +325,11 @@ Deliverables:
 - Split edge detection from dieline state mutation.
 - Expose edge detection as pure input/output capability.
 - Expose dieline geometry/rendering as a layer-targeted capability.
-- Move `DielineWorkflowExtension` orchestration to app or compatibility code.
 
 Acceptance:
 
 - An app can export an image crop, detect edges, create a dieline layer, and add
   a path without invoking a kit-owned dieline tool.
-
-### Slice P3.S3 - White Ink Capability
-
-Deliverables:
-
-- Extract white ink mask generation, preview rendering, cover rendering, and
-  print settings into a capability.
-- Decouple from image tool activation and hard-coded image layer ids.
-- Keep `WhiteInkTool` as a wrapper during compatibility.
-
-Acceptance:
-
-- White ink extraction can run against caller-selected image elements or layers.
-- Existing white ink session behavior still works through the wrapper.
-
-### Slice P3.S4 - Template And Size Capabilities
-
-Deliverables:
-
-- Convert mostly presentational helpers into layer/config capabilities.
-- Ensure each capability can be enabled independently.
-- Move toolbar and workflow decisions to callers.
-
-Acceptance:
-
-- Applications can opt into each capability without receiving a business tool.
 
 ### Slice P3.S5 - Export Capability
 
@@ -445,8 +394,7 @@ Deliverables:
 
 Acceptance:
 
-- `DielineWorkflowExtension` is no longer required for the app workflow, or is
-  clearly marked as compatibility.
+- Dieline workflow orchestration is no longer required in `@pooder/kit`.
 
 ### Slice P4.S4 - Build And Type Verification
 
@@ -534,8 +482,8 @@ Acceptance:
 - M0: migration plan and changelog tracking published.
 - M1: core capability registry and scene contracts available.
 - M2: browser scene adapter supports dynamic layers and elements.
-- M3: image and export capabilities extracted with legacy wrappers.
-- M4: edge detection, dieline, and white ink capabilities extracted.
+- M3: image and export capabilities extracted.
+- M4: edge detection, dieline, and mirror capabilities extracted.
 - M5: storefront tools composed at the app layer.
 - M6: legacy kit tool contributions deprecated.
 - M7: compatibility wrappers removed in a major release.

@@ -14,8 +14,8 @@ but new public APIs should not copy the legacy `*Tool` pattern.
 - A `Capability` is reusable domain behavior that can be installed without
   adding a product toolbar item.
 - Public capability ids use reverse-DNS namespaces and a noun phrase:
-  `pooder.kit.image-placement`, `pooder.kit.white-ink`,
-  `pooder.kit.dieline-geometry`.
+  `pooder.kit.image-placement`, `pooder.kit.dieline-geometry`,
+  `pooder.kit.mirror`.
 - Public TypeScript names use `<Domain>Capability` for definitions and
   `<Domain>CapabilityService` or `<Domain>CapabilityApi` for callable facades.
 - Capability commands, when needed for compatibility, use a namespaced command
@@ -147,22 +147,6 @@ Use these labels when P5.S1 starts marking old exports:
   `Legacy command bridge for <oldCommand>. Prefer <typedFacade>.<method>().`
 - Changelog label:
   `Deprecated compatibility wrapper: <ExportName> -> <ReplacementName>.`
-
-Examples:
-
-```ts
-/**
- * @deprecated Compatibility wrapper for ImagePlacementCapability. Use
- * createImagePlacementCapability().
- */
-export class ImageTool {}
-
-/**
- * @deprecated Compatibility factory for ImageTool. Use
- * createImagePlacementCapability().
- */
-export const createImageExtension = () => new ImageTool();
-```
 
 Deprecation labels must include a concrete replacement. If no replacement exists
 yet, defer the deprecation until the replacement slice ships.

@@ -19,7 +19,6 @@ import {
   createDielineGeometryCapability,
   createEdgeDetectionCapability,
   createImagePlacementCapability,
-  createWhiteInkCapability,
   type ImagePlacementCapabilityApi,
 } from "@pooder/kit";
 
@@ -31,15 +30,6 @@ runtime.extensions.registerMany([
     layers: {
       imageLayerId: "app.image",
       overlayLayerId: "app.image.overlay",
-    },
-  }),
-  createWhiteInkCapability({
-    configNamespace: "storefrontWhiteInk",
-    layers: {
-      sourceLayerIds: ["app.image"],
-      whiteLayerId: "app.white-ink",
-      coverLayerId: "app.white-ink.cover",
-      overlayLayerId: "app.white-ink.overlay",
     },
   }),
   createEdgeDetectionCapability(),
