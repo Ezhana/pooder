@@ -59,6 +59,7 @@ import {
   type FeatureOperation,
   type ReplaceFeaturesOptions,
 } from "./capability";
+import { createLegacyCommandBridge } from "../legacyCommandBridge";
 const FEATURE_STROKE_WIDTH = 2;
 const DEFAULT_RECT_SIZE = 10;
 const DEFAULT_CIRCLE_RADIUS = 5;
@@ -282,73 +283,64 @@ export class FeatureTool implements ExtensionDefinition {
 
     if (this.contributeLegacyCommands) {
       contributions.commands = [
-        {
-          id: "beginFeatureSession",
-          command: "beginFeatureSession",
-          title: "Begin Feature Session",
-          handler: async () => this.beginFeatureSession(),
-        },
-        {
-          id: "addFeature",
-          command: "addFeature",
-          title: "Add Edge Feature",
-          handler: (type: FeatureOperation = "subtract") => {
+        createLegacyCommandBridge(
+          "beginFeatureSession",
+          "Begin Feature Session",
+          async () => this.beginFeatureSession(),
+        ),
+        createLegacyCommandBridge(
+          "addFeature",
+          "Add Edge Feature",
+          (type: FeatureOperation = "subtract") => {
             return this.addFeature(type);
           },
-        },
-        {
-          id: "addHole",
-          command: "addHole",
-          title: "Add Hole",
-          handler: () => {
+        ),
+        createLegacyCommandBridge(
+          "addHole",
+          "Add Hole",
+          () => {
             return this.addFeature("subtract");
           },
-        },
-        {
-          id: "addDoubleLayerHole",
-          command: "addDoubleLayerHole",
-          title: "Add Double Layer Hole",
-          handler: () => {
+        ),
+        createLegacyCommandBridge(
+          "addDoubleLayerHole",
+          "Add Double Layer Hole",
+          () => {
             return this.addDoubleLayerHole();
           },
-        },
-        {
-          id: "clearFeatures",
-          command: "clearFeatures",
-          title: "Clear Features",
-          handler: () => this.clearFeatures(),
-        },
-        {
-          id: "rollbackFeatureSession",
-          command: "rollbackFeatureSession",
-          title: "Rollback Feature Session",
-          handler: async () => this.rollbackFeatureSession(),
-        },
-        {
-          id: "resetWorkingFeatures",
-          command: "resetWorkingFeatures",
-          title: "Reset Working Features",
-          handler: async () => {
+        ),
+        createLegacyCommandBridge(
+          "clearFeatures",
+          "Clear Features",
+          () => this.clearFeatures(),
+        ),
+        createLegacyCommandBridge(
+          "rollbackFeatureSession",
+          "Rollback Feature Session",
+          async () => this.rollbackFeatureSession(),
+        ),
+        createLegacyCommandBridge(
+          "resetWorkingFeatures",
+          "Reset Working Features",
+          async () => {
             await this.resetWorkingFeaturesFromSource();
             return { ok: true };
           },
-        },
-        {
-          id: "updateWorkingGroupPosition",
-          command: "updateWorkingGroupPosition",
-          title: "Update Working Group Position",
-          handler: (groupId: string, x: number, y: number) => {
+        ),
+        createLegacyCommandBridge(
+          "updateWorkingGroupPosition",
+          "Update Working Group Position",
+          (groupId: string, x: number, y: number) => {
             return this.updateWorkingGroupPosition(groupId, x, y);
           },
-        },
-        {
-          id: "completeFeatures",
-          command: "completeFeatures",
-          title: "Complete Features",
-          handler: () => {
+        ),
+        createLegacyCommandBridge(
+          "completeFeatures",
+          "Complete Features",
+          () => {
             return this.completeFeatures();
           },
-        },
+        ),
       ];
     }
 

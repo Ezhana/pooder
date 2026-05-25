@@ -28,6 +28,7 @@ class EventBus {
     if (!listeners) return;
 
     const index = listeners.findIndex((l) => l.handler === handler);
+    if (index < 0) return;
     listeners.splice(index, 1);
   }
 

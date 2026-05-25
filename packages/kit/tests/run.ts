@@ -70,6 +70,7 @@ import {
 } from "../src/extensions/configurable-visual";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
+import { listLegacyCommandBridges } from "../src/extensions/legacyCommandBridge";
 import {
   normalizePointInGeometry,
   resolveFeaturePosition,
@@ -768,13 +769,18 @@ function testImageViewStateHelper() {
 }
 
 function testContributionCompatibility() {
-  const designExportCommandNames = createDesignExportCommands({} as any).map(
-    (entry) => entry.command,
+  const allowedLegacyCommands = new Set(
+    listLegacyCommandBridges().map((bridge) => bridge.legacyCommand),
   );
-  const dielineCommandNames = createDielineCommands({} as any, {
+  const designExportCommands = createDesignExportCommands({} as any);
+  const dielineCommands = createDielineCommands({} as any, {
     width: 0,
     height: 0,
-  }).map((entry) => entry.command);
+  });
+  const designExportCommandNames = designExportCommands.map(
+    (entry) => entry.command,
+  );
+  const dielineCommandNames = dielineCommands.map((entry) => entry.command);
 
   const expectedDesignExportCommands = ["exportImage"];
   const expectedDielineCommands = ["updateFeaturePosition", "detectEdge"];
@@ -788,6 +794,40 @@ function testContributionCompatibility() {
     JSON.stringify(dielineCommandNames) ===
       JSON.stringify(expectedDielineCommands),
     `dieline command set changed: ${JSON.stringify(dielineCommandNames)}`,
+  );
+  for (const command of [...designExportCommands, ...dielineCommands]) {
+    assert(
+      command.command.includes(".") || allowedLegacyCommands.has(command.command),
+      `unnamespaced command "${command.command}" must be listed as a legacy bridge`,
+    );
+  }
+
+  let exportCalls = 0;
+  const exportCommand = createDesignExportCommands({
+    exportImage: async () => {
+      exportCalls += 1;
+      return { ok: true };
+    },
+  })[0];
+  void exportCommand.handler?.({});
+  assertEqual(exportCalls, 1, "exportImage bridge should delegate export facade");
+
+  const calls: string[] = [];
+  const delegatedDielineCommands = createDielineCommands({
+    updateFeaturePosition: (groupId: string, x: number, y: number) => {
+      calls.push(`update:${groupId}:${x}:${y}`);
+    },
+    detectEdge: async () => {
+      calls.push("detect");
+      return { pathData: "" };
+    },
+  });
+  delegatedDielineCommands[0]?.handler?.("group", 1, 2);
+  void delegatedDielineCommands[1]?.handler?.("/image.png");
+  assertDeepEqual(
+    calls,
+    ["update:group:1:2", "detect"],
+    "dieline command bridges should delegate typed facade methods",
   );
 
   const dielineConfigKeys = createDielineConfigurations({
@@ -1787,6 +1827,122 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
   );
 
   await runtime.dispose();
+}
+
+async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
+  const baseDocument = {
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "object",
+                type: "rect",
+                width: 10,
+                height: 20,
+                frame: { x: 1, y: 2, width: 10, height: 20 },
+                effects: [
+                  {
+                    type: "mirror",
+                    payload: { horizontal: true, vertical: false },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const documentRuntime = new Pooder();
+  documentRuntime.extensions.register(new MirrorCapabilityExtension());
+  await documentRuntime.extensions.flushActivation();
+  const documentResult = await applyKitEditorDocument(documentRuntime, baseDocument);
+  assert(
+    documentResult.ok,
+    `document patch apply should succeed (${JSON.stringify(documentResult.diagnostics)})`,
+  );
+  const documentNode = documentRuntime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers[0]?.nodes[0];
+
+  const runtimeDocument = {
+    ...baseDocument,
+    surfaces: [
+      {
+        ...baseDocument.surfaces[0],
+        layers: [
+          {
+            ...baseDocument.surfaces[0].layers[0],
+            objects: [
+              {
+                ...baseDocument.surfaces[0].layers[0].objects[0],
+                effects: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const runtimePatchRuntime = new Pooder();
+  const runtimeResult = await applyKitEditorDocument(
+    runtimePatchRuntime,
+    runtimeDocument,
+  );
+  assert(
+    runtimeResult.ok,
+    `runtime patch base apply should succeed (${JSON.stringify(runtimeResult.diagnostics)})`,
+  );
+  runtimePatchRuntime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .patchIntentEntry({
+      sourceId: `capability:${MIRROR_CAPABILITY_ID}`,
+      phase: "layout",
+      sequence: 0,
+      patch: {
+        id: "object",
+        placement: {
+          transform: {
+            left: 1,
+            top: 2,
+            originX: "left",
+            originY: "top",
+            scaleX: -1,
+            scaleY: 1,
+          },
+        },
+        data: {
+          mirror: { horizontal: true, vertical: false },
+        },
+      },
+    });
+  const runtimeNode = runtimePatchRuntime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers[0]?.nodes[0];
+
+  assertDeepEqual(
+    {
+      transform: documentNode?.transform,
+      mirror: documentNode?.data.mirror,
+    },
+    {
+      transform: runtimeNode?.transform,
+      mirror: runtimeNode?.data.mirror,
+    },
+    "document compiler patches and runtime patches should merge consistently",
+  );
+
+  await documentRuntime.dispose();
+  await runtimePatchRuntime.dispose();
 }
 
 async function testApplyKitEditorDocumentObjectInteraction() {
@@ -4177,6 +4333,7 @@ async function main() {
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();
   await testApplyKitEditorDocument();
   await testMirrorCapabilityDocumentEffectAndFacade();
+  await testDocumentCompilerAndRuntimePatchUseSameMerge();
   await testApplyKitEditorDocumentObjectInteraction();
   await testApplyKitEditorDocumentDragConstraints();
   await testApplyKitEditorDocumentMissingCapabilities();

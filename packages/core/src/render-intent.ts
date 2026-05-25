@@ -143,7 +143,29 @@ export type RenderIntentPatch = Partial<
   id: string;
   subject?: Partial<RenderIntentSubject>;
   ordering?: Partial<RenderIntentOrderingAspect>;
+  clear?: readonly RenderIntentPatchClearPath[];
 };
+
+export type RenderIntentPatchClearPath = string;
+
+export type RenderIntentPatchPhase =
+  | "document"
+  | "layout"
+  | "render"
+  | "interaction"
+  | "export"
+  | "runtime"
+  | string;
+
+export interface RenderIntentPatchEntry {
+  sourceId: string;
+  patch: RenderIntentPatch;
+  priority?: number;
+  phase?: RenderIntentPatchPhase;
+  sequence?: number;
+  reason?: string;
+  debugLabel?: string;
+}
 
 export interface RenderGraphSortKey {
   layerOrder: number;
@@ -188,7 +210,7 @@ export interface RenderGraph {
   revision: number;
   surfaceIds: string[];
   layers: RenderGraphLayer[];
-  diagnostics: string[];
+  diagnostics: RenderIntentDiagnostic[];
 }
 
 export interface RenderIntentCompilerContext<TEffect = unknown, TDocument = unknown> {
@@ -224,15 +246,33 @@ export interface RenderIntentChangeEvent {
   revision: number;
 }
 
-export interface RenderIntentPatchMergeDiagnostic {
-  code: "render-intent-patch-base-missing";
+export type RenderIntentDiagnosticSeverity = "warning" | "error";
+
+export type RenderIntentDiagnosticCode =
+  | "render-intent-patch-base-missing"
+  | "render-intent-clear-path-invalid"
+  | "render-intent-field-conflict"
+  | "render-intent-missing-layer";
+
+export interface RenderIntentDiagnostic {
+  code: RenderIntentDiagnosticCode;
+  severity: RenderIntentDiagnosticSeverity;
   message: string;
-  patchId: string;
+  patchId?: string;
+  sourceId?: string;
+  field?: string;
+  reason?: string;
+  debugLabel?: string;
 }
 
 export interface RenderIntentPatchMergeResult {
   draft?: RenderIntentDraft;
-  diagnostics: RenderIntentPatchMergeDiagnostic[];
+  diagnostics: RenderIntentDiagnostic[];
+}
+
+export interface RenderIntentPatchBatchMergeResult {
+  drafts: RenderIntentDraft[];
+  diagnostics: RenderIntentDiagnostic[];
 }
 
 const CHANNEL_ORDER: Record<RenderIntentChannel, number> = {
@@ -243,6 +283,37 @@ const CHANNEL_ORDER: Record<RenderIntentChannel, number> = {
   overlay: 20,
   effect: 30,
 };
+
+const PATCH_PHASE_ORDER: Record<string, number> = {
+  document: 0,
+  layout: 10,
+  render: 20,
+  interaction: 30,
+  export: 40,
+  runtime: 50,
+};
+
+const CRITICAL_PATCH_FIELDS = [
+  "visual.replacement",
+  "placement.frame",
+  "ordering.layerId",
+  "interaction.session",
+  "export.visibility",
+] as const;
+
+const CLEARABLE_ROOT_FIELDS = new Set([
+  "subject",
+  "visual",
+  "placement",
+  "clipping",
+  "interaction",
+  "export",
+  "coordinateSpace",
+  "ordering",
+  "props",
+  "data",
+  "extensions",
+]);
 
 class RegistryDisposable implements Disposable {
   private disposed = false;
@@ -311,10 +382,11 @@ export class RenderIntentCompilerRegistryService implements Service {
 export class RenderIntentService implements Service {
   private readonly eventBus = new EventBus();
   private baseIntents: RenderIntentDraft[] = [];
-  private runtimePatches = new Map<string, Map<string, RenderIntentPatch>>();
+  private runtimePatches = new Map<string, RequiredRuntimePatchEntry>();
   private visibilityContextValues = new Map<string, unknown>();
   private graph: RenderGraph = createRenderGraph([], 0);
   private revision = 0;
+  private runtimePatchSequence = 0;
 
   init(): void {}
 
@@ -378,25 +450,24 @@ export class RenderIntentService implements Service {
   }
 
   patchIntent(sourceId: string, patch: RenderIntentPatch): RenderGraph {
-    const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
-    const id = normalizeId(patch.id, "RenderIntentPatch.id");
-    let sourcePatches = this.runtimePatches.get(source);
-    if (!sourcePatches) {
-      sourcePatches = new Map();
-      this.runtimePatches.set(source, sourcePatches);
-    }
-    sourcePatches.set(id, clonePatch({ ...patch, id }));
+    this.upsertRuntimePatchEntry({
+      sourceId,
+      patch,
+      phase: "runtime",
+      priority: 0,
+    });
+    return this.recompile();
+  }
+
+  patchIntentEntry(entry: RenderIntentPatchEntry): RenderGraph {
+    this.upsertRuntimePatchEntry(entry);
     return this.recompile();
   }
 
   clearRuntimePatch(sourceId: string, intentId: string): boolean {
     const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
     const id = normalizeId(intentId, "RenderIntentPatch.id");
-    const sourcePatches = this.runtimePatches.get(source);
-    if (!sourcePatches?.delete(id)) return false;
-    if (sourcePatches.size === 0) {
-      this.runtimePatches.delete(source);
-    }
+    if (!this.runtimePatches.delete(getRuntimePatchKey(source, id))) return false;
     this.recompile();
     return true;
   }
@@ -409,7 +480,14 @@ export class RenderIntentService implements Service {
       return true;
     }
     const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
-    if (!this.runtimePatches.delete(source)) return false;
+    let removed = false;
+    for (const key of Array.from(this.runtimePatches.keys())) {
+      if (this.runtimePatches.get(key)?.sourceId === source) {
+        this.runtimePatches.delete(key);
+        removed = true;
+      }
+    }
+    if (!removed) return false;
     this.recompile();
     return true;
   }
@@ -423,8 +501,11 @@ export class RenderIntentService implements Service {
 
   private recompile(): RenderGraph {
     this.revision += 1;
-    const patched = applyRuntimePatches(this.baseIntents, this.runtimePatches);
-    this.graph = createRenderGraph(patched, this.revision);
+    const merged = mergeRenderIntentPatchEntries(
+      this.baseIntents,
+      Array.from(this.runtimePatches.values()),
+    );
+    this.graph = createRenderGraph(merged.drafts, this.revision, merged.diagnostics);
     this.emitChange();
     return this.getGraph();
   }
@@ -435,7 +516,22 @@ export class RenderIntentService implements Service {
       revision: this.revision,
     });
   }
+
+  private upsertRuntimePatchEntry(entry: RenderIntentPatchEntry): void {
+    const sourceId = normalizeId(entry.sourceId, "RenderIntentPatch.sourceId");
+    const patchId = normalizeId(entry.patch.id, "RenderIntentPatch.id");
+    const key = getRuntimePatchKey(sourceId, patchId);
+    const existing = this.runtimePatches.get(key);
+    const sequence = entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
+    this.runtimePatches.set(key, normalizePatchEntry(entry, sequence));
+  }
 }
+
+type RequiredRuntimePatchEntry = RenderIntentPatchEntry & {
+  priority: number;
+  phase: RenderIntentPatchPhase;
+  sequence: number;
+};
 
 export function reduceRenderIntentDrafts(
   drafts: readonly RenderIntentDraft[],
@@ -452,40 +548,171 @@ export function mergeRenderIntentPatchDraft(
   drafts: readonly RenderIntentDraft[],
   patch: RenderIntentPatch,
 ): RenderIntentPatchMergeResult {
-  const base = findLastRenderIntentDraft(drafts, patch.id);
-  if (base) {
-    return {
-      draft: mergePatch(base, patch),
-      diagnostics: [],
-    };
-  }
-
-  const subject = patch.subject;
-  const ordering = patch.ordering;
-  const surfaceId = subject?.surfaceId;
-  const layerId = ordering?.layerId;
-  if (!surfaceId || !layerId) {
-    return {
-      diagnostics: [
-        {
-          code: "render-intent-patch-base-missing",
-          patchId: patch.id,
-          message:
-            `RenderIntentPatch "${patch.id}" has no base intent and must ` +
-            "provide subject.surfaceId and ordering.layerId.",
-        },
-      ],
-    };
-  }
-
+  const result = mergeRenderIntentPatchEntries(drafts, [
+    {
+      sourceId: "document",
+      patch,
+      phase: "document",
+      priority: 0,
+      sequence: 0,
+    },
+  ]);
   return {
-    draft: createDraftFromPatch(
+    draft: findLastRenderIntentDraft(result.drafts, patch.id),
+    diagnostics: result.diagnostics,
+  };
+}
+
+export function mergeRenderIntentPatchEntries(
+  drafts: readonly RenderIntentDraft[],
+  entries: readonly RenderIntentPatchEntry[],
+): RenderIntentPatchBatchMergeResult {
+  const result = reduceRenderIntentDrafts(drafts);
+  const normalizedEntries = entries.map((entry, index) =>
+    normalizePatchEntry(entry, entry.sequence ?? index),
+  ).sort(comparePatchEntries);
+  const diagnostics = collectPatchConflictDiagnostics(normalizedEntries);
+
+  normalizedEntries.forEach((entry) => {
+    const patch = entry.patch;
+    const index = result.findIndex((draft) => draft.id === patch.id);
+    if (index >= 0) {
+      const mergeResult = mergePatch(result[index], patch, entry);
+      result[index] = mergeResult.draft;
+      diagnostics.push(...mergeResult.diagnostics);
+      return;
+    }
+
+    const subject = patch.subject;
+    const ordering = patch.ordering;
+    const surfaceId = subject?.surfaceId;
+    const layerId = ordering?.layerId;
+    if (!surfaceId || !layerId) {
+      diagnostics.push({
+        code: "render-intent-patch-base-missing",
+        severity: "error",
+        patchId: patch.id,
+        sourceId: entry.sourceId,
+        reason: entry.reason,
+        debugLabel: entry.debugLabel,
+        message:
+          `RenderIntentPatch "${patch.id}" has no base intent and must ` +
+          "provide subject.surfaceId and ordering.layerId.",
+      });
+      return;
+    }
+
+    const draft = createDraftFromPatch(
       patch,
       { ...subject, surfaceId },
       { ...ordering, layerId },
-    ),
-    diagnostics: [],
+    );
+    const mergeResult = applyPatchClear(draft, patch, entry);
+    result.push(mergeResult.draft);
+    diagnostics.push(...mergeResult.diagnostics);
+  });
+
+  return {
+    drafts: result,
+    diagnostics,
   };
+}
+
+function normalizePatchEntry(
+  entry: RenderIntentPatchEntry,
+  sequence: number,
+): RequiredRuntimePatchEntry {
+  const sourceId = normalizeId(entry.sourceId, "RenderIntentPatch.sourceId");
+  const patchId = normalizeId(entry.patch.id, "RenderIntentPatch.id");
+  return {
+    sourceId,
+    patch: clonePatch({ ...entry.patch, id: patchId }),
+    priority: entry.priority ?? 0,
+    phase: entry.phase ?? "runtime",
+    sequence,
+    reason: entry.reason,
+    debugLabel: entry.debugLabel,
+  };
+}
+
+function comparePatchEntries(
+  left: RequiredRuntimePatchEntry,
+  right: RequiredRuntimePatchEntry,
+): number {
+  return (
+    left.priority - right.priority ||
+    getPhaseOrder(left.phase) - getPhaseOrder(right.phase) ||
+    left.sequence - right.sequence ||
+    left.sourceId.localeCompare(right.sourceId) ||
+    left.patch.id.localeCompare(right.patch.id)
+  );
+}
+
+function getPhaseOrder(phase: RenderIntentPatchPhase): number {
+  return PATCH_PHASE_ORDER[phase] ?? 100;
+}
+
+function getRuntimePatchKey(sourceId: string, patchId: string): string {
+  return `${sourceId}\u0000${patchId}`;
+}
+
+function collectPatchConflictDiagnostics(
+  entries: readonly RequiredRuntimePatchEntry[],
+): RenderIntentDiagnostic[] {
+  const seen = new Map<string, { sourceId: string; value: unknown; entry: RequiredRuntimePatchEntry }>();
+  const diagnostics: RenderIntentDiagnostic[] = [];
+
+  entries.forEach((entry) => {
+    CRITICAL_PATCH_FIELDS.forEach((field) => {
+      const touched = getTouchedPatchFieldValue(entry.patch, field);
+      if (!touched.touched) return;
+      const key = `${entry.patch.id}:${field}`;
+      const previous = seen.get(key);
+      if (!previous) {
+        seen.set(key, {
+          sourceId: entry.sourceId,
+          value: touched.value,
+          entry,
+        });
+        return;
+      }
+      if (
+        previous.sourceId === entry.sourceId ||
+        sameJsonValue(previous.value, touched.value)
+      ) {
+        return;
+      }
+      diagnostics.push({
+        code: "render-intent-field-conflict",
+        severity: "warning",
+        patchId: entry.patch.id,
+        sourceId: entry.sourceId,
+        field,
+        reason: entry.reason,
+        debugLabel: entry.debugLabel,
+        message:
+          `RenderIntentPatch "${entry.patch.id}" field "${field}" is modified ` +
+          `by both "${previous.sourceId}" and "${entry.sourceId}".`,
+      });
+    });
+  });
+
+  return diagnostics;
+}
+
+function getTouchedPatchFieldValue(
+  patch: RenderIntentPatch,
+  field: string,
+): { touched: boolean; value?: unknown } {
+  if (patch.clear?.some((path) => isSameOrParentClearPath(path, field))) {
+    return { touched: true, value: { clear: true } };
+  }
+  const value = getPathValue(patch, field);
+  return value === undefined ? { touched: false } : { touched: true, value };
+}
+
+function isSameOrParentClearPath(path: string, field: string): boolean {
+  return field === path || field.startsWith(`${path}.`);
 }
 
 function findLastRenderIntentDraft(
@@ -501,8 +728,9 @@ function findLastRenderIntentDraft(
 export function createRenderGraph(
   drafts: readonly RenderIntentDraft[],
   revision = 0,
+  inputDiagnostics: readonly RenderIntentDiagnostic[] = [],
 ): RenderGraph {
-  const diagnostics: string[] = [];
+  const diagnostics: RenderIntentDiagnostic[] = [...inputDiagnostics];
   const layerMap = new Map<string, RenderGraphLayer>();
   const surfaceIds = new Set<string>();
   const reducedDrafts = reduceRenderIntentDrafts(drafts);
@@ -510,7 +738,13 @@ export function createRenderGraph(
   reducedDrafts.forEach((draft) => {
     const layerId = draft.ordering.layerId;
     if (!layerId) {
-      diagnostics.push(`RenderIntent "${draft.id}" is missing ordering.layerId.`);
+      diagnostics.push({
+        code: "render-intent-missing-layer",
+        severity: "error",
+        patchId: draft.id,
+        field: "ordering.layerId",
+        message: `RenderIntent "${draft.id}" is missing ordering.layerId.`,
+      });
       return;
     }
     surfaceIds.add(draft.subject.surfaceId);
@@ -548,34 +782,6 @@ function normalizeIdList(values: readonly string[] | undefined): string[] {
         .filter((value) => value.length > 0),
     ),
   );
-}
-
-function applyRuntimePatches(
-  drafts: readonly RenderIntentDraft[],
-  patchesBySource: Map<string, Map<string, RenderIntentPatch>>,
-): RenderIntentDraft[] {
-  const result = reduceRenderIntentDrafts(drafts);
-  patchesBySource.forEach((patches) => {
-    patches.forEach((patch) => {
-      const index = result.findIndex((draft) => draft.id === patch.id);
-      if (index >= 0) {
-        result[index] = mergePatch(result[index], patch);
-      } else {
-        const surfaceId = patch.subject?.surfaceId;
-        const layerId = patch.ordering?.layerId;
-        if (surfaceId && layerId) {
-          result.push(
-            createDraftFromPatch(
-              patch,
-              { ...patch.subject, surfaceId },
-              { ...patch.ordering, layerId },
-            ),
-          );
-        }
-      }
-    });
-  });
-  return result;
 }
 
 function createDraftFromPatch(
@@ -754,20 +960,103 @@ function mergeDraft(
 function mergePatch(
   base: RenderIntentDraft,
   patch: RenderIntentPatch,
-): RenderIntentDraft {
+  entry: Pick<RenderIntentPatchEntry, "sourceId" | "reason" | "debugLabel">,
+): { draft: RenderIntentDraft; diagnostics: RenderIntentDiagnostic[] } {
+  const clearResult = applyPatchClear(base, patch, entry);
+  const clearedBase = clearResult.draft;
   return {
-    ...base,
-    subject: { ...base.subject, ...(patch.subject ?? {}) },
-    visual: mergeOptionalRecord(base.visual, patch.visual),
-    placement: mergeOptionalRecord(base.placement, patch.placement),
-    clipping: mergeOptionalRecord(base.clipping, patch.clipping),
-    interaction: mergeOptionalRecord(base.interaction, patch.interaction),
-    export: mergeOptionalRecord(base.export, patch.export),
-    ordering: { ...base.ordering, ...(patch.ordering ?? {}) },
-    props: mergeOptionalRecord(base.props, patch.props),
-    data: mergeOptionalRecord(base.data, patch.data),
-    extensions: mergeOptionalRecord(base.extensions, patch.extensions),
+    draft: {
+      ...clearedBase,
+      subject: { ...clearedBase.subject, ...(patch.subject ?? {}) },
+      visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
+      placement: mergeOptionalRecord(clearedBase.placement, patch.placement),
+      clipping: mergeOptionalRecord(clearedBase.clipping, patch.clipping),
+      interaction: mergeOptionalRecord(clearedBase.interaction, patch.interaction),
+      export: mergeOptionalRecord(clearedBase.export, patch.export),
+      ordering: { ...clearedBase.ordering, ...(patch.ordering ?? {}) },
+      props: mergeOptionalRecord(clearedBase.props, patch.props),
+      data: mergeOptionalRecord(clearedBase.data, patch.data),
+      extensions: mergeOptionalRecord(clearedBase.extensions, patch.extensions),
+    },
+    diagnostics: clearResult.diagnostics,
   };
+}
+
+function applyPatchClear(
+  base: RenderIntentDraft,
+  patch: RenderIntentPatch,
+  entry: Pick<RenderIntentPatchEntry, "sourceId" | "reason" | "debugLabel">,
+): { draft: RenderIntentDraft; diagnostics: RenderIntentDiagnostic[] } {
+  const draft = cloneDraft(base);
+  const diagnostics: RenderIntentDiagnostic[] = [];
+  patch.clear?.forEach((path) => {
+    const validation = validateClearPath(path);
+    if (!validation.ok) {
+      diagnostics.push({
+        code: "render-intent-clear-path-invalid",
+        severity: "error",
+        patchId: patch.id,
+        sourceId: entry.sourceId,
+        field: String(path || ""),
+        reason: entry.reason,
+        debugLabel: entry.debugLabel,
+        message: validation.message,
+      });
+      return;
+    }
+    deletePathValue(draft as unknown as Record<string, unknown>, path);
+  });
+  return { draft, diagnostics };
+}
+
+function validateClearPath(
+  path: RenderIntentPatchClearPath,
+): { ok: true } | { ok: false; message: string } {
+  const normalized = String(path || "").trim();
+  const segments = normalized.split(".");
+  if (!normalized || segments.some((segment) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(segment))) {
+    return {
+      ok: false,
+      message: `RenderIntentPatch clear path "${String(path)}" is invalid.`,
+    };
+  }
+  if (segments[0] === "id") {
+    return {
+      ok: false,
+      message: "RenderIntentPatch clear cannot remove id.",
+    };
+  }
+  if (!CLEARABLE_ROOT_FIELDS.has(segments[0])) {
+    return {
+      ok: false,
+      message: `RenderIntentPatch clear path "${normalized}" has an unknown root.`,
+    };
+  }
+  return { ok: true };
+}
+
+function deletePathValue(target: Record<string, unknown>, path: string): void {
+  const segments = path.split(".");
+  let cursor: Record<string, unknown> | undefined = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const value = cursor?.[segments[index]];
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    cursor = value as Record<string, unknown>;
+  }
+  delete cursor?.[segments[segments.length - 1]];
+}
+
+function getPathValue(target: unknown, path: string): unknown {
+  let cursor = target as Record<string, unknown> | undefined;
+  for (const segment of path.split(".")) {
+    if (!cursor || typeof cursor !== "object") return undefined;
+    cursor = cursor[segment] as Record<string, unknown> | undefined;
+  }
+  return cursor;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function mergeOptionalRecord<T>(

@@ -1,12 +1,14 @@
 import {
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
-  mergeRenderIntentPatchDraft,
+  mergeRenderIntentPatchEntries,
   type ExtensionDefinition,
+  type RenderIntentDiagnostic,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDraft,
   type RenderIntentDragConstraint,
   type RenderIntentPatch,
+  type RenderIntentPatchEntry,
   type RenderIntentService,
   type Service,
   type ServiceIdentifier,
@@ -176,9 +178,11 @@ export async function applyKitEditorDocument(
     runtime.services.getOrThrow<RenderIntentCompilerRegistryService>(
       RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
       "RenderIntentCompilerRegistryService is required to apply an EditorDocument.",
-    );
+  );
   const intentDrafts = createBaseRenderIntentDrafts(document);
   const effectEntries = collectEffectEntries(document).sort(compareEffectEntries);
+  const patchEntries: RenderIntentPatchEntry[] = [];
+  let patchSequence = 0;
 
   for (const entry of effectEntries) {
     if (entry.effect.require === "ignore") continue;
@@ -193,36 +197,35 @@ export async function applyKitEditorDocument(
       runtime,
       allDiagnostics,
     );
-    for (const patch of patches) {
-      const result = mergeRenderIntentPatchDraft(intentDrafts, patch);
-      result.diagnostics.forEach((diagnostic) => {
-        allDiagnostics.push(
-          createDiagnostic(
-            entry,
-            "error",
-            diagnostic.code,
-            diagnostic.message,
-            capabilityId,
-          ),
-        );
-      });
-      if (result.draft) {
-        intentDrafts.push(result.draft);
-      }
-    }
+    patchEntries.push(
+      ...patches.map((patch) => ({
+        sourceId: `capability:${capabilityId}`,
+        patch,
+        priority: 0,
+        phase: entry.effect.phase ?? "layout",
+        sequence: patchSequence++,
+        reason: entry.effect.type,
+        debugLabel: entry.path,
+      })),
+    );
   }
+
+  const mergeResult = mergeRenderIntentPatchEntries(intentDrafts, patchEntries);
+  mergeResult.diagnostics.forEach((diagnostic) => {
+    allDiagnostics.push(createRenderIntentDiagnostic(diagnostic));
+  });
 
   if (hasErrors(allDiagnostics)) {
     return createResult(false, document, allDiagnostics, []);
   }
 
-  renderIntentService.setDocumentIntents(intentDrafts);
+  renderIntentService.setDocumentIntents(mergeResult.drafts);
 
   return createResult(
     true,
     document,
     allDiagnostics,
-    collectAppliedSurfaceIds(intentDrafts),
+    collectAppliedSurfaceIds(mergeResult.drafts),
   );
 }
 
@@ -658,6 +661,21 @@ function createDiagnostic(
     path: entry.path,
     capabilityId,
     effectType: entry.effect.type,
+  };
+}
+
+function createRenderIntentDiagnostic(
+  diagnostic: RenderIntentDiagnostic,
+): EditorDocumentDiagnostic {
+  return {
+    severity: diagnostic.severity,
+    code: diagnostic.code,
+    message: diagnostic.message,
+    path: diagnostic.debugLabel ?? "renderIntent",
+    capabilityId: diagnostic.sourceId?.startsWith("capability:")
+      ? diagnostic.sourceId.slice("capability:".length)
+      : undefined,
+    effectType: diagnostic.reason,
   };
 }
 

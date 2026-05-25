@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added deterministic `RenderIntentPatchEntry` runtime patch ownership,
+  explicit `patch.clear` field removal, and typed RenderGraph diagnostics for
+  merge errors and critical-field conflicts.
 - Added `CapabilityRegistryService`, public capability definition types, and
   `ExtensionContributions.capabilities` so extensions can expose discoverable
   capabilities without registering toolbar tools.
@@ -19,6 +22,9 @@
 
 ### Planning Notes
 
+- Published the compatibility surface inventory and marked legacy tool
+  contribution types as deprecated because core no longer auto-consumes
+  `ExtensionContributions.tools`.
 - Track the capability-first architecture migration. Core is planned to own the
   runtime, capability registry, headless scene contracts, and workflow-neutral
   session contracts. See `../../docs/architecture-migration-plan.md`.

@@ -72,6 +72,11 @@ Use legacy command ids only when a host integration still depends on the
 command bus. Command bridges are compatibility surfaces, not the preferred API
 for new app code.
 
+The supported legacy command bridge map lives in
+`packages/kit/src/extensions/legacyCommandBridge.ts`. New command bus
+integrations must use namespaced command ids unless they are explicitly added
+to that bridge map with a typed facade replacement.
+
 ## Layer Migration
 
 Old kit integrations often relied on fixed layer ids such as `image.user`,

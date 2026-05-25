@@ -128,6 +128,10 @@ when a host integration or compatibility bridge needs command bus access.
   behavior is still supported.
 - A command bridge should delegate to the same typed facade implementation used
   by applications.
+- Kit legacy command bridges are centralized in
+  `packages/kit/src/extensions/legacyCommandBridge.ts`; adding a new
+  unnamespaced command requires adding an explicit bridge entry and typed
+  facade replacement.
 
 ## Checklist
 

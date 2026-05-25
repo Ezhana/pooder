@@ -66,8 +66,10 @@ export type {
   RenderIntentCompilerContext,
   RenderIntentCompilerContribution,
   RenderIntentCompilerQuery,
+  RenderIntentDiagnostic,
   RenderIntentDraft,
   RenderIntentPatch,
+  RenderIntentPatchEntry,
   RenderIntentSubject,
 } from "../render-intent";
 export type { SceneChangeEvent } from "./SceneService";

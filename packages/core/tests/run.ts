@@ -1,10 +1,13 @@
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
+  EventBus,
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
+  TOOL_REGISTRY_SERVICE,
+  ToolRegistryService,
   buildSceneGeometry,
   computeSceneLayout,
   computeDragInteraction,
@@ -568,6 +571,8 @@ async function testRuntimeCapabilityFacadeApiThrowsForMissingFacade() {
 
 async function testCapabilityIgnoresLegacyToolContribution() {
   await withRuntime(async (runtime) => {
+    const toolRegistry = new ToolRegistryService();
+    runtime.services.register(toolRegistry, TOOL_REGISTRY_SERVICE);
     runtime.extensions.register({
       id: "capability-with-tool",
       contribute() {
@@ -597,7 +602,74 @@ async function testCapabilityIgnoresLegacyToolContribution() {
         .hasCapability("pooder.test.capability-with-tool"),
       true,
     );
+    assertEqual(
+      toolRegistry.hasTool("legacy.tool"),
+      false,
+      "legacy tools contribution should not register a tool",
+    );
+    assertEqual(
+      runtime.services
+        .getOrThrow<SessionService>(SESSION_SERVICE)
+        .hasActiveSession(),
+      false,
+      "legacy tools contribution should not create workflow sessions",
+    );
   });
+}
+
+async function testLegacyToolOnlyContributionIsInert() {
+  await withRuntime(async (runtime) => {
+    const toolRegistry = new ToolRegistryService();
+    runtime.services.register(toolRegistry, TOOL_REGISTRY_SERVICE);
+    runtime.extensions.register({
+      id: "tool-only",
+      contribute() {
+        return {
+          tools: [
+            {
+              id: "legacy.only",
+              name: "Legacy Only",
+              interaction: "session",
+            },
+          ],
+        };
+      },
+      activate() {},
+    });
+
+    await runtime.extensions.flushActivation();
+
+    assertEqual(toolRegistry.listTools().length, 0);
+    assertEqual(runtime.capabilities.list().length, 0);
+    assertEqual(
+      runtime.services
+        .getOrThrow<SessionService>(SESSION_SERVICE)
+        .hasActiveSession(),
+      false,
+    );
+  });
+}
+
+async function testEventBusOffMissingHandlerPreservesListeners() {
+  const eventBus = new EventBus();
+  const calls: string[] = [];
+  const first = () => {
+    calls.push("first");
+  };
+  const second = () => {
+    calls.push("second");
+  };
+  const missing = () => {
+    calls.push("missing");
+  };
+
+  eventBus.on("change", first);
+  eventBus.on("change", second);
+  eventBus.off("change", missing);
+  eventBus.emit("change");
+
+  assertDeepEqual(calls, ["first", "second"]);
+  assertEqual(eventBus.count("change"), 2);
 }
 
 async function testUnregisterCleansDefinitionsCapabilitiesAndCommands() {
@@ -1591,6 +1663,141 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
   });
 }
 
+async function testRenderIntentPatchEntriesAreSortedDeterministically() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    intents.setDocumentIntents([
+      {
+        id: "image",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "artwork",
+          objectId: "image",
+        },
+        visual: { type: "image", src: "/base.png" },
+        ordering: { layerId: "artwork" },
+      },
+    ]);
+
+    intents.patchIntentEntry({
+      sourceId: "app:late",
+      patch: { id: "image", visual: { replacement: { src: "/late.png" } } },
+      priority: 5,
+      phase: "runtime",
+      sequence: 1,
+    });
+    intents.patchIntentEntry({
+      sourceId: "app:early",
+      patch: { id: "image", visual: { replacement: { src: "/early.png" } } },
+      priority: 10,
+      phase: "runtime",
+      sequence: 0,
+    });
+
+    const node = intents.getGraph().layers[0]?.nodes[0];
+    assertEqual(
+      node?.visual?.src,
+      "/early.png",
+      "higher priority runtime patch should be applied later",
+    );
+  });
+}
+
+async function testRenderIntentPatchClearRemovesOnlyTargetField() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    intents.setDocumentIntents([
+      {
+        id: "image",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "artwork",
+          objectId: "image",
+        },
+        visual: {
+          type: "image",
+          src: "/base.png",
+          replacement: { src: "/replacement.png" },
+          fallback: { src: "/fallback.png" },
+        },
+        placement: { frame: { x: 0, y: 0, width: 10, height: 10 } },
+        ordering: { layerId: "artwork" },
+      },
+    ]);
+
+    intents.patchIntent("app:clear", {
+      id: "image",
+      clear: ["visual.replacement"],
+    });
+
+    const node = intents.getGraph().layers[0]?.nodes[0];
+    assertEqual(node?.visual?.src, "/fallback.png");
+    assertDeepEqual(node?.frame, { x: 0, y: 0, width: 10, height: 10 });
+  });
+}
+
+async function testRenderIntentPatchDiagnosticsAreTyped() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    intents.setDocumentIntents([
+      {
+        id: "image",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "artwork",
+          objectId: "image",
+        },
+        visual: { type: "image", src: "/base.png" },
+        ordering: { layerId: "artwork" },
+      },
+    ]);
+
+    intents.patchIntentEntry({
+      sourceId: "capability:first",
+      patch: { id: "image", visual: { replacement: { src: "/first.png" } } },
+      sequence: 0,
+    });
+    intents.patchIntentEntry({
+      sourceId: "capability:second",
+      patch: { id: "image", visual: { replacement: { src: "/second.png" } } },
+      sequence: 1,
+    });
+    intents.patchIntent("app:invalid", {
+      id: "missing",
+      clear: ["id"],
+    });
+
+    const diagnostics = intents.getGraph().diagnostics;
+    assert(
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.code === "render-intent-field-conflict" &&
+          diagnostic.severity === "warning" &&
+          diagnostic.field === "visual.replacement",
+      ),
+      "conflicting critical fields should produce typed diagnostics",
+    );
+    assert(
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.code === "render-intent-patch-base-missing" &&
+          diagnostic.severity === "error" &&
+          diagnostic.patchId === "missing",
+      ),
+      "missing base intent should produce typed diagnostics",
+    );
+  });
+}
+
 async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
@@ -2055,8 +2262,28 @@ async function main() {
       testToolContributionDoesNotManageSessions,
     ],
     [
+      "legacy tool-only contribution is inert",
+      testLegacyToolOnlyContributionIsInert,
+    ],
+    [
+      "EventBus off ignores missing handlers",
+      testEventBusOffMissingHandlerPreservesListeners,
+    ],
+    [
       "keeps render intent runtime patches source scoped",
       testRenderIntentRuntimePatchesAreSourceScoped,
+    ],
+    [
+      "sorts render intent patch entries deterministically",
+      testRenderIntentPatchEntriesAreSortedDeterministically,
+    ],
+    [
+      "clears render intent patch fields explicitly",
+      testRenderIntentPatchClearRemovesOnlyTargetField,
+    ],
+    [
+      "emits typed render intent patch diagnostics",
+      testRenderIntentPatchDiagnosticsAreTyped,
     ],
     [
       "writes render intent interaction onto graph props and data",

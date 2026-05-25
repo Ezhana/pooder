@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added a centralized legacy command bridge map documenting each global command
+  id, typed capability facade replacement, and compatibility target.
 - Added a typed `pooder.kit.image-placement` capability facade and a
   capability-only image placement extension that accepts caller-provided layer
   ids and config namespaces.
@@ -24,6 +26,8 @@
 
 ### Changed
 
+- Updated document RenderIntent effect application to use the same core
+  patch-entry merge and diagnostics path as runtime patches.
 - Updated the legacy `exportImage` design export command to delegate browser
   export work to `@pooder/platform-browser` while preserving compatibility
   layer defaults and result shape.
