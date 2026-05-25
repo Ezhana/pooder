@@ -193,7 +193,9 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         });
 
         clone.set({
-          ...(options.preserveClipPaths === true ? {} : { clipPath: undefined }),
+          ...(options.preserveClipPaths === true
+            ? {}
+            : { clipPath: undefined }),
           originX: "center",
           originY: "center",
           left: (sceneCenter.x - crop.left) * multiplier,
@@ -314,6 +316,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       multiplier: options.multiplier,
       sceneScale: options.sceneScale,
       source,
+      transparentColor: options.outputMask.transparentColor,
       width: options.width,
     });
 
@@ -334,10 +337,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       throw new Error("browser-scene-export-output-mask-source-missing");
     }
 
-    if ((source as any)?.visible === false) {
-      throw new Error("browser-scene-export-output-mask-source-hidden");
-    }
-
     return source;
   }
 
@@ -348,9 +347,13 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         visible: selector.visible,
       }) as FabricObject[];
     }
-    return (canvasService.canvas?.getObjects?.() || []).filter((object: any) => {
-      return selector.visible === undefined || object?.visible === selector.visible;
-    }) as FabricObject[];
+    return (canvasService.canvas?.getObjects?.() || []).filter(
+      (object: any) => {
+        return (
+          selector.visible === undefined || object?.visible === selector.visible
+        );
+      },
+    ) as FabricObject[];
   }
 
   private resolveCrop(

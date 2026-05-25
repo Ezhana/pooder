@@ -154,7 +154,10 @@ export function evaluateVisibilityExpr(
     case "contextTruthy":
       return Boolean(readVisibilityContextValue(context, expr.key));
     case "contextEquals":
-      return Object.is(readVisibilityContextValue(context, expr.key), expr.value);
+      return Object.is(
+        readVisibilityContextValue(context, expr.key),
+        expr.value,
+      );
     case "activeToolIn":
       return Boolean(
         context.activeToolId && expr.ids.includes(context.activeToolId),
@@ -284,9 +287,17 @@ export type SceneExportCrop =
 
 export type SceneExportOutputMaskMode = "alpha" | "outline" | "shape";
 
+export interface SceneExportOutputMaskTransparentColor {
+  red: number;
+  green: number;
+  blue: number;
+  tolerance?: number;
+}
+
 export interface SceneExportOutputMask {
   sourceKey: string;
   mode?: SceneExportOutputMaskMode;
+  transparentColor?: SceneExportOutputMaskTransparentColor;
 }
 
 export interface SceneExportSourceSelector {

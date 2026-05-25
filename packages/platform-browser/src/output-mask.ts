@@ -1,6 +1,7 @@
 import type {
   CanvasRect,
   CanvasService,
+  SceneExportOutputMaskTransparentColor,
   SceneExportOutputMaskMode,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, type FabricObject, Point } from "fabric";
@@ -20,6 +21,7 @@ export interface RenderOutputMaskOptions {
   multiplier: number;
   sceneScale: number;
   source: FabricObject;
+  transparentColor?: SceneExportOutputMaskTransparentColor;
   width: number;
 }
 
@@ -36,7 +38,10 @@ function createBrowserCanvas(width: number, height: number): HTMLCanvasElement {
   return canvas;
 }
 
-function createFabricMaskCanvas(width: number, height: number): OutputMaskRenderCanvas {
+function createFabricMaskCanvas(
+  width: number,
+  height: number,
+): OutputMaskRenderCanvas {
   const exportCanvas = new FabricCanvas(createBrowserCanvas(width, height), {
     renderOnAddRemove: false,
     selection: false,
@@ -59,14 +64,20 @@ function loadImage(src: string) {
 }
 
 function readObjectType(source: any): string {
-  return String(source?.type || source?.data?.documentObjectType || "").toLowerCase();
+  return String(
+    source?.type || source?.data?.documentObjectType || "",
+  ).toLowerCase();
 }
 
 function readImageSource(source: any): string {
   const fromGetSrc =
     typeof source?.getSrc === "function" ? source.getSrc() : undefined;
   return String(
-    fromGetSrc || source?.src || source?._element?.src || source?.data?.src || "",
+    fromGetSrc ||
+      source?.src ||
+      source?._element?.src ||
+      source?.data?.src ||
+      "",
   ).trim();
 }
 
@@ -80,7 +91,10 @@ function normalizeScaleBase(sceneScale: number): number {
   return Number.isFinite(sceneScale) && sceneScale > 0 ? sceneScale : 1;
 }
 
-function assertMaskSourceSupported(source: FabricObject, mode: SceneExportOutputMaskMode) {
+function assertMaskSourceSupported(
+  source: FabricObject,
+  mode: SceneExportOutputMaskMode,
+) {
   const type = readObjectType(source);
 
   if (mode === "shape") {
@@ -127,6 +141,58 @@ export function createAlphaMask(
   }
 
   return hasAnyAlpha(alpha) ? alpha : null;
+}
+
+const clampColorChannel = (value: number): number => {
+  return Number.isFinite(value)
+    ? Math.max(0, Math.min(255, Math.round(value)))
+    : 0;
+};
+
+const normalizeTransparentColor = (
+  color: SceneExportOutputMaskTransparentColor | undefined,
+): Required<SceneExportOutputMaskTransparentColor> | null => {
+  if (!color) return null;
+
+  return {
+    red: clampColorChannel(color.red),
+    green: clampColorChannel(color.green),
+    blue: clampColorChannel(color.blue),
+    tolerance: clampColorChannel(color.tolerance ?? 0),
+  };
+};
+
+const matchesTransparentColor = (
+  data: Uint8ClampedArray,
+  dataIndex: number,
+  color: Required<SceneExportOutputMaskTransparentColor>,
+) => {
+  return (
+    Math.abs((data[dataIndex] ?? 0) - color.red) <= color.tolerance &&
+    Math.abs((data[dataIndex + 1] ?? 0) - color.green) <= color.tolerance &&
+    Math.abs((data[dataIndex + 2] ?? 0) - color.blue) <= color.tolerance
+  );
+};
+
+export function applyTransparentColorToAlpha(
+  data: Uint8ClampedArray,
+  transparentColor?: SceneExportOutputMaskTransparentColor,
+  alphaThreshold = OUTPUT_MASK_ALPHA_THRESHOLD,
+): Uint8ClampedArray {
+  const color = normalizeTransparentColor(transparentColor);
+  if (!color) return data;
+
+  const next = new Uint8ClampedArray(data);
+  for (let dataIndex = 0; dataIndex < next.length; dataIndex += 4) {
+    if (
+      (next[dataIndex + 3] ?? 0) > alphaThreshold &&
+      matchesTransparentColor(next, dataIndex, color)
+    ) {
+      next[dataIndex + 3] = 0;
+    }
+  }
+
+  return next;
 }
 
 export function createBoundaryOutputMaskAlpha(
@@ -206,7 +272,9 @@ export function applyAlphaMaskData(
 
   for (let index = 0; index < pixelCount; index += 1) {
     const dataIndex = index * 4 + 3;
-    next[dataIndex] = Math.round(((next[dataIndex] ?? 0) * (alpha[index] ?? 0)) / 255);
+    next[dataIndex] = Math.round(
+      ((next[dataIndex] ?? 0) * (alpha[index] ?? 0)) / 255,
+    );
   }
 
   return next;
@@ -217,17 +285,23 @@ function toMaskAlpha(
   width: number,
   height: number,
   mode: SceneExportOutputMaskMode,
+  transparentColor?: SceneExportOutputMaskTransparentColor,
 ): Uint8ClampedArray | null {
+  const maskData = applyTransparentColorToAlpha(data, transparentColor);
+
   if (mode === "outline") {
-    return createBoundaryOutputMaskAlpha(data, width, height);
+    return createBoundaryOutputMaskAlpha(maskData, width, height);
   }
 
-  return createAlphaMask(data, width, height);
+  return createAlphaMask(maskData, width, height);
 }
 
 function rewriteMaskCanvasAlpha(
   canvas: HTMLCanvasElement,
-  mode: SceneExportOutputMaskMode,
+  options: {
+    mode: SceneExportOutputMaskMode;
+    transparentColor?: SceneExportOutputMaskTransparentColor;
+  },
 ) {
   const context = canvas.getContext("2d");
   if (!context) {
@@ -241,7 +315,13 @@ function rewriteMaskCanvasAlpha(
     throw new Error("browser-scene-export-output-mask-unreadable");
   }
 
-  const alpha = toMaskAlpha(imageData.data, canvas.width, canvas.height, mode);
+  const alpha = toMaskAlpha(
+    imageData.data,
+    canvas.width,
+    canvas.height,
+    options.mode,
+    options.transparentColor,
+  );
   if (!alpha) {
     throw new Error("browser-scene-export-output-mask-invalid");
   }
@@ -260,7 +340,10 @@ function rewriteMaskCanvasAlpha(
 export async function renderOutputMask(
   options: RenderOutputMaskOptions & {
     canvasService: CanvasService;
-    createMaskCanvas?: (width: number, height: number) => OutputMaskRenderCanvas;
+    createMaskCanvas?: (
+      width: number,
+      height: number,
+    ) => OutputMaskRenderCanvas;
   },
 ): Promise<HTMLCanvasElement> {
   assertMaskSourceSupported(options.source, options.mode);
@@ -310,7 +393,10 @@ export async function renderOutputMask(
       throw new Error("browser-scene-export-output-mask-canvas-unavailable");
     }
     context.drawImage(image, 0, 0, options.width, options.height);
-    rewriteMaskCanvasAlpha(canvas, options.mode);
+    rewriteMaskCanvasAlpha(canvas, {
+      mode: options.mode,
+      transparentColor: options.transparentColor,
+    });
     return canvas;
   } finally {
     maskCanvas.dispose();

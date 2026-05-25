@@ -10,6 +10,7 @@ import {
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   applyAlphaMaskData,
+  applyTransparentColorToAlpha,
   createBoundaryOutputMaskAlpha,
 } from "../src";
 import type {
@@ -71,7 +72,10 @@ class FakeCanvasService {
 
   selectObjects(selector: any = {}) {
     return this.objects.filter((object) => {
-      if (selector.visible !== undefined && object?.visible !== selector.visible) {
+      if (
+        selector.visible !== undefined &&
+        object?.visible !== selector.visible
+      ) {
         return false;
       }
       return true;
@@ -1294,16 +1298,7 @@ async function testSceneExportPreservesClipPathWhenRequested() {
 }
 
 function testOutputMaskAlphaHelpers() {
-  const target = new Uint8ClampedArray([
-    10,
-    20,
-    30,
-    255,
-    40,
-    50,
-    60,
-    128,
-  ]);
+  const target = new Uint8ClampedArray([10, 20, 30, 255, 40, 50, 60, 128]);
   const masked = applyAlphaMaskData(target, new Uint8ClampedArray([255, 0]));
 
   assertEqual(masked[3], 255, "alpha mask should keep covered pixels opaque");
@@ -1358,6 +1353,43 @@ function testOutputMaskOutlinePreservesFrameShape() {
     255,
     "outline mask should fill the frame center",
   );
+}
+
+function testOutputMaskTreatsNearWhiteAsTransparent() {
+  const width = 5;
+  const height = 5;
+  const data = new Uint8ClampedArray(width * height * 4);
+  const setPixel = (x: number, y: number, color: [number, number, number]) => {
+    const index = (y * width + x) * 4;
+    data[index] = color[0];
+    data[index + 1] = color[1];
+    data[index + 2] = color[2];
+    data[index + 3] = 255;
+  };
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      setPixel(x, y, [255, 255, 255]);
+    }
+  }
+  for (let index = 1; index <= 3; index += 1) {
+    setPixel(index, 1, [254, 178, 191]);
+    setPixel(index, 3, [254, 178, 191]);
+    setPixel(1, index, [254, 178, 191]);
+    setPixel(3, index, [254, 178, 191]);
+  }
+
+  const filtered = applyTransparentColorToAlpha(data, {
+    red: 255,
+    green: 255,
+    blue: 255,
+    tolerance: 8,
+  });
+  const alpha = createBoundaryOutputMaskAlpha(filtered, width, height);
+
+  assertEqual(filtered[3], 0, "near-white pixels should become transparent");
+  assertEqual(alpha?.[0], 0, "near-white outside should remain transparent");
+  assertEqual(alpha?.[2 * width + 2], 255, "outline mask should fill interior");
 }
 
 async function testSceneExportAppliesOutputMask() {
@@ -1511,7 +1543,7 @@ async function testSceneExportRejectsMissingOutputMaskSource() {
   }
 }
 
-async function testSceneExportRejectsHiddenOutputMaskSource() {
+async function testSceneExportAllowsHiddenOutputMaskSource() {
   const source = {
     data: {
       exportKeys: ["element"],
@@ -1560,31 +1592,36 @@ async function testSceneExportRejectsHiddenOutputMaskSource() {
   };
   service.sceneLayoutService = {};
   service.createExportCanvas = () => exportCanvas;
+  service.applyOutputMask = async () => "data:image/png;base64,masked";
 
-  try {
-    await service.exportImage({
-      crop: {
-        type: "sceneRect",
-        rect: { left: 0, top: 0, width: 100, height: 80 },
-      },
-      outputMask: { sourceKey: "templateFrame" },
-      source: { layerIds: ["image.user"] },
-    });
-    throw new Error("scene export should throw for hidden output mask source");
-  } catch (error) {
-    assertEqual(
-      error instanceof Error ? error.message : "",
-      "browser-scene-export-output-mask-source-hidden",
-      "scene export should reject hidden output mask sources",
-    );
-  }
+  const result = await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+    outputMask: { sourceKey: "templateFrame" },
+    source: { layerIds: ["image.user"] },
+  });
+
+  assertEqual(
+    result.url,
+    "data:image/png;base64,masked",
+    "scene export should allow hidden output mask sources",
+  );
 }
 
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["applies alpha mask data", testOutputMaskAlphaHelpers],
     ["fills outline output masks", testOutputMaskOutlineHelpers],
-    ["preserves outline output mask frame shapes", testOutputMaskOutlinePreservesFrameShape],
+    [
+      "preserves outline output mask frame shapes",
+      testOutputMaskOutlinePreservesFrameShape,
+    ],
+    [
+      "treats near-white output mask pixels as transparent",
+      testOutputMaskTreatsNearWhiteAsTransparent,
+    ],
     [
       "registers render graph adapter in browser host",
       testAttachRegistersRenderGraphAdapter,
@@ -1643,14 +1680,17 @@ async function main() {
       "preserves export clip paths when requested",
       testSceneExportPreservesClipPathWhenRequested,
     ],
-    ["applies output masks during scene export", testSceneExportAppliesOutputMask],
+    [
+      "applies output masks during scene export",
+      testSceneExportAppliesOutputMask,
+    ],
     [
       "rejects missing output mask source",
       testSceneExportRejectsMissingOutputMaskSource,
     ],
     [
-      "rejects hidden output mask source",
-      testSceneExportRejectsHiddenOutputMaskSource,
+      "allows hidden output mask source",
+      testSceneExportAllowsHiddenOutputMaskSource,
     ],
   ];
 
