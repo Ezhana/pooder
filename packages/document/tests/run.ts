@@ -622,7 +622,7 @@ function testRequirePolicyDiagnostics() {
             effects: [
               { type: "dieline", require: "strict" },
               { type: "configurable-visual", require: "warn" },
-              { type: "white-ink", require: "ignore" },
+              { type: "image-placement", require: "ignore" },
             ],
           },
         ],
@@ -653,7 +653,7 @@ function testRequirePolicyDiagnostics() {
   );
   assert(
     !result.diagnostics.some(
-      (item) => item.capabilityId === "pooder.kit.white-ink",
+      (item) => item.capabilityId === "pooder.kit.image-placement",
     ),
     "ignore missing capability should not produce diagnostic",
   );

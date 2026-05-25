@@ -59,8 +59,6 @@ import {
 
 const IMAGE_SESSION_CHANNEL = "image-placement";
 const LEGACY_IMAGE_TOOL_ID = "pooder.kit.image";
-const WHITE_INK_SESSION_CHANNEL = "white-ink";
-const WHITE_INK_TOOL_ID = "pooder.kit.white-ink";
 
 export interface DielineToolOptions
   extends Partial<DielineState>, DielineGeometryCapabilityOptions {
@@ -322,7 +320,6 @@ export class DielineTool implements ExtensionDefinition {
         op: "any",
         exprs: [
           { op: "anySessionActive", scope: { channel: IMAGE_SESSION_CHANNEL } },
-          { op: "anySessionActive", scope: { channel: WHITE_INK_SESSION_CHANNEL } },
         ],
       },
     };
@@ -339,7 +336,7 @@ export class DielineTool implements ExtensionDefinition {
           op: "not",
           expr: {
             op: "activeToolIn",
-            ids: [LEGACY_IMAGE_TOOL_ID, WHITE_INK_TOOL_ID],
+            ids: [LEGACY_IMAGE_TOOL_ID],
           },
         },
       ],

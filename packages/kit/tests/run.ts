@@ -42,22 +42,17 @@ import {
   type DesignExportCapabilityApi,
 } from "../src/extensions/design-export";
 import {
-  MOCKUP_EXPORT_CAPABILITY_ID,
-  MockupExportCapabilityExtension,
-  createMockupExportCapabilityDefinition,
-  type MockupExportCapabilityApi,
-} from "../src/extensions/mockup-export";
-import { createWhiteInkCommands } from "../src/extensions/white-ink/commands";
-import { createWhiteInkConfigurations } from "../src/extensions/white-ink/config";
+  IMAGE_MASK_CAPABILITY_ID,
+  ImageMaskCapabilityExtension,
+  createImageMaskCapabilityDefinition,
+  type ImageMaskCapabilityApi,
+} from "../src/extensions/image-mask";
 import {
-  WHITE_INK_CAPABILITY_ID,
-  WhiteInkCapabilityExtension,
-  createWhiteInkCapabilityDefinition,
-  getWhiteInkConfigKey,
-  normalizeWhiteInkConfigNamespace,
-  normalizeWhiteInkLayerId,
-  type WhiteInkCapabilityApi,
-} from "../src/extensions/white-ink";
+  SCENE_EXPORT_CAPABILITY_ID,
+  SceneExportCapabilityExtension,
+  createSceneExportCapabilityDefinition,
+  type SceneExportCapabilityApi,
+} from "../src/extensions/scene-export";
 import {
   CLIP_CAPABILITY_ID,
   ClipCapabilityExtension,
@@ -93,9 +88,9 @@ import {
   createClipCapability,
   createFeatureCapability,
   createConfigurableVisualCapability,
+  createImageMaskCapability,
   createImagePlacementCapability,
-  createMockupExportCapability,
-  createWhiteInkCapability,
+  createSceneExportCapability,
 } from "../src/factories";
 import {
   applyKitEditorDocument,
@@ -630,7 +625,7 @@ function testVisibilityDsl() {
   );
   assert(
     evaluateVisibilityExpr(
-      { op: "activeToolIn", ids: ["pooder.kit.white-ink"] },
+      { op: "activeToolIn", ids: ["pooder.kit.ruler"] },
       context,
     ) === false,
     "activeToolIn false failed",
@@ -698,7 +693,7 @@ function testVisibilityDsl() {
     evaluateVisibilityExpr(
       {
         op: "not",
-        expr: { op: "activeToolIn", ids: ["pooder.kit.white-ink"] },
+        expr: { op: "activeToolIn", ids: ["pooder.kit.ruler"] },
       },
       context,
     ) === true,
@@ -780,31 +775,12 @@ function testContributionCompatibility() {
   const designExportCommandNames = createDesignExportCommands({} as any).map(
     (entry) => entry.command,
   );
-  const whiteInkCommandNames = createWhiteInkCommands({} as any).map(
-    (entry) => entry.command,
-  );
   const dielineCommandNames = createDielineCommands({} as any, {
     width: 0,
     height: 0,
   }).map((entry) => entry.command);
 
   const expectedDesignExportCommands = ["exportImage"];
-  const expectedWhiteInkCommands = [
-    "addWhiteInk",
-    "upsertWhiteInk",
-    "getWhiteInks",
-    "getWhiteInkSettings",
-    "setWhiteInkPrintEnabled",
-    "setWhiteInkPreviewImageVisible",
-    "getWorkingWhiteInks",
-    "setWorkingWhiteInk",
-    "updateWhiteInk",
-    "removeWhiteInk",
-    "clearWhiteInks",
-    "resetWorkingWhiteInks",
-    "completeWhiteInks",
-    "setWhiteInkImage",
-  ];
   const expectedDielineCommands = ["updateFeaturePosition", "detectEdge"];
 
   assert(
@@ -813,19 +789,11 @@ function testContributionCompatibility() {
     `design export command set changed: ${JSON.stringify(designExportCommandNames)}`,
   );
   assert(
-    JSON.stringify(whiteInkCommandNames) ===
-      JSON.stringify(expectedWhiteInkCommands),
-    `white-ink command set changed: ${JSON.stringify(whiteInkCommandNames)}`,
-  );
-  assert(
     JSON.stringify(dielineCommandNames) ===
       JSON.stringify(expectedDielineCommands),
     `dieline command set changed: ${JSON.stringify(dielineCommandNames)}`,
   );
 
-  const whiteInkConfigKeys = createWhiteInkConfigurations().map(
-    (entry) => entry.id,
-  );
   const dielineConfigKeys = createDielineConfigurations({
     shape: "rect",
     radius: 0,
@@ -837,12 +805,6 @@ function testContributionCompatibility() {
     features: [],
   }).map((entry) => entry.id);
 
-  const expectedWhiteInkConfigKeys = [
-    "whiteInk.items",
-    "whiteInk.printWithWhiteInk",
-    "whiteInk.previewImageVisible",
-    "whiteInk.debug",
-  ];
   const expectedDielineConfigKeys = [
     "dieline.shape",
     "dieline.radius",
@@ -860,11 +822,6 @@ function testContributionCompatibility() {
     "dieline.features",
   ];
 
-  assert(
-    JSON.stringify(whiteInkConfigKeys) ===
-      JSON.stringify(expectedWhiteInkConfigKeys),
-    `white-ink config keys changed: ${JSON.stringify(whiteInkConfigKeys)}`,
-  );
   assert(
     JSON.stringify(dielineConfigKeys) ===
       JSON.stringify(expectedDielineConfigKeys),
@@ -909,21 +866,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     "clip effect should normalize image clip sources",
   );
   assertEqual(
-    normalizeWhiteInkConfigNamespace(" storefrontWhiteInk "),
-    "storefrontWhiteInk",
-    "white ink config namespace should trim caller input",
-  );
-  assertEqual(
-    getWhiteInkConfigKey("storefrontWhiteInk", "print.enabled"),
-    "storefrontWhiteInk.print.enabled",
-    "white ink config keys should stay caller-namespaced",
-  );
-  assertEqual(
-    normalizeWhiteInkLayerId(" app.white ", "legacy.white"),
-    "app.white",
-    "white ink layer id should trim caller input",
-  );
-  assertEqual(
     normalizeRulerConfigNamespace(" storefrontRuler "),
     "storefrontRuler",
     "ruler config namespace should trim caller input",
@@ -953,11 +895,11 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     createDesignExportCapabilityDefinition({} as DesignExportCapabilityApi, {
       capabilityId: "custom.export",
     }),
-    createMockupExportCapabilityDefinition({} as MockupExportCapabilityApi, {
-      capabilityId: "custom.mockup-export",
+    createImageMaskCapabilityDefinition({} as ImageMaskCapabilityApi, {
+      capabilityId: "custom.image-mask",
     }),
-    createWhiteInkCapabilityDefinition({} as WhiteInkCapabilityApi, {
-      capabilityId: "custom.white-ink",
+    createSceneExportCapabilityDefinition({} as SceneExportCapabilityApi, {
+      capabilityId: "custom.scene-export",
     }),
     createRulerCapabilityDefinition({} as RulerCapabilityApi, {
       capabilityId: "custom.ruler",
@@ -973,8 +915,8 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
       "custom.image",
       "custom.dieline",
       "custom.export",
-      "custom.mockup-export",
-      "custom.white-ink",
+      "custom.image-mask",
+      "custom.scene-export",
       "custom.ruler",
       "custom.feature",
     ],
@@ -1101,7 +1043,7 @@ async function testDesignExportCapabilityExtension() {
   await runtime.dispose();
 }
 
-async function testMockupExportCapabilityExtension() {
+async function testSceneExportCapabilityExtension() {
   const runtime = new Pooder();
   const commandService =
     runtime.services.getOrThrow<CommandService>(COMMAND_SERVICE);
@@ -1122,29 +1064,29 @@ async function testMockupExportCapabilityExtension() {
     width: 120,
   };
 
-  runtime.extensions.register(new MockupExportCapabilityExtension());
+  runtime.extensions.register(new SceneExportCapabilityExtension());
   runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
   await runtime.extensions.flushActivation();
 
   assertEqual(
-    runtime.extensions.getState(MOCKUP_EXPORT_CAPABILITY_ID)?.state,
+    runtime.extensions.getState(SCENE_EXPORT_CAPABILITY_ID)?.state,
     "active",
-    "mockup export capability should activate",
+    "scene export capability should activate",
   );
   assertEqual(
-    commandService.getCommand("exportMockup"),
+    commandService.getCommand("exportImage"),
     undefined,
-    "mockup export capability should not register legacy exportMockup",
+    "scene export capability should not register legacy exportImage",
   );
 
-  const facade = runtime.capabilities.get<MockupExportCapabilityApi>(
-    MOCKUP_EXPORT_CAPABILITY_ID,
+  const facade = runtime.capabilities.get<SceneExportCapabilityApi>(
+    SCENE_EXPORT_CAPABILITY_ID,
   );
   if (!facade) {
-    throw new Error("mockup export capability facade should be registered");
+    throw new Error("scene export capability facade should be registered");
   }
 
-  const result = await facade.exportMockup({
+  const result = await facade.exportImage({
     crop: {
       type: "sceneRect",
       rect: { left: 4, top: 5, width: 120, height: 90 },
@@ -1167,27 +1109,27 @@ async function testMockupExportCapabilityExtension() {
       layerIds: ["base", "artwork", "overlay"],
       tags: ["mockup"],
     },
-    "mockup export capability should delegate caller source selector",
+    "scene export capability should delegate caller source selector",
   );
   assertDeepEqual(
     lastCall.crop,
     { type: "sceneRect", rect: { left: 4, top: 5, width: 120, height: 90 } },
-    "mockup export capability should delegate explicit crop",
+    "scene export capability should delegate explicit crop",
   );
   assertEqual(
     lastCall.includeHidden,
     true,
-    "mockup export capability should delegate includeHidden",
+    "scene export capability should delegate includeHidden",
   );
   assertEqual(
     lastCall.preserveClipPaths,
     true,
-    "mockup export capability should preserve clip paths by default",
+    "scene export capability should preserve clip paths by default",
   );
   assertEqual(
     result.url,
     "data:image/png;base64,mockup",
-    "mockup export capability should map platform export url",
+    "scene export capability should map platform export url",
   );
   assertDeepEqual(
     result.source,
@@ -1196,28 +1138,28 @@ async function testMockupExportCapabilityExtension() {
       elementIds: ["mockup-element"],
       tags: ["mockup"],
     },
-    "mockup export capability should map platform source result",
+    "scene export capability should map platform source result",
   );
   assertDeepEqual(
     result.crop,
     { left: 4, top: 5, width: 120, height: 90 },
-    "mockup export capability should map platform crop",
+    "scene export capability should map platform crop",
   );
 
-  await facade.exportMockup({ preserveClipPaths: false });
+  await facade.exportImage({ preserveClipPaths: false });
   const defaultCall = exportService.calls[exportService.calls.length - 1];
   assertDeepEqual(
     defaultCall.crop,
     { type: "frame", frame: "cut" },
-    "mockup export capability should default to cut frame crop",
+    "scene export capability should default to cut frame crop",
   );
   assertEqual(
     defaultCall.preserveClipPaths,
     false,
-    "mockup export capability should allow callers to disable clip path preservation",
+    "scene export capability should allow callers to disable clip path preservation",
   );
 
-  await facade.exportMockup({
+  await facade.exportImage({
     format: "jpeg",
     outputMask: { mode: "outline", sourceKey: " templateFrame " },
   });
@@ -1225,60 +1167,49 @@ async function testMockupExportCapabilityExtension() {
   assertEqual(
     maskCall.format,
     "png",
-    "mockup export capability should force png when output mask is requested",
+    "scene export capability should force png when output mask is requested",
   );
   assertDeepEqual(
     maskCall.outputMask,
-    { sourceKey: "templateFrame", mode: "outline" },
-    "mockup export capability should delegate normalized output mask options",
+    { mode: "outline", sourceKey: " templateFrame " },
+    "scene export capability should delegate output mask options",
   );
-
-  try {
-    await facade.exportMockup({ outputMask: { sourceKey: "" } as any });
-    throw new Error("mockup export should throw for empty output mask source key");
-  } catch (error) {
-    assertEqual(
-      error instanceof Error ? error.message : "",
-      "mockup-export-output-mask-source-key-required",
-      "mockup export capability should reject empty output mask source keys",
-    );
-  }
 
   exportService.error = new Error("browser-scene-export-empty");
   try {
-    await facade.exportMockup();
-    throw new Error("mockup export should throw for empty source exports");
+    await facade.exportImage();
+    throw new Error("scene export should throw for empty source exports");
   } catch (error) {
     assertEqual(
       error instanceof Error ? error.message : "",
-      "mockup-export-empty",
-      "mockup export capability should map empty source errors",
+      "scene-export-empty",
+      "scene export capability should map empty source errors",
     );
   }
 
   exportService.error = new Error("browser-scene-export-failed");
   try {
-    await facade.exportMockup();
-    throw new Error("mockup export should throw for failed exports");
+    await facade.exportImage();
+    throw new Error("scene export should throw for failed exports");
   } catch (error) {
     assertEqual(
       error instanceof Error ? error.message : "",
-      "mockup-export-failed",
-      "mockup export capability should map platform export failures",
+      "scene-export-failed",
+      "scene export capability should map platform export failures",
     );
   }
 
   exportService.error = new Error("browser-scene-export-output-mask-source-missing");
   try {
-    await facade.exportMockup({
+    await facade.exportImage({
       outputMask: { sourceKey: "templateFrame" },
     });
-    throw new Error("mockup export should throw for missing output mask source");
+    throw new Error("scene export should throw for missing output mask source");
   } catch (error) {
     assertEqual(
       error instanceof Error ? error.message : "",
-      "mockup-export-output-mask-source-missing",
-      "mockup export capability should map platform output mask failures",
+      "scene-export-output-mask-source-missing",
+      "scene export capability should map platform output mask failures",
     );
   }
 
@@ -1305,12 +1236,12 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
       shapeStyle: { fitMode: "stretch" },
     }));
   runtime.extensions.register(createImagePlacementCapability());
-  runtime.extensions.register(createWhiteInkCapability());
+  runtime.extensions.register(createImageMaskCapability());
   runtime.extensions.register(createDielineGeometryCapability());
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
   runtime.extensions.register(createConfigurableVisualCapability());
-  runtime.extensions.register(createMockupExportCapability());
+  runtime.extensions.register(createSceneExportCapability());
   await runtime.extensions.flushActivation();
 
   assert(
@@ -1319,8 +1250,8 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     "image placement capability factory should activate",
   );
   assert(
-    runtime.extensions.getState(WHITE_INK_CAPABILITY_ID)?.state === "active",
-    "white ink capability factory should activate",
+    runtime.extensions.getState(IMAGE_MASK_CAPABILITY_ID)?.state === "active",
+    "image mask capability factory should activate",
   );
   assert(
     runtime.extensions.getState(DIELINE_GEOMETRY_CAPABILITY_ID)?.state ===
@@ -1341,9 +1272,9 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     "configurable visual capability factory should activate",
   );
   assert(
-    runtime.extensions.getState(MOCKUP_EXPORT_CAPABILITY_ID)?.state ===
+    runtime.extensions.getState(SCENE_EXPORT_CAPABILITY_ID)?.state ===
       "active",
-    "mockup export capability factory should activate",
+    "scene export capability factory should activate",
   );
   await runtime.dispose();
 }
@@ -1539,15 +1470,6 @@ async function testApplyKitEditorDocument() {
                 ],
                 frame: { x: 10, y: 20, width: 30, height: 40 },
               },
-              {
-                id: "white-source",
-                type: "image",
-                src: "/photo.png",
-                effects: [
-                  { type: "white-ink", payload: { src: "/white.png" } },
-                ],
-                frame: { x: 0, y: 0, width: 10, height: 10 },
-              },
             ],
           },
         ],
@@ -1686,16 +1608,6 @@ async function testApplyKitEditorDocument() {
     TEST_DOCUMENT_CONFIG["scene.previewBounds"],
     "document apply should import document config",
   );
-  assert(
-    renderGraph.layers
-      .flatMap((layer) => layer.nodes)
-      .some(
-        (node) =>
-          node.data.type === "white-ink" && node.visual?.src === "/white.png",
-      ),
-    "white ink effect should compile to a RenderIntent graph node",
-  );
-
   await runtime.dispose();
 }
 
@@ -1945,7 +1857,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
             id: "front-artwork",
             effects: [
               { type: "configurable-visual", require: "warn" },
-              { type: "white-ink", require: "ignore" },
+              { type: "image-placement", require: "ignore" },
             ],
           },
         ],
@@ -1966,7 +1878,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   );
   assert(
     !optionalResult.diagnostics.some(
-      (item) => item.capabilityId === WHITE_INK_CAPABILITY_ID,
+      (item) => item.capabilityId === IMAGE_PLACEMENT_CAPABILITY_ID,
     ),
     "ignore missing capability should not diagnose",
   );
@@ -3321,17 +3233,6 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   await sessions.cancelSession("image-placement:placement");
 
   sessions.createSession({
-    sessionId: "white-ink:front",
-    scope: { channel: "white-ink", subjectId: "front" },
-  });
-  assertEqual(
-    evaluateVisibilityExpr(dielineNode?.visibility, context),
-    false,
-    "dieline overlay should be hidden during white ink sessions",
-  );
-  await sessions.cancelSession("white-ink:front");
-
-  sessions.createSession({
     sessionId: "dieline:front",
     scope: { channel: DIELINE_GEOMETRY_CAPABILITY_ID, subjectId: "front" },
   });
@@ -3600,53 +3501,36 @@ async function testDielineGeometryCapabilityExtension() {
   await runtime.dispose();
 }
 
-async function testWhiteInkCapabilityExtension() {
+async function testImageMaskCapabilityExtension() {
   const runtime = new Pooder();
 
-  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.extensions.register(
-    new WhiteInkCapabilityExtension({
-      configNamespace: "storefrontWhiteInk",
-      layers: {
-        sourceLayerIds: ["app.image"],
-        whiteLayerId: "app.white-ink",
-        coverLayerId: "app.white-ink.cover",
-        overlayLayerId: "app.white-ink.overlay",
-      },
-    }),
-  );
+  runtime.extensions.register(new ImageMaskCapabilityExtension());
 
   await runtime.extensions.flushActivation();
 
   assertEqual(
-    runtime.extensions.getState(WHITE_INK_CAPABILITY_ID)?.state,
+    runtime.extensions.getState(IMAGE_MASK_CAPABILITY_ID)?.state,
     "active",
-    "white ink capability should activate without the legacy image extension",
+    "image mask capability should activate",
   );
 
-  const facade = runtime.capabilities.get<WhiteInkCapabilityApi>(
-    WHITE_INK_CAPABILITY_ID,
+  const facade = runtime.capabilities.get<ImageMaskCapabilityApi>(
+    IMAGE_MASK_CAPABILITY_ID,
   );
   if (!facade) {
-    throw new Error("white ink capability facade should be registered");
+    throw new Error("image mask capability facade should be registered");
   }
 
-  assert(
-    runtime.config.getDefinition("storefrontWhiteInk.items"),
-    "white ink capability should accept caller config namespace",
-  );
-
-  facade.setPrintEnabled(false);
-  assertEqual(
-    runtime.config.get("storefrontWhiteInk.printWithWhiteInk"),
-    false,
-    "white ink capability should write print settings to caller namespace",
-  );
-  assertDeepEqual(
-    facade.getItems(),
-    [],
-    "white ink capability should expose white ink items",
-  );
+  try {
+    await facade.extractAlphaMask("data:image/png;base64,test");
+    throw new Error("image mask should require a browser image environment");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "image-mask-browser-required",
+      "image mask capability should report missing browser APIs",
+    );
+  }
 
   await runtime.dispose();
 }
@@ -4151,7 +4035,7 @@ async function main() {
   testContributionCompatibility();
   testKitCapabilityContractDefinitionsAndNormalization();
   await testDesignExportCapabilityExtension();
-  await testMockupExportCapabilityExtension();
+  await testSceneExportCapabilityExtension();
   await testKitCapabilityFactoriesDoNotRegisterTools();
   testCreateKitCapabilitiesForDocument();
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();
@@ -4169,7 +4053,7 @@ async function main() {
   await testDielineOverlayVisibilityFollowsEditingSessions();
   testImageSessionShapeOverlayUsesDielineGeometry();
   await testDielineGeometryCapabilityExtension();
-  await testWhiteInkCapabilityExtension();
+  await testImageMaskCapabilityExtension();
   await testConfigurableVisualConfigPatchesOriginalRenderIntents();
   await testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisible();
   await testRulerCapabilityExtension();

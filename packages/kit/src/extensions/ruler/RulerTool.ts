@@ -112,17 +112,7 @@ export class RulerTool implements ExtensionDefinition {
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =
       options.contributeConfigurations !== false;
-    this.visibility =
-      options.visibility ||
-      (options.legacyVisibility === false
-        ? undefined
-        : {
-            op: "not",
-            expr: {
-              op: "activeToolIn",
-              ids: ["pooder.kit.white-ink"],
-            },
-          });
+    this.visibility = options.visibility;
     this.setInitialTheme(options);
   }
 

@@ -27,7 +27,6 @@ export type {
 
 const DEFAULT_EXPORT_LAYER_IDS = [
   KIT_LEGACY_LAYER_PRESET.imageObject,
-  KIT_LEGACY_LAYER_PRESET.whiteInkObject,
 ] as const;
 
 export interface DesignExportExtensionOptions
