@@ -35,10 +35,9 @@ the original coupling unless they explicitly note a later migration slice.
 | `FeatureTool` | Removed public wrapper; formerly `pooder.kit.feature` | Feature geometry kit capability; feature placement workflow moves to app |
 | `SizeTool` | Removed public wrapper; formerly `pooder.kit.size` | Size/session-independent scene config capability |
 | `TemplateOverlayTool` | No | Template overlay kit capability |
-| `RulerTool` | No | Ruler overlay kit capability |
 | `DesignExportExtension` | No | Export kit/platform capability |
 | `DielineWorkflowExtension` | Removed | App workflow |
-| `MirrorTool` | No | Browser/platform viewport helper or optional compatibility utility |
+| `MirrorCapabilityExtension` | No | Object mirror transform kit capability |
 | `FilmTool` | Removed | Superseded by dynamic scene/document layers |
 
 ## `ImageTool`
@@ -211,24 +210,6 @@ the original coupling unless they explicitly note a later migration slice.
   rendering is platform implementation.
 - Migration target: P3.S4.
 
-## `RulerTool`
-
-- Extension id: `pooder.kit.ruler`.
-- Tool: none.
-- Commands: `setTheme`.
-- Config keys: `ruler.thickness`, `ruler.gap`, `ruler.backgroundColor`,
-  `ruler.textColor`, `ruler.lineColor`, `ruler.fontSize`, `ruler.debug`; also
-  responds to `size.*`.
-- Layers: `ruler-overlay`.
-- Events/listeners: listens to `canvas:resized` and ruler/size config changes.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`, platform scene
-  layout and geometry helpers.
-- Coupling to migrate: visibility predicate references white ink tool id and
-  layer id is hard-coded.
-- Ownership: ruler rendering and theme config are kit capability; scene
-  geometry is platform/core contract; current command is compatibility surface.
-- Migration target: P3.S4 and P2.S3 for tool-free visibility predicates.
-
 ## `DesignExportExtension`
 
 - Extension id: `pooder.kit.design-export`.
@@ -266,20 +247,20 @@ the original coupling unless they explicitly note a later migration slice.
   detection and dieline config application should become typed capabilities.
 - Migration target: P3.S2 and P4.S3.
 
-## `MirrorTool`
+## `MirrorCapabilityExtension`
 
 - Extension id: `pooder.kit.mirror`.
 - Tool: none.
-- Commands: `setMirror`.
-- Config keys: `mirror.enabled`.
-- Layers: none; mutates Fabric viewport transform.
-- Events/listeners: listens to `mirror.enabled` config changes.
-- Dependencies: `CANVAS_SERVICE`, `CONFIGURATION_SERVICE`.
-- Coupling to migrate: direct Fabric viewport mutation belongs behind browser
-  platform APIs if retained.
-- Ownership: platform implementation or optional compatibility utility; current
-  command/config are compatibility surface.
-- Migration target: not in current known slices; revisit during P2/P3 policy.
+- Commands: capability metadata references `setObjectMirror`,
+  `toggleObjectMirror`, `clearObjectMirror`, `getObjectMirror`, and
+  `refreshMirror`.
+- Config keys: none.
+- Layers: none; patches object render intent transforms.
+- Events/listeners: none.
+- Dependencies: `RENDER_INTENT_SERVICE`.
+- Ownership: object-level mirror effect compilation and runtime mirror facade
+  are kit capability concerns.
+- Migration target: object effect + facade long-term API.
 
 ## `FilmTool`
 
@@ -300,7 +281,7 @@ the original coupling unless they explicitly note a later migration slice.
   with `Tool` naming or factory exposure has an owner and target.
 - App-specific tool ids currently leak through render visibility predicates:
   `activeToolIn`, `sessionActive`, and `anySessionActive` are used in image,
-  dieline, ruler, feature, and tests. P2.S3 should replace these for new APIs.
+  dieline, feature, and tests. P2.S3 should replace these for new APIs.
 - Hard-coded layer ids are concentrated in `shared/constants/layers.ts`; later
   capability APIs should accept caller-provided layer ids and keep these values
   only as compatibility defaults.

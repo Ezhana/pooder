@@ -57,12 +57,12 @@ Completed:
   preview refresh, session state, and caller-owned source/target layers; the
   legacy `WhiteInkTool` wrapper was kept during the compatibility window and
   removed from public exports in P5.S3.
-- P3.S4 template overlay, size, and ruler capabilities have been added.
+- P3.S4 template overlay and size capabilities have been added.
   Applications can resolve typed `pooder.kit.template-overlay`,
-  `pooder.kit.size`, and `pooder.kit.ruler` facades, enable each capability
-  independently, and provide caller-owned config namespaces or layer ids where
-  supported. Legacy `pooder.kit.background` was removed after background
-  artwork moved to ordinary document layers and objects.
+  and `pooder.kit.size` facades, enable each capability independently, and
+  provide caller-owned config namespaces or layer ids where supported. Legacy
+  `pooder.kit.background` was removed after background artwork moved to
+  ordinary document layers and objects.
 - P3.S5 export capability has been added. Applications can resolve a typed
   `pooder.kit.design-export` facade for layer, element, scene-rect, and frame
   exports while the legacy `exportImage` command remains available as a
@@ -127,7 +127,7 @@ Resume instruction for a new thread:
   scene and render contracts.
 - `@pooder/kit` owns optional official capabilities such as image placement,
   edge detection, dieline geometry, white ink extraction, template overlays,
-  rulers, and export helpers. It must not define product tools, toolbar items,
+  and export helpers. It must not define product tools, toolbar items,
   labels, or application workflow semantics.
 - Applications own product tools and workflows. For storefront customization,
   `image`, `whiteInk`, `dieline`, and `feature` are app-level concepts composed
@@ -184,7 +184,6 @@ Known starting points:
 - `FeatureTool`
 - `SizeTool`
 - `TemplateOverlayTool`
-- `RulerTool`
 - `DesignExportExtension`
 - `DielineWorkflowExtension`
 
@@ -371,7 +370,7 @@ Acceptance:
 - White ink extraction can run against caller-selected image elements or layers.
 - Existing white ink session behavior still works through the wrapper.
 
-### Slice P3.S4 - Template, Size, Ruler Capabilities
+### Slice P3.S4 - Template And Size Capabilities
 
 Deliverables:
 

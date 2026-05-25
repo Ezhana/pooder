@@ -187,24 +187,6 @@ export default class CanvasService implements Service, CanvasServiceContract {
     return true;
   }
 
-  setViewportMirror(enabled: boolean): void {
-    const width = this.canvas.width || 800;
-    let vpt = this.canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-    vpt = [...vpt];
-    const isFlipped = vpt[0] < 0;
-
-    if (enabled && !isFlipped) {
-      vpt[0] = -vpt[0];
-      vpt[4] = width - vpt[4];
-    } else if (!enabled && isFlipped) {
-      vpt[0] = -vpt[0];
-      vpt[4] = width - vpt[4];
-    }
-
-    this.canvas.setViewportTransform(vpt as any);
-    this.requestRenderAll();
-  }
-
   onCanvasEvent(event: string, handler: (...args: any[]) => void): void {
     this.canvas.on(event as any, handler as any);
   }

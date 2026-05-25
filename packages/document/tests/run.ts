@@ -578,6 +578,11 @@ function testKitEffectCapabilityResolution() {
     "pooder.kit.feature",
     "feature should resolve to kit capability",
   );
+  assertEqual(
+    resolveKitEditorDocumentEffectCapabilityId({ type: "mirror" }),
+    "pooder.kit.mirror",
+    "mirror should resolve to kit capability",
+  );
 
   const diagnostics = validateKitEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
@@ -597,7 +602,7 @@ function testKitEffectCapabilityResolution() {
                 frame: { x: 0, y: 0, width: 1, height: 1 },
                 width: 1,
                 height: 1,
-                effects: [{ type: "clip" }],
+                effects: [{ type: "clip" }, { type: "mirror" }],
               },
             ],
           },

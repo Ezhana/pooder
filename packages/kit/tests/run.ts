@@ -59,14 +59,11 @@ import {
   normalizeClipEffectPayload,
 } from "../src/extensions/clip";
 import {
-  RULER_CAPABILITY_ID,
-  RulerCapabilityExtension,
-  createRulerCapabilityDefinition,
-  getRulerConfigKey,
-  normalizeRulerConfigNamespace,
-  normalizeRulerLayerId,
-  type RulerCapabilityApi,
-} from "../src/extensions/ruler";
+  MIRROR_CAPABILITY_ID,
+  MirrorCapabilityExtension,
+  createMirrorCapabilityDefinition,
+  type MirrorCapabilityApi,
+} from "../src/extensions/mirror";
 import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   type ConfigurableVisualCapabilityApi,
@@ -90,6 +87,7 @@ import {
   createConfigurableVisualCapability,
   createImageMaskCapability,
   createImagePlacementCapability,
+  createMirrorCapability,
   createSceneExportCapability,
 } from "../src/factories";
 import {
@@ -289,8 +287,6 @@ class FakeCanvasService {
   discardActiveObject() {
     this.activeObject = null;
   }
-
-  setViewportMirror() {}
 
   onCanvasEvent(eventName: string, handler: (event?: any) => void) {
     let handlers = this.eventHandlers.get(eventName);
@@ -594,7 +590,7 @@ function testFeaturePlacementProjection() {
 
 function testVisibilityDsl() {
   const layers = new Map([
-    ["ruler-overlay", { exists: true, objectCount: 2 }],
+    ["measurement-overlay", { exists: true, objectCount: 2 }],
     ["feature-overlay", { exists: true, objectCount: 0 }],
   ]);
 
@@ -625,7 +621,7 @@ function testVisibilityDsl() {
   );
   assert(
     evaluateVisibilityExpr(
-      { op: "activeToolIn", ids: ["pooder.kit.ruler"] },
+      { op: "activeToolIn", ids: ["pooder.kit.measurement"] },
       context,
     ) === false,
     "activeToolIn false failed",
@@ -639,7 +635,7 @@ function testVisibilityDsl() {
   );
   assert(
     evaluateVisibilityExpr(
-      { op: "sessionActive", sessionId: "session.ruler" },
+      { op: "sessionActive", sessionId: "session.measurement" },
       context,
     ) === false,
     "sessionActive false failed",
@@ -650,7 +646,7 @@ function testVisibilityDsl() {
   );
   assert(
     evaluateVisibilityExpr(
-      { op: "layerExists", layerId: "ruler-overlay" },
+      { op: "layerExists", layerId: "measurement-overlay" },
       context,
     ) === true,
     "layerExists true failed",
@@ -679,7 +675,7 @@ function testVisibilityDsl() {
       evaluateVisibilityExpr(
         {
           op: "layerObjectCount",
-          layerId: "ruler-overlay",
+          layerId: "measurement-overlay",
           cmp: entry.cmp,
           value: entry.value,
         },
@@ -693,7 +689,7 @@ function testVisibilityDsl() {
     evaluateVisibilityExpr(
       {
         op: "not",
-        expr: { op: "activeToolIn", ids: ["pooder.kit.ruler"] },
+        expr: { op: "activeToolIn", ids: ["pooder.kit.measurement"] },
       },
       context,
     ) === true,
@@ -704,7 +700,7 @@ function testVisibilityDsl() {
       {
         op: "all",
         exprs: [
-          { op: "layerExists", layerId: "ruler-overlay" },
+          { op: "layerExists", layerId: "measurement-overlay" },
           { op: "sessionScopeActive", scope: { channel: "feature" } },
         ],
       },
@@ -865,22 +861,6 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     },
     "clip effect should normalize image clip sources",
   );
-  assertEqual(
-    normalizeRulerConfigNamespace(" storefrontRuler "),
-    "storefrontRuler",
-    "ruler config namespace should trim caller input",
-  );
-  assertEqual(
-    getRulerConfigKey("storefrontRuler", "thickness"),
-    "storefrontRuler.thickness",
-    "ruler config keys should stay caller-namespaced",
-  );
-  assertEqual(
-    normalizeRulerLayerId(" app.ruler ", "legacy.ruler"),
-    "app.ruler",
-    "ruler layer id should trim caller input",
-  );
-
   const definitions = [
     createImagePlacementCapabilityDefinition(
       {} as ImagePlacementCapabilityApi,
@@ -901,8 +881,8 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
     createSceneExportCapabilityDefinition({} as SceneExportCapabilityApi, {
       capabilityId: "custom.scene-export",
     }),
-    createRulerCapabilityDefinition({} as RulerCapabilityApi, {
-      capabilityId: "custom.ruler",
+    createMirrorCapabilityDefinition({} as MirrorCapabilityApi, {
+      capabilityId: "custom.mirror",
     }),
     createFeatureCapabilityDefinition({} as FeatureCapabilityApi, {
       capabilityId: "custom.feature",
@@ -917,7 +897,7 @@ function testKitCapabilityContractDefinitionsAndNormalization() {
       "custom.export",
       "custom.image-mask",
       "custom.scene-export",
-      "custom.ruler",
+      "custom.mirror",
       "custom.feature",
     ],
     "capability definitions should accept caller-provided capability ids",
@@ -1241,6 +1221,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
   runtime.extensions.register(createConfigurableVisualCapability());
+  runtime.extensions.register(createMirrorCapability());
   runtime.extensions.register(createSceneExportCapability());
   await runtime.extensions.flushActivation();
 
@@ -1270,6 +1251,10 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     runtime.extensions.getState(CONFIGURABLE_VISUAL_CAPABILITY_ID)?.state ===
       "active",
     "configurable visual capability factory should activate",
+  );
+  assert(
+    runtime.extensions.getState(MIRROR_CAPABILITY_ID)?.state === "active",
+    "mirror capability factory should activate",
   );
   assert(
     runtime.extensions.getState(SCENE_EXPORT_CAPABILITY_ID)?.state ===
@@ -1305,6 +1290,7 @@ function testCreateKitCapabilitiesForDocument() {
                   { type: "image-placement", payload: { accepts: ["image"] } },
                   { type: "clip", payload: { source: { type: "dieline" } } },
                   { type: "configurable-visual" },
+                  { type: "mirror" },
                 ],
               },
             ],
@@ -1322,6 +1308,7 @@ function testCreateKitCapabilitiesForDocument() {
       FEATURE_CAPABILITY_ID,
       CONFIGURABLE_VISUAL_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
+      MIRROR_CAPABILITY_ID,
     ].sort(),
     "document helper should create supported kit capabilities once and ignore background effects",
   );
@@ -1608,6 +1595,197 @@ async function testApplyKitEditorDocument() {
     TEST_DOCUMENT_CONFIG["scene.previewBounds"],
     "document apply should import document config",
   );
+  await runtime.dispose();
+}
+
+async function testMirrorCapabilityDocumentEffectAndFacade() {
+  const runtime = new Pooder();
+  runtime.extensions.register(new MirrorCapabilityExtension());
+  await runtime.extensions.flushActivation();
+
+  const document = {
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "horizontal-object",
+                type: "rect",
+                width: 10,
+                height: 20,
+                frame: { x: 1, y: 2, width: 10, height: 20 },
+                transform: {
+                  left: 4,
+                  top: 6,
+                  scaleX: 2,
+                  scaleY: 3,
+                  originX: "center",
+                  originY: "center",
+                },
+                effects: [
+                  {
+                    type: "mirror",
+                    capabilityId: MIRROR_CAPABILITY_ID,
+                    payload: { horizontal: true },
+                  },
+                ],
+              },
+              {
+                id: "vertical-object",
+                type: "rect",
+                width: 10,
+                height: 20,
+                frame: { x: 10, y: 20, width: 10, height: 20 },
+                transform: { scaleX: -4, scaleY: -5 },
+                effects: [
+                  {
+                    type: "mirror",
+                    capabilityId: MIRROR_CAPABILITY_ID,
+                    payload: { vertical: true },
+                  },
+                ],
+              },
+              {
+                id: "both-object",
+                type: "rect",
+                width: 10,
+                height: 20,
+                frame: { x: 20, y: 30, width: 10, height: 20 },
+                transform: { scaleX: -2, scaleY: 3 },
+                effects: [
+                  {
+                    type: "mirror",
+                    capabilityId: MIRROR_CAPABILITY_ID,
+                    payload: { horizontal: true, vertical: true },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = await applyKitEditorDocument(runtime, document);
+  assert(
+    result.ok,
+    `mirror document effect should apply (${JSON.stringify(result.diagnostics)})`,
+  );
+
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
+  const findNode = (objectId: string) =>
+    renderIntentService
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find((node) => node.subjectId === objectId);
+
+  assertDeepEqual(
+    findNode("horizontal-object")?.transform,
+    {
+      left: 4,
+      top: 6,
+      scaleX: -2,
+      scaleY: 3,
+      originX: "center",
+      originY: "center",
+    },
+    "mirror effect should flip horizontal scale and preserve transform fields",
+  );
+  assertDeepEqual(
+    findNode("horizontal-object")?.data.mirror,
+    { horizontal: true, vertical: false },
+    "mirror effect should expose normalized mirror state",
+  );
+  assertDeepEqual(
+    {
+      scaleX: findNode("vertical-object")?.transform?.scaleX,
+      scaleY: findNode("vertical-object")?.transform?.scaleY,
+    },
+    { scaleX: 4, scaleY: -5 },
+    "vertical mirror effect should only force the vertical scale sign",
+  );
+  assertDeepEqual(
+    {
+      scaleX: findNode("both-object")?.transform?.scaleX,
+      scaleY: findNode("both-object")?.transform?.scaleY,
+    },
+    { scaleX: -2, scaleY: -3 },
+    "double-axis mirror effect should force both scale signs",
+  );
+
+  const facade = runtime.capabilities.getOrThrow<MirrorCapabilityApi>(
+    MIRROR_CAPABILITY_ID,
+  );
+  assertDeepEqual(
+    facade.getObjectMirror({ objectId: "horizontal-object" }),
+    { horizontal: true, vertical: false },
+    "mirror facade should read graph mirror state",
+  );
+  assert(
+    facade.setObjectMirror(
+      { objectId: "horizontal-object" },
+      { horizontal: false, vertical: true },
+    ),
+    "mirror facade should patch an existing object",
+  );
+  assertDeepEqual(
+    {
+      scaleX: findNode("horizontal-object")?.transform?.scaleX,
+      scaleY: findNode("horizontal-object")?.transform?.scaleY,
+      mirror: findNode("horizontal-object")?.data.mirror,
+    },
+    {
+      scaleX: 2,
+      scaleY: -3,
+      mirror: { horizontal: false, vertical: true },
+    },
+    "mirror facade should override document mirror state at runtime",
+  );
+  assertDeepEqual(
+    facade.toggleObjectMirror({ objectId: "horizontal-object" }, "horizontal"),
+    { horizontal: true, vertical: true },
+    "mirror facade should toggle from the current graph state",
+  );
+  assertDeepEqual(
+    {
+      scaleX: findNode("horizontal-object")?.transform?.scaleX,
+      scaleY: findNode("horizontal-object")?.transform?.scaleY,
+    },
+    { scaleX: -2, scaleY: -3 },
+    "mirror facade toggle should update runtime transform signs",
+  );
+  assert(
+    facade.clearObjectMirror({ objectId: "horizontal-object" }),
+    "mirror facade should clear an existing runtime patch",
+  );
+  assertDeepEqual(
+    {
+      scaleX: findNode("horizontal-object")?.transform?.scaleX,
+      scaleY: findNode("horizontal-object")?.transform?.scaleY,
+      mirror: findNode("horizontal-object")?.data.mirror,
+    },
+    {
+      scaleX: -2,
+      scaleY: 3,
+      mirror: { horizontal: true, vertical: false },
+    },
+    "mirror facade clear should restore document effect state",
+  );
+  assert(
+    facade.setObjectMirror({ objectId: "missing-object" }, { horizontal: true }) ===
+      false,
+    "mirror facade should reject missing objects",
+  );
+
   await runtime.dispose();
 }
 
@@ -3822,48 +4000,6 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   await runtime.dispose();
 }
 
-async function testRulerCapabilityExtension() {
-  const runtime = new Pooder();
-
-  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
-  runtime.extensions.register(
-    new RulerCapabilityExtension({
-      configNamespace: "storefrontRuler",
-      layers: {
-        rulerLayerId: "app.ruler",
-      },
-    }),
-  );
-
-  await runtime.extensions.flushActivation();
-
-  assertEqual(
-    runtime.extensions.getState(RULER_CAPABILITY_ID)?.state,
-    "active",
-    "ruler capability should activate",
-  );
-
-  const facade =
-    runtime.capabilities.get<RulerCapabilityApi>(RULER_CAPABILITY_ID);
-  if (!facade) {
-    throw new Error("ruler capability facade should be registered");
-  }
-
-  assert(
-    runtime.config.getDefinition("storefrontRuler.thickness"),
-    "ruler capability should accept caller config namespace",
-  );
-
-  facade.setTheme({ lineColor: "#111111" });
-  assertEqual(
-    facade.getTheme().lineColor,
-    "#111111",
-    "ruler capability should expose theme mutation facade",
-  );
-
-  await runtime.dispose();
-}
-
 async function testFeatureCapabilityDefinition() {
   const runtime = new Pooder();
   let committedFeatures: any[] = [];
@@ -4040,6 +4176,7 @@ async function main() {
   testCreateKitCapabilitiesForDocument();
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();
   await testApplyKitEditorDocument();
+  await testMirrorCapabilityDocumentEffectAndFacade();
   await testApplyKitEditorDocumentObjectInteraction();
   await testApplyKitEditorDocumentDragConstraints();
   await testApplyKitEditorDocumentMissingCapabilities();
@@ -4056,7 +4193,6 @@ async function main() {
   await testImageMaskCapabilityExtension();
   await testConfigurableVisualConfigPatchesOriginalRenderIntents();
   await testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisible();
-  await testRulerCapabilityExtension();
   await testFeatureCapabilityDefinition();
   console.log("ok");
 }

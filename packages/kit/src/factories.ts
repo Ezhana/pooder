@@ -6,7 +6,7 @@ import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
 import { ImagePlacementCapabilityExtension } from "./extensions/image";
-import { RulerCapabilityExtension } from "./extensions/ruler";
+import { MirrorCapabilityExtension } from "./extensions/mirror";
 import { SceneExportCapabilityExtension } from "./extensions/scene-export";
 
 export const createClipCapability = (
@@ -41,9 +41,9 @@ export const createImageMaskCapability = (
   options?: ConstructorParameters<typeof ImageMaskCapabilityExtension>[0],
 ) => new ImageMaskCapabilityExtension(options);
 
-export const createRulerCapability = (
-  options?: ConstructorParameters<typeof RulerCapabilityExtension>[0],
-) => new RulerCapabilityExtension(options);
+export const createMirrorCapability = (
+  options?: ConstructorParameters<typeof MirrorCapabilityExtension>[0],
+) => new MirrorCapabilityExtension(options);
 
 export const createSceneExportCapability = (
   options?: ConstructorParameters<typeof SceneExportCapabilityExtension>[0],

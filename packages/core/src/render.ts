@@ -259,7 +259,6 @@ export interface CanvasService extends Service {
   getActiveObject(): CanvasObjectLike | undefined;
   setActiveObject(object: CanvasObjectLike): boolean;
   discardActiveObject(): boolean;
-  setViewportMirror(enabled: boolean): void;
   onCanvasEvent(event: string, handler: (...args: any[]) => void): void;
   offCanvasEvent(event: string, handler: (...args: any[]) => void): void;
   getTopContext(): CanvasRenderingContext2D | undefined;

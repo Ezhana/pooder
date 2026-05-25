@@ -14,6 +14,7 @@ export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   feature: "pooder.kit.feature",
   "configurable-visual": "pooder.kit.configurable-visual",
   "image-placement": "pooder.kit.image-placement",
+  mirror: "pooder.kit.mirror",
 } as const;
 
 export type KitEditorDocumentEffectType =

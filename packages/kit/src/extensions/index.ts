@@ -7,5 +7,4 @@ export * from "./image";
 export * from "./dieline";
 export * from "./feature";
 export * from "./mirror";
-export * from "./ruler";
 export * from "./scene-export";

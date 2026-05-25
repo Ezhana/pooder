@@ -96,7 +96,6 @@ class FakeLayoutCanvasService implements CanvasService {
   discardActiveObject() {
     return false;
   }
-  setViewportMirror() {}
   onCanvasEvent() {}
   offCanvasEvent() {}
   getTopContext() {
