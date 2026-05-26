@@ -1,5 +1,11 @@
 # @pooder/core
 
+## 4.0.0
+
+### Major Changes
+
+- Capability and Facade
+
 ## Unreleased
 
 ### Added

@@ -1,5 +1,17 @@
 # @pooder/kit
 
+## 9.0.0
+
+### Major Changes
+
+- Capability and Facade
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/document@2.0.0
+  - @pooder/core@4.0.0
+
 ## Unreleased
 
 ### Added
@@ -59,6 +71,7 @@
   `createFeatureCapability()`.
 - Deprecated compatibility wrapper: `createFeatureExtension` ->
   `createFeatureCapability()`.
+
 ### Removed
 
 - Removed legacy `tools` contributions for `pooder.kit.image`,

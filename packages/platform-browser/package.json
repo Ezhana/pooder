@@ -1,6 +1,6 @@
 {
   "name": "@pooder/platform-browser",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "description": "Browser host services for Pooder runtimes",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

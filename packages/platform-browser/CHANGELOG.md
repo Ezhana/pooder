@@ -1,5 +1,16 @@
 # @pooder/platform-browser
 
+## 2.0.0
+
+### Major Changes
+
+- Capability and Facade
+
+### Patch Changes
+
+- Updated dependencies
+  - @pooder/core@4.0.0
+
 ## Unreleased
 
 ### Added
