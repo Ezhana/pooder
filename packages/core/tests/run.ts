@@ -1,7 +1,9 @@
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
+  CONSTRAINT_RESOLVER_SERVICE,
   EventBus,
+  GEOMETRY_SOURCE_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
@@ -13,7 +15,13 @@ import {
   computeDragInteraction,
   containsPoint,
   containsRect,
+  containsGeometryPoint,
+  createStaticGeometrySourceProvider,
+  DefaultConstraintResolverCapability,
+  DefaultGeometrySourceCapability,
   createRectSnapLines,
+  findNearestGeometryPoint,
+  getGeometryBounds,
   intersectRects,
   mergeRenderIntentPatchDraft,
   normalizeRect,
@@ -1520,6 +1528,148 @@ async function testDragInteractionSnapsAndConstrains() {
   );
 }
 
+async function testGeometrySourceCapabilityRegistry() {
+  await withRuntime(async (runtime) => {
+    const geometry = runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    const disposable = geometry.registerSource(
+      createStaticGeometrySourceProvider({
+        sourceId: "static",
+        geometries: [
+          {
+            kind: "rect",
+            ref: { sourceId: "static", geometryId: "bounds" },
+            space: "document",
+            rect: { left: 10, top: 20, width: 30, height: 40 },
+          },
+          {
+            kind: "pointSet",
+            ref: { sourceId: "static", geometryId: "points" },
+            points: [
+              { x: 0, y: 0 },
+              { x: 100, y: 100 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const rect = geometry.getGeometry({
+      sourceId: "static",
+      geometryId: "bounds",
+    });
+    assert(rect, "geometry source should resolve registered geometry");
+    assertDeepEqual(
+      getGeometryBounds(rect),
+      { left: 10, top: 20, width: 30, height: 40 },
+      "geometry utility should read rect bounds",
+    );
+    assertDeepEqual(
+      findNearestGeometryPoint(rect, { x: 100, y: 0 }),
+      { x: 40, y: 20 },
+      "geometry utility should clamp nearest rect point",
+    );
+    assertEqual(
+      containsGeometryPoint(rect, { x: 15, y: 25 }),
+      true,
+      "geometry utility should test point containment",
+    );
+    assertEqual(
+      geometry.projectGeometry(
+        { sourceId: "static", geometryId: "bounds" },
+        "scene",
+      )?.space,
+      "scene",
+      "default projection should produce the requested coordinate space",
+    );
+    assertEqual(
+      geometry.listGeometries("static").length,
+      2,
+      "geometry source should list registered descriptors",
+    );
+    disposable.dispose();
+    assertEqual(
+      geometry.getGeometry({ sourceId: "static", geometryId: "bounds" }),
+      null,
+      "disposing a source should unregister it",
+    );
+  });
+}
+
+async function testConstraintResolverCapabilityBuiltins() {
+  await withRuntime(async (runtime) => {
+    const geometry = runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    const resolver = runtime.services.getOrThrow<DefaultConstraintResolverCapability>(
+      CONSTRAINT_RESOLVER_SERVICE,
+    );
+    geometry.registerSource(
+      createStaticGeometrySourceProvider({
+        sourceId: "static",
+        geometries: [
+          {
+            kind: "polygon",
+            ref: { sourceId: "static", geometryId: "diamond" },
+            points: [
+              { x: 50, y: 0 },
+              { x: 100, y: 50 },
+              { x: 50, y: 100 },
+              { x: 0, y: 50 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const clamped = resolver.resolve({
+      transform: {
+        frame: { left: 96, top: -5, width: 10, height: 10 },
+      },
+      constraints: [
+        {
+          type: "rect.contain",
+          params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+        },
+      ],
+    });
+    assertDeepEqual(
+      clamped.result.frame,
+      { left: 90, top: 0, width: 10, height: 10 },
+      "rect.contain should clamp a frame into bounds",
+    );
+
+    const nearest = resolver.resolve({
+      transform: { position: { x: 80, y: 10 } },
+      constraints: [
+        {
+          type: "path.nearest-point",
+          source: { sourceId: "static", geometryId: "diamond" },
+        },
+      ],
+    });
+    assertDeepEqual(
+      nearest.result.position,
+      { x: 70, y: 20 },
+      "path.nearest-point should use generic geometry nearest point lookup",
+    );
+
+    const snapped = resolver.resolve({
+      transform: { position: { x: 23, y: 36 } },
+      constraints: [
+        { type: "axis.lock", mode: "x", params: { origin: { x: 0, y: 30 } } },
+        { type: "grid.snap", params: { size: 10 } },
+      ],
+    });
+    assertDeepEqual(
+      snapped.result.position,
+      { x: 20, y: 30 },
+      "axis.lock and grid.snap should compose deterministically",
+    );
+  });
+}
+
 async function testSessionDirtyTrackerCanBlockLeave() {
   await withRuntime(async (runtime) => {
     const sessions = runtime.services.getOrThrow<SessionService>(
@@ -1798,7 +1948,7 @@ async function testRenderIntentPatchDiagnosticsAreTyped() {
   });
 }
 
-async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
+async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
@@ -1818,33 +1968,66 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
         placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
         ordering: { layerId: "artwork" },
         export: { keys: ["image.export"], tags: [" design ", "design", "mockup"] },
-        props: { selectable: true, evented: false },
+        props: { fill: "red" },
         data: { locked: false },
         interaction: {
-          selectable: false,
-          evented: true,
+          enabled: true,
+          when: { op: "contextTruthy", key: "can-interact" },
           locked: true,
-          dragConstraints: [
+          constraints: [
             {
-              type: "rect",
-              rect: { left: 0, top: 0, width: 100, height: 100 },
-              target: "frame",
+              when: { op: "const", value: true },
+              spec: { type: "grid.snap", params: { size: 10 } },
             },
           ],
         },
       },
     ]);
+    intents.patchIntentEntry({
+      sourceId: "constraints:first",
+      phase: "interaction",
+      sequence: 1,
+      patch: {
+        id: "image",
+        interaction: {
+          constraints: [
+            {
+              spec: {
+                type: "rect.contain",
+                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+              },
+            },
+          ],
+        },
+      },
+    });
+    intents.patchIntentEntry({
+      sourceId: "constraints:second",
+      phase: "interaction",
+      sequence: 2,
+      patch: {
+        id: "image",
+        interaction: {
+          constraints: [
+            {
+              when: { op: "activeToolIn", ids: ["move"] },
+              spec: { type: "axis.lock", mode: "x" },
+            },
+          ],
+        },
+      },
+    });
 
     const node = intents.getGraph().layers[0]?.nodes[0];
     assertEqual(
       node?.props.selectable,
-      false,
-      "interaction selectable should override graph props",
+      undefined,
+      "interaction should not write renderer-specific selectable props",
     );
     assertEqual(
       node?.props.evented,
-      true,
-      "interaction evented should override graph props",
+      undefined,
+      "interaction should not write renderer-specific evented props",
     );
     assertEqual(
       node?.data.locked,
@@ -1852,15 +2035,39 @@ async function testRenderIntentInteractionAspectWritesGraphPropsAndData() {
       "interaction locked should override graph data",
     );
     assertDeepEqual(
-      node?.data.dragConstraints,
-      [
-        {
-          type: "rect",
-          rect: { left: 0, top: 0, width: 100, height: 100 },
-          target: "frame",
-        },
-      ],
-      "interaction drag constraints should enter render graph data",
+      node?.interaction,
+      {
+        enabled: true,
+        when: { op: "contextTruthy", key: "can-interact" },
+        locked: true,
+        constraints: [
+          {
+            when: { op: "const", value: true },
+            spec: { type: "grid.snap", params: { size: 10 } },
+          },
+          {
+            spec: {
+              type: "rect.contain",
+              params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+            },
+          },
+          {
+            when: { op: "activeToolIn", ids: ["move"] },
+            spec: { type: "axis.lock", mode: "x" },
+          },
+        ],
+      },
+      "interaction aspect should carry merged constraints in patch order",
+    );
+    assertEqual(
+      node?.data.interactionComponents,
+      undefined,
+      "interaction should not emit legacy interaction component data",
+    );
+    assertEqual(
+      node?.data.interactionConstraints,
+      undefined,
+      "interaction constraints should stay on the graph interaction aspect",
     );
     assertEqual(
       node?.coordinateSpace,
@@ -2254,6 +2461,14 @@ async function main() {
     ["computes geometry primitives", testGeometryPrimitives],
     ["computes drag interaction snaps and constraints", testDragInteractionSnapsAndConstrains],
     [
+      "registers and queries geometry sources",
+      testGeometrySourceCapabilityRegistry,
+    ],
+    [
+      "resolves generic constraints through capability",
+      testConstraintResolverCapabilityBuiltins,
+    ],
+    [
       "session dirty trackers can block leave",
       testSessionDirtyTrackerCanBlockLeave,
     ],
@@ -2286,8 +2501,8 @@ async function main() {
       testRenderIntentPatchDiagnosticsAreTyped,
     ],
     [
-      "writes render intent interaction onto graph props and data",
-      testRenderIntentInteractionAspectWritesGraphPropsAndData,
+      "carries declarative render intent interaction",
+      testRenderIntentInteractionAspectCarriesDeclarativeState,
     ],
     [
       "keeps render intent clip targets graph-scoped",

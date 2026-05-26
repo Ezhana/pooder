@@ -10,6 +10,8 @@ import type SceneService from "./SceneService";
 import type ToolRegistryService from "./ToolRegistryService";
 import type WorkbenchService from "./WorkbenchService";
 import type SessionService from "./SessionService";
+import type { DefaultConstraintResolverCapability } from "../constraint-resolver";
+import type { DefaultGeometrySourceCapability } from "../geometry-source";
 import type {
   CanvasService,
   SceneExportService,
@@ -41,6 +43,12 @@ export const TOOL_REGISTRY_SERVICE =
 export const WORKBENCH_SERVICE =
   createServiceToken<WorkbenchService>("WorkbenchService");
 export const SESSION_SERVICE = createServiceToken<SessionService>("SessionService");
+export const GEOMETRY_SOURCE_SERVICE =
+  createServiceToken<DefaultGeometrySourceCapability>("GeometrySourceService");
+export const CONSTRAINT_RESOLVER_SERVICE =
+  createServiceToken<DefaultConstraintResolverCapability>(
+    "ConstraintResolverService",
+  );
 
 export const CORE_SERVICE_TOKENS = {
   CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
@@ -55,4 +63,6 @@ export const CORE_SERVICE_TOKENS = {
   TOOL_REGISTRY: TOOL_REGISTRY_SERVICE,
   WORKBENCH: WORKBENCH_SERVICE,
   SESSION: SESSION_SERVICE,
+  GEOMETRY_SOURCE: GEOMETRY_SOURCE_SERVICE,
+  CONSTRAINT_RESOLVER: CONSTRAINT_RESOLVER_SERVICE,
 } as const;

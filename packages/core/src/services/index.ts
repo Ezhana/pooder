@@ -9,6 +9,8 @@ import SceneService from "./SceneService";
 import ToolRegistryService from "./ToolRegistryService";
 import WorkbenchService from "./WorkbenchService";
 import SessionService from "./SessionService";
+import { DefaultConstraintResolverCapability } from "../constraint-resolver";
+import { DefaultGeometrySourceCapability } from "../geometry-source";
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -23,6 +25,8 @@ import {
   TOOL_REGISTRY_SERVICE,
   WORKBENCH_SERVICE,
   SESSION_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
+  CONSTRAINT_RESOLVER_SERVICE,
 } from "./tokens";
 
 export {
@@ -35,6 +39,8 @@ export {
   ToolRegistryService,
   WorkbenchService,
   SessionService,
+  DefaultGeometrySourceCapability,
+  DefaultConstraintResolverCapability,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
@@ -47,6 +53,8 @@ export {
   TOOL_REGISTRY_SERVICE,
   WORKBENCH_SERVICE,
   SESSION_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
+  CONSTRAINT_RESOLVER_SERVICE,
   CORE_SERVICE_TOKENS,
 };
 

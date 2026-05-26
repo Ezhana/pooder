@@ -6,7 +6,6 @@ import {
   type RenderIntentDiagnostic,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDraft,
-  type RenderIntentDragConstraint,
   type RenderIntentPatch,
   type RenderIntentPatchEntry,
   type RenderIntentService,
@@ -31,6 +30,7 @@ import {
   createDielineGeometryCapability,
   createFeatureCapability,
   createImagePlacementCapability,
+  createInteractionCapability,
   createMirrorCapability,
 } from "../factories";
 import { CLIP_CAPABILITY_ID } from "../extensions/clip";
@@ -38,6 +38,7 @@ import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-vi
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
 import { IMAGE_PLACEMENT_CAPABILITY_ID } from "../extensions/image";
+import { INTERACTION_CAPABILITY_ID } from "../extensions/interaction";
 import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
 
 export interface KitEditorDocumentRuntime {
@@ -92,6 +93,7 @@ const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
   [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),
   [IMAGE_PLACEMENT_CAPABILITY_ID]: () => createImagePlacementCapability(),
+  [INTERACTION_CAPABILITY_ID]: () => createInteractionCapability(),
   [MIRROR_CAPABILITY_ID]: () => createMirrorCapability(),
 };
 
@@ -264,7 +266,6 @@ function collectAvailableCapabilityIds(
 
 function createBaseRenderIntentDrafts(document: EditorDocument): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
-  const objectFrames = collectDocumentObjectFrames(document);
   document.surfaces.forEach((surface) => {
     surface.layers.forEach((layer) => {
       layer.objects?.forEach((object, index) => {
@@ -273,7 +274,6 @@ function createBaseRenderIntentDrafts(document: EditorDocument): RenderIntentDra
           layer,
           object,
           index,
-          objectFrames,
         );
         if (draft) drafts.push(draft);
       });
@@ -287,24 +287,15 @@ function createObjectRenderIntentDraft(
   layer: EditorLayer,
   object: EditorObject,
   index: number,
-  objectFrames: ReadonlyMap<string, NonNullable<EditorObject["frame"]>>,
 ): RenderIntentDraft | null {
   if (!object.frame) return null;
   const objectOrder = object.order ?? index;
   const layerOrder = layer.order ?? 0;
-  const interactionLocked = object.interaction?.locked ?? object.locked;
+  const locked = object.locked;
   const outputMaskKeys = normalizeOutputMaskKeys(
     object.metadata?.outputMaskKeys ?? object.metadata?.outputMaskKey,
   );
   const tags = normalizeTags(layer.tags, object.tags);
-  const interaction = {
-    selectable: object.interaction?.selectable ?? interactionLocked !== true,
-    evented: object.interaction?.evented ?? interactionLocked !== true,
-    ...(typeof interactionLocked === "boolean"
-      ? { locked: interactionLocked }
-      : {}),
-    ...compileObjectDragConstraints(object, objectFrames),
-  };
   const base = {
     id: object.id,
     subject: {
@@ -340,14 +331,13 @@ function createObjectRenderIntentDraft(
       ...(object.style ?? {}),
       ...(object.transform ?? {}),
     },
-    interaction,
     data: {
       id: object.id,
       layerId: layer.id,
       documentSurfaceId: surface.id,
       documentObjectType: object.type,
       documentLayerRole: layer.role,
-      locked: interactionLocked,
+      ...(typeof locked === "boolean" ? { locked } : {}),
       ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
     },
   } satisfies Omit<RenderIntentDraft, "visual">;
@@ -386,60 +376,6 @@ function createObjectRenderIntentDraft(
     ...base,
     visual: { type: "text" },
     props: { ...base.props, text: object.text },
-  };
-}
-
-function collectDocumentObjectFrames(
-  document: EditorDocument,
-): Map<string, NonNullable<EditorObject["frame"]>> {
-  const frames = new Map<string, NonNullable<EditorObject["frame"]>>();
-  document.surfaces.forEach((surface) => {
-    surface.layers.forEach((layer) => {
-      layer.objects?.forEach((object) => {
-        if (object.id && object.frame) frames.set(object.id, object.frame);
-      });
-    });
-  });
-  return frames;
-}
-
-function compileObjectDragConstraints(
-  object: EditorObject,
-  objectFrames: ReadonlyMap<string, NonNullable<EditorObject["frame"]>>,
-): { dragConstraints?: RenderIntentDragConstraint[] } {
-  const constraints = object.constraints?.drag
-    ?.map((constraint): RenderIntentDragConstraint | null => {
-      if (constraint.type === "rect") {
-        return {
-          type: "rect",
-          rect: toGeometryRect(constraint.rect),
-          ...(constraint.mode ? { mode: constraint.mode } : {}),
-          ...(constraint.target ? { target: constraint.target } : {}),
-        };
-      }
-      const fallbackFrame = objectFrames.get(constraint.objectId);
-      if (!fallbackFrame) return null;
-      return {
-        type: "object",
-        objectId: constraint.objectId,
-        source: constraint.source ?? "frame",
-        fallbackFrame: toGeometryRect(fallbackFrame),
-        ...(constraint.mode ? { mode: constraint.mode } : {}),
-        ...(constraint.target ? { target: constraint.target } : {}),
-      };
-    })
-    .filter((constraint): constraint is RenderIntentDragConstraint =>
-      Boolean(constraint),
-    );
-  return constraints?.length ? { dragConstraints: constraints } : {};
-}
-
-function toGeometryRect(rect: NonNullable<EditorObject["frame"]>) {
-  return {
-    left: rect.x,
-    top: rect.y,
-    width: rect.width,
-    height: rect.height,
   };
 }
 

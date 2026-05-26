@@ -674,6 +674,164 @@ async function testFabricRenderGraphAdapterPreservesScreenSpace() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  const intents = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  intents.setDocumentIntents([
+    {
+      id: "interactive",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "interactive",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", objectOrder: 0 },
+      props: { width: 10, height: 10 },
+      interaction: { enabled: true },
+    },
+    {
+      id: "constraint-only",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "constraint-only",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", objectOrder: 1 },
+      props: { width: 10, height: 10 },
+      interaction: {
+        constraints: [
+          {
+            spec: {
+              type: "rect.contain",
+              params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+            },
+          },
+        ],
+      },
+    },
+    {
+      id: "conditional",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "conditional",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", objectOrder: 2 },
+      props: { width: 10, height: 10 },
+      interaction: {
+        enabled: true,
+        when: { op: "contextTruthy", key: "can.interact" },
+        constraints: [
+          {
+            when: { op: "const", value: true },
+            spec: { type: "grid.snap", params: { size: 5 } },
+          },
+        ],
+      },
+    },
+    {
+      id: "runtime-evented",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "runtime-evented",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", objectOrder: 3 },
+      props: {
+        width: 10,
+        height: 10,
+        selectable: false,
+        evented: true,
+      },
+    },
+  ]);
+
+  await adapter.flush();
+  let last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  assert(last, "adapter should reconcile declarative interaction");
+  const interactive = last.items.find((item) => item.key === "interactive");
+  const constraintOnly = last.items.find((item) => item.key === "constraint-only");
+  const conditional = last.items.find((item) => item.key === "conditional");
+  const runtimeEvented = last.items.find((item) => item.key === "runtime-evented");
+  assertEqual(
+    interactive?.spec.props.selectable,
+    true,
+    "interaction alone should enable Fabric selection",
+  );
+  assertEqual(
+    interactive?.spec.props.evented,
+    true,
+    "interaction alone should enable Fabric events",
+  );
+  assertEqual(
+    constraintOnly?.spec.props.selectable,
+    false,
+    "constraints alone should not enable Fabric selection",
+  );
+  assertEqual(
+    constraintOnly?.spec.data?.interactionEnabled,
+    false,
+    "constraints alone should not mark the live object interactive",
+  );
+  assertEqual(
+    conditional?.spec.props.visible,
+    true,
+    "interaction.when should not affect object visibility",
+  );
+  assertEqual(
+    conditional?.spec.props.selectable,
+    false,
+    "unmatched interaction.when should disable interaction",
+  );
+  assertEqual(
+    runtimeEvented?.spec.props.selectable,
+    false,
+    "runtime props should keep non-selectable graph objects non-selectable",
+  );
+  assertEqual(
+    runtimeEvented?.spec.props.evented,
+    true,
+    "runtime props should keep graph objects targetable for canvas clicks",
+  );
+  assertEqual(
+    runtimeEvented?.spec.data?.interactionEnabled,
+    false,
+    "runtime evented props should not opt into declarative drag handling",
+  );
+
+  intents.setVisibilityContextValue("can.interact", true);
+  await adapter.flush();
+  last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  const enabledConditional = last.items.find(
+    (item) => item.key === "conditional",
+  );
+  assertEqual(
+    enabledConditional?.spec.props.selectable,
+    true,
+    "matched interaction.when should enable interaction",
+  );
+  assertDeepEqual(
+    enabledConditional?.spec.data?.interactionConstraints,
+    [{ type: "grid.snap", params: { size: 5 } }],
+    "matched constraint.when should expose active constraints to dragging",
+  );
+
+  await runtime.dispose();
+}
+
 async function testFabricRenderGraphAdapterConstrainsDragging() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -690,11 +848,13 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     scaleY: 1,
     data: {
       renderTarget: "render-graph",
-      dragConstraints: [
+      subjectId: "constrained",
+      renderIntentId: "constrained",
+      interactionEnabled: true,
+      interactionConstraints: [
         {
-          type: "rect",
-          rect: { left: 0, top: 0, width: 100, height: 100 },
-          target: "frame",
+          type: "rect.contain",
+          params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
         },
       ],
     },
@@ -716,7 +876,36 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
   assertEqual(
     target.left,
     90,
-    "rect drag constraints should clamp graph objects",
+    "rect interaction constraints should clamp graph objects",
+  );
+  let modifiedTransform: any;
+  const transformListener = (event: any) => {
+    modifiedTransform = event;
+  };
+  runtime.eventBus.on("render-graph:object-transform", transformListener);
+  canvas.emitCanvasEvent("object:modified", { target });
+  runtime.eventBus.off("render-graph:object-transform", transformListener);
+  assertDeepEqual(
+    modifiedTransform?.transform?.frame,
+    { left: 90, top: 20, width: 10, height: 10 },
+    "modified graph objects should emit the resolved transform result",
+  );
+
+  const constraintOnly = {
+    ...target,
+    left: 95,
+    data: {
+      ...target.data,
+      subjectId: "constraint-only",
+      renderIntentId: "constraint-only",
+      interactionEnabled: false,
+    },
+  };
+  canvas.emitCanvasEvent("object:moving", { target: constraintOnly });
+  assertEqual(
+    constraintOnly.left,
+    95,
+    "constraints without enabled interaction should not make objects draggable",
   );
 
   const reference = {
@@ -729,6 +918,7 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
       renderTarget: "render-graph",
       subject: { objectId: "bounds" },
       subjectId: "bounds",
+      renderIntentId: "bounds",
     },
     getBoundingRect() {
       return {
@@ -745,12 +935,14 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     top: 20,
     data: {
       renderTarget: "render-graph",
-      dragConstraints: [
+      subjectId: "object-constrained",
+      renderIntentId: "object-constrained",
+      interactionEnabled: true,
+      interactionConstraints: [
         {
-          type: "object",
-          objectId: "bounds",
-          fallbackFrame: { left: 0, top: 0, width: 10, height: 10 },
-          target: "center",
+          type: "object-frame.contain",
+          source: { sourceId: "render-graph", geometryId: "bounds" },
+          params: { target: "center" },
         },
       ],
     },
@@ -760,18 +952,9 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
   assertEqual(
     objectConstrained.left,
     45,
-    "object constraints should use live object bounds when available",
+    "object-frame interaction constraints should use live object bounds",
   );
-
-  objectConstrained.left = 80;
-  objectConstrained.data.dragConstraints[0].objectId = "missing";
-  canvas.objects = [];
-  canvas.emitCanvasEvent("object:moving", { target: objectConstrained });
-  assertEqual(
-    objectConstrained.left,
-    5,
-    "object constraints should fall back to compiled frames",
-  );
+  canvas.emitCanvasEvent("object:modified", { target: objectConstrained });
 
   await runtime.dispose();
 }
@@ -1649,6 +1832,10 @@ async function main() {
     [
       "preserves graph coordinate space",
       testFabricRenderGraphAdapterPreservesScreenSpace,
+    ],
+    [
+      "maps declarative interaction state",
+      testFabricRenderGraphAdapterMapsDeclarativeInteraction,
     ],
     [
       "constrains render graph object dragging",

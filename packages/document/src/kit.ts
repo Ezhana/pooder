@@ -14,6 +14,8 @@ export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   feature: "pooder.kit.feature",
   "configurable-visual": "pooder.kit.configurable-visual",
   "image-placement": "pooder.kit.image-placement",
+  interaction: "pooder.kit.interaction",
+  constraint: "pooder.kit.interaction",
   mirror: "pooder.kit.mirror",
 } as const;
 
@@ -90,8 +92,6 @@ export type {
   EditorImageObject,
   EditorLayer,
   EditorObject,
-  EditorObjectConstraints,
-  EditorObjectDragConstraint,
   EditorSurface,
   EditorView,
 } from "./index";

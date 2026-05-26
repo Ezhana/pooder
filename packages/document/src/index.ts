@@ -92,31 +92,6 @@ export interface EditorLayer {
   metadata?: Record<string, unknown>;
 }
 
-export interface EditorObjectInteraction {
-  selectable?: boolean;
-  evented?: boolean;
-  locked?: boolean;
-}
-
-export interface EditorObjectConstraints {
-  drag?: EditorObjectDragConstraint[];
-}
-
-export type EditorObjectDragConstraint =
-  | {
-      type: "rect";
-      rect: EditorRect;
-      mode?: "contain";
-      target?: "frame" | "center";
-    }
-  | {
-      type: "object";
-      objectId: string;
-      source?: "frame";
-      mode?: "contain";
-      target?: "frame" | "center";
-    };
-
 export interface EditorObjectBase {
   id: string;
   frame?: EditorRect;
@@ -124,8 +99,6 @@ export interface EditorObjectBase {
   visible?: boolean;
   locked?: boolean;
   tags?: string[];
-  interaction?: EditorObjectInteraction;
-  constraints?: EditorObjectConstraints;
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -333,86 +306,6 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
   return Object.keys(transform).length ? transform : undefined;
 }
 
-function normalizeObjectInteraction(
-  value: unknown,
-): EditorObjectInteraction | undefined {
-  if (!isRecord(value)) return undefined;
-  const interaction: EditorObjectInteraction = {};
-  if (typeof value.selectable === "boolean") {
-    interaction.selectable = value.selectable;
-  }
-  if (typeof value.evented === "boolean") {
-    interaction.evented = value.evented;
-  }
-  if (typeof value.locked === "boolean") {
-    interaction.locked = value.locked;
-  }
-  return Object.keys(interaction).length ? interaction : undefined;
-}
-
-function normalizeObjectConstraints(
-  value: unknown,
-): EditorObjectConstraints | undefined {
-  if (!isRecord(value)) return undefined;
-  const drag = normalizeObjectDragConstraints(value.drag);
-  return drag?.length ? { drag } : undefined;
-}
-
-function normalizeObjectDragConstraints(
-  value: unknown,
-): EditorObjectDragConstraint[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const constraints = value
-    .map(normalizeObjectDragConstraint)
-    .filter((item): item is EditorObjectDragConstraint => Boolean(item));
-  return constraints.length ? constraints : undefined;
-}
-
-function normalizeObjectDragConstraint(
-  value: unknown,
-): EditorObjectDragConstraint | null {
-  if (!isRecord(value)) return null;
-  if (value.mode !== undefined && value.mode !== "contain") return null;
-  if (
-    value.target !== undefined &&
-    value.target !== "frame" &&
-    value.target !== "center"
-  ) {
-    return null;
-  }
-  const mode = value.mode === "contain" ? value.mode : undefined;
-  const target =
-    value.target === "frame" || value.target === "center"
-      ? value.target
-      : undefined;
-
-  if (value.type === "rect") {
-    const rect = normalizeRect(value.rect);
-    if (!rect) return null;
-    return {
-      type: "rect",
-      rect,
-      ...(mode ? { mode } : {}),
-      ...(target ? { target } : {}),
-    };
-  }
-
-  if (value.type === "object") {
-    const objectId = normalizeId(value.objectId);
-    if (!objectId) return null;
-    if (value.source !== undefined && value.source !== "frame") return null;
-    return {
-      type: "object",
-      objectId,
-      ...(value.source === "frame" ? { source: value.source } : {}),
-      ...(mode ? { mode } : {}),
-      ...(target ? { target } : {}),
-    };
-  }
-
-  return null;
-}
-
 function normalizeEffectTarget(value: unknown): EditorEffectTarget | undefined {
   if (value === undefined || value === "self") return "self";
   if (!isRecord(value)) return undefined;
@@ -477,8 +370,6 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     visible: typeof value.visible === "boolean" ? value.visible : true,
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
     tags: normalizeIdList(value.tags),
-    interaction: normalizeObjectInteraction(value.interaction),
-    constraints: normalizeObjectConstraints(value.constraints),
     transform: normalizeTransform(value.transform),
     style: isRecord(value.style) ? cloneRecord(value.style) : undefined,
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
@@ -738,49 +629,6 @@ function validateEffects(
   );
 }
 
-function collectObjectIds(document: EditorDocument): Set<string> {
-  const ids = new Set<string>();
-  document.surfaces.forEach((surface) => {
-    surface.layers.forEach((layer) => {
-      layer.objects?.forEach((object) => {
-        if (object.id) ids.add(object.id);
-      });
-    });
-  });
-  return ids;
-}
-
-function validateObjectDragConstraints(
-  diagnostics: EditorDocumentDiagnostic[],
-  object: EditorObject,
-  path: string,
-  objectIds: ReadonlySet<string>,
-) {
-  object.constraints?.drag?.forEach((constraint, index) => {
-    if (constraint.type !== "object") return;
-    const constraintPath = `${path}.constraints.drag[${index}].objectId`;
-    if (constraint.objectId === object.id) {
-      addDiagnostic(diagnostics, {
-        severity: "error",
-        code: "object-drag-constraint-self-reference",
-        message: `Object "${object.id}" cannot constrain dragging to itself.`,
-        path: constraintPath,
-      });
-      return;
-    }
-    if (!objectIds.has(constraint.objectId)) {
-      addDiagnostic(diagnostics, {
-        severity: "error",
-        code: "object-drag-constraint-object-missing",
-        message:
-          `Object "${object.id}" references missing drag constraint object ` +
-          `"${constraint.objectId}".`,
-        path: constraintPath,
-      });
-    }
-  });
-}
-
 function runValidators(
   diagnostics: EditorDocumentDiagnostic[],
   validators: readonly EditorDocumentValidator[] | undefined,
@@ -818,7 +666,6 @@ export function validateEditorDocument(
   const surfaceIds = new Set<string>();
   const layerIds = new Set<string>();
   const objectIds = new Set<string>();
-  const allObjectIds = collectObjectIds(document);
   const viewIds = new Set<string>();
 
   validateDocumentConfig(diagnostics, input, document);
@@ -921,12 +768,6 @@ export function validateEditorDocument(
             path: `${objectPath}.frame`,
           });
         }
-        validateObjectDragConstraints(
-          diagnostics,
-          object,
-          objectPath,
-          allObjectIds,
-        );
         validateEffects(diagnostics, object.effects, objectPath, options);
         runValidators(diagnostics, options.validators, {
           document,

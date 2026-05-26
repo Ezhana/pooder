@@ -6,6 +6,7 @@ import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
 import { ImagePlacementCapabilityExtension } from "./extensions/image";
+import { InteractionCapabilityExtension } from "./extensions/interaction";
 import { MirrorCapabilityExtension } from "./extensions/mirror";
 import { SceneExportCapabilityExtension } from "./extensions/scene-export";
 
@@ -40,6 +41,9 @@ export const createImagePlacementCapability = (
 export const createImageMaskCapability = (
   options?: ConstructorParameters<typeof ImageMaskCapabilityExtension>[0],
 ) => new ImageMaskCapabilityExtension(options);
+
+export const createInteractionCapability = () =>
+  new InteractionCapabilityExtension();
 
 export const createMirrorCapability = (
   options?: ConstructorParameters<typeof MirrorCapabilityExtension>[0],

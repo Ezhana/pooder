@@ -8,11 +8,7 @@ import type {
   VisibilityEvalContext,
   VisibilityExpr,
 } from "./render";
-import type {
-  DragConstraintMode,
-  DragConstraintTarget,
-  GeometryRect,
-} from "./interaction";
+import type { ConstraintSpec } from "./constraint-resolver";
 import type { SessionScope } from "./workflow-session";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
@@ -81,28 +77,17 @@ export interface RenderIntentInteractionSessionAspect {
   payload?: Record<string, unknown>;
 }
 
-export type RenderIntentDragConstraint =
-  | {
-      type: "rect";
-      rect: GeometryRect;
-      mode?: DragConstraintMode;
-      target?: DragConstraintTarget;
-    }
-  | {
-      type: "object";
-      objectId: string;
-      source?: "frame";
-      mode?: DragConstraintMode;
-      target?: DragConstraintTarget;
-      fallbackFrame: GeometryRect;
-    };
+export interface RenderIntentInteractionConstraint {
+  when?: VisibilityExpr;
+  spec: ConstraintSpec;
+}
 
 export interface RenderIntentInteractionAspect {
   session?: RenderIntentInteractionSessionAspect;
   imagePlacement?: Record<string, unknown>;
-  dragConstraints?: readonly RenderIntentDragConstraint[];
-  selectable?: boolean;
-  evented?: boolean;
+  enabled?: boolean;
+  when?: VisibilityExpr;
+  constraints?: readonly RenderIntentInteractionConstraint[];
   locked?: boolean;
 }
 
@@ -189,6 +174,7 @@ export interface RenderGraphNode {
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
+  interaction?: RenderIntentInteractionAspect;
   visibility?: VisibilityExpr;
   visible: boolean;
   tags: string[];
@@ -866,12 +852,6 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     transform: draft.placement?.transform,
     props: {
       ...(draft.props ?? {}),
-      ...(typeof draft.interaction?.selectable === "boolean"
-        ? { selectable: draft.interaction.selectable }
-        : {}),
-      ...(typeof draft.interaction?.evented === "boolean"
-        ? { evented: draft.interaction.evented }
-        : {}),
     },
     data: {
       ...(draft.data ?? {}),
@@ -884,14 +864,12 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       ...(draft.interaction?.imagePlacement
         ? { imagePlacement: draft.interaction.imagePlacement }
         : {}),
-      ...(draft.interaction?.dragConstraints
-        ? { dragConstraints: draft.interaction.dragConstraints }
-        : {}),
       ...(draft.interaction?.session
         ? { session: draft.interaction.session }
         : {}),
     },
     effects: draft.clipping?.effects?.map(cloneRecord) ?? [],
+    interaction: cloneRecord(draft.interaction),
     visibility: cloneRecord(draft.export?.visibility),
     visible: draft.export?.visible !== false,
     sortKey: {
@@ -948,7 +926,7 @@ function mergeDraft(
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
     clipping: mergeOptionalRecord(base.clipping, patch.clipping),
-    interaction: mergeOptionalRecord(base.interaction, patch.interaction),
+    interaction: mergeInteractionAspect(base.interaction, patch.interaction),
     export: mergeOptionalRecord(base.export, patch.export),
     ordering: { ...base.ordering, ...patch.ordering },
     props: mergeOptionalRecord(base.props, patch.props),
@@ -971,7 +949,7 @@ function mergePatch(
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
       placement: mergeOptionalRecord(clearedBase.placement, patch.placement),
       clipping: mergeOptionalRecord(clearedBase.clipping, patch.clipping),
-      interaction: mergeOptionalRecord(clearedBase.interaction, patch.interaction),
+      interaction: mergeInteractionAspect(clearedBase.interaction, patch.interaction),
       export: mergeOptionalRecord(clearedBase.export, patch.export),
       ordering: { ...clearedBase.ordering, ...(patch.ordering ?? {}) },
       props: mergeOptionalRecord(clearedBase.props, patch.props),
@@ -1057,6 +1035,27 @@ function getPathValue(target: unknown, path: string): unknown {
 
 function sameJsonValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function mergeInteractionAspect(
+  base: RenderIntentInteractionAspect | undefined,
+  patch: RenderIntentInteractionAspect | undefined,
+): RenderIntentInteractionAspect | undefined {
+  if (patch === undefined) return cloneRecord(base);
+  const constraints = [
+    ...(base?.constraints ?? []),
+    ...(patch.constraints ?? []),
+  ].map(cloneRecord);
+  const merged = {
+    ...((base ?? {}) as object),
+    ...((patch ?? {}) as object),
+  } as RenderIntentInteractionAspect;
+  if (constraints.length) {
+    merged.constraints = constraints;
+  } else {
+    delete merged.constraints;
+  }
+  return Object.keys(merged).length ? merged : undefined;
 }
 
 function mergeOptionalRecord<T>(

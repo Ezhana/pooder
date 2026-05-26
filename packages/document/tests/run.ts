@@ -133,14 +133,13 @@ function testNormalizeDefaults() {
     "interaction",
     "effect phase should normalize",
   );
-  assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.interaction,
-    undefined,
-    "objects without interaction should remain unchanged",
+  assert(
+    !("interaction" in (doc.surfaces[0].layers[0].objects?.[0] ?? {})),
+    "objects should not expose legacy interaction fields",
   );
 }
 
-function testNormalizeObjectInteraction() {
+function testLegacyObjectInteractionIsIgnored() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
@@ -187,24 +186,21 @@ function testNormalizeObjectInteraction() {
   });
 
   const objects = doc.surfaces[0].layers[0].objects;
-  assertDeepEqual(
-    objects?.[0]?.interaction,
-    { selectable: true, evented: false, locked: true },
-    "valid interaction fields should normalize",
+  assert(
+    !("interaction" in (objects?.[0] ?? {})),
+    "legacy interaction fields should not be part of normalized document objects",
   );
-  assertEqual(
-    objects?.[1]?.interaction,
-    undefined,
-    "non-boolean interaction fields should be dropped",
+  assert(
+    !("interaction" in (objects?.[1] ?? {})),
+    "invalid legacy interaction fields should not be part of normalized document objects",
   );
-  assertEqual(
-    objects?.[2]?.interaction,
-    undefined,
-    "empty interaction should normalize to undefined",
+  assert(
+    !("interaction" in (objects?.[2] ?? {})),
+    "empty legacy interaction fields should not be part of normalized document objects",
   );
 }
 
-function testNormalizeObjectConstraints() {
+function testLegacyObjectConstraintsAreIgnored() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
@@ -256,74 +252,13 @@ function testNormalizeObjectConstraints() {
   });
 
   const objects = doc.surfaces[0].layers[0].objects;
-  assertDeepEqual(
-    objects?.[0]?.constraints,
-    {
-      drag: [
-        {
-          type: "rect",
-          rect: { x: 0, y: 0, width: 100, height: 100 },
-          mode: "contain",
-          target: "center",
-        },
-        { type: "object", objectId: "frame", source: "frame", mode: "contain" },
-      ],
-    },
-    "valid drag constraints should normalize and drop unknown fields",
-  );
-  assertEqual(
-    objects?.[1]?.constraints,
-    undefined,
-    "empty constraints should normalize to undefined",
-  );
-}
-
-function testObjectConstraintReferenceDiagnostics() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        layers: [
-          {
-            id: "artwork",
-            objects: [
-              {
-                id: "self",
-                type: "rect",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                constraints: {
-                  drag: [{ type: "object", objectId: "self" }],
-                },
-              },
-              {
-                id: "missing",
-                type: "rect",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                constraints: {
-                  drag: [{ type: "object", objectId: "absent" }],
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
   assert(
-    diagnostics.some(
-      (item) => item.code === "object-drag-constraint-self-reference",
-    ),
-    "self-referencing object constraints should be diagnosed",
+    !("constraints" in (objects?.[0] ?? {})),
+    "legacy object constraints should not be part of normalized document objects",
   );
   assert(
-    diagnostics.some(
-      (item) => item.code === "object-drag-constraint-object-missing",
-    ),
-    "missing object constraint references should be diagnosed",
+    !("constraints" in (objects?.[1] ?? {})),
+    "empty legacy constraints should not be part of normalized document objects",
   );
 }
 
@@ -583,6 +518,21 @@ function testKitEffectCapabilityResolution() {
     "pooder.kit.mirror",
     "mirror should resolve to kit capability",
   );
+  assertEqual(
+    resolveKitEditorDocumentEffectCapabilityId({ type: "interaction" }),
+    "pooder.kit.interaction",
+    "interaction should resolve to kit capability",
+  );
+  assertEqual(
+    resolveKitEditorDocumentEffectCapabilityId({ type: "constraint" }),
+    "pooder.kit.interaction",
+    "constraint should resolve to kit interaction capability",
+  );
+  assertEqual(
+    resolveKitEditorDocumentEffectCapabilityId({ type: "interaction-component" }),
+    undefined,
+    "legacy interaction-component should not resolve to a kit capability",
+  );
 
   const diagnostics = validateKitEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
@@ -602,7 +552,12 @@ function testKitEffectCapabilityResolution() {
                 frame: { x: 0, y: 0, width: 1, height: 1 },
                 width: 1,
                 height: 1,
-                effects: [{ type: "clip" }, { type: "mirror" }],
+                effects: [
+                  { type: "clip" },
+                  { type: "mirror" },
+                  { type: "interaction" },
+                  { type: "constraint" },
+                ],
               },
             ],
           },
@@ -671,9 +626,8 @@ function testRequirePolicyDiagnostics() {
 
 function main() {
   testNormalizeDefaults();
-  testNormalizeObjectInteraction();
-  testNormalizeObjectConstraints();
-  testObjectConstraintReferenceDiagnostics();
+  testLegacyObjectInteractionIsIgnored();
+  testLegacyObjectConstraintsAreIgnored();
   testV2ImagePlacementImageDoesNotRequireSource();
   testImageObjectDoesNotRequireSource();
   testV2DocumentIsRejected();

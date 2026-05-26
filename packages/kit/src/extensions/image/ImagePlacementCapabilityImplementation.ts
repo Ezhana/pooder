@@ -798,8 +798,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             payload.sessionProjections,
           ),
         },
-        evented: true,
-        selectable: false,
+        enabled: true,
       },
       data: {
         id: object.id,
@@ -1602,8 +1601,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           },
           ...(image
             ? {
-                selectable: false,
-                evented: true,
+                enabled: true,
               }
             : {}),
         },
@@ -1771,8 +1769,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         },
         ...(image
           ? {
-              selectable: false,
-              evented: true,
+              enabled: true,
             }
           : {}),
       },

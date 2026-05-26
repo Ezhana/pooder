@@ -68,6 +68,7 @@ import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   type ConfigurableVisualCapabilityApi,
 } from "../src/extensions/configurable-visual";
+import { INTERACTION_CAPABILITY_ID } from "../src/extensions/interaction";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
 import { listLegacyCommandBridges } from "../src/extensions/legacyCommandBridge";
@@ -75,6 +76,7 @@ import {
   normalizePointInGeometry,
   resolveFeaturePosition,
 } from "../src/extensions/featureCoordinates";
+import { createPaperPathGeometrySnapshot } from "../src/extensions/geometry";
 import {
   FEATURE_CAPABILITY_ID,
   createFeatureCapabilityDefinition,
@@ -88,6 +90,7 @@ import {
   createConfigurableVisualCapability,
   createImageMaskCapability,
   createImagePlacementCapability,
+  createInteractionCapability,
   createMirrorCapability,
   createSceneExportCapability,
 } from "../src/factories";
@@ -100,7 +103,11 @@ import {
   CANVAS_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  containsGeometryPoint,
   evaluateVisibilityExpr,
+  findNearestGeometryPoint,
+  getGeometryBounds,
+  sampleGeometryPoint,
 } from "@pooder/core";
 import type {
   SceneLayoutSnapshot,
@@ -142,6 +149,42 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   if (actualJson !== expectedJson) {
     throw new Error(`${message} (expected ${expectedJson}, got ${actualJson})`);
   }
+}
+
+async function testPaperPathGeometryProviderUtilities() {
+  const snapshot = createPaperPathGeometrySnapshot({
+    pathData: "M 0 0 L 100 0 L 100 100 Z",
+    ref: { sourceId: "paper", geometryId: "triangle" },
+    space: "scene",
+  });
+  assertDeepEqual(
+    getGeometryBounds(snapshot),
+    { left: 0, top: 0, width: 100, height: 100 },
+    "paper path geometry should expose bounds through core utilities",
+  );
+  assertDeepEqual(
+    findNearestGeometryPoint(snapshot, { x: 50, y: 10 }),
+    { x: 50, y: 0 },
+    "paper path geometry should expose nearest point through core utilities",
+  );
+  assertEqual(
+    containsGeometryPoint(snapshot, { x: 90, y: 10 }),
+    true,
+    "paper path geometry should expose containment through core utilities",
+  );
+  assertDeepEqual(
+    sampleGeometryPoint(snapshot, 0),
+    { x: 0, y: 0 },
+    "paper path geometry should expose sampling through core utilities",
+  );
+  const normal = snapshot.utilities?.normalAt?.(
+    { x: 50, y: 10 },
+    { snapshot },
+  );
+  assert(
+    Boolean(normal && Number.isFinite(normal.x) && Number.isFinite(normal.y)),
+    "paper path geometry should expose normals through core utilities",
+  );
 }
 
 const TEST_DOCUMENT_CONFIG = {
@@ -1261,6 +1304,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
   runtime.extensions.register(createConfigurableVisualCapability());
+  runtime.extensions.register(createInteractionCapability());
   runtime.extensions.register(createMirrorCapability());
   runtime.extensions.register(createSceneExportCapability());
   await runtime.extensions.flushActivation();
@@ -1291,6 +1335,10 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     runtime.extensions.getState(CONFIGURABLE_VISUAL_CAPABILITY_ID)?.state ===
       "active",
     "configurable visual capability factory should activate",
+  );
+  assert(
+    runtime.extensions.getState(INTERACTION_CAPABILITY_ID)?.state === "active",
+    "interaction capability factory should activate",
   );
   assert(
     runtime.extensions.getState(MIRROR_CAPABILITY_ID)?.state === "active",
@@ -1331,6 +1379,12 @@ function testCreateKitCapabilitiesForDocument() {
                   { type: "clip", payload: { source: { type: "dieline" } } },
                   { type: "configurable-visual" },
                   { type: "mirror" },
+                  { type: "interaction", phase: "interaction" },
+                  {
+                    type: "constraint",
+                    phase: "interaction",
+                    payload: { constraints: [{ type: "grid.snap" }] },
+                  },
                 ],
               },
             ],
@@ -1348,6 +1402,7 @@ function testCreateKitCapabilitiesForDocument() {
       FEATURE_CAPABILITY_ID,
       CONFIGURABLE_VISUAL_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
+      INTERACTION_CAPABILITY_ID,
       MIRROR_CAPABILITY_ID,
     ].sort(),
     "document helper should create supported kit capabilities once and ignore background effects",
@@ -1579,13 +1634,18 @@ async function testApplyKitEditorDocument() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    false,
-    "document apply should make committed images non-selectable through graph props",
+    undefined,
+    "document apply should not write renderer-specific selectable props",
   );
   assertEqual(
     committedGraphNode?.props.evented,
+    undefined,
+    "document apply should not write renderer-specific evented props",
+  );
+  assertEqual(
+    committedGraphNode?.interaction?.enabled,
     true,
-    "document apply should keep committed images clickable through graph props",
+    "document apply should mark committed images interactive declaratively",
   );
   assertDeepEqual(
     {
@@ -1993,10 +2053,9 @@ async function testApplyKitEditorDocumentObjectInteraction() {
     result.ok,
     `document interaction apply should succeed (${JSON.stringify(result.diagnostics)})`,
   );
-  assertDeepEqual(
-    result.document.surfaces[0].layers[0].objects?.[1]?.interaction,
-    { selectable: true, evented: true, locked: false },
-    "document interaction should remain on the normalized document",
+  assert(
+    !("interaction" in (result.document.surfaces[0].layers[0].objects?.[1] ?? {})),
+    "legacy object interaction should not remain on the normalized document",
   );
 
   const renderGraph = runtime.services
@@ -2013,13 +2072,13 @@ async function testApplyKitEditorDocumentObjectInteraction() {
 
   assertEqual(
     legacyLockedNode?.props.selectable,
-    false,
-    "missing interaction should keep legacy locked selectable behavior",
+    undefined,
+    "document objects should not write selectable props by default",
   );
   assertEqual(
     legacyLockedNode?.props.evented,
-    false,
-    "missing interaction should keep legacy locked evented behavior",
+    undefined,
+    "document objects should not write evented props by default",
   );
   assertEqual(
     legacyLockedNode?.data.locked,
@@ -2027,40 +2086,188 @@ async function testApplyKitEditorDocumentObjectInteraction() {
     "legacy locked should remain render graph locked data",
   );
   assertEqual(
-    explicitInteractionNode?.props.selectable,
-    true,
-    "interaction selectable should explicitly override object locked",
-  );
-  assertEqual(
-    explicitInteractionNode?.props.evented,
-    true,
-    "interaction evented should explicitly override object locked",
-  );
-  assertEqual(
-    explicitInteractionNode?.data.locked,
-    false,
-    "interaction locked should override object locked in render graph data",
-  );
-  assertEqual(
-    interactionLockedNode?.props.selectable,
-    false,
-    "interaction locked should drive selectable default",
-  );
-  assertEqual(
-    interactionLockedNode?.props.evented,
-    false,
-    "interaction locked should drive evented default",
+    explicitInteractionNode?.interaction,
+    undefined,
+    "legacy object interaction should not create render intent interaction",
   );
   assertEqual(
     interactionLockedNode?.data.locked,
-    true,
-    "interaction locked should enter render graph locked data",
+    false,
+    "legacy interaction.locked should not override object locked",
   );
 
   await runtime.dispose();
 }
 
-async function testApplyKitEditorDocumentDragConstraints() {
+async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
+  const runtime = new Pooder();
+  const document = {
+    version: 3,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "interaction-only",
+                type: "rect",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                effects: [
+                  {
+                    type: "interaction",
+                    phase: "interaction",
+                    payload: {
+                      enabled: true,
+                      when: {
+                        op: "sessionScopeActive",
+                        scope: { channel: "layout-edit" },
+                      },
+                    },
+                  },
+                ],
+              },
+              {
+                id: "constraint-only",
+                type: "rect",
+                frame: { x: 25, y: 0, width: 20, height: 20 },
+                effects: [
+                  {
+                    type: "constraint",
+                    phase: "interaction",
+                    payload: {
+                      constraints: [
+                        {
+                          type: "rect.contain",
+                          params: {
+                            rect: { left: 0, top: 0, width: 90, height: 90 },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+              {
+                id: "interactive-constrained",
+                type: "rect",
+                frame: { x: 50, y: 0, width: 20, height: 20 },
+                effects: [
+                  {
+                    type: "constraint",
+                    phase: "interaction",
+                    order: 2,
+                    payload: {
+                      when: { op: "activeToolIn", ids: ["move"] },
+                      constraints: [
+                        {
+                          type: "rect.contain",
+                          params: {
+                            rect: { left: 0, top: 0, width: 90, height: 90 },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                  {
+                    type: "interaction",
+                    phase: "interaction",
+                    order: 1,
+                    payload: { enabled: true },
+                  },
+                  {
+                    type: "constraint",
+                    phase: "interaction",
+                    order: 3,
+                    payload: {
+                      constraints: [
+                        {
+                          type: "grid.snap",
+                          when: { op: "contextTruthy", key: "snap.enabled" },
+                          params: { size: 5 },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  runtime.extensions.registerMany(createKitCapabilitiesForDocument(document));
+  await runtime.extensions.flushActivation();
+  const result = await applyKitEditorDocument(runtime, document);
+
+  assert(
+    result.ok,
+    `declarative interaction effects should apply (${JSON.stringify(result.diagnostics)})`,
+  );
+  const renderGraph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const nodes = renderGraph.layers.flatMap((layer) => layer.nodes);
+  assertDeepEqual(
+    nodes.find((node) => node.id === "interaction-only")?.interaction,
+    {
+      enabled: true,
+      when: {
+        op: "sessionScopeActive",
+        scope: { channel: "layout-edit" },
+      },
+    },
+    "interaction effect should compile to enabled/when",
+  );
+  assertDeepEqual(
+    nodes.find((node) => node.id === "constraint-only")?.interaction,
+    {
+      constraints: [
+        {
+          spec: {
+            type: "rect.contain",
+            params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+          },
+        },
+      ],
+    },
+    "constraint effect alone should not enable interaction",
+  );
+  assertDeepEqual(
+    nodes.find((node) => node.id === "interactive-constrained")?.interaction,
+    {
+      enabled: true,
+      constraints: [
+        {
+          when: { op: "activeToolIn", ids: ["move"] },
+          spec: {
+            type: "rect.contain",
+            params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+          },
+        },
+        {
+          when: { op: "contextTruthy", key: "snap.enabled" },
+          spec: { type: "grid.snap", params: { size: 5 } },
+        },
+      ],
+    },
+    "interaction and constraint effects should merge constraints in order",
+  );
+  assertEqual(
+    nodes.find((node) => node.id === "interactive-constrained")?.data
+      .interactionComponents,
+    undefined,
+    "declarative interaction should not emit legacy interaction components",
+  );
+
+  await runtime.dispose();
+}
+
+async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
     version: 3,
@@ -2074,34 +2281,25 @@ async function testApplyKitEditorDocumentDragConstraints() {
             id: "artwork",
             objects: [
               {
-                id: "frame",
+                id: "legacy",
                 type: "rect",
-                frame: { x: 0, y: 0, width: 80, height: 80 },
-              },
-              {
-                id: "constrained",
-                type: "rect",
-                frame: { x: 10, y: 10, width: 20, height: 20 },
-                constraints: {
-                  drag: [
-                    {
-                      type: "rect",
-                      rect: { x: 0, y: 0, width: 90, height: 90 },
-                      target: "frame",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                effects: [
+                  {
+                    type: "interaction-component",
+                    phase: "interaction",
+                    payload: {
+                      constraints: [
+                        {
+                          type: "rect.contain",
+                          params: {
+                            rect: { left: 0, top: 0, width: 90, height: 90 },
+                          },
+                        },
+                      ],
                     },
-                    {
-                      type: "object",
-                      objectId: "frame",
-                      source: "frame",
-                      target: "center",
-                    },
-                  ],
-                },
-              },
-              {
-                id: "unconstrained",
-                type: "rect",
-                frame: { x: 50, y: 50, width: 20, height: 20 },
+                  },
+                ],
               },
             ],
           },
@@ -2110,36 +2308,18 @@ async function testApplyKitEditorDocumentDragConstraints() {
     ],
   });
 
-  assert(
-    result.ok,
-    `document constraints apply should succeed (${JSON.stringify(result.diagnostics)})`,
-  );
-  const renderGraph = runtime.services
-    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
-    .getGraph();
-  const nodes = renderGraph.layers.flatMap((layer) => layer.nodes);
-  assertDeepEqual(
-    nodes.find((node) => node.id === "constrained")?.data.dragConstraints,
-    [
-      {
-        type: "rect",
-        rect: { left: 0, top: 0, width: 90, height: 90 },
-        target: "frame",
-      },
-      {
-        type: "object",
-        objectId: "frame",
-        source: "frame",
-        fallbackFrame: { left: 0, top: 0, width: 80, height: 80 },
-        target: "center",
-      },
-    ],
-    "drag constraints should compile into render graph node data",
-  );
   assertEqual(
-    nodes.find((node) => node.id === "unconstrained")?.data.dragConstraints,
-    undefined,
-    "objects without constraints should not carry drag constraint data",
+    result.ok,
+    false,
+    "legacy interaction-component effects should not be supported",
+  );
+  assert(
+    result.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === "effect-capability-required" &&
+        diagnostic.effectType === "interaction-component",
+    ),
+    "legacy interaction-component should require an explicit custom capability",
   );
 
   await runtime.dispose();
@@ -2921,13 +3101,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    false,
-    "completed placement committed image should be non-selectable through graph props",
+    undefined,
+    "completed placement should not write renderer-specific selectable props",
   );
   assertEqual(
     committedGraphNode?.props.evented,
+    undefined,
+    "completed placement should not write renderer-specific evented props",
+  );
+  assertEqual(
+    committedGraphNode?.interaction?.enabled,
     true,
-    "completed placement committed image should remain clickable through graph props",
+    "completed placement committed image should remain interactive declaratively",
   );
   assertDeepEqual(
     {
@@ -3008,13 +3193,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     resetGraphNode?.props.selectable,
-    false,
-    "resetting a reopened image session should keep committed images non-selectable",
+    undefined,
+    "resetting a reopened image session should not write selectable props",
   );
   assertEqual(
     resetGraphNode?.props.evented,
+    undefined,
+    "resetting a reopened image session should not write evented props",
+  );
+  assertEqual(
+    resetGraphNode?.interaction?.enabled,
     true,
-    "resetting a reopened image session should keep committed images clickable",
+    "resetting a reopened image session should keep committed images interactive declaratively",
   );
   assertDeepEqual(
     {
@@ -4129,9 +4319,9 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     "configurable visual image placement commit should keep a committed image in the render graph",
   );
   assertEqual(
-    committedGraphNode?.props.evented,
+    committedGraphNode?.interaction?.enabled,
     true,
-    "configurable visual image placement commit should keep the committed image clickable",
+    "configurable visual image placement commit should keep the committed image interactive declaratively",
   );
   assertEqual(
     evaluateVisibilityExpr(committedGraphNode?.visibility, {
@@ -4321,6 +4511,7 @@ async function main() {
   testBridgeSelection();
   testMaskOps();
   testEdgeScale();
+  await testPaperPathGeometryProviderUtilities();
   testFeaturePlacementProjection();
   testVisibilityDsl();
   testImageViewStateHelper();
@@ -4335,7 +4526,8 @@ async function main() {
   await testMirrorCapabilityDocumentEffectAndFacade();
   await testDocumentCompilerAndRuntimePatchUseSameMerge();
   await testApplyKitEditorDocumentObjectInteraction();
-  await testApplyKitEditorDocumentDragConstraints();
+  await testApplyKitEditorDocumentDeclarativeInteractionEffects();
+  await testApplyKitEditorDocumentRejectsInteractionComponentEffects();
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();

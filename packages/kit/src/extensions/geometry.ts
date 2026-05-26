@@ -1,4 +1,11 @@
 import paper from "paper";
+import type {
+  CoordinateSpace,
+  GeometryPathSnapshot,
+  GeometryPoint,
+  GeometryRect,
+  GeometryRef,
+} from "@pooder/core";
 import { pickExitIndex, scoreOutsideAbove } from "./bridgeSelection";
 import {
   DEFAULT_DIELINE_SHAPE,
@@ -848,4 +855,95 @@ export function getPathBounds(pathData: string): {
     width: bounds.width,
     height: bounds.height,
   };
+}
+
+export function createPaperPathGeometrySnapshot(options: {
+  ref?: GeometryRef;
+  pathData: string;
+  space?: CoordinateSpace;
+  metadata?: Record<string, unknown>;
+}): GeometryPathSnapshot {
+  const snapshot: GeometryPathSnapshot = {
+    kind: "path",
+    pathData: options.pathData,
+    ...(options.ref ? { ref: options.ref } : {}),
+    ...(options.space ? { space: options.space } : {}),
+    ...(options.metadata ? { metadata: { ...options.metadata } } : {}),
+    utilities: {
+      bounds: ({ snapshot: pathSnapshot }) =>
+        getPaperPathBounds(pathSnapshot.pathData),
+      nearestPoint: (point, { snapshot: pathSnapshot }) =>
+        getPaperPathNearestPoint(pathSnapshot.pathData, point)?.point ?? null,
+      contains: (point, { snapshot: pathSnapshot }) =>
+        withPaperPath(pathSnapshot.pathData, (path) =>
+          path.contains(new paper.Point(point.x, point.y)),
+        ) ?? false,
+      sample: (ratio, { snapshot: pathSnapshot }) =>
+        withPaperPath(pathSnapshot.pathData, (path) => {
+          const pathWithLength = path as paper.PathItem & {
+            length?: number;
+            getPointAt?(offset: number): paper.Point | null;
+          };
+          const length = Math.max(0, pathWithLength.length || 0);
+          const point = length > 0
+            ? pathWithLength.getPointAt?.(
+                Math.max(0, Math.min(1, ratio)) * length,
+              )
+            : null;
+          return point ? { x: point.x, y: point.y } : null;
+        }),
+      normalAt: (point, { snapshot: pathSnapshot }) =>
+        getPaperPathNearestPoint(pathSnapshot.pathData, point)?.normal ?? null,
+    },
+  };
+  const bounds = getPaperPathBounds(options.pathData);
+  return bounds ? { ...snapshot, bounds } : snapshot;
+}
+
+function getPaperPathBounds(pathData: string): GeometryRect | null {
+  return withPaperPath(pathData, (path) => ({
+    left: path.bounds.x,
+    top: path.bounds.y,
+    width: path.bounds.width,
+    height: path.bounds.height,
+  }));
+}
+
+function getPaperPathNearestPoint(
+  pathData: string,
+  point: GeometryPoint,
+): { point: GeometryPoint; normal?: GeometryPoint } | null {
+  return withPaperPath(pathData, (path) => {
+    const location = path.getNearestLocation(new paper.Point(point.x, point.y));
+    if (!location?.point) return null;
+    return {
+      point: { x: location.point.x, y: location.point.y },
+      normal: location.normal
+        ? { x: location.normal.x, y: location.normal.y }
+        : undefined,
+    };
+  });
+}
+
+function withPaperPath<T>(
+  pathData: string,
+  read: (path: paper.PathItem) => T,
+): T | null {
+  if (typeof pathData !== "string" || pathData.trim().length === 0) {
+    return null;
+  }
+  ensurePaper(1000, 1000);
+  const hasMultipleSubPaths = ((pathData.match(/[Mm]/g) || []).length ?? 0) > 1;
+  const path: paper.PathItem = hasMultipleSubPaths
+    ? new paper.CompoundPath(pathData)
+    : (() => {
+        const item = new paper.Path();
+        item.pathData = pathData;
+        return item;
+      })();
+  try {
+    return read(path);
+  } finally {
+    path.remove();
+  }
 }

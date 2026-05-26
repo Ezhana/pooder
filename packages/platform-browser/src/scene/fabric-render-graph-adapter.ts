@@ -1,17 +1,22 @@
 import {
+  CONSTRAINT_RESOLVER_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  computeDragInteraction,
+  WORKBENCH_SERVICE,
   evaluateVisibilityExpr,
   type CanvasService,
-  type DragInteractionConstraint,
+  type ConstraintResolverCapability,
+  type ConstraintSpec,
   type GeometryRect,
+  type GeometrySourceCapability,
+  type GeometrySourceProvider,
   type RenderEffectSpec,
   type RenderGraph,
   type RenderGraphLayer,
   type RenderGraphNode,
-  type RenderIntentDragConstraint,
+  type RenderIntentInteractionConstraint,
   type RenderObjectSpec,
   type SceneElement,
   type SceneLayer,
@@ -22,6 +27,7 @@ import {
   type VisibilityLayerState,
   type SessionService,
   type RenderIntentService,
+  type WorkbenchService,
 } from "@pooder/core";
 import type {
   FabricRenderTargetClipEffect,
@@ -54,12 +60,17 @@ type FabricRenderTargetCanvasService = CanvasService & {
 export class FabricRenderGraphAdapter implements Service {
   private renderIntentService?: RenderIntentService;
   private sceneService?: SceneService;
+  private geometrySource?: GeometrySourceCapability;
+  private constraintResolver?: ConstraintResolverCapability;
+  private workbenchService?: WorkbenchService;
   private canvasService?: FabricRenderTargetCanvasService;
   private sessionService?: SessionService;
   private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
   private sceneSubscription?: { dispose(): void };
   private canvasObjectMovingHandler?: (event?: any) => void;
+  private canvasObjectModifiedHandler?: (event?: any) => void;
+  private geometrySourceDisposable?: { dispose(): void };
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
   private syncGeneration = 0;
@@ -77,6 +88,9 @@ export class FabricRenderGraphAdapter implements Service {
     this.sceneSubscription?.dispose();
     this.renderIntentService = context.get(RENDER_INTENT_SERVICE);
     this.sceneService = context.get(SCENE_SERVICE);
+    this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
+    this.constraintResolver = context.get(CONSTRAINT_RESOLVER_SERVICE);
+    this.workbenchService = context.get(WORKBENCH_SERVICE);
     this.canvasService = context.get(CANVAS_SERVICE) as
       | FabricRenderTargetCanvasService
       | undefined;
@@ -98,7 +112,17 @@ export class FabricRenderGraphAdapter implements Service {
     this.canvasObjectMovingHandler = (event?: any) => {
       this.handleRenderGraphObjectMoving(event?.target);
     };
+    this.canvasObjectModifiedHandler = (event?: any) => {
+      void this.handleRenderGraphObjectModified(event?.target);
+    };
     this.canvasService.onCanvasEvent("object:moving", this.canvasObjectMovingHandler);
+    this.canvasService.onCanvasEvent(
+      "object:modified",
+      this.canvasObjectModifiedHandler,
+    );
+    this.geometrySourceDisposable = this.geometrySource?.registerSource(
+      this.createRenderGraphGeometrySource(),
+    );
     this.attachRuntimeVisibilityEvents();
     this.requestSync();
   }
@@ -111,13 +135,25 @@ export class FabricRenderGraphAdapter implements Service {
         this.canvasObjectMovingHandler,
       );
     }
+    if (this.canvasObjectModifiedHandler) {
+      this.canvasService?.offCanvasEvent(
+        "object:modified",
+        this.canvasObjectModifiedHandler,
+      );
+    }
+    this.geometrySourceDisposable?.dispose();
     this.graphSubscription?.dispose();
     this.sceneSubscription?.dispose();
     this.graphSubscription = undefined;
     this.sceneSubscription = undefined;
     this.canvasObjectMovingHandler = undefined;
+    this.canvasObjectModifiedHandler = undefined;
+    this.geometrySourceDisposable = undefined;
     this.renderIntentService = undefined;
     this.sceneService = undefined;
+    this.geometrySource = undefined;
+    this.constraintResolver = undefined;
+    this.workbenchService = undefined;
     this.canvasService = undefined;
     this.sessionService = undefined;
     this.eventBus = undefined;
@@ -194,6 +230,7 @@ export class FabricRenderGraphAdapter implements Service {
     if (!eventBus) return;
     eventBus.on("session:change", this.onRuntimeVisibilityChange);
     eventBus.on("scene:layout:change", this.onRuntimeVisibilityChange);
+    eventBus.on("tool:switch", this.onRuntimeVisibilityChange);
   }
 
   private detachRuntimeVisibilityEvents() {
@@ -201,6 +238,7 @@ export class FabricRenderGraphAdapter implements Service {
     if (!eventBus) return;
     eventBus.off("session:change", this.onRuntimeVisibilityChange);
     eventBus.off("scene:layout:change", this.onRuntimeVisibilityChange);
+    eventBus.off("tool:switch", this.onRuntimeVisibilityChange);
   }
 
   private async runSyncLoop() {
@@ -234,7 +272,7 @@ export class FabricRenderGraphAdapter implements Service {
         });
 
         if (!evaluateVisibilityExpr(node.visibility, visibility)) return;
-        const spec = this.toRenderObjectSpec(layer, node);
+        const spec = this.toRenderObjectSpec(layer, node, visibility);
         if (!spec) return;
         items.push({
           key: node.id,
@@ -281,27 +319,49 @@ export class FabricRenderGraphAdapter implements Service {
     if (!canvas || target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) {
       return;
     }
-    const dragConstraints = normalizeRenderDragConstraints(
-      target.data?.dragConstraints,
-      (objectId) => this.resolveLiveObjectFrame(objectId),
-    );
-    if (!dragConstraints.length) return;
+    if (target.data?.interactionEnabled !== true) return;
+    const constraints = normalizeConstraintSpecs(target.data?.interactionConstraints);
+    if (!constraints.length) return;
 
     const frame = this.getTargetSceneBounds(target);
     if (!frame) return;
-    const result = computeDragInteraction({
-      frame,
-      proposedFrame: frame,
-      constraints: dragConstraints,
+    const resolved = this.requireConstraintResolver().resolve({
+      transform: { frame },
+      constraints,
+      coordinateSpace: "scene",
+      metadata: {
+        renderIntentId: target.data?.renderIntentId,
+        subjectId: target.data?.subjectId,
+      },
     });
-    const dx = canvas.toScreenLength(result.frame.left - frame.left);
-    const dy = canvas.toScreenLength(result.frame.top - frame.top);
+    const resultFrame = resolved.result.frame;
+    if (!resultFrame) return;
+    const dx = canvas.toScreenLength(resultFrame.left - frame.left);
+    const dy = canvas.toScreenLength(resultFrame.top - frame.top);
     if (dx === 0 && dy === 0) return;
     target.set?.({
       left: finiteNumber(target.left, 0) + dx,
       top: finiteNumber(target.top, 0) + dy,
     });
     target.setCoords?.();
+  }
+
+  private handleRenderGraphObjectModified(target: any) {
+    if (
+      target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET ||
+      target.data?.interactionEnabled !== true
+    ) {
+      return;
+    }
+    const frame = this.getTargetSceneBounds(target);
+    if (!frame) return;
+    this.eventBus?.emit("render-graph:object-transform", {
+      renderIntentId: target.data?.renderIntentId ?? target.data?.renderNodeId,
+      subjectId: target.data?.subjectId ?? target.data?.subject?.objectId,
+      layerId: target.data?.layerId,
+      surfaceId: target.data?.subject?.surfaceId,
+      transform: { frame },
+    });
   }
 
   private resolveLiveObjectFrame(objectId: string): GeometryRect | null {
@@ -342,6 +402,50 @@ export class FabricRenderGraphAdapter implements Service {
     };
   }
 
+  private createRenderGraphGeometrySource(): GeometrySourceProvider {
+    return {
+      sourceId: "render-graph",
+      getGeometry: (ref) => {
+        const rect = this.resolveLiveObjectFrame(ref.geometryId);
+        return rect
+          ? {
+              kind: "rect",
+              ref,
+              space: "scene",
+              rect,
+            }
+          : null;
+      },
+      listGeometries: () => {
+        const graph = this.renderIntentService?.getGraph();
+        if (!graph) return [];
+        return graph.layers.flatMap((layer) =>
+          layer.nodes.map((node) => ({
+            ref: {
+              sourceId: "render-graph",
+              geometryId: node.subjectId,
+            },
+            kind: "rect" as const,
+            space: node.coordinateSpace,
+            metadata: {
+              renderIntentId: node.id,
+              layerId: layer.id,
+            },
+          })),
+        );
+      },
+    };
+  }
+
+  private requireConstraintResolver(): ConstraintResolverCapability {
+    if (!this.constraintResolver) {
+      throw new Error(
+        "[FabricRenderGraphAdapter] ConstraintResolverCapability is not initialized.",
+      );
+    }
+    return this.constraintResolver;
+  }
+
   private buildVisibilityContext(graph: RenderGraph) {
     const layers = new Map<string, VisibilityLayerState>();
     graph.layers.forEach((layer) => {
@@ -370,6 +474,7 @@ export class FabricRenderGraphAdapter implements Service {
     });
 
     return this.requireRenderIntentService().createVisibilityEvalContext({
+      activeToolId: this.workbenchService?.activeToolId ?? null,
       getLayerState: (layerId: string) => layers.get(layerId),
       isSessionActive: (sessionId: string) =>
         this.sessionService?.isSessionActive(sessionId) ?? false,
@@ -401,10 +506,30 @@ export class FabricRenderGraphAdapter implements Service {
   private toRenderObjectSpec(
     layer: RenderGraphLayer,
     node: RenderGraphNode,
+    visibility: ReturnType<FabricRenderGraphAdapter["buildVisibilityContext"]>,
   ): RenderObjectSpec | null {
+    const hasDeclarativeInteraction =
+      typeof node.interaction?.enabled === "boolean" ||
+      node.interaction?.when !== undefined;
+    const interactionEnabled =
+      node.interaction?.enabled === true &&
+      evaluateVisibilityExpr(node.interaction.when, visibility);
+    const selectable = hasDeclarativeInteraction
+      ? interactionEnabled
+      : node.props.selectable === true;
+    const evented = hasDeclarativeInteraction
+      ? interactionEnabled
+      : typeof node.props.evented === "boolean"
+        ? node.props.evented
+        : selectable;
+    const interactionConstraints = interactionEnabled
+      ? normalizeRenderInteractionConstraints(node.interaction?.constraints, visibility)
+      : [];
     const commonProps = {
       ...node.props,
       ...this.resolvePlacementProps(node),
+      selectable,
+      evented,
       visible: layer.visible && node.visible,
     };
     const commonData = {
@@ -415,6 +540,10 @@ export class FabricRenderGraphAdapter implements Service {
       subjectId: node.subjectId,
       exportKeys: node.exportKeys,
       tags: node.tags,
+      interactionEnabled,
+      ...(interactionConstraints.length
+        ? { interactionConstraints }
+        : {}),
     };
 
     if (node.type === "image") {
@@ -583,35 +712,40 @@ function finiteNumber(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function normalizeRenderDragConstraints(
+function normalizeRenderInteractionConstraints(
   value: unknown,
-  resolveObjectFrame: (objectId: string) => GeometryRect | null,
-): DragInteractionConstraint[] {
+  visibility: ReturnType<FabricRenderGraphAdapter["buildVisibilityContext"]>,
+): ConstraintSpec[] {
   if (!Array.isArray(value)) return [];
   return value
-    .map((constraint): DragInteractionConstraint | null => {
-      const item = constraint as Partial<RenderIntentDragConstraint>;
-      if (item.type === "rect" && item.rect) {
-        return {
-          rect: item.rect,
-          ...(item.mode ? { mode: item.mode } : {}),
-          ...(item.target ? { target: item.target } : {}),
-        };
-      }
-      if (item.type !== "object") return null;
-      const objectId = String(item.objectId || "").trim();
-      if (!objectId) return null;
-      const rect = resolveObjectFrame(objectId) ?? item.fallbackFrame;
-      if (!rect) return null;
-      return {
-        rect,
-        ...(item.mode ? { mode: item.mode } : {}),
-        ...(item.target ? { target: item.target } : {}),
-      };
+    .map((constraint): ConstraintSpec | null => {
+      if (!isRecord(constraint)) return null;
+      const item = constraint as Partial<RenderIntentInteractionConstraint>;
+      if (!evaluateVisibilityExpr(item.when, visibility)) return null;
+      return normalizeConstraintSpec(item.spec);
     })
-    .filter((constraint): constraint is DragInteractionConstraint =>
-      Boolean(constraint),
-    );
+    .filter((constraint): constraint is ConstraintSpec => Boolean(constraint));
+}
+
+function normalizeConstraintSpecs(value: unknown): ConstraintSpec[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => normalizeConstraintSpec(item))
+    .filter((item): item is ConstraintSpec => Boolean(item));
+}
+
+function normalizeConstraintSpec(value: unknown): ConstraintSpec | null {
+  if (!isRecord(value)) return null;
+  const type = String(value.type || "").trim();
+  if (!type) return null;
+  return {
+    type,
+    ...(value.source !== undefined
+      ? { source: value.source as ConstraintSpec["source"] }
+      : {}),
+    ...(typeof value.mode === "string" ? { mode: value.mode } : {}),
+    ...(isRecord(value.params) ? { params: { ...value.params } } : {}),
+  };
 }
 
 function normalizeIds(values: unknown): string[] {
