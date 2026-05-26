@@ -17,7 +17,7 @@ import {
   type RenderIntentInteractionConstraint,
   type RenderIntentPatch,
   type RenderIntentSubject,
-  type VisibilityExpr,
+  type RuntimeConditionExpr,
 } from "@pooder/core";
 import type { EditorEffect } from "@pooder/document/kit";
 
@@ -25,11 +25,11 @@ export const INTERACTION_CAPABILITY_ID = "pooder.kit.interaction";
 
 interface InteractionEffectPayload {
   enabled?: boolean;
-  when?: VisibilityExpr;
+  enabledWhen?: RuntimeConditionExpr;
 }
 
 interface ConstraintEffectPayload {
-  when?: VisibilityExpr;
+  activeWhen?: RuntimeConditionExpr;
   constraints: unknown[];
 }
 
@@ -100,7 +100,7 @@ export class InteractionCapabilityExtension implements ExtensionDefinition {
       id,
       interaction: {
         enabled: payload.enabled ?? true,
-        ...(payload.when ? { when: payload.when } : {}),
+        ...(payload.enabledWhen ? { enabledWhen: payload.enabledWhen } : {}),
       },
     };
   }
@@ -112,7 +112,7 @@ export class InteractionCapabilityExtension implements ExtensionDefinition {
     if (!id) return;
     const payload = normalizeConstraintPayload(context.effect.payload);
     const constraints = payload.constraints
-      .map((constraint) => normalizeConstraint(constraint, payload.when))
+      .map((constraint) => normalizeConstraint(constraint, payload.activeWhen))
       .filter(
         (constraint): constraint is RenderIntentInteractionConstraint =>
           Boolean(constraint),
@@ -175,24 +175,24 @@ function normalizeInteractionPayload(value: unknown): InteractionEffectPayload {
   if (!isRecord(value)) return {};
   return {
     enabled: typeof value.enabled === "boolean" ? value.enabled : undefined,
-    when: normalizeVisibilityExpr(value.when),
+    enabledWhen: normalizeRuntimeCondition(value.enabledWhen),
   };
 }
 
 function normalizeConstraintPayload(value: unknown): ConstraintEffectPayload {
   if (!isRecord(value)) return { constraints: [] };
   return {
-    when: normalizeVisibilityExpr(value.when),
+    activeWhen: normalizeRuntimeCondition(value.activeWhen),
     constraints: Array.isArray(value.constraints) ? value.constraints : [],
   };
 }
 
 function normalizeConstraint(
   value: unknown,
-  payloadWhen?: VisibilityExpr,
+  payloadActiveWhen?: RuntimeConditionExpr,
 ): RenderIntentInteractionConstraint | null {
   if (!isRecord(value)) return null;
-  const entryWhen = normalizeVisibilityExpr(value.when);
+  const entryActiveWhen = normalizeRuntimeCondition(value.activeWhen);
   const rawSpec = isRecord(value.spec) ? value.spec : value;
   if (!isRecord(rawSpec)) return null;
   const type = normalizeId(rawSpec.type);
@@ -207,23 +207,25 @@ function normalizeConstraint(
       ? { params: cloneRecord(rawSpec.params) }
       : {}),
   };
-  const when = combineVisibilityExprs(payloadWhen, entryWhen);
+  const activeWhen = combineRuntimeConditions(payloadActiveWhen, entryActiveWhen);
   return {
-    ...(when ? { when } : {}),
+    ...(activeWhen ? { activeWhen } : {}),
     spec,
   };
 }
 
-function combineVisibilityExprs(
-  first?: VisibilityExpr,
-  second?: VisibilityExpr,
-): VisibilityExpr | undefined {
+function combineRuntimeConditions(
+  first?: RuntimeConditionExpr,
+  second?: RuntimeConditionExpr,
+): RuntimeConditionExpr | undefined {
   if (first && second) return { op: "all", exprs: [first, second] };
   return first ?? second;
 }
 
-function normalizeVisibilityExpr(value: unknown): VisibilityExpr | undefined {
-  return isRecord(value) ? (cloneRecord(value) as VisibilityExpr) : undefined;
+function normalizeRuntimeCondition(
+  value: unknown,
+): RuntimeConditionExpr | undefined {
+  return isRecord(value) ? (cloneRecord(value) as RuntimeConditionExpr) : undefined;
 }
 
 function normalizeId(value: unknown): string {

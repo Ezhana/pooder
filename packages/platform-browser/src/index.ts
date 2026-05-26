@@ -7,4 +7,4 @@ export * from "./render-spec";
 export * from "./scene/fabric-render-graph-adapter";
 export * from "./scene/scene-layout-model";
 export * from "./tokens";
-export * from "./visibility";
+export * from "./runtime-condition";

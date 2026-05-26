@@ -51,7 +51,7 @@ export interface RenderObjectSpec {
   space?: RenderCoordinateSpace;
   exportKeys?: readonly string[];
   layout?: RenderObjectLayoutSpec;
-  visibility?: VisibilityExpr;
+  visibleWhen?: RuntimeConditionExpr;
 }
 
 export interface RenderPatternSpec {
@@ -62,32 +62,51 @@ export interface RenderPatternSpec {
   repetition?: "repeat";
 }
 
-export type LayerObjectCountComparator = ">" | ">=" | "==" | "<" | "<=";
+export type RuntimeConditionComparator = ">" | ">=" | "==" | "!=" | "<" | "<=";
 
-export type VisibilityExpr =
-  | { op: "const"; value: boolean }
-  | { op: "contextTruthy"; key: string }
-  | { op: "contextEquals"; key: string; value: unknown }
-  | { op: "activeToolIn"; ids: string[] }
-  | { op: "sessionActive"; sessionId: string }
-  | { op: "sessionScopeActive"; scope: Partial<SessionScope> }
-  | { op: "sessionFocused"; sessionId: string }
-  | { op: "anySessionActive"; scope?: Partial<SessionScope> }
-  | { op: "layerExists"; layerId: string }
+export type RuntimeConditionRef =
+  | { source: "context"; key: string }
+  | { source: "activeToolId" }
   | {
-      op: "layerObjectCount";
+      source: "workflowSession";
+      field: "active" | "focused";
+      sessionId: string;
+    }
+  | {
+      source: "workflowSession";
+      field: "scopeActive";
+      scope: Partial<SessionScope>;
+    }
+  | {
+      source: "workflowSession";
+      field: "anyActive";
+      scope?: Partial<SessionScope>;
+    }
+  | {
+      source: "renderLayer";
       layerId: string;
-      cmp: LayerObjectCountComparator;
+      field: "exists" | "objectCount" | "visibleObjectCount";
+    };
+
+export type RuntimeConditionExpr =
+  | { op: "const"; value: boolean }
+  | { op: "truthy"; ref: RuntimeConditionRef }
+  | { op: "equals"; ref: RuntimeConditionRef; value: unknown }
+  | { op: "in"; ref: RuntimeConditionRef; values: readonly unknown[] }
+  | {
+      op: "compare";
+      ref: RuntimeConditionRef;
+      cmp: RuntimeConditionComparator;
       value: number;
     }
-  | { op: "not"; expr: VisibilityExpr }
-  | { op: "all"; exprs: VisibilityExpr[] }
-  | { op: "any"; exprs: VisibilityExpr[] };
+  | { op: "not"; expr: RuntimeConditionExpr }
+  | { op: "all"; exprs: readonly RuntimeConditionExpr[] }
+  | { op: "any"; exprs: readonly RuntimeConditionExpr[] };
 
 export interface RenderClipPathEffectSpec {
   type: "clipPath";
   id?: string;
-  visibility?: VisibilityExpr;
+  activeWhen?: RuntimeConditionExpr;
   source: RenderObjectSpec;
   targetLayerIds?: string[];
   targetSubjectIds?: string[];
@@ -95,26 +114,26 @@ export interface RenderClipPathEffectSpec {
 
 export type RenderEffectSpec = RenderClipPathEffectSpec;
 
-export interface VisibilityLayerState {
+export interface RuntimeConditionLayerState {
   exists: boolean;
   objectCount: number;
   visibleObjectCount?: number;
 }
 
-export interface VisibilityEvalContext {
+export interface RuntimeConditionEvalContext {
   activeToolId?: string | null;
   contextValues?: Map<string, unknown> | Record<string, unknown>;
   isSessionActive?: (sessionId: string) => boolean;
   isSessionScopeActive?: (scope: Partial<SessionScope>) => boolean;
   isSessionFocused?: (sessionId: string) => boolean;
   hasAnyActiveSession?: (scope?: Partial<SessionScope>) => boolean;
-  layers?: Map<string, VisibilityLayerState>;
-  getLayerState?: (layerId: string) => VisibilityLayerState | undefined;
+  layers?: Map<string, RuntimeConditionLayerState>;
+  getLayerState?: (layerId: string) => RuntimeConditionLayerState | undefined;
   getContextValue?: (key: string) => unknown;
 }
 
-function readVisibilityContextValue(
-  context: VisibilityEvalContext,
+function readRuntimeConditionContextValue(
+  context: RuntimeConditionEvalContext,
   key: string,
 ): unknown {
   const normalizedKey = String(key || "").trim();
@@ -132,70 +151,102 @@ function readVisibilityContextValue(
     : undefined;
 }
 
-function readVisibilityLayerState(
-  context: VisibilityEvalContext,
+function readRuntimeConditionLayerState(
+  context: RuntimeConditionEvalContext,
   layerId: string,
-): VisibilityLayerState | undefined {
+): RuntimeConditionLayerState | undefined {
   if (context.getLayerState) {
     return context.getLayerState(layerId);
   }
   return context.layers?.get(layerId);
 }
 
-export function evaluateVisibilityExpr(
-  expr: VisibilityExpr | undefined,
-  context: VisibilityEvalContext,
+function readRuntimeConditionRefValue(
+  ref: RuntimeConditionRef,
+  context: RuntimeConditionEvalContext,
+): unknown {
+  switch (ref.source) {
+    case "context":
+      return readRuntimeConditionContextValue(context, ref.key);
+    case "activeToolId":
+      return context.activeToolId ?? undefined;
+    case "workflowSession":
+      switch (ref.field) {
+        case "active":
+          return context.isSessionActive?.(ref.sessionId) ?? false;
+        case "focused":
+          return context.isSessionFocused?.(ref.sessionId) ?? false;
+        case "scopeActive":
+          return context.isSessionScopeActive?.(ref.scope) ?? false;
+        case "anyActive":
+          return context.hasAnyActiveSession?.(ref.scope) ?? false;
+        default:
+          return undefined;
+      }
+    case "renderLayer": {
+      const layer = readRuntimeConditionLayerState(context, ref.layerId);
+      if (ref.field === "exists") return layer?.exists ?? false;
+      if (ref.field === "objectCount") return layer?.objectCount;
+      return layer?.visibleObjectCount;
+    }
+    default:
+      return undefined;
+  }
+}
+
+function compareRuntimeConditionValue(
+  actual: unknown,
+  cmp: RuntimeConditionComparator,
+  expected: number,
+): boolean {
+  if (typeof actual !== "number" || !Number.isFinite(actual)) return false;
+  switch (cmp) {
+    case ">":
+      return actual > expected;
+    case ">=":
+      return actual >= expected;
+    case "==":
+      return actual === expected;
+    case "!=":
+      return actual !== expected;
+    case "<":
+      return actual < expected;
+    case "<=":
+      return actual <= expected;
+    default:
+      return false;
+  }
+}
+
+export function evaluateRuntimeCondition(
+  expr: RuntimeConditionExpr | undefined,
+  context: RuntimeConditionEvalContext,
 ): boolean {
   if (!expr) return true;
 
   switch (expr.op) {
     case "const":
       return Boolean(expr.value);
-    case "contextTruthy":
-      return Boolean(readVisibilityContextValue(context, expr.key));
-    case "contextEquals":
-      return Object.is(
-        readVisibilityContextValue(context, expr.key),
+    case "truthy":
+      return Boolean(readRuntimeConditionRefValue(expr.ref, context));
+    case "equals":
+      return Object.is(readRuntimeConditionRefValue(expr.ref, context), expr.value);
+    case "in":
+      return expr.values.some((value) =>
+        Object.is(readRuntimeConditionRefValue(expr.ref, context), value),
+      );
+    case "compare":
+      return compareRuntimeConditionValue(
+        readRuntimeConditionRefValue(expr.ref, context),
+        expr.cmp,
         expr.value,
       );
-    case "activeToolIn":
-      return Boolean(
-        context.activeToolId && expr.ids.includes(context.activeToolId),
-      );
-    case "sessionActive":
-      return Boolean(context.isSessionActive?.(expr.sessionId));
-    case "sessionScopeActive":
-      return Boolean(context.isSessionScopeActive?.(expr.scope));
-    case "sessionFocused":
-      return Boolean(context.isSessionFocused?.(expr.sessionId));
-    case "anySessionActive":
-      return Boolean(context.hasAnyActiveSession?.(expr.scope));
-    case "layerExists":
-      return Boolean(readVisibilityLayerState(context, expr.layerId)?.exists);
-    case "layerObjectCount": {
-      const count =
-        readVisibilityLayerState(context, expr.layerId)?.objectCount ?? 0;
-      switch (expr.cmp) {
-        case ">":
-          return count > expr.value;
-        case ">=":
-          return count >= expr.value;
-        case "==":
-          return count === expr.value;
-        case "<":
-          return count < expr.value;
-        case "<=":
-          return count <= expr.value;
-        default:
-          return false;
-      }
-    }
     case "not":
-      return !evaluateVisibilityExpr(expr.expr, context);
+      return !evaluateRuntimeCondition(expr.expr, context);
     case "all":
-      return expr.exprs.every((item) => evaluateVisibilityExpr(item, context));
+      return expr.exprs.every((item) => evaluateRuntimeCondition(item, context));
     case "any":
-      return expr.exprs.some((item) => evaluateVisibilityExpr(item, context));
+      return expr.exprs.some((item) => evaluateRuntimeCondition(item, context));
     default:
       return true;
   }

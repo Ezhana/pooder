@@ -104,7 +104,7 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   containsGeometryPoint,
-  evaluateVisibilityExpr,
+  evaluateRuntimeCondition,
   findNearestGeometryPoint,
   getGeometryBounds,
   sampleGeometryPoint,
@@ -193,12 +193,15 @@ const TEST_DOCUMENT_CONFIG = {
   "scene.viewportFocusFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
 };
 
-function imagePlacementCommittedVisibility(placementId: string) {
+function imagePlacementCommittedVisibleWhen(placementId: string) {
   return {
     op: "not",
     expr: {
-      op: "contextTruthy",
-      key: `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-placement.${placementId}`,
+      op: "truthy",
+      ref: {
+        source: "context",
+        key: `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-placement.${placementId}`,
+      },
     },
   };
 }
@@ -632,7 +635,7 @@ function testFeaturePlacementProjection() {
   );
 }
 
-function testVisibilityDsl() {
+function testRuntimeConditionDsl() {
   const layers = new Map([
     ["measurement-overlay", { exists: true, objectCount: 2 }],
     ["feature-overlay", { exists: true, objectCount: 0 }],
@@ -649,58 +652,100 @@ function testVisibilityDsl() {
   };
 
   assert(
-    evaluateVisibilityExpr({ op: "const", value: true }, context) === true,
+    evaluateRuntimeCondition({ op: "const", value: true }, context) === true,
     "const true failed",
   );
   assert(
-    evaluateVisibilityExpr({ op: "const", value: false }, context) === false,
+    evaluateRuntimeCondition({ op: "const", value: false }, context) === false,
     "const false failed",
   );
   assert(
-    evaluateVisibilityExpr(
-      { op: "activeToolIn", ids: ["pooder.kit.image"] },
+    evaluateRuntimeCondition(
+      {
+        op: "in",
+        ref: { source: "activeToolId" },
+        values: ["pooder.kit.image"],
+      },
       context,
     ) === true,
-    "activeToolIn true failed",
+    "activeToolId in true failed",
   );
   assert(
-    evaluateVisibilityExpr(
-      { op: "activeToolIn", ids: ["pooder.kit.measurement"] },
+    evaluateRuntimeCondition(
+      {
+        op: "in",
+        ref: { source: "activeToolId" },
+        values: ["pooder.kit.measurement"],
+      },
       context,
     ) === false,
-    "activeToolIn false failed",
+    "activeToolId in false failed",
   );
   assert(
-    evaluateVisibilityExpr(
-      { op: "sessionActive", sessionId: "session.feature" },
+    evaluateRuntimeCondition(
+      {
+        op: "truthy",
+        ref: {
+          source: "workflowSession",
+          field: "active",
+          sessionId: "session.feature",
+        },
+      },
       context,
     ) === true,
-    "sessionActive true failed",
+    "workflowSession active true failed",
   );
   assert(
-    evaluateVisibilityExpr(
-      { op: "sessionActive", sessionId: "session.measurement" },
+    evaluateRuntimeCondition(
+      {
+        op: "truthy",
+        ref: {
+          source: "workflowSession",
+          field: "active",
+          sessionId: "session.measurement",
+        },
+      },
       context,
     ) === false,
-    "sessionActive false failed",
+    "workflowSession active false failed",
   );
   assert(
-    evaluateVisibilityExpr({ op: "anySessionActive" }, context) === true,
-    "anySessionActive true failed",
-  );
-  assert(
-    evaluateVisibilityExpr(
-      { op: "layerExists", layerId: "measurement-overlay" },
+    evaluateRuntimeCondition(
+      {
+        op: "truthy",
+        ref: { source: "workflowSession", field: "anyActive" },
+      },
       context,
     ) === true,
-    "layerExists true failed",
+    "workflowSession anyActive true failed",
   );
   assert(
-    evaluateVisibilityExpr(
-      { op: "layerExists", layerId: "missing-layer" },
+    evaluateRuntimeCondition(
+      {
+        op: "truthy",
+        ref: {
+          source: "renderLayer",
+          layerId: "measurement-overlay",
+          field: "exists",
+        },
+      },
+      context,
+    ) === true,
+    "renderLayer exists true failed",
+  );
+  assert(
+    evaluateRuntimeCondition(
+      {
+        op: "truthy",
+        ref: {
+          source: "renderLayer",
+          layerId: "missing-layer",
+          field: "exists",
+        },
+      },
       context,
     ) === false,
-    "layerExists false failed",
+    "renderLayer exists false failed",
   );
 
   const comparisons: Array<{
@@ -716,36 +761,58 @@ function testVisibilityDsl() {
   ];
   comparisons.forEach((entry) => {
     assert(
-      evaluateVisibilityExpr(
+      evaluateRuntimeCondition(
         {
-          op: "layerObjectCount",
-          layerId: "measurement-overlay",
+          op: "compare",
+          ref: {
+            source: "renderLayer",
+            layerId: "measurement-overlay",
+            field: "objectCount",
+          },
           cmp: entry.cmp,
           value: entry.value,
         },
         context,
       ) === entry.expected,
-      `layerObjectCount ${entry.cmp} failed`,
+      `renderLayer objectCount ${entry.cmp} failed`,
     );
   });
 
   assert(
-    evaluateVisibilityExpr(
+    evaluateRuntimeCondition(
       {
         op: "not",
-        expr: { op: "activeToolIn", ids: ["pooder.kit.measurement"] },
+        expr: {
+          op: "in",
+          ref: { source: "activeToolId" },
+          values: ["pooder.kit.measurement"],
+        },
       },
       context,
     ) === true,
     "not failed",
   );
   assert(
-    evaluateVisibilityExpr(
+    evaluateRuntimeCondition(
       {
         op: "all",
         exprs: [
-          { op: "layerExists", layerId: "measurement-overlay" },
-          { op: "sessionScopeActive", scope: { channel: "feature" } },
+          {
+            op: "truthy",
+            ref: {
+              source: "renderLayer",
+              layerId: "measurement-overlay",
+              field: "exists",
+            },
+          },
+          {
+            op: "truthy",
+            ref: {
+              source: "workflowSession",
+              field: "scopeActive",
+              scope: { channel: "feature" },
+            },
+          },
         ],
       },
       context,
@@ -753,12 +820,23 @@ function testVisibilityDsl() {
     "all failed",
   );
   assert(
-    evaluateVisibilityExpr(
+    evaluateRuntimeCondition(
       {
         op: "any",
         exprs: [
-          { op: "layerExists", layerId: "missing-layer" },
-          { op: "activeToolIn", ids: ["pooder.kit.image"] },
+          {
+            op: "truthy",
+            ref: {
+              source: "renderLayer",
+              layerId: "missing-layer",
+              field: "exists",
+            },
+          },
+          {
+            op: "in",
+            ref: { source: "activeToolId" },
+            values: ["pooder.kit.image"],
+          },
         ],
       },
       context,
@@ -2122,9 +2200,13 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                     phase: "interaction",
                     payload: {
                       enabled: true,
-                      when: {
-                        op: "sessionScopeActive",
-                        scope: { channel: "layout-edit" },
+                      enabledWhen: {
+                        op: "truthy",
+                        ref: {
+                          source: "workflowSession",
+                          field: "scopeActive",
+                          scope: { channel: "layout-edit" },
+                        },
                       },
                     },
                   },
@@ -2161,7 +2243,11 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                     phase: "interaction",
                     order: 2,
                     payload: {
-                      when: { op: "activeToolIn", ids: ["move"] },
+                      activeWhen: {
+                        op: "in",
+                        ref: { source: "activeToolId" },
+                        values: ["move"],
+                      },
                       constraints: [
                         {
                           type: "rect.contain",
@@ -2186,7 +2272,10 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                       constraints: [
                         {
                           type: "grid.snap",
-                          when: { op: "contextTruthy", key: "snap.enabled" },
+                          activeWhen: {
+                            op: "truthy",
+                            ref: { source: "context", key: "snap.enabled" },
+                          },
                           params: { size: 5 },
                         },
                       ],
@@ -2216,12 +2305,16 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
     nodes.find((node) => node.id === "interaction-only")?.interaction,
     {
       enabled: true,
-      when: {
-        op: "sessionScopeActive",
-        scope: { channel: "layout-edit" },
+      enabledWhen: {
+        op: "truthy",
+        ref: {
+          source: "workflowSession",
+          field: "scopeActive",
+          scope: { channel: "layout-edit" },
+        },
       },
     },
-    "interaction effect should compile to enabled/when",
+    "interaction effect should compile to enabled/enabledWhen",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "constraint-only")?.interaction,
@@ -2243,14 +2336,21 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
       enabled: true,
       constraints: [
         {
-          when: { op: "activeToolIn", ids: ["move"] },
+          activeWhen: {
+            op: "in",
+            ref: { source: "activeToolId" },
+            values: ["move"],
+          },
           spec: {
             type: "rect.contain",
             params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
           },
         },
         {
-          when: { op: "contextTruthy", key: "snap.enabled" },
+          activeWhen: {
+            op: "truthy",
+            ref: { source: "context", key: "snap.enabled" },
+          },
           spec: { type: "grid.snap", params: { size: 5 } },
         },
       ],
@@ -2695,8 +2795,8 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
     RENDER_INTENT_SERVICE,
   );
-  renderIntentService.setVisibilityContextValue("show.hidden-helper", false);
-  renderIntentService.setVisibilityContextValue("show.visible-helper", true);
+  renderIntentService.setRuntimeConditionValue("show.hidden-helper", false);
+  renderIntentService.setRuntimeConditionValue("show.visible-helper", true);
   renderIntentService.setDocumentIntents([
     {
       id: "front-business-helper",
@@ -2765,7 +2865,10 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       },
       export: {
         tags: ["conditional-hidden-helper"],
-        visibility: { op: "contextTruthy", key: "show.hidden-helper" },
+        visibleWhen: {
+          op: "truthy",
+          ref: { source: "context", key: "show.hidden-helper" },
+        },
       },
       props: { width: 10, height: 10 },
     },
@@ -2785,7 +2888,10 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       },
       export: {
         tags: ["conditional-visible-helper"],
-        visibility: { op: "contextTruthy", key: "show.visible-helper" },
+        visibleWhen: {
+          op: "truthy",
+          ref: { source: "context", key: "show.visible-helper" },
+        },
       },
       props: { width: 10, height: 10 },
     },
@@ -2842,9 +2948,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     (node: any) => node.id === "image:placement",
   );
   assertDeepEqual(
-    committedImageNode?.visibility,
-    imagePlacementCommittedVisibility("placement"),
-    "committed image object should carry graph visibility while its working session is active",
+    committedImageNode?.visibleWhen,
+    imagePlacementCommittedVisibleWhen("placement"),
+    "committed image object should carry graph visibleWhen while its working session is active",
   );
   assertEqual(
     sessionScene?.renderable,
@@ -2923,12 +3029,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   assertEqual(
     conditionalHiddenProjection?.visible,
     false,
-    "image session should snapshot false visibility expressions onto projection elements",
+    "image session should snapshot false visibleWhen expressions onto projection elements",
   );
   assertEqual(
     conditionalVisibleProjection?.visible,
     true,
-    "image session should snapshot true visibility expressions onto projection elements",
+    "image session should snapshot true visibleWhen expressions onto projection elements",
   );
   assertEqual(
     crossSurfaceBusinessProjection,
@@ -3128,12 +3234,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "completed placement should expose generic committed image interaction data",
   );
   assertDeepEqual(
-    committedGraphNode?.visibility,
-    imagePlacementCommittedVisibility("placement"),
+    committedGraphNode?.visibleWhen,
+    imagePlacementCommittedVisibleWhen("placement"),
     "completed placement should declaratively hide the graph-backed committed image while editing",
   );
   assertEqual(
-    evaluateVisibilityExpr(committedGraphNode?.visibility, {
+    evaluateRuntimeCondition(committedGraphNode?.visibleWhen, {
       isSessionScopeActive: (scope) => sessions.hasActiveSession({ scope }),
     }),
     true,
@@ -3480,10 +3586,10 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     "multiple uploaded working images should render together before commit",
   );
   assert(
-    renderIntentService.getVisibilityContextValue(
+    renderIntentService.getRuntimeConditionValue(
       `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-placement.placement-a`,
     ) === true,
-    "placement-a committed visibility context should stay active while its working image exists",
+    "placement-a committed condition context should stay active while its working image exists",
   );
 
   await driver.beginSession("committed-placement");
@@ -3506,7 +3612,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     "resetting an edit session should discard uncommitted transform changes",
   );
   assert(
-    renderIntentService.getVisibilityContextValue(
+    renderIntentService.getRuntimeConditionValue(
       `${IMAGE_PLACEMENT_CAPABILITY_ID}.image-placement.active-placement.committed-placement`,
     ) !== true,
     "resetting an edit session should reveal the committed image again",
@@ -3710,7 +3816,7 @@ async function testEdgeDetectionCapabilityExtension() {
   await runtime.dispose();
 }
 
-async function testDielineOverlayVisibilityFollowsEditingSessions() {
+async function testDielineOverlayConditionFollowsEditingSessions() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
@@ -3740,7 +3846,7 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   };
 
   assertEqual(
-    evaluateVisibilityExpr(dielineNode?.visibility, context),
+    evaluateRuntimeCondition(dielineNode?.visibleWhen, context),
     true,
     "dieline overlay should be visible when no edit session is active",
   );
@@ -3750,7 +3856,7 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
     scope: { channel: "image-placement", subjectId: "placement" },
   });
   assertEqual(
-    evaluateVisibilityExpr(dielineNode?.visibility, context),
+    evaluateRuntimeCondition(dielineNode?.visibleWhen, context),
     false,
     "dieline overlay should be hidden during image placement sessions",
   );
@@ -3761,7 +3867,7 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
     scope: { channel: DIELINE_GEOMETRY_CAPABILITY_ID, subjectId: "front" },
   });
   assertEqual(
-    evaluateVisibilityExpr(dielineNode?.visibility, context),
+    evaluateRuntimeCondition(dielineNode?.visibleWhen, context),
     true,
     "dieline overlay should remain visible during dieline sessions",
   );
@@ -3769,7 +3875,7 @@ async function testDielineOverlayVisibilityFollowsEditingSessions() {
   await sessions.cancelSession("dieline:front");
 
   assertEqual(
-    evaluateVisibilityExpr(dielineNode?.visibility, context),
+    evaluateRuntimeCondition(dielineNode?.visibleWhen, context),
     true,
     "dieline overlay should be restored after edit sessions end",
   );
@@ -4125,7 +4231,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   assertEqual(
     defaultNode?.visible,
     true,
-    "configurable visual should preserve document default visibility before config patch",
+    "configurable visual should preserve document default visible state before config patch",
   );
 
   runtime.config.update("configurableVisual", {
@@ -4324,7 +4430,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     "configurable visual image placement commit should keep the committed image interactive declaratively",
   );
   assertEqual(
-    evaluateVisibilityExpr(committedGraphNode?.visibility, {
+    evaluateRuntimeCondition(committedGraphNode?.visibleWhen, {
       isSessionScopeActive: (scope) => sessions.hasActiveSession({ scope }),
     }),
     true,
@@ -4335,7 +4441,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     scope: { channel: "image-placement", subjectId: "front.image.user" },
   });
   assertEqual(
-    evaluateVisibilityExpr(committedGraphNode?.visibility, {
+    evaluateRuntimeCondition(committedGraphNode?.visibleWhen, {
       getContextValue: () => undefined,
       isSessionScopeActive: (scope) => sessions.hasActiveSession({ scope }),
     }),
@@ -4513,7 +4619,7 @@ async function main() {
   testEdgeScale();
   await testPaperPathGeometryProviderUtilities();
   testFeaturePlacementProjection();
-  testVisibilityDsl();
+  testRuntimeConditionDsl();
   testImageViewStateHelper();
   testContributionCompatibility();
   testKitCapabilityContractDefinitionsAndNormalization();
@@ -4536,7 +4642,7 @@ async function main() {
   await testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft();
   await testImagePlacementCanvasPressCanOnlyRequestSession();
   await testEdgeDetectionCapabilityExtension();
-  await testDielineOverlayVisibilityFollowsEditingSessions();
+  await testDielineOverlayConditionFollowsEditingSessions();
   testImageSessionShapeOverlayUsesDielineGeometry();
   await testDielineGeometryCapabilityExtension();
   await testImageMaskCapabilityExtension();

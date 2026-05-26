@@ -11,7 +11,7 @@ import {
   SCENE_LAYOUT_SERVICE,
   SESSION_SERVICE,
   computeDragInteraction,
-  evaluateVisibilityExpr,
+  evaluateRuntimeCondition,
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
@@ -30,7 +30,7 @@ import {
   type SceneService,
   type SessionArtifact,
   type SessionService,
-  type VisibilityExpr,
+  type RuntimeConditionExpr,
 } from "@pooder/core";
 import type {
   EditorDocument,
@@ -592,7 +592,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     string,
     ImagePlacementImageState | null
   >();
-  private visibleWorkingPlacementContextKeys = new Set<string>();
+  private activeWorkingPlacementConditionKeys = new Set<string>();
   private pendingUploadPlacementIds = new Set<string>();
   private sessionIdsByPlacementId = new Map<string, string>();
   private sessionSceneIdsBySessionId = new Map<string, string>();
@@ -680,7 +680,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.sessionSceneIdsBySessionId.clear();
     this.activePlacementId = null;
     this.activeImageSessionId = null;
-    this.clearWorkingPlacementVisibilityContext();
+    this.clearWorkingPlacementConditionContext();
     this.sourceSizeCache.clear();
     this.endMoveSnapInteraction();
     this.unbindCanvasInteractionHandlers();
@@ -1149,7 +1149,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.activeImageSessionId = sessionId;
     this.sessionIdsByPlacementId.set(placementId, sessionId);
     this.ensureImageSessionScene(placementId, sessionId);
-    this.patchCommittedImageVisibilityForPlacements();
+    this.patchCommittedImageConditionsForPlacements();
     if (this.workingImageDraftsBySessionId.has(sessionId)) {
       this.workingImages.set(
         placementId,
@@ -1164,7 +1164,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     }
     this.upsertImageSessionDraft(placementId, this.workingImages.get(placementId) ?? null, sessionId);
     this.sessionService?.focusSession(sessionId);
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
     this.setSessionNotice(null);
     await this.updateImagesAsync();
     return { ok: true };
@@ -1212,7 +1212,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       opacity: current.opacity ?? 1,
     });
     this.upsertImageSessionDraft(placementId, this.workingImages.get(placementId) ?? null, sessionId);
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
     this.rememberSourceSizeFromMetadata(src, source.metadata);
     if (!this.retainedWorkingImageBaselines.has(placementId)) {
       this.retainWorkingImageBaseline(placementId);
@@ -1256,7 +1256,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.setWorkingImageDraft(placementId, sessionId, next);
     this.publishImageSessionScenes();
     this.upsertImageSessionDraft(placementId, next, sessionId);
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
     if (!options.skipRender) {
       this.updateImages();
     }
@@ -1295,7 +1295,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!placement) return { ok: false, reason: "placement-not-found" };
     this.setWorkingImageDraft(placementId, sessionId, null);
     this.upsertImageSessionDraft(placementId, null, sessionId);
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
     this.updateImages();
     this.emitStateChange();
     return { ok: true };
@@ -1328,7 +1328,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.activePlacementId = null;
       this.activeImageSessionId = null;
     }
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
     this.setSessionNotice(null);
     this.updateImages();
   }
@@ -1433,7 +1433,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.workingImageDraftsBySessionId.delete(targetSessionId);
     }));
     this.sessionService?.focusSession(null);
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
   }
 
   private resolveSessionTargetIds(placementId?: string): string[] {
@@ -1592,7 +1592,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           objectOrder: placement.order,
         },
         export: {
-          visibility: this.getCommittedImageVisibility(placementId),
+          visibleWhen: this.getCommittedImageVisibleWhen(placementId),
         },
         interaction: {
           imagePlacement: {
@@ -1641,7 +1641,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         this.getFallbackImageSessionId(placementId),
     );
     this.retainedWorkingImageBaselines.delete(placementId);
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
   }
 
   private commitConfigurableVisualImage(
@@ -1696,26 +1696,29 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     }
   }
 
-  private getCommittedImageVisibility(placementId: string): VisibilityExpr {
+  private getCommittedImageVisibleWhen(placementId: string): RuntimeConditionExpr {
     return {
       op: "not",
       expr: {
-        op: "contextTruthy",
-        key: this.getWorkingPlacementVisibilityContextKey(placementId),
+        op: "truthy",
+        ref: {
+          source: "context",
+          key: this.getWorkingPlacementConditionKey(placementId),
+        },
       },
     };
   }
 
-  private patchCommittedImageVisibilityForPlacements(placementIds?: string[]) {
+  private patchCommittedImageConditionsForPlacements(placementIds?: string[]) {
     const targetIds =
       placementIds ??
       this.getCommittedPlacementStates()
         .filter((placement) => placement.hasImage)
         .map((placement) => placement.id);
-    targetIds.forEach((placementId) => this.patchCommittedImageVisibility(placementId));
+    targetIds.forEach((placementId) => this.patchCommittedImageConditions(placementId));
   }
 
-  private patchCommittedImageVisibility(placementId: string) {
+  private patchCommittedImageConditions(placementId: string) {
     const placement = this.getPlacementElement(placementId);
     if (!placement || !this.renderIntentService) return;
     const data = isRecord(placement.data) ? placement.data : {};
@@ -1751,7 +1754,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ...(committedTransform ? { transform: committedTransform } : {}),
       },
       export: {
-        visibility: this.getCommittedImageVisibility(placementId),
+        visibleWhen: this.getCommittedImageVisibleWhen(placementId),
       },
       visual: image
         ? {
@@ -1785,32 +1788,32 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     });
   }
 
-  private getWorkingPlacementVisibilityContextKey(placementId: string): string {
+  private getWorkingPlacementConditionKey(placementId: string): string {
     return `${this.capabilityId}.${IMAGE_ACTIVE_PLACEMENT_CONTEXT_PREFIX}.${placementId}`;
   }
 
-  private syncWorkingPlacementVisibilityContext() {
+  private syncWorkingPlacementConditionContext() {
     if (!this.renderIntentService) return;
     const nextKeys = new Set<string>();
     this.workingImages.forEach((_image, placementId) => {
-      nextKeys.add(this.getWorkingPlacementVisibilityContextKey(placementId));
+      nextKeys.add(this.getWorkingPlacementConditionKey(placementId));
     });
 
     nextKeys.forEach((key) => {
-      this.renderIntentService?.setVisibilityContextValue(key, true);
+      this.renderIntentService?.setRuntimeConditionValue(key, true);
     });
-    this.visibleWorkingPlacementContextKeys.forEach((key) => {
+    this.activeWorkingPlacementConditionKeys.forEach((key) => {
       if (nextKeys.has(key)) return;
-      this.renderIntentService?.deleteVisibilityContextValue(key);
+      this.renderIntentService?.deleteRuntimeConditionValue(key);
     });
-    this.visibleWorkingPlacementContextKeys = nextKeys;
+    this.activeWorkingPlacementConditionKeys = nextKeys;
   }
 
-  private clearWorkingPlacementVisibilityContext() {
-    this.visibleWorkingPlacementContextKeys.forEach((key) => {
-      this.renderIntentService?.deleteVisibilityContextValue(key);
+  private clearWorkingPlacementConditionContext() {
+    this.activeWorkingPlacementConditionKeys.forEach((key) => {
+      this.renderIntentService?.deleteRuntimeConditionValue(key);
     });
-    this.visibleWorkingPlacementContextKeys.clear();
+    this.activeWorkingPlacementConditionKeys.clear();
   }
 
   private focusPlacement(
@@ -1822,7 +1825,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       return { ok: false, reason: "placement-not-found" as const };
     }
     this.activePlacementId = placementId;
-    this.syncWorkingPlacementVisibilityContext();
+    this.syncWorkingPlacementConditionContext();
     if (options.syncCanvasSelection !== false && this.canvasService) {
       if (!placementId) {
         this.canvasService.discardActiveObject();
@@ -2764,7 +2767,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private isSessionProjectionSourceVisible(node: RenderGraphNode): boolean {
     if (node.visible === false) return false;
-    const visibility = this.renderIntentService?.createVisibilityEvalContext({
+    const conditionContext = this.renderIntentService?.createRuntimeConditionContext({
       isSessionActive: (sessionId: string) =>
         this.sessionService?.isSessionActive(sessionId) ?? false,
       isSessionScopeActive: (scope) =>
@@ -2774,7 +2777,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       hasAnyActiveSession: (scope) =>
         this.sessionService?.hasActiveSession({ scope }) ?? false,
     });
-    return evaluateVisibilityExpr(node.visibility, visibility ?? {});
+    return evaluateRuntimeCondition(node.visibleWhen, conditionContext ?? {});
   }
 
   private resolveGraphNodePlacementProps(

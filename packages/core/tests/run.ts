@@ -1972,11 +1972,14 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         data: { locked: false },
         interaction: {
           enabled: true,
-          when: { op: "contextTruthy", key: "can-interact" },
+          enabledWhen: {
+            op: "truthy",
+            ref: { source: "context", key: "can-interact" },
+          },
           locked: true,
           constraints: [
             {
-              when: { op: "const", value: true },
+              activeWhen: { op: "const", value: true },
               spec: { type: "grid.snap", params: { size: 10 } },
             },
           ],
@@ -2010,7 +2013,11 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         interaction: {
           constraints: [
             {
-              when: { op: "activeToolIn", ids: ["move"] },
+              activeWhen: {
+                op: "in",
+                ref: { source: "activeToolId" },
+                values: ["move"],
+              },
               spec: { type: "axis.lock", mode: "x" },
             },
           ],
@@ -2038,11 +2045,14 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       node?.interaction,
       {
         enabled: true,
-        when: { op: "contextTruthy", key: "can-interact" },
+        enabledWhen: {
+          op: "truthy",
+          ref: { source: "context", key: "can-interact" },
+        },
         locked: true,
         constraints: [
           {
-            when: { op: "const", value: true },
+            activeWhen: { op: "const", value: true },
             spec: { type: "grid.snap", params: { size: 10 } },
           },
           {
@@ -2052,7 +2062,11 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
             },
           },
           {
-            when: { op: "activeToolIn", ids: ["move"] },
+            activeWhen: {
+              op: "in",
+              ref: { source: "activeToolId" },
+              values: ["move"],
+            },
             spec: { type: "axis.lock", mode: "x" },
           },
         ],

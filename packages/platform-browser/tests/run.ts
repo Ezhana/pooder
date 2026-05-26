@@ -731,10 +731,13 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       props: { width: 10, height: 10 },
       interaction: {
         enabled: true,
-        when: { op: "contextTruthy", key: "can.interact" },
+        enabledWhen: {
+          op: "truthy",
+          ref: { source: "context", key: "can.interact" },
+        },
         constraints: [
           {
-            when: { op: "const", value: true },
+            activeWhen: { op: "const", value: true },
             spec: { type: "grid.snap", params: { size: 5 } },
           },
         ],
@@ -789,12 +792,12 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   assertEqual(
     conditional?.spec.props.visible,
     true,
-    "interaction.when should not affect object visibility",
+    "interaction.enabledWhen should not affect object visibility",
   );
   assertEqual(
     conditional?.spec.props.selectable,
     false,
-    "unmatched interaction.when should disable interaction",
+    "unmatched interaction.enabledWhen should disable interaction",
   );
   assertEqual(
     runtimeEvented?.spec.props.selectable,
@@ -812,7 +815,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "runtime evented props should not opt into declarative drag handling",
   );
 
-  intents.setVisibilityContextValue("can.interact", true);
+  intents.setRuntimeConditionValue("can.interact", true);
   await adapter.flush();
   last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
   const enabledConditional = last.items.find(
@@ -821,12 +824,12 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   assertEqual(
     enabledConditional?.spec.props.selectable,
     true,
-    "matched interaction.when should enable interaction",
+    "matched interaction.enabledWhen should enable interaction",
   );
   assertDeepEqual(
     enabledConditional?.spec.data?.interactionConstraints,
     [{ type: "grid.snap", params: { size: 5 } }],
-    "matched constraint.when should expose active constraints to dragging",
+    "matched constraint.activeWhen should expose active constraints to dragging",
   );
 
   await runtime.dispose();

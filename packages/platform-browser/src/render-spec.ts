@@ -1,5 +1,4 @@
 export type {
-  LayerObjectCountComparator,
   RenderClipPathEffectSpec,
   RenderCoordinateSpace,
   RenderEffectSpec,
@@ -13,5 +12,7 @@ export type {
   RenderObjectType,
   RenderPatternSpec,
   RenderProps,
-  VisibilityExpr,
+  RuntimeConditionComparator,
+  RuntimeConditionExpr,
+  RuntimeConditionRef,
 } from "@pooder/core";

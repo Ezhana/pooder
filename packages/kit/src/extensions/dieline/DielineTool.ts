@@ -10,7 +10,7 @@ import {
   type RenderIntentCompilerContext,
   type RenderIntentPatch,
   type RenderPatternSpec,
-  type VisibilityExpr,
+  type RuntimeConditionExpr,
 } from "@pooder/core";
 import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
 import {
@@ -286,7 +286,7 @@ export class DielineTool implements ExtensionDefinition {
         : {}),
       export: {
         visible: true,
-        visibility: this.resolveDielinePassVisibility(),
+        visibleWhen: this.resolveDielinePassVisibleWhen(),
       },
       data: {
         type: "dieline",
@@ -313,30 +313,38 @@ export class DielineTool implements ExtensionDefinition {
     );
   }
 
-  private resolveDielinePassVisibility(): VisibilityExpr {
-    const sessionVisibility: VisibilityExpr = {
+  private resolveDielinePassVisibleWhen(): RuntimeConditionExpr {
+    const sessionCondition: RuntimeConditionExpr = {
       op: "not",
       expr: {
         op: "any",
         exprs: [
-          { op: "anySessionActive", scope: { channel: IMAGE_SESSION_CHANNEL } },
+          {
+            op: "truthy",
+            ref: {
+              source: "workflowSession",
+              field: "anyActive",
+              scope: { channel: IMAGE_SESSION_CHANNEL },
+            },
+          },
         ],
       },
     };
 
     if (!this.legacyVisibility) {
-      return sessionVisibility;
+      return sessionCondition;
     }
 
     return {
       op: "all",
       exprs: [
-        sessionVisibility,
+        sessionCondition,
         {
           op: "not",
           expr: {
-            op: "activeToolIn",
-            ids: [LEGACY_IMAGE_TOOL_ID],
+            op: "in",
+            ref: { source: "activeToolId" },
+            values: [LEGACY_IMAGE_TOOL_ID],
           },
         },
       ],
@@ -428,7 +436,7 @@ export class DielineTool implements ExtensionDefinition {
       stack: 700,
       layerOrder: 0,
       channel: "overlay",
-      visibility: this.resolveDielinePassVisibility(),
+      visibleWhen: this.resolveDielinePassVisibleWhen(),
     });
     if (seq !== this.renderSeq) return;
     this.canvasService.requestRenderAll();

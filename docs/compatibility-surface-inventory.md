@@ -55,4 +55,4 @@ explicitly removes fields; `undefined` continues to mean “do not modify”.
 Typed graph diagnostics are non-blocking unless marked `error`. Conflict
 diagnostics are warnings by default for critical fields:
 `visual.replacement`, `placement.frame`, `ordering.layerId`,
-`interaction.session`, and `export.visibility`.
+`interaction.session`, and `export.visibleWhen`.

@@ -107,9 +107,8 @@ but new public APIs should not copy the legacy `*Tool` pattern.
 - Platform-browser owns render producer execution and Fabric object materializing.
 - Kit capabilities may contribute render producers only when render output is
   reusable and can target caller-provided layer ids.
-- New render producers must not depend on `activeToolIn`,
-  `sessionActive(toolId)`, or hard-coded app tool ids. Use generic workflow or
-  context predicates once available.
+- New render producers must not depend on hard-coded app tool ids. Use
+  `RuntimeConditionExpr` refs for generic workflow or context predicates.
 - Existing hard-coded layers may remain as compatibility defaults during the
   migration.
 

@@ -278,13 +278,14 @@ Acceptance:
 - A capability can render into an app-created layer without owning the app
   workflow.
 
-### Slice P2.S3 - Tool-Free Visibility Predicates
+### Slice P2.S3 - Runtime Condition Predicates
 
 Deliverables:
 
-- Replace direct `activeToolIn` and `sessionActive(toolId)` coupling in new APIs
-  with generic context predicates.
-- Keep old predicates for compatibility.
+- Replace direct tool/session coupling in render APIs with
+  `RuntimeConditionExpr` refs for context, workflow session, active tool, and
+  render layer state.
+- Remove old visibility-specific predicates.
 
 Acceptance:
 

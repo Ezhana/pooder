@@ -5,8 +5,8 @@ import type {
   RenderCoordinateSpace,
   RenderEffectSpec,
   RenderObjectSpec,
-  VisibilityEvalContext,
-  VisibilityExpr,
+  RuntimeConditionEvalContext,
+  RuntimeConditionExpr,
 } from "./render";
 import type { ConstraintSpec } from "./constraint-resolver";
 import type { SessionScope } from "./workflow-session";
@@ -78,7 +78,7 @@ export interface RenderIntentInteractionSessionAspect {
 }
 
 export interface RenderIntentInteractionConstraint {
-  when?: VisibilityExpr;
+  activeWhen?: RuntimeConditionExpr;
   spec: ConstraintSpec;
 }
 
@@ -86,7 +86,7 @@ export interface RenderIntentInteractionAspect {
   session?: RenderIntentInteractionSessionAspect;
   imagePlacement?: Record<string, unknown>;
   enabled?: boolean;
-  when?: VisibilityExpr;
+  enabledWhen?: RuntimeConditionExpr;
   constraints?: readonly RenderIntentInteractionConstraint[];
   locked?: boolean;
 }
@@ -95,7 +95,7 @@ export interface RenderIntentExportAspect {
   keys?: readonly string[];
   tags?: readonly string[];
   visible?: boolean;
-  visibility?: VisibilityExpr;
+  visibleWhen?: RuntimeConditionExpr;
 }
 
 export interface RenderIntentOrderingAspect {
@@ -175,7 +175,7 @@ export interface RenderGraphNode {
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
   interaction?: RenderIntentInteractionAspect;
-  visibility?: VisibilityExpr;
+  visibleWhen?: RuntimeConditionExpr;
   visible: boolean;
   tags: string[];
   sortKey: RenderGraphSortKey;
@@ -284,7 +284,7 @@ const CRITICAL_PATCH_FIELDS = [
   "placement.frame",
   "ordering.layerId",
   "interaction.session",
-  "export.visibility",
+  "export.visibleWhen",
 ] as const;
 
 const CLEARABLE_ROOT_FIELDS = new Set([
@@ -369,7 +369,7 @@ export class RenderIntentService implements Service {
   private readonly eventBus = new EventBus();
   private baseIntents: RenderIntentDraft[] = [];
   private runtimePatches = new Map<string, RequiredRuntimePatchEntry>();
-  private visibilityContextValues = new Map<string, unknown>();
+  private runtimeConditionValues = new Map<string, unknown>();
   private graph: RenderGraph = createRenderGraph([], 0);
   private revision = 0;
   private runtimePatchSequence = 0;
@@ -389,39 +389,39 @@ export class RenderIntentService implements Service {
     return cloneGraph(this.graph);
   }
 
-  getVisibilityContextValue(key: string): unknown {
-    return this.visibilityContextValues.get(
-      normalizeId(key, "visibility context key"),
+  getRuntimeConditionValue(key: string): unknown {
+    return this.runtimeConditionValues.get(
+      normalizeId(key, "runtime condition key"),
     );
   }
 
-  setVisibilityContextValue(key: string, value: unknown): boolean {
-    const normalizedKey = normalizeId(key, "visibility context key");
-    const previous = this.visibilityContextValues.get(normalizedKey);
+  setRuntimeConditionValue(key: string, value: unknown): boolean {
+    const normalizedKey = normalizeId(key, "runtime condition key");
+    const previous = this.runtimeConditionValues.get(normalizedKey);
     if (Object.is(previous, value)) return false;
-    this.visibilityContextValues.set(normalizedKey, value);
+    this.runtimeConditionValues.set(normalizedKey, value);
     this.emitChange();
     return true;
   }
 
-  deleteVisibilityContextValue(key: string): boolean {
+  deleteRuntimeConditionValue(key: string): boolean {
     const normalizedKey = String(key || "").trim();
     if (!normalizedKey) return false;
-    const removed = this.visibilityContextValues.delete(normalizedKey);
+    const removed = this.runtimeConditionValues.delete(normalizedKey);
     if (removed) this.emitChange();
     return removed;
   }
 
-  clearVisibilityContextValues(): boolean {
-    if (!this.visibilityContextValues.size) return false;
-    this.visibilityContextValues.clear();
+  clearRuntimeConditionValues(): boolean {
+    if (!this.runtimeConditionValues.size) return false;
+    this.runtimeConditionValues.clear();
     this.emitChange();
     return true;
   }
 
-  createVisibilityEvalContext(
-    extra: Partial<VisibilityEvalContext> = {},
-  ): VisibilityEvalContext {
+  createRuntimeConditionContext(
+    extra: Partial<RuntimeConditionEvalContext> = {},
+  ): RuntimeConditionEvalContext {
     return {
       ...extra,
       getContextValue: (key: string) => {
@@ -430,7 +430,7 @@ export class RenderIntentService implements Service {
         const extraValue = extra.getContextValue?.(normalizedKey);
         return extraValue !== undefined
           ? extraValue
-          : this.visibilityContextValues.get(normalizedKey);
+          : this.runtimeConditionValues.get(normalizedKey);
       },
     };
   }
@@ -870,7 +870,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     },
     effects: draft.clipping?.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
-    visibility: cloneRecord(draft.export?.visibility),
+    visibleWhen: cloneRecord(draft.export?.visibleWhen),
     visible: draft.export?.visible !== false,
     sortKey: {
       layerOrder: draft.ordering.layerOrder ?? 0,

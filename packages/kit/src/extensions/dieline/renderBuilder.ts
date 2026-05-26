@@ -2,7 +2,7 @@ import type {
   RenderEffectSpec,
   RenderObjectSpec,
   RenderPatternSpec,
-  VisibilityExpr,
+  RuntimeConditionExpr,
 } from "@pooder/core";
 import type { SceneLayoutSnapshot } from "../../shared/scene/scene-layout-model";
 import { generateBleedZonePath, generateDielinePath } from "../geometry";
@@ -37,7 +37,7 @@ export interface DielineRenderOptions {
   createHatchPattern?: (color: string) => RenderPatternSpec | undefined;
   includeImageClipEffect?: boolean;
   clipTargetLayerIds?: string[];
-  clipVisibility?: VisibilityExpr;
+  clipActiveWhen?: RuntimeConditionExpr;
 }
 
 export interface DielineClipSourceOptions {
@@ -70,7 +70,7 @@ export function buildDielineRenderBundle(
     createHatchPattern,
     includeImageClipEffect = true,
     clipTargetLayerIds = [IMAGE_OBJECT_LAYER_ID],
-    clipVisibility,
+    clipActiveWhen,
   } = options;
   const { shape, shapeStyle, radius, mainLine, offsetLine, insideColor } =
     state;
@@ -283,7 +283,7 @@ export function buildDielineRenderBundle(
       {
         type: "clipPath",
         id: ids.clip,
-        visibility: clipVisibility,
+        activeWhen: clipActiveWhen,
         targetLayerIds: clipTargetLayerIds,
         source: clipSource,
       },

@@ -1083,7 +1083,7 @@ export class FeatureTool implements ExtensionDefinition {
       hasImages: this.hasImageItems(),
       createHatchPattern: (color) => this.createHatchPattern(color),
       clipTargetLayerIds: this.imageClipLayerIds,
-      clipVisibility: { op: "const", value: true },
+      clipActiveWhen: { op: "const", value: true },
       ids: {
         inside: "feature.session.dieline.inside",
         bleedZone: "feature.session.dieline.bleed-zone",

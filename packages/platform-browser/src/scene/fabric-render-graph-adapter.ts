@@ -5,7 +5,7 @@ import {
   SCENE_SERVICE,
   SESSION_SERVICE,
   WORKBENCH_SERVICE,
-  evaluateVisibilityExpr,
+  evaluateRuntimeCondition,
   type CanvasService,
   type ConstraintResolverCapability,
   type ConstraintSpec,
@@ -24,7 +24,7 @@ import {
   type SceneService,
   type Service,
   type ServiceContext,
-  type VisibilityLayerState,
+  type RuntimeConditionLayerState,
   type SessionService,
   type RenderIntentService,
   type WorkbenchService,
@@ -79,7 +79,7 @@ export class FabricRenderGraphAdapter implements Service {
   private readonly syncStateListeners =
     new Set<FabricRenderGraphSyncStateListener>();
 
-  private readonly onRuntimeVisibilityChange = () => {
+  private readonly onRuntimeConditionChange = () => {
     this.requestSync();
   };
 
@@ -123,12 +123,12 @@ export class FabricRenderGraphAdapter implements Service {
     this.geometrySourceDisposable = this.geometrySource?.registerSource(
       this.createRenderGraphGeometrySource(),
     );
-    this.attachRuntimeVisibilityEvents();
+    this.attachRuntimeConditionEvents();
     this.requestSync();
   }
 
   dispose() {
-    this.detachRuntimeVisibilityEvents();
+    this.detachRuntimeConditionEvents();
     if (this.canvasObjectMovingHandler) {
       this.canvasService?.offCanvasEvent(
         "object:moving",
@@ -225,20 +225,20 @@ export class FabricRenderGraphAdapter implements Service {
     this.syncStateListeners.forEach((listener) => listener(state));
   }
 
-  private attachRuntimeVisibilityEvents() {
+  private attachRuntimeConditionEvents() {
     const eventBus = this.eventBus;
     if (!eventBus) return;
-    eventBus.on("session:change", this.onRuntimeVisibilityChange);
-    eventBus.on("scene:layout:change", this.onRuntimeVisibilityChange);
-    eventBus.on("tool:switch", this.onRuntimeVisibilityChange);
+    eventBus.on("session:change", this.onRuntimeConditionChange);
+    eventBus.on("scene:layout:change", this.onRuntimeConditionChange);
+    eventBus.on("tool:switch", this.onRuntimeConditionChange);
   }
 
-  private detachRuntimeVisibilityEvents() {
+  private detachRuntimeConditionEvents() {
     const eventBus = this.eventBus;
     if (!eventBus) return;
-    eventBus.off("session:change", this.onRuntimeVisibilityChange);
-    eventBus.off("scene:layout:change", this.onRuntimeVisibilityChange);
-    eventBus.off("tool:switch", this.onRuntimeVisibilityChange);
+    eventBus.off("session:change", this.onRuntimeConditionChange);
+    eventBus.off("scene:layout:change", this.onRuntimeConditionChange);
+    eventBus.off("tool:switch", this.onRuntimeConditionChange);
   }
 
   private async runSyncLoop() {
@@ -251,13 +251,17 @@ export class FabricRenderGraphAdapter implements Service {
   private async syncGraph() {
     const graph = this.requireRenderIntentService().getGraph();
     const canvas = this.requireCanvasService();
-    const visibility = this.buildVisibilityContext(graph);
+    const conditionContext = this.buildRuntimeConditionContext(graph);
     const items: FabricRenderTargetItem[] = [];
     const effects: FabricRenderTargetClipEffect[] = [];
 
     graph.layers.forEach((layer, layerIndex) => {
       layer.effects.forEach((effect, index) => {
-        const normalized = this.toClipEffect(effect, `layer:${layer.id}:${index}`, visibility);
+        const normalized = this.toClipEffect(
+          effect,
+          `layer:${layer.id}:${index}`,
+          conditionContext,
+        );
         if (normalized) effects.push(normalized);
       });
 
@@ -266,13 +270,13 @@ export class FabricRenderGraphAdapter implements Service {
           const normalized = this.toClipEffect(
             effect,
             `node:${node.id}:${index}`,
-            visibility,
+            conditionContext,
           );
           if (normalized) effects.push(normalized);
         });
 
-        if (!evaluateVisibilityExpr(node.visibility, visibility)) return;
-        const spec = this.toRenderObjectSpec(layer, node, visibility);
+        if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext)) return;
+        const spec = this.toRenderObjectSpec(layer, node, conditionContext);
         if (!spec) return;
         items.push({
           key: node.id,
@@ -446,8 +450,8 @@ export class FabricRenderGraphAdapter implements Service {
     return this.constraintResolver;
   }
 
-  private buildVisibilityContext(graph: RenderGraph) {
-    const layers = new Map<string, VisibilityLayerState>();
+  private buildRuntimeConditionContext(graph: RenderGraph) {
+    const layers = new Map<string, RuntimeConditionLayerState>();
     graph.layers.forEach((layer) => {
       const visibleNodes = layer.nodes.filter((node) => node.visible !== false);
       layers.set(layer.id, {
@@ -473,7 +477,7 @@ export class FabricRenderGraphAdapter implements Service {
       });
     });
 
-    return this.requireRenderIntentService().createVisibilityEvalContext({
+    return this.requireRenderIntentService().createRuntimeConditionContext({
       activeToolId: this.workbenchService?.activeToolId ?? null,
       getLayerState: (layerId: string) => layers.get(layerId),
       isSessionActive: (sessionId: string) =>
@@ -490,10 +494,10 @@ export class FabricRenderGraphAdapter implements Service {
   private toClipEffect(
     effect: RenderEffectSpec,
     fallbackKey: string,
-    visibility: ReturnType<FabricRenderGraphAdapter["buildVisibilityContext"]>,
+    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
   ): FabricRenderTargetClipEffect | null {
     if (effect.type !== "clipPath") return null;
-    if (!evaluateVisibilityExpr(effect.visibility, visibility)) return null;
+    if (!evaluateRuntimeCondition(effect.activeWhen, conditionContext)) return null;
     const key = String(effect.id || fallbackKey).trim();
     return {
       key,
@@ -506,14 +510,14 @@ export class FabricRenderGraphAdapter implements Service {
   private toRenderObjectSpec(
     layer: RenderGraphLayer,
     node: RenderGraphNode,
-    visibility: ReturnType<FabricRenderGraphAdapter["buildVisibilityContext"]>,
+    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
   ): RenderObjectSpec | null {
     const hasDeclarativeInteraction =
       typeof node.interaction?.enabled === "boolean" ||
-      node.interaction?.when !== undefined;
+      node.interaction?.enabledWhen !== undefined;
     const interactionEnabled =
       node.interaction?.enabled === true &&
-      evaluateVisibilityExpr(node.interaction.when, visibility);
+      evaluateRuntimeCondition(node.interaction.enabledWhen, conditionContext);
     const selectable = hasDeclarativeInteraction
       ? interactionEnabled
       : node.props.selectable === true;
@@ -523,7 +527,10 @@ export class FabricRenderGraphAdapter implements Service {
         ? node.props.evented
         : selectable;
     const interactionConstraints = interactionEnabled
-      ? normalizeRenderInteractionConstraints(node.interaction?.constraints, visibility)
+      ? normalizeRenderInteractionConstraints(
+          node.interaction?.constraints,
+          conditionContext,
+        )
       : [];
     const commonProps = {
       ...node.props,
@@ -714,14 +721,14 @@ function finiteNumber(value: unknown, fallback: number): number {
 
 function normalizeRenderInteractionConstraints(
   value: unknown,
-  visibility: ReturnType<FabricRenderGraphAdapter["buildVisibilityContext"]>,
+  conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
 ): ConstraintSpec[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((constraint): ConstraintSpec | null => {
       if (!isRecord(constraint)) return null;
       const item = constraint as Partial<RenderIntentInteractionConstraint>;
-      if (!evaluateVisibilityExpr(item.when, visibility)) return null;
+      if (!evaluateRuntimeCondition(item.activeWhen, conditionContext)) return null;
       return normalizeConstraintSpec(item.spec);
     })
     .filter((constraint): constraint is ConstraintSpec => Boolean(constraint));

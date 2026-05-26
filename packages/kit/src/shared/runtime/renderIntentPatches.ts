@@ -2,7 +2,7 @@ import type {
   RenderIntentPatch,
   RenderIntentService,
   RenderObjectSpec,
-  VisibilityExpr,
+  RuntimeConditionExpr,
 } from "@pooder/core";
 
 export interface RenderIntentObjectPatchOptions {
@@ -17,7 +17,7 @@ export interface RenderIntentObjectPatchOptions {
       : never
     : never;
   baseOrder?: number;
-  visibility?: VisibilityExpr;
+  visibleWhen?: RuntimeConditionExpr;
 }
 
 export function patchRenderObjectSpecs(
@@ -55,7 +55,7 @@ export function patchRenderObjectSpecs(
       },
       export: {
         keys: spec.exportKeys,
-        visibility: spec.visibility ?? options.visibility,
+        visibleWhen: spec.visibleWhen ?? options.visibleWhen,
         visible: spec.props?.visible !== false,
       },
       coordinateSpace: spec.space || "scene",
