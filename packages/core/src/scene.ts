@@ -1,3 +1,5 @@
+import type { RenderEffectSpec } from "./render";
+
 export type LayerId = string;
 export type ElementId = string;
 export type SceneId = string;
@@ -28,6 +30,7 @@ export interface SceneLayer {
   id: LayerId;
   order: number;
   visible: boolean;
+  effects?: RenderEffectSpec[];
   tags?: string[];
   metadata?: SceneMetadata;
 }
@@ -36,6 +39,7 @@ export interface SceneLayerInput {
   id: LayerId;
   order?: number;
   visible?: boolean;
+  effects?: RenderEffectSpec[];
   tags?: string[];
   metadata?: SceneMetadata;
 }
@@ -43,6 +47,7 @@ export interface SceneLayerInput {
 export interface SceneLayerPatch {
   order?: number;
   visible?: boolean;
+  effects?: RenderEffectSpec[];
   tags?: string[];
   metadata?: SceneMetadata;
 }
@@ -83,6 +88,7 @@ export interface SceneElementBase {
   type: SceneElementType;
   order: number;
   visible: boolean;
+  effects?: RenderEffectSpec[];
   tags?: string[];
   metadata?: SceneMetadata;
   data?: SceneElementData;
@@ -135,6 +141,7 @@ export interface SceneElementPatch {
   layerId?: LayerId;
   order?: number;
   visible?: boolean;
+  effects?: RenderEffectSpec[];
   tags?: string[];
   metadata?: SceneMetadata;
   data?: SceneElementData;

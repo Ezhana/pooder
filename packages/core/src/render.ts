@@ -1,3 +1,4 @@
+import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type { Unit } from "./coordinate";
 import type { DielineShape, DielineShapeStyle } from "./dieline-shape";
@@ -51,7 +52,16 @@ export interface RenderObjectSpec {
   space?: RenderCoordinateSpace;
   exportKeys?: readonly string[];
   layout?: RenderObjectLayoutSpec;
+  effects?: RenderEffectSpec[];
   visibleWhen?: RuntimeConditionExpr;
+}
+
+export interface RenderLayerSpec {
+  id: string;
+  order: number;
+  visible: boolean;
+  effects?: RenderEffectSpec[];
+  objects: RenderObjectSpec[];
 }
 
 export interface RenderPatternSpec {
@@ -108,11 +118,130 @@ export interface RenderClipPathEffectSpec {
   id?: string;
   activeWhen?: RuntimeConditionExpr;
   source: RenderObjectSpec;
-  targetLayerIds?: string[];
-  targetSubjectIds?: string[];
+  coordinateMode?: "absolute" | "object";
 }
 
 export type RenderEffectSpec = RenderClipPathEffectSpec;
+
+export interface RenderEffectDefinition {
+  type: RenderEffectSpec["type"] | string;
+  capabilityId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RenderEffectRendererContext<
+  TTarget = unknown,
+  TServices = unknown,
+> {
+  target: TTarget;
+  spec: RenderObjectSpec;
+  effect: RenderEffectSpec;
+  services?: TServices;
+}
+
+export interface RenderEffectRendererContribution<
+  TTarget = unknown,
+  TServices = unknown,
+> {
+  effectType: RenderEffectSpec["type"] | string;
+  backend?: string;
+  render(
+    context: RenderEffectRendererContext<TTarget, TServices>,
+  ): void | Promise<void>;
+}
+
+export interface RegisteredRenderEffectDefinition
+  extends RenderEffectDefinition {
+  extensionId: string;
+}
+
+export interface RegisteredRenderEffectRenderer
+  extends RenderEffectRendererContribution {
+  extensionId: string;
+}
+
+class RenderEffectRegistryDisposable implements Disposable {
+  private disposed = false;
+
+  constructor(private readonly disposeFn: () => void) {}
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.disposeFn();
+  }
+}
+
+export class RenderEffectRegistryService implements Service {
+  private readonly definitions: RegisteredRenderEffectDefinition[] = [];
+  private readonly renderers: RegisteredRenderEffectRenderer[] = [];
+
+  registerDefinition(
+    extensionId: string,
+    definition: RenderEffectDefinition,
+  ): Disposable {
+    const type = String(definition.type || "").trim();
+    if (!type) {
+      throw new Error("Render effect definition requires type.");
+    }
+    const registered: RegisteredRenderEffectDefinition = {
+      ...definition,
+      type,
+      extensionId,
+    };
+    this.definitions.push(registered);
+    return new RenderEffectRegistryDisposable(() => {
+      const index = this.definitions.indexOf(registered);
+      if (index >= 0) this.definitions.splice(index, 1);
+    });
+  }
+
+  registerRenderer(
+    extensionId: string,
+    renderer: RenderEffectRendererContribution,
+  ): Disposable {
+    const effectType = String(renderer.effectType || "").trim();
+    if (!effectType) {
+      throw new Error("Render effect renderer requires effectType.");
+    }
+    const registered: RegisteredRenderEffectRenderer = {
+      ...renderer,
+      effectType,
+      extensionId,
+    };
+    this.renderers.push(registered);
+    return new RenderEffectRegistryDisposable(() => {
+      const index = this.renderers.indexOf(registered);
+      if (index >= 0) this.renderers.splice(index, 1);
+    });
+  }
+
+  getRenderers(query: {
+    effectType: string;
+    backend?: string;
+  }): RegisteredRenderEffectRenderer[] {
+    const effectType = String(query.effectType || "").trim();
+    const backend = String(query.backend || "").trim();
+    return this.renderers.filter((renderer) => {
+      if (renderer.effectType !== effectType) return false;
+      if (backend && renderer.backend && renderer.backend !== backend) return false;
+      return true;
+    });
+  }
+
+  listDefinitions(): RegisteredRenderEffectDefinition[] {
+    return this.definitions.slice();
+  }
+
+  listRenderers(): RegisteredRenderEffectRenderer[] {
+    return this.renderers.slice();
+  }
+
+  dispose() {
+    this.definitions.length = 0;
+    this.renderers.length = 0;
+  }
+}
 
 export interface RuntimeConditionLayerState {
   exists: boolean;

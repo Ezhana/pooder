@@ -64,11 +64,6 @@ export interface RenderIntentPlacementAspect {
   fit?: "cover" | "contain" | "stretch";
 }
 
-export interface RenderIntentClippingAspect {
-  enabled?: boolean;
-  effects?: RenderEffectSpec[];
-}
-
 export interface RenderIntentInteractionSessionAspect {
   sessionId: string;
   scope?: SessionScope;
@@ -112,7 +107,7 @@ export interface RenderIntentDraft {
   subject: RenderIntentSubject;
   visual?: RenderIntentVisualAspect;
   placement?: RenderIntentPlacementAspect;
-  clipping?: RenderIntentClippingAspect;
+  effects?: RenderEffectSpec[];
   interaction?: RenderIntentInteractionAspect;
   export?: RenderIntentExportAspect;
   coordinateSpace?: RenderCoordinateSpace;
@@ -291,7 +286,7 @@ const CLEARABLE_ROOT_FIELDS = new Set([
   "subject",
   "visual",
   "placement",
-  "clipping",
+  "effects",
   "interaction",
   "export",
   "coordinateSpace",
@@ -739,8 +734,8 @@ export function createRenderGraph(
     if (node) {
       layer.nodes.push(node);
     }
-    if (draft.subject.kind === "layer" && draft.clipping?.effects?.length) {
-      layer.effects.push(...draft.clipping.effects.map(cloneRecord));
+    if (draft.subject.kind === "layer" && draft.effects?.length) {
+      layer.effects.push(...draft.effects.map(cloneRecord));
     }
   });
 
@@ -794,7 +789,7 @@ function createDraftFromPatch(
     },
     visual: patch.visual,
     placement: patch.placement,
-    clipping: patch.clipping,
+    effects: patch.effects,
     interaction: patch.interaction,
     export: patch.export,
     coordinateSpace: patch.coordinateSpace,
@@ -868,7 +863,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
         ? { session: draft.interaction.session }
         : {}),
     },
-    effects: draft.clipping?.effects?.map(cloneRecord) ?? [],
+    effects: draft.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
     visibleWhen: cloneRecord(draft.export?.visibleWhen),
     visible: draft.export?.visible !== false,
@@ -925,7 +920,7 @@ function mergeDraft(
     subject: { ...base.subject, ...patch.subject },
     visual: mergeOptionalRecord(base.visual, patch.visual),
     placement: mergeOptionalRecord(base.placement, patch.placement),
-    clipping: mergeOptionalRecord(base.clipping, patch.clipping),
+    effects: mergeOptionalEffects(base.effects, patch.effects),
     interaction: mergeInteractionAspect(base.interaction, patch.interaction),
     export: mergeOptionalRecord(base.export, patch.export),
     ordering: { ...base.ordering, ...patch.ordering },
@@ -948,7 +943,7 @@ function mergePatch(
       subject: { ...clearedBase.subject, ...(patch.subject ?? {}) },
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
       placement: mergeOptionalRecord(clearedBase.placement, patch.placement),
-      clipping: mergeOptionalRecord(clearedBase.clipping, patch.clipping),
+      effects: mergeOptionalEffects(clearedBase.effects, patch.effects),
       interaction: mergeInteractionAspect(clearedBase.interaction, patch.interaction),
       export: mergeOptionalRecord(clearedBase.export, patch.export),
       ordering: { ...clearedBase.ordering, ...(patch.ordering ?? {}) },
@@ -1067,6 +1062,14 @@ function mergeOptionalRecord<T>(
     ...((base ?? {}) as object),
     ...((patch ?? {}) as object),
   } as T;
+}
+
+function mergeOptionalEffects(
+  base: RenderEffectSpec[] | undefined,
+  patch: RenderEffectSpec[] | undefined,
+): RenderEffectSpec[] | undefined {
+  const source = patch === undefined ? base : patch;
+  return source?.map(cloneRecord);
 }
 
 function cloneDraft(draft: RenderIntentDraft): RenderIntentDraft {

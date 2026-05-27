@@ -48,6 +48,7 @@ export function patchRenderObjectSpecs(
         objectOrder: (options.baseOrder ?? 0) + index,
         channel: options.channel,
       },
+      effects: spec.effects,
       props: { ...(spec.props || {}) },
       data: {
         ...(spec.data || {}),

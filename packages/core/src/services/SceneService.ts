@@ -19,6 +19,7 @@ import type {
 } from "../scene";
 import { DEFAULT_SCENE_ID } from "../scene";
 import EventBus from "../event";
+import type { RenderEffectSpec } from "../render";
 import type { Service } from "../service";
 
 export type SceneChangeEvent = SceneChangeSet;
@@ -159,6 +160,7 @@ export default class SceneService implements Service {
       id,
       order: layer.order ?? scene.layersById.size,
       visible: layer.visible ?? true,
+      effects: this.cloneEffects(layer.effects),
       tags: this.normalizeTags(layer.tags),
       metadata: this.cloneRecord(layer.metadata),
     };
@@ -184,6 +186,10 @@ export default class SceneService implements Service {
       ...current,
       order: patch.order ?? current.order,
       visible: patch.visible ?? current.visible,
+      effects:
+        patch.effects === undefined
+          ? this.cloneEffects(current.effects)
+          : this.cloneEffects(patch.effects),
       tags:
         patch.tags === undefined
           ? this.cloneTags(current.tags)
@@ -293,6 +299,10 @@ export default class SceneService implements Service {
       layerId: nextLayerId,
       order: patch.order ?? current.order,
       visible: patch.visible ?? current.visible,
+      effects:
+        patch.effects === undefined
+          ? this.cloneEffects(current.effects)
+          : this.cloneEffects(patch.effects),
       tags:
         patch.tags === undefined
           ? this.cloneTags(current.tags)
@@ -526,6 +536,7 @@ export default class SceneService implements Service {
   private cloneLayer(layer: SceneLayer): SceneLayer {
     return {
       ...layer,
+      effects: this.cloneEffects(layer.effects),
       tags: this.cloneTags(layer.tags),
       metadata: this.cloneRecord(layer.metadata),
     };
@@ -536,6 +547,7 @@ export default class SceneService implements Service {
   ): TElement {
     return {
       ...element,
+      effects: this.cloneEffects(element.effects),
       tags: this.cloneTags(element.tags),
       metadata: this.cloneRecord(element.metadata),
       data: this.cloneRecord(element.data),
@@ -605,6 +617,21 @@ export default class SceneService implements Service {
 
   private cloneRecord<T extends object>(value?: T): T | undefined {
     return value ? ({ ...value } as T) : undefined;
+  }
+
+  private cloneEffects(
+    effects?: readonly RenderEffectSpec[],
+  ): RenderEffectSpec[] | undefined {
+    if (!effects) return undefined;
+    return effects.map((effect) => ({
+      ...effect,
+      source: {
+        ...effect.source,
+        data: this.cloneRecord(effect.source.data),
+        props: this.cloneRecord(effect.source.props) ?? {},
+        effects: this.cloneEffects(effect.source.effects),
+      },
+    }));
   }
 
   private cloneTags(value?: readonly string[]): string[] | undefined {

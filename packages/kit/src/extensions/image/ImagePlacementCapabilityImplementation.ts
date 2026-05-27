@@ -15,6 +15,7 @@ import {
   type CanvasService,
   type CapabilityRegistryService,
   type ConfigurationService,
+  type RenderEffectSpec,
   type RenderIntentCompilerContribution,
   type RenderIntentCompilerContext,
   type RenderIntentPatch,
@@ -765,23 +766,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ...(committedTransform ? { transform: committedTransform } : {}),
       },
       interaction: {
-        session: {
-          sessionId: sessionKey,
-          scope: {
-            surfaceId: resolved.surface.id,
-            subjectId: object.id,
-            channel: IMAGE_SESSION_CHANNEL,
-          },
-          source: "render-graph",
-          mode: "edit",
-          payload: {
-            placementId: object.id,
-            sessionKey,
-            fit,
-            accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
-            commitTarget,
-          },
-        },
         imagePlacement: {
           enabled: true,
           placementId: object.id,
@@ -976,6 +960,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             : {}),
         },
       },
+      effects: node.effects,
       style: node.props,
       transform: {
         left: frame?.x ?? 0,
@@ -2448,8 +2433,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
     const scale =
       getCoverScaleFromRect(placement.frame, source) * Math.max(0.05, image.scale ?? 1);
+    const id = options.committed
+      ? `image:${placement.id}`
+      : this.getWorkingImageNodeId(placement.id);
+    const clipEffect = this.buildPlacementClipEffect(placement, id);
     return {
-      id: options.committed ? `image:${placement.id}` : this.getWorkingImageNodeId(placement.id),
+      id,
       subjectId: placement.id,
       type: "image",
       src: image.src,
@@ -2485,6 +2474,45 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         lockScalingX: options.committed,
         lockScalingY: options.committed,
         lockUniScaling: !options.committed,
+      },
+      ...(clipEffect ? { effects: [clipEffect] } : {}),
+    };
+  }
+
+  private buildPlacementClipEffect(
+    placement: ImagePlacementState,
+    objectId: string,
+  ): RenderEffectSpec {
+    const frame = placement.frame;
+    const sourceId = `${objectId}.clip-source`;
+    return {
+      type: "clipPath",
+      id: `${objectId}.clip`,
+      coordinateMode: "absolute",
+      source: {
+        id: sourceId,
+        type: "rect",
+        space: "scene",
+        data: {
+          id: sourceId,
+          type: "image-placement-clip",
+          placementId: placement.id,
+          effect: "clipPath",
+        },
+        props: {
+          left: frame.left,
+          top: frame.top,
+          width: frame.width,
+          height: frame.height,
+          fill: "#000000",
+          stroke: null,
+          originX: "left",
+          originY: "top",
+          selectable: false,
+          evented: false,
+          excludeFromExport: true,
+          objectCaching: false,
+        },
       },
     };
   }
@@ -2762,6 +2790,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         hasControls: projection.interactive === true,
         hasBorders: projection.interactive === true,
       },
+      effects: node.effects,
     };
   }
 
@@ -2844,6 +2873,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       visible: props.visible !== false,
       data,
       style: props,
+      effects: spec.effects,
     };
     if (spec.type === "image") {
       if (!spec.src) return null;

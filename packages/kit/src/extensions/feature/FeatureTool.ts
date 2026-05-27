@@ -1034,20 +1034,22 @@ export class FeatureTool implements ExtensionDefinition {
       channel: "overlay",
     });
     this.sessionDielineEffects.forEach((effect, index) => {
-      this.renderIntentService?.patchIntent(this.id, {
-        id: `${this.id}.effect.${index}`,
-        subject: {
-          kind: "layer",
-          surfaceId: "legacy",
-          layerId: this.sessionDielineLayerId,
-        },
-        ordering: {
-          layerId: this.sessionDielineLayerId,
-          stack: 705,
-          layerOrder: 0,
-          objectOrder: 10_000 + index,
-        },
-        clipping: { enabled: true, effects: [effect] },
+      this.imageClipLayerIds.forEach((layerId) => {
+        this.renderIntentService?.patchIntent(this.id, {
+          id: `${this.id}.effect.${layerId}.${index}`,
+          subject: {
+            kind: "layer",
+            surfaceId: "legacy",
+            layerId,
+          },
+          ordering: {
+            layerId,
+            stack: 705,
+            layerOrder: 0,
+            objectOrder: 10_000 + index,
+          },
+          effects: [effect],
+        });
       });
     });
   }
@@ -1082,7 +1084,6 @@ export class FeatureTool implements ExtensionDefinition {
         sceneLayout.canvasHeight || this.canvasService.getViewportSize().height || 600,
       hasImages: this.hasImageItems(),
       createHatchPattern: (color) => this.createHatchPattern(color),
-      clipTargetLayerIds: this.imageClipLayerIds,
       clipActiveWhen: { op: "const", value: true },
       ids: {
         inside: "feature.session.dieline.inside",

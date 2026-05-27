@@ -1750,14 +1750,25 @@ async function testApplyKitEditorDocument() {
     (effect) => effect.id === "clip.front-placement",
   );
   assertDeepEqual(
-    clipEffect?.targetLayerIds,
-    ["front-artwork"],
-    "clip render intent should resolve the target layer from effect context",
+    {
+      coordinateMode: clipEffect?.coordinateMode,
+      sourceId: clipEffect?.source.id,
+    },
+    {
+      coordinateMode: "absolute",
+      sourceId: "clip.front-placement.path-source",
+    },
+    "clip render intent should attach a local object clip effect",
   );
-  assertDeepEqual(
-    clipEffect?.targetSubjectIds,
-    ["front-placement"],
-    "clip render intent should resolve object-level target ids",
+  assertEqual(
+    "targetLayerIds" in ((clipEffect ?? {}) as unknown as Record<string, unknown>),
+    false,
+    "clip render intent should not emit global target selectors",
+  );
+  assertEqual(
+    "targetSubjectIds" in ((clipEffect ?? {}) as unknown as Record<string, unknown>),
+    false,
+    "clip render intent should not emit global subject selectors",
   );
   assertEqual(
     (

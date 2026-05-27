@@ -21,6 +21,7 @@ import {
   ConfigurationService,
   DefaultConstraintResolverCapability,
   DefaultGeometrySourceCapability,
+  RenderEffectRegistryService,
   RenderIntentCompilerRegistryService,
   RenderIntentService,
   SceneService,
@@ -158,6 +159,7 @@ export class Pooder {
   private readonly capabilityRegistryService = new CapabilityRegistryService();
   private readonly configurationService = new ConfigurationService();
   private readonly renderIntentService = new RenderIntentService();
+  private readonly renderEffectRegistryService = new RenderEffectRegistryService();
   private readonly renderIntentCompilerRegistryService =
     new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
@@ -187,6 +189,10 @@ export class Pooder {
     this.registerService(
       this.renderIntentService,
       CORE_SERVICE_TOKENS.RENDER_INTENT,
+    );
+    this.registerService(
+      this.renderEffectRegistryService,
+      CORE_SERVICE_TOKENS.RENDER_EFFECT_REGISTRY,
     );
     this.registerService(
       this.renderIntentCompilerRegistryService,
@@ -224,6 +230,7 @@ export class Pooder {
       capabilityRegistry: this.capabilityRegistryService,
       configurationService: this.configurationService,
       commandService: this.commandService,
+      renderEffectRegistry: this.renderEffectRegistryService,
       renderIntentCompilerRegistry: this.renderIntentCompilerRegistryService,
     });
 

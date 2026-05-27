@@ -1,4 +1,8 @@
 import type { CapabilityDefinition } from "../capability";
+import type {
+  RenderEffectDefinition,
+  RenderEffectRendererContribution,
+} from "../render";
 import type { RenderIntentCompilerContribution } from "../render-intent";
 
 export interface CommandContribution {
@@ -52,6 +56,8 @@ export interface ExtensionContributions {
   capabilities?: CapabilityDefinition[];
   configurations?: ConfigurationContribution[];
   commands?: CommandContribution[];
+  renderEffectDefinitions?: RenderEffectDefinition[];
+  renderEffectRenderers?: RenderEffectRendererContribution[];
   renderIntentCompilers?: RenderIntentCompilerContribution[];
   /**
    * @deprecated Core no longer consumes tools contributions automatically.

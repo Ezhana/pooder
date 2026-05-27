@@ -14,6 +14,7 @@ import type { DefaultConstraintResolverCapability } from "../constraint-resolver
 import type { DefaultGeometrySourceCapability } from "../geometry-source";
 import type {
   CanvasService,
+  RenderEffectRegistryService,
   SceneExportService,
   SceneLayoutService,
 } from "../render";
@@ -32,6 +33,8 @@ export const RENDER_INTENT_COMPILER_REGISTRY_SERVICE =
   createServiceToken<RenderIntentCompilerRegistryService>(
     "RenderIntentCompilerRegistryService",
   );
+export const RENDER_EFFECT_REGISTRY_SERVICE =
+  createServiceToken<RenderEffectRegistryService>("RenderEffectRegistryService");
 export const SCENE_SERVICE = createServiceToken<SceneService>("SceneService");
 export const CANVAS_SERVICE = createServiceToken<CanvasService>("CanvasService");
 export const SCENE_LAYOUT_SERVICE =
@@ -56,6 +59,7 @@ export const CORE_SERVICE_TOKENS = {
   CONFIGURATION: CONFIGURATION_SERVICE,
   RENDER_INTENT: RENDER_INTENT_SERVICE,
   RENDER_INTENT_COMPILER_REGISTRY: RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+  RENDER_EFFECT_REGISTRY: RENDER_EFFECT_REGISTRY_SERVICE,
   CANVAS: CANVAS_SERVICE,
   SCENE: SCENE_SERVICE,
   SCENE_LAYOUT: SCENE_LAYOUT_SERVICE,

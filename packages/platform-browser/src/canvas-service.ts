@@ -3,6 +3,7 @@ import {
   EventBus,
   Service,
   ServiceContext,
+  evaluateRuntimeCondition,
   type CanvasObjectLike,
   type CanvasObjectSelector,
   type CanvasService as CanvasServiceContract,
@@ -32,11 +33,44 @@ export interface FabricRenderTargetItem {
   spec: RenderObjectSpec;
 }
 
-export interface FabricRenderTargetClipEffect {
-  key: string;
-  source: RenderObjectSpec;
-  targetLayerIds?: string[];
-  targetSubjectIds?: string[];
+export interface FabricObjectEffectRendererContext {
+  canvasService: CanvasService;
+  effect: RenderEffectSpec;
+  object: FabricObject;
+  spec: RenderObjectSpec;
+}
+
+export interface FabricObjectEffectRenderer {
+  type: RenderEffectSpec["type"] | string;
+  apply(context: FabricObjectEffectRendererContext): Promise<void> | void;
+  clear(context: Omit<FabricObjectEffectRendererContext, "effect">): void;
+}
+
+export class FabricEffectRendererRegistry {
+  private readonly renderers = new Map<string, FabricObjectEffectRenderer>();
+
+  register(renderer: FabricObjectEffectRenderer) {
+    const type = String(renderer.type || "").trim();
+    if (!type) {
+      throw new Error("Fabric effect renderer requires type.");
+    }
+    this.renderers.set(type, { ...renderer, type });
+    return {
+      dispose: () => {
+        if (this.renderers.get(type)?.apply === renderer.apply) {
+          this.renderers.delete(type);
+        }
+      },
+    };
+  }
+
+  get(type: string): FabricObjectEffectRenderer | undefined {
+    return this.renderers.get(String(type || "").trim());
+  }
+
+  list(): FabricObjectEffectRenderer[] {
+    return Array.from(this.renderers.values());
+  }
 }
 
 const GRAPH_RENDER_TARGET = "render-graph";
@@ -44,6 +78,7 @@ const GRAPH_RENDER_TARGET = "render-graph";
 export default class CanvasService implements Service, CanvasServiceContract {
   public canvas: Canvas;
   public viewport: ViewportSystem;
+  public effectRenderers = new FabricEffectRendererRegistry();
   private context?: ServiceContext;
   private eventBus?: EventBus;
   private canvasForwardersBound = false;
@@ -80,6 +115,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       });
     }
     this.ensureCanvasPreservesObjectStacking();
+    this.effectRenderers.register(this.createClipPathEffectRenderer());
 
     this.viewport = new ViewportSystem();
     if (this.canvas.width !== undefined && this.canvas.height !== undefined) {
@@ -297,7 +333,6 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   async reconcileRenderGraphDrawList(
     items: FabricRenderTargetItem[],
-    effects: FabricRenderTargetClipEffect[] = [],
     options: { render?: boolean } = {},
   ): Promise<void> {
     const normalizedItems = items
@@ -354,9 +389,9 @@ export default class CanvasService implements Service, CanvasServiceContract {
         layerId: item.layerId,
         renderOrder: item.order,
       });
+      await this.applyObjectEffects(current as FabricObject, spec);
     }
 
-    await this.applyRenderGraphClipEffects(effects);
     this.syncRenderGraphStacking(normalizedItems.map((item) => item.key));
 
     if (options.render !== false) {
@@ -364,54 +399,61 @@ export default class CanvasService implements Service, CanvasServiceContract {
     }
   }
 
-  private async applyRenderGraphClipEffects(
-    effects: FabricRenderTargetClipEffect[],
+  private async applyObjectEffects(
+    object: FabricObject,
+    spec: RenderObjectSpec,
   ) {
-    const targetsByObject = new Map<FabricObject, FabricRenderTargetClipEffect>();
-
+    if (!this.effectRenderers) {
+      this.effectRenderers = new FabricEffectRendererRegistry();
+      this.effectRenderers.register(this.createClipPathEffectRenderer());
+    }
+    const effects = (spec.effects ?? []).filter((effect) =>
+      evaluateRuntimeCondition(effect.activeWhen, {}),
+    );
+    const effectsByType = new Map<string, RenderEffectSpec[]>();
     effects.forEach((effect) => {
-      const targetLayerIds = new Set(effect.targetLayerIds ?? []);
-      const targetSubjectIds = new Set(effect.targetSubjectIds ?? []);
-      if (!targetLayerIds.size && !targetSubjectIds.size) return;
-
-      this.canvas.getObjects().forEach((object: any) => {
-        if (object?.data?.renderTarget !== GRAPH_RENDER_TARGET) return;
-        if (
-          targetLayerIds.has(String(object.data.layerId || "")) ||
-          targetSubjectIds.has(String(object.data.subjectId || ""))
-        ) {
-          targetsByObject.set(object as FabricObject, effect);
-        }
-      });
+      const type = String(effect.type || "").trim();
+      if (!type) return;
+      const list = effectsByType.get(type) ?? [];
+      list.push(effect);
+      effectsByType.set(type, list);
     });
 
-    const templateCache = new Map<string, FabricObject | null>();
-    for (const object of this.canvas.getObjects() as FabricObject[]) {
-      const data = (object as any)?.data || {};
-      if (data.renderTarget !== GRAPH_RENDER_TARGET) continue;
-      const effect = targetsByObject.get(object);
-      if (!effect) {
-        this.clearClipPathEffectFromObject(object as any);
+    for (const renderer of this.effectRenderers.list()) {
+      const typedEffects = effectsByType.get(String(renderer.type));
+      if (!typedEffects?.length) {
+        renderer.clear({ canvasService: this, object, spec });
         continue;
       }
-
-      let template = templateCache.get(effect.key);
-      if (template === undefined) {
-        template = await this.createClipPathTemplate(effect);
-        templateCache.set(effect.key, template);
+      for (const effect of typedEffects) {
+        await renderer.apply({ canvasService: this, effect, object, spec });
       }
-
-      if (!template) {
-        this.clearClipPathEffectFromObject(object as any);
-        continue;
-      }
-
-      await this.applyClipPathEffectToObject(object as any, template, effect.key);
     }
   }
 
+  private createClipPathEffectRenderer(): FabricObjectEffectRenderer {
+    return {
+      type: "clipPath",
+      apply: async ({ effect, object }) => {
+        if (effect.type !== "clipPath") return;
+        const template = await this.createClipPathTemplate(effect);
+        if (!template) {
+          this.clearClipPathEffectFromObject(object as any);
+          return;
+        }
+        await this.applyClipPathEffectToObject(
+          object as any,
+          template,
+          String(effect.id || effect.source.id || "clipPath"),
+          effect.coordinateMode,
+        );
+      },
+      clear: ({ object }) => this.clearClipPathEffectFromObject(object as any),
+    };
+  }
+
   private async createClipPathTemplate(
-    effect: FabricRenderTargetClipEffect,
+    effect: Extract<RenderEffectSpec, { type: "clipPath" }>,
   ): Promise<FabricObject | null> {
     const source = effect.source;
     const sourceId = String(source.id || "").trim();
@@ -424,7 +466,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
         ...(source.data || {}),
         id: sourceId,
         type: "clip-path-effect-template",
-        effectKey: effect.key,
+        effectKey: effect.id,
       },
       props: {
         ...(source.props || {}),
@@ -456,6 +498,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     target: any,
     clipTemplate: FabricObject,
     effectKey: string,
+    coordinateMode: "absolute" | "object" = "absolute",
   ) {
     if (!target) return;
 
@@ -469,7 +512,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       selectable: false,
       evented: false,
       excludeFromExport: true,
-      absolutePositioned: true,
+      absolutePositioned: coordinateMode !== "object",
     });
     (clipPath as any).setCoords?.();
 

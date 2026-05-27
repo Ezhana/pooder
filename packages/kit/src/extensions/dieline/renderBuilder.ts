@@ -10,7 +10,6 @@ import {
   projectPlacedFeatures,
   resolveFeaturePlacements,
 } from "../featurePlacement";
-import { IMAGE_OBJECT_LAYER_ID } from "../../shared/constants/layers";
 import type { DielineState } from "./model";
 
 interface DielineRenderIds {
@@ -36,7 +35,6 @@ export interface DielineRenderOptions {
   ids?: Partial<DielineRenderIds>;
   createHatchPattern?: (color: string) => RenderPatternSpec | undefined;
   includeImageClipEffect?: boolean;
-  clipTargetLayerIds?: string[];
   clipActiveWhen?: RuntimeConditionExpr;
 }
 
@@ -69,7 +67,6 @@ export function buildDielineRenderBundle(
     hasImages,
     createHatchPattern,
     includeImageClipEffect = true,
-    clipTargetLayerIds = [IMAGE_OBJECT_LAYER_ID],
     clipActiveWhen,
   } = options;
   const { shape, shapeStyle, radius, mainLine, offsetLine, insideColor } =
@@ -284,8 +281,8 @@ export function buildDielineRenderBundle(
         type: "clipPath",
         id: ids.clip,
         activeWhen: clipActiveWhen,
-        targetLayerIds: clipTargetLayerIds,
         source: clipSource,
+        coordinateMode: "absolute",
       },
     ],
   };

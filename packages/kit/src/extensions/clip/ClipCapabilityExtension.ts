@@ -34,7 +34,6 @@ import {
   type ClipEffectPayload,
   type ClipSource,
 } from "./capability";
-import { ClipTargetResolver } from "./ClipTargetResolver";
 import { clearRenderIntentSource } from "../../shared/runtime/renderIntentPatches";
 
 const CLIP_METADATA_KEY = "clip";
@@ -56,7 +55,6 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   private sceneService?: SceneService;
   private configService?: ConfigurationService;
   private readonly capabilityId: string;
-  private readonly targetResolver = new ClipTargetResolver();
   private sceneSubscription?: { dispose(): void };
   private configSubscription?: { dispose(): void };
 
@@ -134,7 +132,10 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
       EditorDocument
     >,
   ): RenderIntentPatch | void {
-    if (context.target.kind !== "object" || !context.target.objectId) {
+    if (
+      (context.target.kind !== "object" || !context.target.objectId) &&
+      (context.target.kind !== "layer" || !context.target.layerId)
+    ) {
       console.warn("[ClipCapability] Ignoring non-object clip effect.", {
         target: context.target,
       });
@@ -143,9 +144,11 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
 
     const clip = normalizeClipEffectPayload(context.effect.payload);
     if (!clip.enabled || !context.target.layerId) return;
+    const targetId =
+      context.target.objectId || context.target.layerId || context.target.surfaceId;
     const source = this.buildSourceSpec(
       {
-        id: context.target.objectId,
+        id: targetId,
         layerId: context.target.layerId,
         type: "rect",
         order: 0,
@@ -156,19 +159,27 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     );
     if (!source) return;
     return {
-      id: context.target.objectId,
-      clipping: {
-        enabled: true,
-        effects: [
-          {
-            type: "clipPath",
-            id: `clip.${context.target.objectId}`,
-            source,
-            targetLayerIds: [context.target.layerId],
-            targetSubjectIds: [context.target.objectId],
-          },
-        ],
-      },
+      id: targetId,
+      subject:
+        context.target.kind === "layer"
+          ? {
+              kind: "layer",
+              surfaceId: context.target.surfaceId,
+              layerId: context.target.layerId,
+            }
+          : undefined,
+      ordering:
+        context.target.kind === "layer"
+          ? { layerId: context.target.layerId }
+          : undefined,
+      effects: [
+        {
+          type: "clipPath",
+          id: `clip.${targetId}`,
+          source,
+          coordinateMode: "absolute",
+        },
+      ],
       data: {
         [CLIP_METADATA_KEY]: clip,
       },
@@ -176,25 +187,20 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   }
 
   private refresh() {
-    if (!this.renderIntentService) return;
-    const effects = this.buildClipEffects();
-    if (!effects.length) {
-      clearRenderIntentSource(this.renderIntentService, this.id);
-      return;
-    }
-    this.renderIntentService.patchIntent(this.id, {
-      id: `${this.id}.effects`,
-      subject: {
-        kind: "layer",
-        surfaceId: "legacy",
-        layerId: `${this.id}.effects`,
-      },
-      ordering: {
-        layerId: `${this.id}.effects`,
-        stack: 0,
-        layerOrder: 0,
-      },
-      clipping: { enabled: true, effects },
+    clearRenderIntentSource(this.renderIntentService, this.id);
+    if (!this.sceneService) return;
+    this.sceneService.selectElements().forEach((element) => {
+      const effect = this.buildClipEffectForElement(element);
+      const effects = (element.effects ?? []).filter(
+        (item) => item.id !== `clip.${element.id}`,
+      );
+      if (effect) effects.push(effect);
+      if (JSON.stringify(effects) === JSON.stringify(element.effects ?? [])) {
+        return;
+      }
+      this.sceneService?.updateElement(element.id, {
+        effects: effects.length ? effects : undefined,
+      });
     });
   }
 
@@ -213,9 +219,6 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     const clip = readClipMetadata(element);
     if (!clip?.enabled) return null;
 
-    const target = this.targetResolver.resolve(element);
-    if (!target) return null;
-
     const source = this.buildSourceSpec(element, clip.source);
     if (!source) return null;
 
@@ -223,8 +226,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
       type: "clipPath",
       id: `clip.${element.id}`,
       source,
-      targetLayerIds: target.targetLayerIds,
-      targetSubjectIds: target.targetSubjectIds,
+      coordinateMode: "absolute",
     };
   }
 

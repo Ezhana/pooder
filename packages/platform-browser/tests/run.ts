@@ -13,10 +13,7 @@ import {
   applyTransparentColorToAlpha,
   createBoundaryOutputMaskAlpha,
 } from "../src";
-import type {
-  FabricRenderTargetClipEffect,
-  FabricRenderTargetItem,
-} from "../src/canvas-service";
+import type { FabricRenderTargetItem } from "../src/canvas-service";
 
 declare const process: {
   exit(code: number): never;
@@ -49,7 +46,6 @@ class FakeCanvasService {
   renderCalls = 0;
   reconcileCalls: Array<{
     items: FabricRenderTargetItem[];
-    effects: FabricRenderTargetClipEffect[];
   }> = [];
 
   resize(width: number, height: number) {
@@ -60,13 +56,9 @@ class FakeCanvasService {
     this.renderCalls += 1;
   }
 
-  async reconcileRenderGraphDrawList(
-    items: FabricRenderTargetItem[],
-    effects: FabricRenderTargetClipEffect[] = [],
-  ) {
+  async reconcileRenderGraphDrawList(items: FabricRenderTargetItem[]) {
     this.reconcileCalls.push({
       items: items.map((item) => ({ ...item, spec: { ...item.spec } })),
-      effects: effects.map((effect) => ({ ...effect })),
     });
   }
 
@@ -349,20 +341,18 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       visual: { type: "rect" },
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
       props: { width: 5, height: 5 },
-      clipping: {
-        effects: [
-          {
-            type: "clipPath",
-            id: "clip.art",
-            source: {
-              id: "clip-source",
-              type: "rect",
-              props: { width: 3, height: 3 },
-            },
-            targetSubjectIds: ["art"],
+      effects: [
+        {
+          type: "clipPath",
+          id: "clip.art",
+          source: {
+            id: "clip-source",
+            type: "rect",
+            props: { width: 3, height: 3 },
           },
-        ],
-      },
+          coordinateMode: "absolute",
+        },
+      ],
     },
     {
       id: "hidden-export",
@@ -392,7 +382,12 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
     "bg",
     "draw list should keep layer order",
   );
-  assertEqual(last.effects.length, 1, "adapter should forward clip effects");
+  const artItem = last.items.find((item) => item.key === "art");
+  assertEqual(
+    artItem?.spec.effects?.length,
+    1,
+    "adapter should attach clip effects to object specs",
+  );
   assertEqual(
     last.items[2]?.spec.props.visible,
     false,
@@ -404,9 +399,9 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
     "hidden graph nodes should keep export tags for scene export",
   );
   assertEqual(
-    last.effects[0]?.targetSubjectIds?.[0],
-    "art",
-    "clip should target graph subject ids",
+    artItem?.spec.effects?.[0]?.id,
+    "clip.art",
+    "clip should stay local on the graph object spec",
   );
 
   await runtime.dispose();
@@ -993,7 +988,6 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
         },
       },
     ],
-    [],
   );
 
   assert(
@@ -1025,18 +1019,18 @@ async function testCanvasReconcileAppliesClipPath() {
           type: "rect",
           props: { width: 10, height: 10 },
           data: { subjectId: "art-subject" },
+          effects: [
+            {
+              type: "clipPath",
+              id: "clip.art",
+              source: {
+                id: "clip-source",
+                type: "rect",
+                props: { width: 5, height: 5 },
+              },
+            },
+          ],
         },
-      },
-    ],
-    [
-      {
-        key: "clip.art",
-        source: {
-          id: "clip-source",
-          type: "rect",
-          props: { width: 5, height: 5 },
-        },
-        targetSubjectIds: ["art-subject"],
       },
     ],
   );
@@ -1062,20 +1056,20 @@ async function testCanvasReconcileAppliesImageClipPath() {
           type: "rect",
           props: { width: 10, height: 10 },
           data: { subjectId: "art-subject" },
+          effects: [
+            {
+              type: "clipPath",
+              id: "clip.art",
+              source: {
+                id: "clip-source",
+                type: "image",
+                src: "data:image/png;base64,dieline",
+                space: "screen",
+                props: { left: 1, top: 2, width: 100, height: 80 },
+              },
+            },
+          ],
         },
-      },
-    ],
-    [
-      {
-        key: "clip.art",
-        source: {
-          id: "clip-source",
-          type: "image",
-          src: "data:image/png;base64,dieline",
-          space: "screen",
-          props: { left: 1, top: 2, width: 100, height: 80 },
-        },
-        targetSubjectIds: ["art-subject"],
       },
     ],
   );
@@ -1409,10 +1403,10 @@ async function testSceneExportClearsClipPathByDefault() {
     source: { layerIds: ["image.user"] },
   });
 
-  assertEqual(
+  assertDeepEqual(
     exportCanvas.objects[0]?.clipPath,
-    undefined,
-    "export should clear clip paths by default",
+    { id: "clip" },
+    "export should preserve render effect clip paths by default",
   );
 }
 
@@ -1472,14 +1466,14 @@ async function testSceneExportPreservesClipPathWhenRequested() {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
-    preserveClipPaths: true,
+    preserveClipPaths: false,
     source: { layerIds: ["image.user"] },
   });
 
   assertEqual(
     exportCanvas.objects[0]?.clipPath,
-    clipPath,
-    "export should preserve clip paths when requested",
+    undefined,
+    "export should clear clip paths when requested",
   );
 }
 
@@ -1863,11 +1857,11 @@ async function main() {
       testSceneExportUsesCutFrameCrop,
     ],
     [
-      "clears export clip paths by default",
+      "preserves export clip paths by default",
       testSceneExportClearsClipPathByDefault,
     ],
     [
-      "preserves export clip paths when requested",
+      "clears export clip paths when requested",
       testSceneExportPreservesClipPathWhenRequested,
     ],
     [

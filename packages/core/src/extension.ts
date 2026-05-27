@@ -7,6 +7,7 @@ import CapabilityRegistryService from "./services/CapabilityRegistryService";
 import CommandService from "./services/CommandService";
 import ConfigurationService from "./services/ConfigurationService";
 import { RenderIntentCompilerRegistryService } from "./render-intent";
+import { RenderEffectRegistryService } from "./render";
 
 export interface ExtensionActivationSpec {
   requiresExtensions?: string[];
@@ -51,6 +52,12 @@ interface NormalizedExtensionContributions {
   capabilities: NonNullable<ExtensionContributions["capabilities"]>;
   configurations: NonNullable<ExtensionContributions["configurations"]>;
   commands: NonNullable<ExtensionContributions["commands"]>;
+  renderEffectDefinitions: NonNullable<
+    ExtensionContributions["renderEffectDefinitions"]
+  >;
+  renderEffectRenderers: NonNullable<
+    ExtensionContributions["renderEffectRenderers"]
+  >;
   renderIntentCompilers: NonNullable<
     ExtensionContributions["renderIntentCompilers"]
   >;
@@ -71,6 +78,7 @@ interface ExtensionManagerDependencies {
   capabilityRegistry: CapabilityRegistryService;
   configurationService: ConfigurationService;
   commandService: CommandService;
+  renderEffectRegistry: RenderEffectRegistryService;
   renderIntentCompilerRegistry: RenderIntentCompilerRegistryService;
 }
 
@@ -80,6 +88,7 @@ class ExtensionManager {
   private readonly capabilityRegistry: CapabilityRegistryService;
   private readonly configurationService: ConfigurationService;
   private readonly commandService: CommandService;
+  private readonly renderEffectRegistry: RenderEffectRegistryService;
   private readonly renderIntentCompilerRegistry: RenderIntentCompilerRegistryService;
   private readonly records = new Map<string, ExtensionRecord>();
   private registrationOrder = 0;
@@ -93,6 +102,7 @@ class ExtensionManager {
     this.capabilityRegistry = dependencies.capabilityRegistry;
     this.configurationService = dependencies.configurationService;
     this.commandService = dependencies.commandService;
+    this.renderEffectRegistry = dependencies.renderEffectRegistry;
     this.renderIntentCompilerRegistry =
       dependencies.renderIntentCompilerRegistry;
   }
@@ -113,6 +123,8 @@ class ExtensionManager {
         capabilities: [],
         configurations: [],
         commands: [],
+        renderEffectDefinitions: [],
+        renderEffectRenderers: [],
         renderIntentCompilers: [],
       });
       this.records.set(extension.id, record);
@@ -241,6 +253,12 @@ class ExtensionManager {
       capabilities: [...(contributions?.capabilities ?? [])],
       configurations: [...(contributions?.configurations ?? [])],
       commands: [...(contributions?.commands ?? [])],
+      renderEffectDefinitions: [
+        ...(contributions?.renderEffectDefinitions ?? []),
+      ],
+      renderEffectRenderers: [
+        ...(contributions?.renderEffectRenderers ?? []),
+      ],
       renderIntentCompilers: [
         ...(contributions?.renderIntentCompilers ?? []),
       ],
@@ -337,6 +355,24 @@ class ExtensionManager {
           this.renderIntentCompilerRegistry.registerCompiler(
             record.definition.id,
             compiler,
+          ),
+        );
+      });
+
+      record.contributions.renderEffectDefinitions.forEach((definition) => {
+        disposables.push(
+          this.renderEffectRegistry.registerDefinition(
+            record.definition.id,
+            definition,
+          ),
+        );
+      });
+
+      record.contributions.renderEffectRenderers.forEach((renderer) => {
+        disposables.push(
+          this.renderEffectRegistry.registerRenderer(
+            record.definition.id,
+            renderer,
           ),
         );
       });

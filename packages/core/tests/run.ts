@@ -2106,7 +2106,7 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
   });
 }
 
-async function testRenderIntentClipTargetsLayerAndSubject() {
+async function testRenderIntentObjectLocalEffects() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
@@ -2123,35 +2123,44 @@ async function testRenderIntentClipTargetsLayerAndSubject() {
         visual: { type: "rect" },
         ordering: { layerId: "artwork" },
         props: { width: 10, height: 10 },
-        clipping: {
-          effects: [
-            {
-              type: "clipPath",
-              id: "clip.target",
-              source: {
-                id: "clip-source",
-                type: "rect",
-                props: { width: 5, height: 5 },
-              },
-              targetLayerIds: ["artwork"],
-              targetSubjectIds: ["target"],
+        effects: [
+          {
+            type: "clipPath",
+            id: "clip.target",
+            source: {
+              id: "clip-source",
+              type: "rect",
+              props: { width: 5, height: 5 },
             },
-          ],
-        },
+            coordinateMode: "absolute",
+          },
+        ],
       },
     ]);
 
     const effect = intents.getGraph().layers[0]?.nodes[0]?.effects[0];
     assertDeepEqual(
       {
-        targetLayerIds: effect?.targetLayerIds,
-        targetSubjectIds: effect?.targetSubjectIds,
+        coordinateMode: effect?.coordinateMode,
+        id: effect?.id,
+        sourceId: effect?.source.id,
       },
       {
-        targetLayerIds: ["artwork"],
-        targetSubjectIds: ["target"],
+        coordinateMode: "absolute",
+        id: "clip.target",
+        sourceId: "clip-source",
       },
-      "clip effects should target graph layer and subject ids",
+      "clip effects should stay local on the render graph node",
+    );
+    assertEqual(
+      "targetLayerIds" in ((effect ?? {}) as unknown as Record<string, unknown>),
+      false,
+      "clip effects should not expose global layer selectors",
+    );
+    assertEqual(
+      "targetSubjectIds" in ((effect ?? {}) as unknown as Record<string, unknown>),
+      false,
+      "clip effects should not expose global subject selectors",
     );
   });
 }
@@ -2519,8 +2528,8 @@ async function main() {
       testRenderIntentInteractionAspectCarriesDeclarativeState,
     ],
     [
-      "keeps render intent clip targets graph-scoped",
-      testRenderIntentClipTargetsLayerAndSubject,
+      "keeps render intent effects object-local",
+      testRenderIntentObjectLocalEffects,
     ],
     [
       "merges render intent patches with diagnostics",

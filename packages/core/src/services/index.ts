@@ -1,6 +1,7 @@
 import CapabilityRegistryService from "./CapabilityRegistryService";
 import CommandService from "./CommandService";
 import ConfigurationService from "./ConfigurationService";
+import { RenderEffectRegistryService } from "../render";
 import {
   RenderIntentCompilerRegistryService,
   RenderIntentService,
@@ -16,6 +17,7 @@ import {
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+  RENDER_EFFECT_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
   CORE_SERVICE_TOKENS,
   CANVAS_SERVICE,
@@ -34,6 +36,7 @@ export {
   CommandService,
   ConfigurationService,
   RenderIntentCompilerRegistryService,
+  RenderEffectRegistryService,
   RenderIntentService,
   SceneService,
   ToolRegistryService,
@@ -45,6 +48,7 @@ export {
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+  RENDER_EFFECT_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
   CANVAS_SERVICE,
   SCENE_SERVICE,

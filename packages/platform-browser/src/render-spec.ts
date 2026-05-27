@@ -7,6 +7,7 @@ export type {
   RenderLayoutLength,
   RenderLayoutRect,
   RenderLayoutReference,
+  RenderLayerSpec,
   RenderObjectLayoutSpec,
   RenderObjectSpec,
   RenderObjectType,

@@ -29,10 +29,7 @@ import {
   type RenderIntentService,
   type WorkbenchService,
 } from "@pooder/core";
-import type {
-  FabricRenderTargetClipEffect,
-  FabricRenderTargetItem,
-} from "../canvas-service";
+import type { FabricRenderTargetItem } from "../canvas-service";
 import { CANVAS_SERVICE } from "../tokens";
 
 export const RENDER_GRAPH_RENDER_SCOPE = "core-render-graph";
@@ -52,7 +49,6 @@ export type FabricRenderGraphSyncStateListener = (
 type FabricRenderTargetCanvasService = CanvasService & {
   reconcileRenderGraphDrawList(
     items: FabricRenderTargetItem[],
-    effects?: FabricRenderTargetClipEffect[],
     options?: { render?: boolean },
   ): Promise<void>;
 };
@@ -253,30 +249,21 @@ export class FabricRenderGraphAdapter implements Service {
     const canvas = this.requireCanvasService();
     const conditionContext = this.buildRuntimeConditionContext(graph);
     const items: FabricRenderTargetItem[] = [];
-    const effects: FabricRenderTargetClipEffect[] = [];
 
     graph.layers.forEach((layer, layerIndex) => {
-      layer.effects.forEach((effect, index) => {
-        const normalized = this.toClipEffect(
-          effect,
-          `layer:${layer.id}:${index}`,
-          conditionContext,
-        );
-        if (normalized) effects.push(normalized);
-      });
+      const layerEffects = this.normalizeActiveEffects(
+        layer.effects,
+        conditionContext,
+      );
 
       layer.nodes.forEach((node, nodeIndex) => {
-        node.effects.forEach((effect, index) => {
-          const normalized = this.toClipEffect(
-            effect,
-            `node:${node.id}:${index}`,
-            conditionContext,
-          );
-          if (normalized) effects.push(normalized);
-        });
-
         if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext)) return;
-        const spec = this.toRenderObjectSpec(layer, node, conditionContext);
+        const spec = this.toRenderObjectSpec(
+          layer,
+          node,
+          conditionContext,
+          layerEffects,
+        );
         if (!spec) return;
         items.push({
           key: node.id,
@@ -298,7 +285,12 @@ export class FabricRenderGraphAdapter implements Service {
         });
         elements.forEach((element, elementIndex) => {
           if (element.visible === false) return;
-          const spec = this.toSceneRenderObjectSpec(scene, layer, element);
+          const spec = this.toSceneRenderObjectSpec(
+            scene,
+            layer,
+            element,
+            conditionContext,
+          );
           if (!spec) return;
           items.push({
             key: `scene:${scene.id}:${element.id}`,
@@ -314,7 +306,7 @@ export class FabricRenderGraphAdapter implements Service {
       });
     });
 
-    await canvas.reconcileRenderGraphDrawList(items, effects, { render: false });
+    await canvas.reconcileRenderGraphDrawList(items, { render: false });
     canvas.requestRenderAll();
   }
 
@@ -491,26 +483,11 @@ export class FabricRenderGraphAdapter implements Service {
     });
   }
 
-  private toClipEffect(
-    effect: RenderEffectSpec,
-    fallbackKey: string,
-    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
-  ): FabricRenderTargetClipEffect | null {
-    if (effect.type !== "clipPath") return null;
-    if (!evaluateRuntimeCondition(effect.activeWhen, conditionContext)) return null;
-    const key = String(effect.id || fallbackKey).trim();
-    return {
-      key,
-      source: effect.source,
-      targetLayerIds: normalizeIds(effect.targetLayerIds),
-      targetSubjectIds: normalizeIds(effect.targetSubjectIds),
-    };
-  }
-
   private toRenderObjectSpec(
     layer: RenderGraphLayer,
     node: RenderGraphNode,
     conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
+    layerEffects: RenderEffectSpec[] = [],
   ): RenderObjectSpec | null {
     const hasDeclarativeInteraction =
       typeof node.interaction?.enabled === "boolean" ||
@@ -552,6 +529,10 @@ export class FabricRenderGraphAdapter implements Service {
         ? { interactionConstraints }
         : {}),
     };
+    const effects = [
+      ...layerEffects,
+      ...this.normalizeActiveEffects(node.effects, conditionContext),
+    ];
 
     if (node.type === "image") {
       const src = node.visual?.src;
@@ -562,6 +543,7 @@ export class FabricRenderGraphAdapter implements Service {
         src,
         space: node.coordinateSpace,
         data: commonData,
+        ...(effects.length ? { effects } : {}),
         props: commonProps,
       };
     }
@@ -572,6 +554,7 @@ export class FabricRenderGraphAdapter implements Service {
         type: "path",
         space: node.coordinateSpace,
         data: commonData,
+        ...(effects.length ? { effects } : {}),
         props: commonProps,
       };
     }
@@ -582,6 +565,7 @@ export class FabricRenderGraphAdapter implements Service {
         type: "rect",
         space: node.coordinateSpace,
         data: commonData,
+        ...(effects.length ? { effects } : {}),
         props: commonProps,
       };
     }
@@ -591,6 +575,7 @@ export class FabricRenderGraphAdapter implements Service {
       type: "text",
       space: node.coordinateSpace,
       data: commonData,
+      ...(effects.length ? { effects } : {}),
       props: commonProps,
     };
   }
@@ -607,6 +592,7 @@ export class FabricRenderGraphAdapter implements Service {
     scene: SceneRecord,
     layer: SceneLayer,
     element: SceneElement,
+    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
   ): RenderObjectSpec | null {
     const renderProps = isRecord(element.data?.renderProps)
       ? element.data.renderProps
@@ -640,8 +626,24 @@ export class FabricRenderGraphAdapter implements Service {
       ...(element.type === "image" ? { src: element.src } : {}),
       space: element.data?.renderSpace === "screen" ? "screen" : "scene",
       data,
+      effects: [
+        ...this.normalizeActiveEffects(layer.effects, conditionContext),
+        ...this.normalizeActiveEffects(element.effects, conditionContext),
+      ],
       props,
     };
+  }
+
+  private normalizeActiveEffects(
+    effects: readonly RenderEffectSpec[] | undefined,
+    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
+  ): RenderEffectSpec[] {
+    if (!Array.isArray(effects)) return [];
+    return effects
+      .filter((effect) =>
+        evaluateRuntimeCondition(effect.activeWhen, conditionContext),
+      )
+      .map((effect) => ({ ...effect }));
   }
 
   private resolvePlacementProps(node: RenderGraphNode): Record<string, unknown> {

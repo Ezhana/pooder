@@ -1,4 +1,5 @@
 export * from "./browser-scene-export-service";
+export * from "./canvas-service";
 export { default as CanvasService } from "./canvas-service";
 export * from "./host";
 export * from "./output-mask";
