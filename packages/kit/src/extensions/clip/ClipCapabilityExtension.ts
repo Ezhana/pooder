@@ -2,7 +2,9 @@ import {
   CANVAS_SERVICE,
   CONFIGURATION_SERVICE,
   RENDER_INTENT_SERVICE,
+  SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
+  SURFACE_FRAME_SERVICE,
   type CanvasService,
   type ConfigurationService,
   type ExtensionContext,
@@ -15,13 +17,11 @@ import {
   type RenderIntentPatch,
   type RenderIntentService,
   type SceneElement,
+  type SceneLayoutService,
   type SceneService,
+  type SurfaceFrameService,
 } from "@pooder/core";
 import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
-import {
-  computeSceneLayout,
-  readSizeState,
-} from "../../shared/scene/scene-layout-model";
 import { buildDielineClipSourceSpec } from "../dieline/renderBuilder";
 import { readDielineState } from "../dieline/model";
 import {
@@ -54,6 +54,8 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   private renderIntentService?: RenderIntentService;
   private sceneService?: SceneService;
   private configService?: ConfigurationService;
+  private sceneLayoutService?: SceneLayoutService;
+  private surfaceFrameService?: SurfaceFrameService;
   private readonly capabilityId: string;
   private sceneSubscription?: { dispose(): void };
   private configSubscription?: { dispose(): void };
@@ -73,6 +75,12 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
+    );
+    this.sceneLayoutService = context.services.get<SceneLayoutService>(
+      SCENE_LAYOUT_SERVICE,
+    );
+    this.surfaceFrameService = context.services.get<SurfaceFrameService>(
+      SURFACE_FRAME_SERVICE,
     );
 
     this.sceneSubscription?.dispose();
@@ -96,6 +104,8 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     this.renderIntentService = undefined;
     this.sceneService = undefined;
     this.configService = undefined;
+    this.sceneLayoutService = undefined;
+    this.surfaceFrameService = undefined;
   }
 
   contribute(): ExtensionContributions {
@@ -292,27 +302,20 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   ): RenderObjectSpec | null {
     if (!this.canvasService || !this.configService) return null;
 
-    const sceneLayout = computeSceneLayout(
-      this.canvasService,
-      readSizeState(this.configService),
-    );
+    const sceneLayout = this.sceneLayoutService?.getLayout();
     if (!sceneLayout) return null;
+    const viewportSize = this.canvasService.getViewportSize();
 
     return buildDielineClipSourceSpec({
       state: readDielineState(
         this.configService,
         undefined,
         source.configNamespace,
+        this.surfaceFrameService?.getFrames(),
       ),
       sceneLayout,
-      canvasWidth:
-        sceneLayout.canvasWidth ||
-        this.canvasService.getViewportSize().width ||
-        800,
-      canvasHeight:
-        sceneLayout.canvasHeight ||
-        this.canvasService.getViewportSize().height ||
-        600,
+      canvasWidth: viewportSize.width || 800,
+      canvasHeight: viewportSize.height || 600,
       id: `clip.${element.id}.dieline-source`,
     });
   }

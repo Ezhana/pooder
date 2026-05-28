@@ -1,7 +1,9 @@
 import {
-  COMMAND_SERVICE,
-  CommandService,
+  CAPABILITY_REGISTRY_SERVICE,
+  CapabilityRegistryService,
   CONFIGURATION_SERVICE,
+  SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   ExtensionContext,
   ExtensionContributions,
   ExtensionDefinition,
@@ -11,6 +13,8 @@ import {
   type RenderIntentCompilerContext,
   type RenderIntentPatch,
   type RenderPatternSpec,
+  type SceneLayoutService,
+  type SurfaceFrameService,
 } from "@pooder/core";
 import {
   CANVAS_SERVICE,
@@ -28,11 +32,6 @@ import {
   resolveFeaturePlacements,
 } from "../featurePlacement";
 import {
-  computeSceneLayout,
-  readSizeState,
-  type SceneGeometrySnapshot as DielineGeometry,
-} from "../../shared/scene/scene-layout-model";
-import {
   DIELINE_LAYER_ID,
   FEATURE_DIELINE_LAYER_ID,
   FEATURE_OVERLAY_LAYER_ID,
@@ -46,7 +45,11 @@ import {
 } from "../../shared/runtime/renderIntentPatches";
 import { cloneWithJson } from "../../shared/runtime/sessionState";
 import { buildDielineRenderBundle } from "../dieline/renderBuilder";
-import { readDielineState } from "../dieline/model";
+import { readDielineState, type DielineGeometry } from "../dieline/model";
+import {
+  DIELINE_GEOMETRY_CAPABILITY_ID,
+  type DielineGeometryCapabilityApi,
+} from "../dieline/capability";
 import {
   createFeatureCapabilityDefinition,
   FEATURE_CAPABILITY_ID,
@@ -116,6 +119,8 @@ export class FeatureTool implements ExtensionDefinition {
   private workingFeatures: ConstraintFeature[] = [];
   private canvasService?: CanvasService;
   private renderIntentService?: RenderIntentService;
+  private sceneLayoutService?: SceneLayoutService;
+  private surfaceFrameService?: SurfaceFrameService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
   private isFeatureSessionActive = false;
@@ -138,10 +143,6 @@ export class FeatureTool implements ExtensionDefinition {
 
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
-  private handleSceneGeometryChange:
-    | ((geometry: DielineGeometry) => void)
-    | null = null;
-
   private currentGeometry: DielineGeometry | null = null;
 
   constructor(options: FeatureToolOptions = {}) {
@@ -187,6 +188,12 @@ export class FeatureTool implements ExtensionDefinition {
     );
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
+    );
+    this.sceneLayoutService = context.services.get<SceneLayoutService>(
+      SCENE_LAYOUT_SERVICE,
+    );
+    this.surfaceFrameService = context.services.get<SurfaceFrameService>(
+      SURFACE_FRAME_SERVICE,
     );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
@@ -240,6 +247,8 @@ export class FeatureTool implements ExtensionDefinition {
     this.teardown();
     this.canvasService = undefined;
     this.renderIntentService = undefined;
+    this.sceneLayoutService = undefined;
+    this.surfaceFrameService = undefined;
     this.context = undefined;
   }
 
@@ -551,16 +560,21 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private async refreshGeometry() {
-    if (!this.context) return;
-    const commandService =
-      this.context.services.get<CommandService>(COMMAND_SERVICE);
-    if (!commandService) return;
-    try {
-      const g = await Promise.resolve(
-        commandService.executeCommand("getSceneGeometry"),
-      );
-      if (g) this.currentGeometry = g as DielineGeometry;
-    } catch (e) {}
+    const geometry = this.getDielineGeometry();
+    if (geometry) this.currentGeometry = geometry;
+  }
+
+  private getDielineGeometry(): DielineGeometry | null {
+    const registry = this.context?.services.get<CapabilityRegistryService>(
+      CAPABILITY_REGISTRY_SERVICE,
+    );
+    return (
+      registry
+        ?.getFacade<DielineGeometryCapabilityApi>(
+          DIELINE_GEOMETRY_CAPABILITY_ID,
+        )
+        ?.getGeometry() ?? null
+    );
   }
 
   private async resetWorkingFeaturesFromSource() {
@@ -586,9 +600,10 @@ export class FeatureTool implements ExtensionDefinition {
     );
     if (!configService) return { ok: false };
 
-    const sizeState = readSizeState(configService);
-    const dielineWidth = sizeState.sceneFrames.productionFrame.widthMm;
-    const dielineHeight = sizeState.sceneFrames.productionFrame.heightMm;
+    const geometry = this.currentGeometry ?? this.getDielineGeometry();
+    const scale = geometry?.scale || 1;
+    const dielineWidth = geometry ? geometry.width / scale : 0;
+    const dielineHeight = geometry ? geometry.height / scale : 0;
 
     let changed = false;
     const next = this.workingFeatures.map((f) => {
@@ -634,9 +649,10 @@ export class FeatureTool implements ExtensionDefinition {
       };
     }
 
-    const sizeState = readSizeState(configService);
-    const dielineWidth = sizeState.sceneFrames.productionFrame.widthMm;
-    const dielineHeight = sizeState.sceneFrames.productionFrame.heightMm;
+    const geometry = this.currentGeometry ?? this.getDielineGeometry();
+    const scale = geometry?.scale || 1;
+    const dielineWidth = geometry ? geometry.width / scale : 0;
+    const dielineHeight = geometry ? geometry.height / scale : 0;
 
     const result = completeFeaturesStrict(
       this.workingFeatures,
@@ -733,31 +749,8 @@ export class FeatureTool implements ExtensionDefinition {
   private setup() {
     if (!this.canvasService || !this.context) return;
 
-    if (!this.handleSceneGeometryChange) {
-      this.handleSceneGeometryChange = (geometry: DielineGeometry) => {
-        this.currentGeometry = geometry;
-        this.redraw({ enforceConstraints: true });
-      };
-      this.context.eventBus.on(
-        "scene:geometry:change",
-        this.handleSceneGeometryChange,
-      );
-    }
-
-    const commandService =
-      this.context.services.get<CommandService>(COMMAND_SERVICE);
-    if (commandService) {
-      try {
-        Promise.resolve(commandService.executeCommand("getSceneGeometry"))
-          .then((g) => {
-            if (g) {
-              this.currentGeometry = g as DielineGeometry;
-              this.redraw();
-            }
-          })
-          .catch(() => {});
-      } catch (e) {}
-    }
+    this.attachLayoutSubscriptions();
+    void this.refreshGeometry().then(() => this.redraw());
 
     if (!this.handleMoving) {
       this.handleMoving = (e: any) => {
@@ -812,19 +805,32 @@ export class FeatureTool implements ExtensionDefinition {
       this.canvasService.offCanvasEvent("object:modified", this.handleModified);
       this.handleModified = null;
     }
-    if (this.handleSceneGeometryChange && this.context) {
-      this.context.eventBus.off(
-        "scene:geometry:change",
-        this.handleSceneGeometryChange,
-      );
-      this.handleSceneGeometryChange = null;
-    }
-
     this.renderSeq += 1;
     this.markerSpecs = [];
     this.sessionDielineSpecs = [];
     this.sessionDielineEffects = [];
     clearRenderIntentSource(this.renderIntentService, this.id);
+  }
+
+  private attachLayoutSubscriptions() {
+    const layoutService = this.sceneLayoutService;
+    const surfaceFrameService = this.surfaceFrameService;
+    if (!layoutService || !surfaceFrameService) return;
+    const observed = new Set<string>();
+    const observe = (surfaceId: string) => {
+      if (!surfaceId || observed.has(surfaceId)) return;
+      observed.add(surfaceId);
+      this.subscriptions.add(
+        layoutService.onLayoutChange(surfaceId, () => {
+          void this.refreshGeometry();
+          this.redraw({ enforceConstraints: true });
+        }),
+      );
+    };
+    surfaceFrameService.listSurfaceIds().forEach(observe);
+    this.subscriptions.add(
+      surfaceFrameService.onAnyFramesChange((event) => observe(event.surfaceId)),
+    );
   }
 
   private createHatchPattern(
@@ -1052,23 +1058,25 @@ export class FeatureTool implements ExtensionDefinition {
     if (!configService) {
       return { specs: [], effects: [] };
     }
-    const sceneLayout = computeSceneLayout(
-      this.canvasService,
-      readSizeState(configService),
-    );
+    const sceneLayout = this.sceneLayoutService?.getLayout();
     if (!sceneLayout) {
       return { specs: [], effects: [] };
     }
 
-    const state = readDielineState(configService, undefined, this.configNamespace);
+    const state = readDielineState(
+      configService,
+      undefined,
+      this.configNamespace,
+      this.surfaceFrameService?.getFrames(),
+    );
     state.features = this.cloneFeatures(this.workingFeatures);
+    const viewportSize = this.canvasService.getViewportSize();
 
     return buildDielineRenderBundle({
       state,
       sceneLayout,
-      canvasWidth: sceneLayout.canvasWidth || this.canvasService.getViewportSize().width || 800,
-      canvasHeight:
-        sceneLayout.canvasHeight || this.canvasService.getViewportSize().height || 600,
+      canvasWidth: viewportSize.width || 800,
+      canvasHeight: viewportSize.height || 600,
       hasImages: this.hasImageItems(),
       createHatchPattern: (color) => this.createHatchPattern(color),
       clipActiveWhen: { op: "const", value: true },

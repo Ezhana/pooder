@@ -9,6 +9,7 @@ import {
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   SESSION_SERVICE,
   computeDragInteraction,
   evaluateRuntimeCondition,
@@ -20,7 +21,6 @@ import {
   type RenderIntentCompilerContext,
   type RenderIntentPatch,
   type RenderObjectSpec,
-  type RenderPatternSpec,
   type RenderGraphNode,
   type RenderIntentTransform,
   type RenderIntentService,
@@ -28,6 +28,7 @@ import {
   type SceneElementInput,
   type SceneExportService,
   type SceneLayoutService,
+  type SurfaceFrameService,
   type SceneService,
   type SessionArtifact,
   type SessionService,
@@ -57,6 +58,9 @@ import {
   type ImagePlacementCommitTarget,
   type ImagePlacementSessionInput,
   type ImageSessionProjection,
+  type ImageSessionOverlayEntry,
+  type ImageSessionOverlayLayer,
+  type ImageSessionOverlayProvider,
   type ImageSessionProjectionPlacement,
   type ImageSessionProjectionSurfaceScope,
   type ImagePlacementViewState,
@@ -72,10 +76,6 @@ import {
   clearRenderIntentSource,
   patchRenderObjectSpecs,
 } from "../../shared/runtime/renderIntentPatches";
-import {
-  DIELINE_GEOMETRY_CAPABILITY_ID,
-  type DielineGeometryCapabilityApi,
-} from "../dieline/capability";
 import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   type ConfigurableVisualCapabilityApi,
@@ -568,6 +568,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private renderIntentService?: RenderIntentService;
   private sceneService?: SceneService;
   private sceneLayoutService?: SceneLayoutService;
+  private surfaceFrameService?: SurfaceFrameService;
   private exportService?: SceneExportService;
   private sessionService?: SessionService;
   private context?: ExtensionContext;
@@ -609,6 +610,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private pendingCanvasSessionPlacementId: string | null = null;
   private pendingCanvasSessionTarget: any = null;
   private pendingCanvasSessionTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private readonly sessionOverlayProviders = new Map<
+    string,
+    ImageSessionOverlayProvider
+  >();
 
   constructor(options: ImagePlacementCapabilityImplementationOptions = {}) {
     this.id = String(options.id || IMAGE_PLACEMENT_CAPABILITY_ID).trim() ||
@@ -637,6 +642,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.sceneLayoutService = context.services.get<SceneLayoutService>(
       SCENE_LAYOUT_SERVICE,
     );
+    this.surfaceFrameService = context.services.get<SurfaceFrameService>(
+      SURFACE_FRAME_SERVICE,
+    );
     this.exportService = context.services.get<SceneExportService>(
       SCENE_EXPORT_SERVICE,
     );
@@ -657,8 +665,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.subscriptions.on(context.eventBus, "selection:cleared", this.onSelectionCleared);
     this.subscriptions.on(context.eventBus, "object:modified", this.onObjectModified);
     this.subscriptions.on(context.eventBus, "mouse:down", this.onMouseDown);
-    this.subscriptions.on(context.eventBus, "scene:layout:change", this.onSceneFrameChanged);
-    this.subscriptions.on(context.eventBus, "scene:geometry:change", this.onSceneFrameChanged);
+    this.attachLayoutSubscriptions();
     this.bindCanvasInteractionHandlers();
     this.updateImages();
   }
@@ -672,6 +679,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.workingImages.clear();
     this.workingImageDraftsBySessionId.clear();
     this.retainedWorkingImageBaselines.clear();
+    this.sessionOverlayProviders.clear();
     this.clearAllSessionScenes();
     this.sessionIdsByPlacementId.clear();
     this.sessionSceneIdsBySessionId.clear();
@@ -686,6 +694,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.renderIntentService = undefined;
     this.sceneService = undefined;
     this.sceneLayoutService = undefined;
+    this.surfaceFrameService = undefined;
     this.exportService = undefined;
     this.sessionService = undefined;
     this.context = undefined;
@@ -887,7 +896,30 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       setTransform: (input, transform) => this.setImageTransform(input, transform),
       validateSession: (input) => this.validateSession(input),
       validatePlacement: (placementId) => this.validateSession(placementId),
+      registerSessionOverlayProvider: (provider) =>
+        this.registerSessionOverlayProvider(provider),
       refresh: () => this.updateImages(),
+    };
+  }
+
+  private registerSessionOverlayProvider(
+    provider: ImageSessionOverlayProvider,
+  ): { dispose(): void } {
+    const id = String(provider?.id || "").trim();
+    if (!id) {
+      throw new Error("Image session overlay provider requires id.");
+    }
+    const registered = { ...provider, id };
+    this.sessionOverlayProviders.set(id, registered);
+    this.publishImageSessionScenes();
+    this.canvasService?.requestRenderAll();
+    return {
+      dispose: () => {
+        if (this.sessionOverlayProviders.get(id) !== registered) return;
+        this.sessionOverlayProviders.delete(id);
+        this.publishImageSessionScenes();
+        this.canvasService?.requestRenderAll();
+      },
     };
   }
 
@@ -2512,20 +2544,20 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
   }
 
-  private buildSessionOverlaySpecs(): RenderObjectSpec[] {
+  private buildSessionOverlayEntries(
+    placement: ImagePlacementState,
+    sessionId: string,
+  ): Array<{ layerId: string; spec: RenderObjectSpec }> {
     if (!this.canvasService || !this.sceneLayoutService) return [];
-    const layout = this.sceneLayoutService.getLayout(true);
+    const requestedSurfaceId = this.resolveImageSessionSurfaceId(placement);
+    const layout = this.sceneLayoutService.getLayout(requestedSurfaceId ?? undefined);
     if (!layout) return [];
-    const geometry = this.normalizeSessionGeometry(
-      this.getDielineGeometry() || this.sceneLayoutService.getGeometry(true),
-      layout.scale,
-    );
     const viewport = this.canvasService.getScreenViewportRect();
-    return buildImageSessionOverlaySpecs({
-      geometry,
+    const surfaceId = layout.surfaceId;
+    const entries: Array<{ layerId: string; spec: RenderObjectSpec }> =
+      buildImageSessionOverlaySpecs({
       layout,
       viewport,
-      hatchPattern: this.createHatchPattern(),
       visual: {
         dashLength: 8,
         innerBackground: "rgba(0, 0, 0, 0)",
@@ -2534,7 +2566,62 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         strokeStyle: "dashed",
         strokeWidth: 1,
       },
-    });
+    }).map((spec) => ({
+      layerId: IMAGE_SESSION_CONTROLS_LAYER_ID,
+      spec,
+    }));
+
+    const context = {
+      placement,
+      sessionId,
+      surfaceId,
+      layout,
+      viewport,
+    };
+    Array.from(this.sessionOverlayProviders.values())
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.id.localeCompare(b.id))
+      .forEach((provider) => {
+        const provided = provider.getOverlaySpecs(context);
+        provided.forEach((entry) => {
+          const normalized = this.normalizeSessionOverlayEntry(entry);
+          if (normalized) entries.push(normalized);
+        });
+      });
+    return entries;
+  }
+
+  private normalizeSessionOverlayEntry(
+    entry: RenderObjectSpec | ImageSessionOverlayEntry,
+  ): { layerId: string; spec: RenderObjectSpec } | null {
+    if (!entry) return null;
+    if ("spec" in entry) {
+      return {
+        layerId: this.resolveImageSessionOverlayLayerId(entry.layer),
+        spec: entry.spec,
+      };
+    }
+    return {
+      layerId: IMAGE_SESSION_CONTROLS_LAYER_ID,
+      spec: entry,
+    };
+  }
+
+  private resolveImageSessionOverlayLayerId(
+    layer: ImageSessionOverlayLayer | undefined,
+  ): string {
+    if (layer === "underlay") return IMAGE_SESSION_UNDERLAY_LAYER_ID;
+    if (layer === "overlay") return IMAGE_SESSION_OVERLAY_LAYER_ID;
+    return IMAGE_SESSION_CONTROLS_LAYER_ID;
+  }
+
+  private resolveImageSessionSurfaceId(
+    placement?: ImagePlacementState,
+  ): string | null {
+    return (
+      (placement ? this.resolvePlacementSurfaceId(placement) : null) ??
+      this.surfaceFrameService?.listSurfaceIds()[0] ??
+      null
+    );
   }
 
   private getImageSessionSceneId(sessionId: string): string {
@@ -2628,7 +2715,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             renderedSceneIds.add(sceneId);
             this.sceneService!.clearScene(sceneId);
             this.addImageSessionSceneLayers(sceneId);
-            this.buildImageSessionSceneSpecs(placement).forEach(({ layerId, spec }, index) => {
+            this.buildImageSessionSceneSpecs(placement, sessionId).forEach(({ layerId, spec }, index) => {
               const element = this.renderSpecToSceneElement(spec, layerId, index);
               if (element) this.sceneService!.addElement(element, { sceneId });
             });
@@ -2661,6 +2748,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private buildImageSessionSceneSpecs(
     placement: ImagePlacementState,
+    sessionId: string,
   ): Array<{ layerId: string; spec: RenderObjectSpec }> {
     const specs: Array<{ layerId: string; spec: RenderObjectSpec }> = [];
     specs.push(
@@ -2689,9 +2777,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           IMAGE_SESSION_CONTROLS_LAYER_ID,
         ),
       );
-      this.buildSessionOverlaySpecs().forEach((spec) => {
-        specs.push({ layerId: IMAGE_SESSION_CONTROLS_LAYER_ID, spec });
-      });
+      specs.push(...this.buildSessionOverlayEntries(placement, sessionId));
     }
     return specs;
   }
@@ -2897,38 +2983,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ...common,
       type: "text",
       text: String((props as any).text ?? ""),
-    };
-  }
-
-  private getDielineGeometry() {
-    const registry = this.context?.services.get<CapabilityRegistryService>(
-      CAPABILITY_REGISTRY_SERVICE,
-    );
-    return registry
-      ?.getFacade<DielineGeometryCapabilityApi>(DIELINE_GEOMETRY_CAPABILITY_ID)
-      ?.getGeometry();
-  }
-
-  private normalizeSessionGeometry(
-    geometry: ReturnType<DielineGeometryCapabilityApi["getGeometry"]>,
-    fallbackScale: number,
-  ) {
-    if (!geometry) return null;
-    return {
-      ...geometry,
-      scale: finiteNumber(geometry.scale, fallbackScale),
-    };
-  }
-
-  private createHatchPattern(
-    color: string = "rgba(255, 0, 0, 0.35)",
-  ): RenderPatternSpec {
-    return {
-      type: "pattern",
-      kind: "diagonalHatch",
-      color,
-      size: 20,
-      repetition: "repeat",
     };
   }
 
@@ -3157,7 +3211,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getSurfaceFrameRect(): FrameRect {
     if (!this.canvasService) return { left: 0, top: 0, width: 1, height: 1 };
-    const layout = this.sceneLayoutService?.getLayout(true);
+    const layout = this.sceneLayoutService?.getLayout();
     if (layout) {
       return this.canvasService.toSceneRect({
         left: layout.cutRect.left,
@@ -3166,7 +3220,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         height: layout.cutRect.height,
       });
     }
-    return resolveSurfaceFrameRect(this.canvasService);
+    return resolveSurfaceFrameRect(this.canvasService, this.sceneLayoutService);
   }
 
   private async ensureSourceSize(src: string): Promise<SourceSize | undefined> {
@@ -3222,4 +3276,22 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private onSceneFrameChanged = () => {
     this.updateImages();
   };
+
+  private attachLayoutSubscriptions() {
+    const layoutService = this.sceneLayoutService;
+    const surfaceFrameService = this.surfaceFrameService;
+    if (!layoutService || !surfaceFrameService) return;
+    const observed = new Set<string>();
+    const observe = (surfaceId: string) => {
+      if (!surfaceId || observed.has(surfaceId)) return;
+      observed.add(surfaceId);
+      this.subscriptions.add(
+        layoutService.onLayoutChange(surfaceId, this.onSceneFrameChanged),
+      );
+    };
+    surfaceFrameService.listSurfaceIds().forEach(observe);
+    this.subscriptions.add(
+      surfaceFrameService.onAnyFramesChange((event) => observe(event.surfaceId)),
+    );
+  }
 }

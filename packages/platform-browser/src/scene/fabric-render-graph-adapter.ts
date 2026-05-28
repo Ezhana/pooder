@@ -4,6 +4,8 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
+  SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   evaluateRuntimeCondition,
   type CanvasService,
   type ConstraintResolverCapability,
@@ -26,6 +28,8 @@ import {
   type RuntimeConditionLayerState,
   type SessionService,
   type RenderIntentService,
+  type SceneLayoutService,
+  type SurfaceFrameService,
 } from "@pooder/core";
 import type { FabricRenderTargetItem } from "../canvas-service";
 import { CANVAS_SERVICE } from "../tokens";
@@ -57,6 +61,8 @@ export class FabricRenderGraphAdapter implements Service {
   private geometrySource?: GeometrySourceCapability;
   private constraintResolver?: ConstraintResolverCapability;
   private canvasService?: FabricRenderTargetCanvasService;
+  private sceneLayoutService?: SceneLayoutService;
+  private surfaceFrameService?: SurfaceFrameService;
   private sessionService?: SessionService;
   private eventBus?: ServiceContext["eventBus"];
   private graphSubscription?: { dispose(): void };
@@ -64,6 +70,7 @@ export class FabricRenderGraphAdapter implements Service {
   private canvasObjectMovingHandler?: (event?: any) => void;
   private canvasObjectModifiedHandler?: (event?: any) => void;
   private geometrySourceDisposable?: { dispose(): void };
+  private layoutDisposables: Array<{ dispose(): void }> = [];
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
   private syncGeneration = 0;
@@ -86,6 +93,8 @@ export class FabricRenderGraphAdapter implements Service {
     this.canvasService = context.get(CANVAS_SERVICE) as
       | FabricRenderTargetCanvasService
       | undefined;
+    this.sceneLayoutService = context.get(SCENE_LAYOUT_SERVICE);
+    this.surfaceFrameService = context.get(SURFACE_FRAME_SERVICE);
     this.sessionService = context.get(SESSION_SERVICE);
     this.eventBus = context.eventBus;
 
@@ -116,11 +125,13 @@ export class FabricRenderGraphAdapter implements Service {
       this.createRenderGraphGeometrySource(),
     );
     this.attachRuntimeConditionEvents();
+    this.attachLayoutChangeEvents();
     this.requestSync();
   }
 
   dispose() {
     this.detachRuntimeConditionEvents();
+    this.detachLayoutChangeEvents();
     if (this.canvasObjectMovingHandler) {
       this.canvasService?.offCanvasEvent(
         "object:moving",
@@ -146,6 +157,8 @@ export class FabricRenderGraphAdapter implements Service {
     this.geometrySource = undefined;
     this.constraintResolver = undefined;
     this.canvasService = undefined;
+    this.sceneLayoutService = undefined;
+    this.surfaceFrameService = undefined;
     this.sessionService = undefined;
     this.eventBus = undefined;
     this.syncRequested = false;
@@ -220,14 +233,37 @@ export class FabricRenderGraphAdapter implements Service {
     const eventBus = this.eventBus;
     if (!eventBus) return;
     eventBus.on("session:change", this.onRuntimeConditionChange);
-    eventBus.on("scene:layout:change", this.onRuntimeConditionChange);
+    eventBus.on("canvas:resized", this.onRuntimeConditionChange);
   }
 
   private detachRuntimeConditionEvents() {
     const eventBus = this.eventBus;
     if (!eventBus) return;
     eventBus.off("session:change", this.onRuntimeConditionChange);
-    eventBus.off("scene:layout:change", this.onRuntimeConditionChange);
+    eventBus.off("canvas:resized", this.onRuntimeConditionChange);
+  }
+
+  private attachLayoutChangeEvents() {
+    const layoutService = this.sceneLayoutService;
+    const surfaceFrameService = this.surfaceFrameService;
+    if (!layoutService || !surfaceFrameService) return;
+    const observed = new Set<string>();
+    const observe = (surfaceId: string) => {
+      if (!surfaceId || observed.has(surfaceId)) return;
+      observed.add(surfaceId);
+      this.layoutDisposables.push(
+        layoutService.onLayoutChange(surfaceId, this.onRuntimeConditionChange),
+      );
+    };
+    surfaceFrameService.listSurfaceIds().forEach(observe);
+    this.layoutDisposables.push(
+      surfaceFrameService.onAnyFramesChange((event) => observe(event.surfaceId)),
+    );
+  }
+
+  private detachLayoutChangeEvents() {
+    this.layoutDisposables.forEach((disposable) => disposable.dispose());
+    this.layoutDisposables = [];
   }
 
   private async runSyncLoop() {

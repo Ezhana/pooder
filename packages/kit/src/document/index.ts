@@ -1,6 +1,7 @@
 import {
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   mergeRenderIntentPatchEntries,
   type ExtensionDefinition,
   type RenderIntentDiagnostic,
@@ -11,6 +12,7 @@ import {
   type RenderIntentService,
   type Service,
   type ServiceIdentifier,
+  type SurfaceFrameService,
 } from "@pooder/core";
 import {
   collectKitEditorDocumentCapabilityRequirements,
@@ -160,6 +162,16 @@ export async function applyKitEditorDocument(
     );
   }
   runtime.config.import(document.config);
+  runtime.services
+    .getOrThrow<SurfaceFrameService>(
+      SURFACE_FRAME_SERVICE,
+      "SurfaceFrameService is required to apply an EditorDocument.",
+    )
+    .importFrames(
+      Object.fromEntries(
+        document.surfaces.map((surface) => [surface.id, surface.frames]),
+      ),
+    );
 
   const capabilityResult = collectKitEditorDocumentCapabilityRequirements(
     document,

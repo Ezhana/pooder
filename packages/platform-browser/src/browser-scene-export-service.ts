@@ -374,7 +374,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
   private resolveFrameCrop(
     frame: BrowserSceneExportFrame,
   ): BrowserSceneExportRect {
-    const layout = this.requireSceneLayoutService().getLayout(true);
+    const layout = this.requireSceneLayoutService().recomputeLayout();
     if (!layout) {
       throw new Error("browser-scene-export-frame-unavailable");
     }

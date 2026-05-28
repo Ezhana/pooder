@@ -16,6 +16,7 @@ import type {
   SceneExportService,
   SceneLayoutService,
 } from "../render";
+import type { DefaultSurfaceFrameService } from "../surface-frames";
 
 export const CAPABILITY_REGISTRY_SERVICE =
   createServiceToken<CapabilityRegistryService>("CapabilityRegistryService");
@@ -37,6 +38,8 @@ export const SCENE_SERVICE = createServiceToken<SceneService>("SceneService");
 export const CANVAS_SERVICE = createServiceToken<CanvasService>("CanvasService");
 export const SCENE_LAYOUT_SERVICE =
   createServiceToken<SceneLayoutService>("SceneLayoutService");
+export const SURFACE_FRAME_SERVICE =
+  createServiceToken<DefaultSurfaceFrameService>("SurfaceFrameService");
 export const SCENE_EXPORT_SERVICE =
   createServiceToken<SceneExportService>("SceneExportService");
 export const SESSION_SERVICE = createServiceToken<SessionService>("SessionService");
@@ -57,6 +60,7 @@ export const CORE_SERVICE_TOKENS = {
   CANVAS: CANVAS_SERVICE,
   SCENE: SCENE_SERVICE,
   SCENE_LAYOUT: SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME: SURFACE_FRAME_SERVICE,
   SCENE_EXPORT: SCENE_EXPORT_SERVICE,
   SESSION: SESSION_SERVICE,
   GEOMETRY_SOURCE: GEOMETRY_SOURCE_SERVICE,

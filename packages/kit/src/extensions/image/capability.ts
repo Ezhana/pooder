@@ -1,4 +1,8 @@
-import type { CapabilityDefinition } from "@pooder/core";
+import type {
+  CapabilityDefinition,
+  RenderObjectSpec,
+  SceneLayoutSnapshot,
+} from "@pooder/core";
 import type {
   ImagePlacementSource,
   ImagePlacementSessionNotice,
@@ -59,6 +63,34 @@ export interface ImagePlacementViewState {
   sessionNotice: ImagePlacementSessionNotice | null;
 }
 
+export type ImageSessionOverlayLayer = "underlay" | "overlay" | "controls";
+
+export interface ImageSessionOverlayContext {
+  placement: ImagePlacementState;
+  sessionId: string;
+  surfaceId: string | null;
+  layout: SceneLayoutSnapshot;
+  viewport: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface ImageSessionOverlayEntry {
+  layer?: ImageSessionOverlayLayer;
+  spec: RenderObjectSpec;
+}
+
+export interface ImageSessionOverlayProvider {
+  id: string;
+  order?: number;
+  getOverlaySpecs(
+    context: ImageSessionOverlayContext,
+  ): RenderObjectSpec[] | ImageSessionOverlayEntry[];
+}
+
 export interface ImagePlacementCapabilityApi {
   applyOperation(
     input: string | ImagePlacementSessionInput,
@@ -85,6 +117,9 @@ export interface ImagePlacementCapabilityApi {
     placementId: string | null,
     options?: { syncCanvasSelection?: boolean; skipRender?: boolean },
   ): { ok: boolean; id?: string | null; reason?: string };
+  registerSessionOverlayProvider(
+    provider: ImageSessionOverlayProvider,
+  ): { dispose(): void };
   refresh(): void;
 }
 

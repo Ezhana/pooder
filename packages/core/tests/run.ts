@@ -8,7 +8,6 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  buildSceneGeometry,
   computeSceneLayout,
   computeDragInteraction,
   containsPoint,
@@ -90,6 +89,7 @@ class FakeLayoutCanvasService implements CanvasService {
       height,
     };
   }
+  setViewportLayout() {}
   selectObjects() {
     return [];
   }
@@ -182,6 +182,17 @@ function assertClose(
       message ?? `Expected ${String(expected)}, got ${String(actual)}`,
     );
   }
+}
+
+function computeTestSceneLayout(
+  canvas: FakeLayoutCanvasService,
+  state: any,
+) {
+  return computeSceneLayout({
+    frames: state.sceneFrames,
+    fitOptions: { viewPadding: state.viewPadding ?? "16%" },
+    viewportSize: canvas.getViewportSize(),
+  });
 }
 
 function assertThrows(run: () => void, message: string) {
@@ -2103,7 +2114,7 @@ async function testSceneLayoutModelDefaultsAndPadding() {
   };
 
   const state = readSizeState(config as any);
-  assertEqual(state.viewPadding, "16%");
+  assertEqual(state.unit, "mm");
   assertEqual(
     resolveViewPaddingPx("10%", 320, 480),
     32,
@@ -2128,7 +2139,7 @@ async function testSceneLayoutModelDefaultsAndPadding() {
 
 async function testSceneLayoutModelUsesExportFrames() {
   const canvas = new FakeLayoutCanvasService(800, 600);
-  const layout = computeSceneLayout(canvas, {
+  const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
@@ -2150,7 +2161,7 @@ async function testSceneLayoutModelUsesExportFrames() {
   assertClose(layout.cutRect.left, 155.2);
   assertClose(layout.cutRect.width, 489.6);
 
-  const insetLayout = computeSceneLayout(canvas, {
+  const insetLayout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
@@ -2172,7 +2183,7 @@ async function testSceneLayoutModelUsesExportFrames() {
 
 async function testSceneLayoutModelPositionsProductionFrame() {
   const canvas = new FakeLayoutCanvasService(800, 600);
-  const layout = computeSceneLayout(canvas, {
+  const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1299 / 709,
     constraintMode: "free",
     maxMm: 2000,
@@ -2198,13 +2209,11 @@ async function testSceneLayoutModelPositionsProductionFrame() {
   assertClose(layout.trimRect.height, 300 * layout.scale);
   assertClose(layout.cutRect.left, layout.trimRect.left);
   assertClose(layout.cutRect.width, layout.trimRect.width);
-  assertEqual(layout.trimWidthMm, 770);
-  assertEqual(layout.trimHeightMm, 300);
 }
 
 async function testSceneLayoutModelClampsFocusedProductionFrame() {
   const canvas = new FakeLayoutCanvasService(800, 600);
-  const layout = computeSceneLayout(canvas, {
+  const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
@@ -2226,7 +2235,7 @@ async function testSceneLayoutModelClampsFocusedProductionFrame() {
 
 async function testSceneLayoutModelUsesExplicitExportFrame() {
   const canvas = new FakeLayoutCanvasService(800, 600);
-  const layout = computeSceneLayout(canvas, {
+  const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
@@ -2242,54 +2251,8 @@ async function testSceneLayoutModelUsesExplicitExportFrame() {
   });
 
   assert(layout, "explicit export frame layout should resolve");
-  assertEqual(layout.cutWidthMm, 80);
-  assertEqual(layout.cutHeightMm, 70);
   assertClose(layout.cutRect.left, 190);
   assertClose(layout.cutRect.width, 80 * layout.scale);
-}
-
-async function testSceneLayoutModelBuildsDielineGeometry() {
-  const canvas = new FakeLayoutCanvasService(800, 600);
-  const layout = computeSceneLayout(canvas, {
-    aspectRatio: 1,
-    constraintMode: "free",
-    maxMm: 2000,
-    minMm: 10,
-    sceneFrames: {
-      exportFrame: { xMm: -10, yMm: -10, widthMm: 120, heightMm: 120 },
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-    },
-    stepMm: 0.1,
-    unit: "mm",
-    viewPadding: "16%",
-  });
-  assert(layout, "layout should resolve before geometry");
-
-  const config = {
-    get: (key: string, defaultValue?: unknown) => {
-      const values: Record<string, unknown> = {
-        "dieline.customSourceHeightPx": 240,
-        "dieline.customSourceWidthPx": 320,
-        "dieline.radius": "5mm",
-        "dieline.shape": "circle",
-        "dieline.shapeStyle": { fitMode: "contain", lobeSpread: 2 },
-      };
-      return Object.prototype.hasOwnProperty.call(values, key)
-        ? values[key]
-        : defaultValue;
-    },
-  };
-  const geometry = buildSceneGeometry(config as any, layout);
-
-  assertEqual(geometry.shape, "circle");
-  assertEqual(geometry.shapeStyle.fitMode, "contain");
-  assertEqual(geometry.shapeStyle.lobeSpread, 1);
-  assertEqual(geometry.width, layout.trimRect.width);
-  assertClose(geometry.radius, 20.4);
-  assertClose(geometry.offset, 40.8);
-  assertEqual(geometry.customSourceWidthPx, 320);
-  assertEqual(geometry.customSourceHeightPx, 240);
 }
 
 async function main() {
@@ -2417,10 +2380,6 @@ async function main() {
     [
       "uses explicit export frame instead of derived cut frame",
       testSceneLayoutModelUsesExplicitExportFrame,
-    ],
-    [
-      "builds scene dieline geometry from config",
-      testSceneLayoutModelBuildsDielineGeometry,
     ],
   ];
 

@@ -1,5 +1,9 @@
 import {
+  CAPABILITY_REGISTRY_SERVICE,
   CONFIGURATION_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
+  SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   SCENE_SERVICE,
   ExtensionContributions,
   ExtensionDefinition,
@@ -11,6 +15,12 @@ import {
   type RenderIntentPatch,
   type RenderPatternSpec,
   type RuntimeConditionExpr,
+  type GeometryRef,
+  type CapabilityRegistryService,
+  type DefaultGeometrySourceCapability,
+  type GeometrySourceProvider,
+  type SceneLayoutService,
+  type SurfaceFrameService,
 } from "@pooder/core";
 import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
 import {
@@ -22,14 +32,15 @@ import {
 } from "@pooder/core";
 import { normalizeShapeStyle, normalizeDielineShape } from "../dielineShape";
 import {
-  computeSceneLayout,
-  readSizeState,
-} from "../../shared/scene/scene-layout-model";
-import {
   DIELINE_LAYER_ID,
   IMAGE_OBJECT_LAYER_ID,
   KIT_LEGACY_LAYER_PRESET,
 } from "../../shared/constants/layers";
+import {
+  IMAGE_PLACEMENT_CAPABILITY_ID,
+  type ImagePlacementCapabilityApi,
+  type ImageSessionOverlayContext,
+} from "../image/capability";
 import { createDielineCommands } from "./commands";
 import { createDielineConfigurations } from "./config";
 import {
@@ -52,12 +63,19 @@ import {
 } from "./model";
 import { buildDielineGuideRenderSpecs } from "./renderBuilder";
 import { detectImageEdge, type DetectEdgeOptions } from "../edge-detection";
+import { generateDielinePath } from "../geometry";
 import {
   clearRenderIntentSource,
   patchRenderObjectSpecs,
 } from "../../shared/runtime/renderIntentPatches";
 
 const IMAGE_SESSION_CHANNEL = "image-placement";
+const IMAGE_SESSION_DIELINE_OVERLAY_ID = "dieline.image-session-overlay";
+const IMAGE_SESSION_SHAPE_HATCH_ID = "image.cropShapeHatch";
+const IMAGE_SESSION_SHAPE_OUTLINE_ID = "image.cropShapeOutline";
+const EPSILON = 0.0001;
+const SHAPE_OUTLINE_COLOR = "rgba(255, 0, 0, 0.9)";
+const DEFAULT_IMAGE_SESSION_HATCH_COLOR = "rgba(255, 0, 0, 0.35)";
 
 export interface DielineToolOptions
   extends Partial<DielineState>, DielineGeometryCapabilityOptions {
@@ -77,12 +95,18 @@ export class DielineTool implements ExtensionDefinition {
   };
   activation = {
     requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
+    after: [IMAGE_PLACEMENT_CAPABILITY_ID],
   };
 
   private state: DielineState = createDefaultDielineState();
 
   private canvasService?: CanvasService;
   private renderIntentService?: RenderIntentService;
+  private sceneLayoutService?: SceneLayoutService;
+  private surfaceFrameService?: SurfaceFrameService;
+  private geometrySource?: DefaultGeometrySourceCapability;
+  private geometrySourceDisposable?: { dispose(): void };
+  private imageSessionOverlayDisposable?: { dispose(): void };
   private context?: ExtensionContext;
   private specs: RenderObjectSpec[] = [];
   private renderSeq = 0;
@@ -152,25 +176,54 @@ export class DielineTool implements ExtensionDefinition {
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
+    this.sceneLayoutService = context.services.get<SceneLayoutService>(
+      SCENE_LAYOUT_SERVICE,
+    );
+    this.surfaceFrameService = context.services.get<SurfaceFrameService>(
+      SURFACE_FRAME_SERVICE,
+    );
+    this.geometrySource = context.services.get<DefaultGeometrySourceCapability>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    this.geometrySourceDisposable?.dispose();
+    this.geometrySourceDisposable = this.geometrySource?.registerSource(
+      this.createGeometrySourceProvider(),
+    );
+    this.imageSessionOverlayDisposable?.dispose();
+    this.imageSessionOverlayDisposable =
+      context.services
+        .get<CapabilityRegistryService>(CAPABILITY_REGISTRY_SERVICE)
+        ?.getFacade<ImagePlacementCapabilityApi>(IMAGE_PLACEMENT_CAPABILITY_ID)
+        ?.registerSessionOverlayProvider(
+          this.createImageSessionOverlayProvider(),
+        );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
     Object.assign(
       this.state,
-      readDielineState(configService, this.state, this.configNamespace),
+      readDielineState(
+        configService,
+        this.state,
+        this.configNamespace,
+        this.getSurfaceFrames(),
+      ),
     );
 
     // Listen for changes
     configService.onAnyChange((e: { key: string; value: any }) => {
       if (
-        e.key.startsWith("size.") ||
-        e.key.startsWith("scene.") ||
         e.key.startsWith(`${this.configNamespace}.`)
       ) {
         Object.assign(
           this.state,
-          readDielineState(configService, this.state, this.configNamespace),
+          readDielineState(
+            configService,
+            this.state,
+            this.configNamespace,
+            this.getSurfaceFrames(),
+          ),
         );
         this.updateDieline();
       }
@@ -185,8 +238,15 @@ export class DielineTool implements ExtensionDefinition {
     this.renderSeq += 1;
     this.specs = [];
     clearRenderIntentSource(this.renderIntentService, this.id);
+    this.geometrySourceDisposable?.dispose();
+    this.geometrySourceDisposable = undefined;
+    this.imageSessionOverlayDisposable?.dispose();
+    this.imageSessionOverlayDisposable = undefined;
     this.canvasService = undefined;
     this.renderIntentService = undefined;
+    this.sceneLayoutService = undefined;
+    this.surfaceFrameService = undefined;
+    this.geometrySource = undefined;
     this.context = undefined;
   }
 
@@ -304,6 +364,174 @@ export class DielineTool implements ExtensionDefinition {
     );
   }
 
+  private getSurfaceId(surfaceId?: string): string {
+    const normalized = String(surfaceId || "").trim();
+    if (normalized) return normalized;
+    return this.surfaceFrameService?.listSurfaceIds()[0] ?? "legacy";
+  }
+
+  private getSurfaceFrames(surfaceId?: string) {
+    return this.surfaceFrameService?.getFrames(this.getSurfaceId(surfaceId)) ?? null;
+  }
+
+  private getSurfaceLayout(surfaceId?: string) {
+    return this.sceneLayoutService?.getLayout(this.getSurfaceId(surfaceId)) ?? null;
+  }
+
+  private createImageSessionOverlayProvider() {
+    return {
+      id: IMAGE_SESSION_DIELINE_OVERLAY_ID,
+      order: 100,
+      getOverlaySpecs: (context: ImageSessionOverlayContext) => {
+        const surfaceId = this.getSurfaceId(context.surfaceId ?? undefined);
+        const geometry = this.getGeometryForSurface(surfaceId);
+        if (!geometry || geometry.shape === "custom") return [];
+        const radius = this.resolveImageSessionShapeRadius(geometry);
+        if (geometry.shape === "rect" && radius <= EPSILON) return [];
+
+        const shapePathData = generateDielinePath({
+          shape: geometry.shape,
+          shapeStyle: geometry.shapeStyle,
+          width: Math.max(1, geometry.width),
+          height: Math.max(1, geometry.height),
+          radius,
+          x: geometry.x,
+          y: geometry.y,
+          features: [],
+          canvasWidth: context.viewport.width,
+          canvasHeight: context.viewport.height,
+        });
+        if (!shapePathData) return [];
+
+        const hatchPathData = `${this.buildAbsoluteRectPath(
+          context.layout.cutRect,
+        )} ${shapePathData}`;
+        return [
+          {
+            layer: "controls" as const,
+            spec: {
+              id: IMAGE_SESSION_SHAPE_HATCH_ID,
+              type: "path" as const,
+              space: "screen" as const,
+              data: { id: IMAGE_SESSION_SHAPE_HATCH_ID, zIndex: 5 },
+              props: {
+                pathData: hatchPathData,
+                originX: "left",
+                originY: "top",
+                fill: this.createHatchPattern(DEFAULT_IMAGE_SESSION_HATCH_COLOR),
+                opacity: 1,
+                stroke: null,
+                fillRule: "evenodd",
+                selectable: false,
+                evented: false,
+                excludeFromExport: true,
+                objectCaching: false,
+              },
+            },
+          },
+          {
+            layer: "controls" as const,
+            spec: {
+              id: IMAGE_SESSION_SHAPE_OUTLINE_ID,
+              type: "path" as const,
+              space: "screen" as const,
+              data: { id: IMAGE_SESSION_SHAPE_OUTLINE_ID, zIndex: 6 },
+              props: {
+                pathData: shapePathData,
+                originX: "left",
+                originY: "top",
+                fill: "transparent",
+                stroke: SHAPE_OUTLINE_COLOR,
+                strokeWidth: 1,
+                selectable: false,
+                evented: false,
+                excludeFromExport: true,
+                objectCaching: false,
+              },
+            },
+          },
+        ];
+      },
+    };
+  }
+
+  private resolveImageSessionShapeRadius(geometry: DielineGeometry): number {
+    const visualRadius = Number.isFinite(geometry.radius)
+      ? Math.max(0, geometry.radius)
+      : 0;
+    const maxRadius = Math.max(0, Math.min(geometry.width, geometry.height) / 2);
+    return Math.max(0, Math.min(maxRadius, visualRadius));
+  }
+
+  private buildAbsoluteRectPath(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }): string {
+    return `M ${rect.left} ${rect.top} L ${rect.left + rect.width} ${rect.top} L ${
+      rect.left + rect.width
+    } ${rect.top + rect.height} L ${rect.left} ${rect.top + rect.height} Z`;
+  }
+
+  private createGeometrySourceProvider(): GeometrySourceProvider {
+    return {
+      sourceId: "dieline",
+      getGeometry: (ref) => this.getGeometrySnapshot(ref),
+      listGeometries: () =>
+        (this.surfaceFrameService?.listSurfaceIds() ?? []).map((surfaceId) => ({
+          ref: {
+            sourceId: "dieline",
+            geometryId: "production",
+            variant: surfaceId,
+          },
+          kind: "rect" as const,
+          space: "screen" as const,
+          metadata: { surfaceId },
+        })),
+    };
+  }
+
+  private getGeometrySnapshot(ref: GeometryRef) {
+    const surfaceId = ref.variant || this.getSurfaceId();
+    const geometry = this.getGeometryForSurface(surfaceId);
+    return geometry
+      ? {
+          kind: "rect" as const,
+          ref,
+          space: "screen" as const,
+          rect: {
+            left: geometry.x - geometry.width / 2,
+            top: geometry.y - geometry.height / 2,
+            width: geometry.width,
+            height: geometry.height,
+          },
+          metadata: { surfaceId, geometry },
+        }
+      : null;
+  }
+
+  private getGeometryForSurface(surfaceId: string): DielineGeometry | null {
+    const layout = this.getSurfaceLayout(surfaceId);
+    if (!layout) return null;
+    return {
+      shape: this.state.shape,
+      shapeStyle: this.state.shapeStyle,
+      unit: "px",
+      x: layout.trimRect.centerX,
+      y: layout.trimRect.centerY,
+      width: layout.trimRect.width,
+      height: layout.trimRect.height,
+      radius: this.state.radius * layout.scale,
+      offset: (layout.cutRect.width - layout.trimRect.width) / 2,
+      scale: layout.scale,
+      strokeWidth: this.state.mainLine.width,
+      pathData: this.state.pathData,
+      customSourceWidthPx: this.state.customSourceWidthPx,
+      customSourceHeightPx: this.state.customSourceHeightPx,
+    };
+  }
+
   private resolveDielinePassVisibleWhen(): RuntimeConditionExpr {
     const sessionCondition: RuntimeConditionExpr = {
       op: "not",
@@ -360,17 +588,17 @@ export class DielineTool implements ExtensionDefinition {
     );
   }
 
-  private buildDielineSpecs(
-    sceneLayout: NonNullable<ReturnType<typeof computeSceneLayout>>,
-  ): RenderObjectSpec[] {
+  private buildDielineSpecs(sceneLayout: NonNullable<ReturnType<SceneLayoutService["getLayout"]>>): RenderObjectSpec[] {
     const hasImages = this.hasImageItems();
+    const viewportSize = this.canvasService?.getViewportSize() ?? {
+      width: 800,
+      height: 600,
+    };
     return buildDielineGuideRenderSpecs({
       state: this.state,
       sceneLayout,
-      canvasWidth:
-        sceneLayout.canvasWidth || this.canvasService?.getViewportSize().width || 800,
-      canvasHeight:
-        sceneLayout.canvasHeight || this.canvasService?.getViewportSize().height || 600,
+      canvasWidth: viewportSize.width || 800,
+      canvasHeight: viewportSize.height || 600,
       hasImages,
       createHatchPattern: (color) => this.createHatchPattern(color),
     });
@@ -388,12 +616,14 @@ export class DielineTool implements ExtensionDefinition {
 
     Object.assign(
       this.state,
-      readDielineState(configService, this.state, this.configNamespace),
+      readDielineState(
+        configService,
+        this.state,
+        this.configNamespace,
+        this.getSurfaceFrames(),
+      ),
     );
-    const sceneLayout = computeSceneLayout(
-      this.canvasService,
-      readSizeState(configService),
-    );
+    const sceneLayout = this.getSurfaceLayout();
     if (!sceneLayout) {
       if (seq !== this.renderSeq) return;
       this.specs = [];
@@ -417,30 +647,7 @@ export class DielineTool implements ExtensionDefinition {
   }
 
   public getGeometry(): DielineGeometry | null {
-    if (!this.canvasService) return null;
-    const configService = this.getConfigService();
-    if (!configService) return null;
-    const sceneLayout = computeSceneLayout(
-      this.canvasService,
-      readSizeState(configService),
-    );
-    if (!sceneLayout) return null;
-    return {
-      shape: this.state.shape,
-      shapeStyle: this.state.shapeStyle,
-      unit: "px",
-      x: sceneLayout.trimRect.centerX,
-      y: sceneLayout.trimRect.centerY,
-      width: sceneLayout.trimRect.width,
-      height: sceneLayout.trimRect.height,
-      radius: this.state.radius * sceneLayout.scale,
-      offset: (sceneLayout.cutRect.width - sceneLayout.trimRect.width) / 2,
-      scale: sceneLayout.scale,
-      strokeWidth: this.state.mainLine.width,
-      pathData: this.state.pathData,
-      customSourceWidthPx: this.state.customSourceWidthPx,
-      customSourceHeightPx: this.state.customSourceHeightPx,
-    } as DielineGeometry;
+    return this.getGeometryForSurface(this.getSurfaceId());
   }
 
   public getState(): DielineState {
@@ -479,10 +686,14 @@ export class DielineTool implements ExtensionDefinition {
     );
 
     if (options.normalizeCutMode !== false) {
-      const sizeState = readSizeState(configService);
-      configService.update("scene.exportFrame", {
-        ...sizeState.sceneFrames.productionFrame,
-      });
+      const surfaceId = this.getSurfaceId();
+      const frames = this.getSurfaceFrames(surfaceId);
+      if (surfaceId && frames) {
+        this.surfaceFrameService?.setFrames(surfaceId, {
+          ...frames,
+          exportFrame: { ...frames.productionFrame },
+        });
+      }
     }
   }
 

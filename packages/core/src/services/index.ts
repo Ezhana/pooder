@@ -10,6 +10,7 @@ import SceneService from "./SceneService";
 import SessionService from "./SessionService";
 import { DefaultConstraintResolverCapability } from "../constraint-resolver";
 import { DefaultGeometrySourceCapability } from "../geometry-source";
+import { DefaultSurfaceFrameService } from "../surface-frames";
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -21,6 +22,7 @@ import {
   CANVAS_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
@@ -38,6 +40,7 @@ export {
   SessionService,
   DefaultGeometrySourceCapability,
   DefaultConstraintResolverCapability,
+  DefaultSurfaceFrameService,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
@@ -48,6 +51,7 @@ export {
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
@@ -59,6 +63,10 @@ export type {
   SceneExportService,
   SceneLayoutService,
 } from "../render";
+export type {
+  SurfaceFrameChangeEvent,
+  SurfaceFrameService,
+} from "../surface-frames";
 
 export type { CapabilityRegistryChangeEvent } from "./CapabilityRegistryService";
 export type {

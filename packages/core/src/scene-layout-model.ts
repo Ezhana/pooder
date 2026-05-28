@@ -1,15 +1,8 @@
 import type { ConfigurationService } from "./services";
 import { Coordinate, type Unit } from "./coordinate";
-import {
-  DEFAULT_DIELINE_SHAPE,
-  DEFAULT_DIELINE_SHAPE_STYLE,
-  normalizeDielineShape,
-  normalizeShapeStyle,
-} from "./dieline-shape";
 import type {
-  CanvasService,
+  CanvasSize,
   SceneFrameMm,
-  SceneGeometrySnapshot,
   SceneLayoutSnapshot,
   SceneRect,
   SurfaceSceneFrames,
@@ -17,7 +10,6 @@ import type {
   SizeState,
   CutMode,
 } from "./render";
-import { parseLengthToMm } from "./units";
 
 export const DEFAULT_SIZE_STATE: SizeState = {
   unit: "mm",
@@ -27,11 +19,22 @@ export const DEFAULT_SIZE_STATE: SizeState = {
   },
   constraintMode: "free",
   aspectRatio: 1,
-  viewPadding: "16%",
   minMm: 10,
   maxMm: 2000,
   stepMm: 0.1,
 };
+
+export interface SceneLayoutFitOptions {
+  viewPadding?: number | string;
+}
+
+export interface SceneLayoutInput {
+  frames: SurfaceSceneFrames;
+  viewportSize: CanvasSize;
+  fitOptions?: SceneLayoutFitOptions;
+  surfaceId?: string;
+  revision?: number;
+}
 
 const FIXED_VIEW_PADDING_LIMIT_RATIO = 0.12;
 const MIN_VIEW_CONTENT_SIDE_PX = 160;
@@ -43,34 +46,6 @@ function clamp(value: number, min: number, max: number): number {
 function roundToStep(value: number, step: number): number {
   if (!Number.isFinite(step) || step <= 0) return value;
   return Math.round(value / step) * step;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeFrameMm(
-  value: unknown,
-  fallback: SceneFrameMm,
-): SceneFrameMm {
-  if (!isRecord(value)) return { ...fallback };
-  const xMm = Number(value.xMm);
-  const yMm = Number(value.yMm);
-  const widthMm = Number(value.widthMm);
-  const heightMm = Number(value.heightMm);
-
-  if (
-    !Number.isFinite(xMm) ||
-    !Number.isFinite(yMm) ||
-    !Number.isFinite(widthMm) ||
-    !Number.isFinite(heightMm) ||
-    widthMm <= 0 ||
-    heightMm <= 0
-  ) {
-    return { ...fallback };
-  }
-
-  return { xMm, yMm, widthMm, heightMm };
 }
 
 export function sanitizeMmValue(
@@ -185,10 +160,6 @@ export function readSizeState(configService: ConfigurationService): SizeState {
     Number(configService.get("size.stepMm", DEFAULT_SIZE_STATE.stepMm)),
   );
 
-  const viewPadding = configService.get(
-    "size.viewPadding",
-    DEFAULT_SIZE_STATE.viewPadding,
-  );
   const defaultPreviewBounds = {
     xMm: 0,
     yMm: 0,
@@ -203,10 +174,7 @@ export function readSizeState(configService: ConfigurationService): SizeState {
       stepMm,
     }),
   };
-  const previewBounds = normalizeFrameMm(
-    configService.get("scene.previewBounds"),
-    defaultPreviewBounds,
-  );
+  const previewBounds = defaultPreviewBounds;
   const aspectRaw = Number(
     configService.get("size.aspectRatio", DEFAULT_SIZE_STATE.aspectRatio),
   );
@@ -214,31 +182,13 @@ export function readSizeState(configService: ConfigurationService): SizeState {
     Number.isFinite(aspectRaw) && aspectRaw > 0
       ? aspectRaw
       : previewBounds.widthMm / Math.max(0.001, previewBounds.heightMm);
-  const productionFrame = normalizeFrameMm(
-    configService.get("scene.productionFrame"),
-    previewBounds,
-  );
-  const explicitExportFrame = isRecord(configService.get("scene.exportFrame"))
-    ? normalizeFrameMm(configService.get("scene.exportFrame"), productionFrame)
-    : undefined;
-  const explicitViewportFocusFrame = isRecord(
-    configService.get("scene.viewportFocusFrame"),
-  )
-    ? normalizeFrameMm(
-        configService.get("scene.viewportFocusFrame"),
-        productionFrame,
-      )
-    : undefined;
+  const productionFrame = previewBounds;
 
   return {
     unit,
     sceneFrames: {
       previewBounds,
       productionFrame,
-      ...(explicitExportFrame ? { exportFrame: explicitExportFrame } : {}),
-      ...(explicitViewportFocusFrame
-        ? { viewportFocusFrame: explicitViewportFocusFrame }
-        : {}),
     },
     constraintMode: normalizeConstraintMode(
       configService.get(
@@ -247,7 +197,6 @@ export function readSizeState(configService: ConfigurationService): SizeState {
       ),
     ),
     aspectRatio,
-    viewPadding,
     minMm,
     maxMm,
     stepMm,
@@ -296,13 +245,12 @@ type ResolvedSurfaceSceneFrames = SurfaceSceneFrames & {
   viewportFocusFrame: SceneFrameMm;
 };
 
-function deriveSceneFrames(size: SizeState): ResolvedSurfaceSceneFrames {
-  const { previewBounds, productionFrame, viewportFocusFrame } =
-    size.sceneFrames;
+function deriveSceneFrames(frames: SurfaceSceneFrames): ResolvedSurfaceSceneFrames {
+  const { previewBounds, productionFrame, viewportFocusFrame } = frames;
   return {
     previewBounds,
     productionFrame,
-    exportFrame: size.sceneFrames.exportFrame ?? productionFrame,
+    exportFrame: frames.exportFrame ?? productionFrame,
     viewportFocusFrame: viewportFocusFrame ?? productionFrame,
   };
 }
@@ -343,15 +291,13 @@ function resolveFrameOffset(
 }
 
 export function computeSceneLayout(
-  canvasService: CanvasService,
-  size: SizeState,
+  input: SceneLayoutInput,
 ): SceneLayoutSnapshot | null {
-  const viewportSize = canvasService.getViewportSize();
-  const canvasWidth = viewportSize.width || 0;
-  const canvasHeight = viewportSize.height || 0;
+  const canvasWidth = input.viewportSize.width || 0;
+  const canvasHeight = input.viewportSize.height || 0;
   if (canvasWidth <= 0 || canvasHeight <= 0) return null;
 
-  const sceneFrames = deriveSceneFrames(size);
+  const sceneFrames = deriveSceneFrames(input.frames);
   const { previewBounds, productionFrame, exportFrame, viewportFocusFrame } =
     sceneFrames;
   const viewWidthMm = previewBounds.widthMm;
@@ -366,7 +312,7 @@ export function computeSceneLayout(
   }
 
   const viewPaddingPx = resolveViewPaddingPx(
-    size.viewPadding,
+    input.fitOptions?.viewPadding ?? "16%",
     canvasWidth,
     canvasHeight,
   );
@@ -383,16 +329,7 @@ export function computeSceneLayout(
     canvasHeight,
     viewPaddingPx,
   );
-  const layout =
-    canvasService.updateViewportLayout({
-      containerWidth: canvasWidth,
-      containerHeight: canvasHeight,
-      padding: viewPaddingPx,
-      widthMm: viewWidthMm,
-      heightMm: viewHeightMm,
-      offsetX,
-      offsetY,
-    }) ?? { ...baseLayout, offsetX, offsetY };
+  const layout = { ...baseLayout, offsetX, offsetY };
   if (
     !Number.isFinite(layout.scale) ||
     !Number.isFinite(layout.offsetX) ||
@@ -417,57 +354,13 @@ export function computeSceneLayout(
   const bleedRect = boundingRect(trimRect, cutRect);
 
   return {
+    surfaceId: input.surfaceId ?? "",
+    revision: input.revision ?? 0,
     scale: layout.scale,
-    canvasWidth,
-    canvasHeight,
+    offsetX: layout.offsetX,
+    offsetY: layout.offsetY,
     trimRect,
     cutRect,
     bleedRect,
-    trimWidthMm: productionFrame.widthMm,
-    trimHeightMm: productionFrame.heightMm,
-    cutWidthMm: exportFrame.widthMm,
-    cutHeightMm: exportFrame.heightMm,
-  };
-}
-
-export function buildSceneGeometry(
-  configService: ConfigurationService,
-  layout: SceneLayoutSnapshot,
-): SceneGeometrySnapshot {
-  const radiusMm = parseLengthToMm(
-    configService.get("dieline.radius", 0),
-    "mm",
-  );
-  const offset = (layout.cutRect.width - layout.trimRect.width) / 2;
-  const sourceWidth = Number(
-    configService.get("dieline.customSourceWidthPx", 0),
-  );
-  const sourceHeight = Number(
-    configService.get("dieline.customSourceHeightPx", 0),
-  );
-  const shapeStyle = normalizeShapeStyle(
-    configService.get("dieline.shapeStyle", DEFAULT_DIELINE_SHAPE_STYLE),
-  );
-
-  return {
-    shape: normalizeDielineShape(
-      configService.get("dieline.shape", DEFAULT_DIELINE_SHAPE),
-    ),
-    shapeStyle,
-    unit: "px",
-    x: layout.trimRect.centerX,
-    y: layout.trimRect.centerY,
-    width: layout.trimRect.width,
-    height: layout.trimRect.height,
-    radius: radiusMm * layout.scale,
-    offset,
-    scale: layout.scale,
-    pathData: configService.get("dieline.pathData"),
-    customSourceWidthPx:
-      Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,
-    customSourceHeightPx:
-      Number.isFinite(sourceHeight) && sourceHeight > 0
-        ? sourceHeight
-        : undefined,
   };
 }

@@ -172,25 +172,8 @@ export default class CanvasService implements Service, CanvasServiceContract {
     };
   }
 
-  updateViewportLayout(options: {
-    containerWidth: number;
-    containerHeight: number;
-    padding: number;
-    widthMm: number;
-    heightMm: number;
-    offsetX?: number;
-    offsetY?: number;
-  }): CanvasViewportLayout | null {
-    this.viewport.updateContainer(options.containerWidth, options.containerHeight);
-    this.viewport.setPadding(options.padding);
-    this.viewport.updatePhysical(options.widthMm, options.heightMm);
-    if (
-      Number.isFinite(options.offsetX) &&
-      Number.isFinite(options.offsetY)
-    ) {
-      this.viewport.setOffset(Number(options.offsetX), Number(options.offsetY));
-    }
-    return this.viewport.layout;
+  setViewportLayout(layout: CanvasViewportLayout): void {
+    this.viewport.setLayout(layout);
   }
 
   selectObjects(selector: CanvasObjectSelector = {}): CanvasObjectLike[] {

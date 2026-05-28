@@ -1,5 +1,12 @@
 import type { Service } from "@pooder/core";
-import { Pooder, RENDER_INTENT_SERVICE, SCENE_SERVICE } from "@pooder/core";
+import {
+  CONFIGURATION_SERVICE,
+  Pooder,
+  RENDER_INTENT_SERVICE,
+  SCENE_SERVICE,
+  SURFACE_FRAME_SERVICE,
+} from "@pooder/core";
+import type { SurfaceSceneFrames } from "@pooder/core";
 import {
   attachBrowserHost,
   BrowserSceneExportService,
@@ -9,11 +16,13 @@ import {
   FabricRenderGraphAdapter,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  SceneLayoutService,
   applyAlphaMaskData,
   applyTransparentColorToAlpha,
   createBoundaryOutputMaskAlpha,
 } from "../src";
 import type { FabricRenderTargetItem } from "../src/canvas-service";
+import { ViewportSystem } from "../src/viewport-system";
 
 declare const process: {
   exit(code: number): never;
@@ -25,6 +34,19 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function assertEqual<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) {
+    throw new Error(
+      `${message} (expected ${String(expected)}, got ${String(actual)})`,
+    );
+  }
+}
+
+function assertClose(
+  actual: number,
+  expected: number,
+  message: string,
+  epsilon = 1e-6,
+) {
+  if (Math.abs(actual - expected) > epsilon) {
     throw new Error(
       `${message} (expected ${String(expected)}, got ${String(actual)})`,
     );
@@ -120,6 +142,64 @@ class FakeCanvasService {
 class FakeSceneLayoutService {}
 class FakeBrowserSceneExportService {}
 class FakeFabricRenderGraphAdapter {}
+
+const TEST_SURFACE_FRAMES: SurfaceSceneFrames = {
+  previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  productionFrame: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
+  exportFrame: { xMm: 5, yMm: 15, widthMm: 90, heightMm: 85 },
+  viewportFocusFrame: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
+};
+
+function createMutableConfig(initial: Record<string, unknown> = {}) {
+  const values = new Map(Object.entries(initial));
+  const listenersByKey = new Map<string, Set<(event: any) => void>>();
+  return {
+    get: <T,>(key: string, defaultValue?: T) =>
+      values.has(key) ? (values.get(key) as T) : defaultValue,
+    onDidChange: (key: string, listener: (event: any) => void) => {
+      const listeners =
+        listenersByKey.get(key) ?? new Set<(event: any) => void>();
+      listeners.add(listener);
+      listenersByKey.set(key, listeners);
+      return {
+        dispose: () => {
+          listeners.delete(listener);
+        },
+      };
+    },
+    update: (key: string, value: unknown) => {
+      const oldValue = values.get(key);
+      values.set(key, value);
+      if (oldValue !== value) {
+        listenersByKey.get(key)?.forEach((listener) => {
+          listener({ key, oldValue, value });
+        });
+      }
+    },
+  };
+}
+
+function createMutableSurfaceFrames(
+  initial: Record<string, SurfaceSceneFrames> = {},
+) {
+  const frameMap = new Map<string, SurfaceSceneFrames>(Object.entries(initial));
+  const frameListeners = new Set<(event: any) => void>();
+  return {
+    getFrames: (surfaceId?: string) => {
+      const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
+      return key ? frameMap.get(key) ?? null : null;
+    },
+    listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
+    onAnyFramesChange: (listener: (event: any) => void) => {
+      frameListeners.add(listener);
+      return { dispose: () => frameListeners.delete(listener) };
+    },
+    setFrames: (surfaceId: string, frames: SurfaceSceneFrames) => {
+      frameMap.set(surfaceId, frames);
+      frameListeners.forEach((listener) => listener({ surfaceId, frames }));
+    },
+  };
+}
 
 class FakeFabricObject {
   data: Record<string, any> = {};
@@ -217,6 +297,9 @@ function createRuntime() {
     runtime: {
       eventBus: {} as any,
       services: {
+        get(identifier: unknown) {
+          return registered.get(identifier) as any;
+        },
         register(service: Service, identifier?: unknown) {
           registered.set(identifier ?? service.constructor.name, service);
           return true;
@@ -235,6 +318,39 @@ function createRuntime() {
       },
     },
   };
+}
+
+async function testCanvasServicePreservesViewportLayout() {
+  const service = Object.create(CanvasService.prototype) as CanvasService & any;
+  service.viewport = new ViewportSystem(
+    { width: 800, height: 600 },
+    { width: 100, height: 120 },
+    96,
+  );
+
+  service.setViewportLayout({
+    height: 478.5,
+    offsetX: 112.25,
+    offsetY: 60.75,
+    scale: 4.25,
+    width: 697.5,
+  });
+
+  assertClose(
+    service.getSceneScale(),
+    4.25,
+    "canvas viewport should keep provided scale",
+  );
+  assertDeepEqual(
+    service.getSceneOffset(),
+    { x: 112.25, y: 60.75 },
+    "canvas viewport should keep provided offset",
+  );
+  assertDeepEqual(
+    service.toScreenPoint({ x: 10, y: 20 }),
+    { x: 154.75, y: 145.75 },
+    "screen mapping should use the provided scale and offset together",
+  );
 }
 
 function testAttachRegistersRenderGraphAdapter() {
@@ -544,7 +660,7 @@ async function testFabricRenderGraphAdapterUsesDerivedImageDimensions() {
   await runtime.dispose();
 }
 
-async function testFabricRenderGraphAdapterResyncsOnLayoutChange() {
+async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -568,14 +684,226 @@ async function testFabricRenderGraphAdapterResyncsOnLayoutChange() {
 
   await adapter.flush();
   const before = canvas.reconcileCalls.length;
-  runtime.eventBus.emit("scene:layout:change", {});
+  runtime.eventBus.emit("canvas:resized", {});
   await adapter.flush();
 
   assert(
     canvas.reconcileCalls.length > before,
-    "adapter should resync screen-space Fabric props after scene layout changes",
+    "adapter should resync screen-space Fabric props after viewport changes",
   );
 
+  await runtime.dispose();
+}
+
+async function testSceneLayoutServiceUsesStableSnapshots() {
+  const runtime = new Pooder();
+  const viewportSize = { width: 800, height: 600 };
+  const canvas = {
+    getViewportSize: () => ({ ...viewportSize }),
+  };
+  const layoutService = new SceneLayoutService();
+  const frameMap = new Map<string, SurfaceSceneFrames>();
+  const frameListeners = new Set<(event: any) => void>();
+  const surfaceFrames = {
+    getFrames: (surfaceId?: string) => {
+      const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
+      return key ? frameMap.get(key) ?? null : null;
+    },
+    listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
+    onAnyFramesChange: (listener: (event: any) => void) => {
+      frameListeners.add(listener);
+      return { dispose: () => frameListeners.delete(listener) };
+    },
+    setFrames: (surfaceId: string, frames: SurfaceSceneFrames) => {
+      frameMap.set(surfaceId, frames);
+      frameListeners.forEach((listener) => listener({ surfaceId, frames }));
+    },
+  };
+  layoutService.init({
+    eventBus: runtime.eventBus,
+    get: ((identifier: unknown) => {
+      if (identifier === CANVAS_SERVICE) return canvas;
+      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      return undefined;
+    }) as any,
+    getOrThrow: (() => undefined) as any,
+    has: () => false,
+  });
+
+  const changes: unknown[] = [];
+  layoutService.onLayoutChange("front", (layout) => {
+    changes.push(layout);
+  });
+
+  assertEqual(
+    layoutService.getLayout("front"),
+    null,
+    "getLayout should not compute a missing snapshot",
+  );
+  assertEqual(changes.length, 0, "pure reads should not emit layout changes");
+
+  surfaceFrames.setFrames("front", TEST_SURFACE_FRAMES);
+  const first = layoutService.getLayout("front");
+  assert(first, "frame invalidation should produce a layout snapshot");
+  assertEqual(first.surfaceId, "front", "snapshot should carry its surface id");
+  assertEqual(first.revision, 1, "first material snapshot should start revision");
+  assertEqual(changes.length, 1, "frame invalidation should emit once");
+
+  const second = layoutService.recomputeLayout("front");
+  assert(second, "explicit recompute should return the stable snapshot");
+  assertEqual(second.revision, 1, "unchanged recompute should keep revision");
+  assertEqual(changes.length, 1, "unchanged recompute should not emit");
+
+  layoutService.getLayout("front");
+  layoutService.getLayout("front");
+  assertEqual(changes.length, 1, "cached reads should remain side-effect free");
+
+  viewportSize.width = 1000;
+  runtime.eventBus.emit("canvas:resized", { width: 1000, height: 600 });
+  const resized = layoutService.getLayout("front");
+  assert(resized, "canvas resize should recompute the layout");
+  assertEqual(resized.revision, 2, "changed resize layout should increment revision");
+  assertEqual(changes.length, 2, "canvas resize should emit a real layout change");
+
+  layoutService.dispose();
+  await runtime.dispose();
+}
+
+async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
+  const runtime = new Pooder();
+  const canvas = {
+    getViewportSize: () => ({ width: 800, height: 600 }),
+  };
+  const layoutService = new SceneLayoutService();
+  const frameMap = new Map<string, SurfaceSceneFrames>();
+  const frameListeners = new Set<(event: any) => void>();
+  const surfaceFrames = {
+    clear: () => {
+      const previous = Array.from(frameMap.keys());
+      frameMap.clear();
+      previous.forEach((surfaceId) => {
+        frameListeners.forEach((listener) =>
+          listener({ surfaceId, frames: null }),
+        );
+      });
+    },
+    getFrames: (surfaceId?: string) => {
+      const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
+      return key ? frameMap.get(key) ?? null : null;
+    },
+    listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
+    onAnyFramesChange: (listener: (event: any) => void) => {
+      frameListeners.add(listener);
+      return { dispose: () => frameListeners.delete(listener) };
+    },
+    setFrames: (surfaceId: string, frames: SurfaceSceneFrames) => {
+      frameMap.set(surfaceId, frames);
+      frameListeners.forEach((listener) => listener({ surfaceId, frames }));
+    },
+  };
+  layoutService.init({
+    eventBus: runtime.eventBus,
+    get: ((identifier: unknown) => {
+      if (identifier === CANVAS_SERVICE) return canvas;
+      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      return undefined;
+    }) as any,
+    getOrThrow: (() => undefined) as any,
+    has: () => false,
+  });
+
+  const changes: Array<unknown> = [];
+  layoutService.onLayoutChange("front", (layout) => {
+    changes.push(layout);
+  });
+
+  surfaceFrames.setFrames("front", TEST_SURFACE_FRAMES);
+  assert(layoutService.getLayout("front"), "snapshot should exist before clear");
+
+  surfaceFrames.clear();
+  assertEqual(
+    layoutService.getLayout("front"),
+    null,
+    "removed surface should clear its layout snapshot",
+  );
+  assertEqual(changes.length, 2, "clear should emit a null layout change");
+  assertEqual(changes[1], null, "clear should publish a null layout");
+
+  layoutService.dispose();
+  await runtime.dispose();
+}
+
+async function testSceneLayoutServiceUsesConfiguredViewPadding() {
+  const runtime = new Pooder();
+  const canvas = {
+    getViewportSize: () => ({ width: 800, height: 600 }),
+  };
+  const config = createMutableConfig({ "size.viewPadding": "10%" });
+  const surfaceFrames = createMutableSurfaceFrames({
+    front: TEST_SURFACE_FRAMES,
+  });
+  const layoutService = new SceneLayoutService();
+
+  layoutService.init({
+    eventBus: runtime.eventBus,
+    get: ((identifier: unknown) => {
+      if (identifier === CANVAS_SERVICE) return canvas;
+      if (identifier === CONFIGURATION_SERVICE) return config;
+      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      return undefined;
+    }) as any,
+    getOrThrow: (() => undefined) as any,
+    has: () => false,
+  });
+
+  const layout = layoutService.getLayout("front");
+  assert(layout, "configured padding layout should resolve");
+  assertClose(
+    layout.scale,
+    4,
+    "scene layout should use size.viewPadding from runtime config",
+  );
+
+  layoutService.dispose();
+  await runtime.dispose();
+}
+
+async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
+  const runtime = new Pooder();
+  const canvas = {
+    getViewportSize: () => ({ width: 800, height: 600 }),
+  };
+  const config = createMutableConfig({ "size.viewPadding": "16%" });
+  const surfaceFrames = createMutableSurfaceFrames({
+    front: TEST_SURFACE_FRAMES,
+  });
+  const layoutService = new SceneLayoutService();
+
+  layoutService.init({
+    eventBus: runtime.eventBus,
+    get: ((identifier: unknown) => {
+      if (identifier === CANVAS_SERVICE) return canvas;
+      if (identifier === CONFIGURATION_SERVICE) return config;
+      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      return undefined;
+    }) as any,
+    getOrThrow: (() => undefined) as any,
+    has: () => false,
+  });
+
+  const initial = layoutService.getLayout("front");
+  assert(initial, "initial layout should resolve");
+  assertClose(initial.scale, 3.4, "initial layout should use 16% padding");
+  assertEqual(initial.revision, 1, "initial layout should start revision");
+
+  config.update("size.viewPadding", "10%");
+
+  const updated = layoutService.getLayout("front");
+  assert(updated, "updated layout should resolve");
+  assertClose(updated.scale, 4, "updated layout should use new view padding");
+  assertEqual(updated.revision, 2, "padding change should increment revision");
+
+  layoutService.dispose();
   await runtime.dispose();
 }
 
@@ -1314,7 +1642,12 @@ async function testSceneExportUsesCutFrameCrop() {
     }) => rect,
   };
   service.sceneLayoutService = {
-    getLayout: () => ({
+    recomputeLayout: () => ({
+      surfaceId: "legacy",
+      revision: 1,
+      offsetX: 0,
+      offsetY: 0,
+      scale: 1,
       cutRect,
       trimRect: cutRect,
       bleedRect: cutRect,
@@ -1807,6 +2140,10 @@ async function main() {
       testAttachRegistersRenderGraphAdapter,
     ],
     [
+      "preserves explicit viewport layout",
+      testCanvasServicePreservesViewportLayout,
+    ],
+    [
       "builds graph adapter draw list",
       testFabricRenderGraphAdapterBuildsDrawList,
     ],
@@ -1820,7 +2157,23 @@ async function main() {
     ],
     [
       "resyncs graph adapter on layout change",
-      testFabricRenderGraphAdapterResyncsOnLayoutChange,
+      testFabricRenderGraphAdapterResyncsOnViewportChange,
+    ],
+    [
+      "keeps scene layout reads side-effect free",
+      testSceneLayoutServiceUsesStableSnapshots,
+    ],
+    [
+      "clears scene layout snapshots for removed surfaces",
+      testSceneLayoutServiceClearsRemovedSurfaceSnapshots,
+    ],
+    [
+      "uses configured scene view padding",
+      testSceneLayoutServiceUsesConfiguredViewPadding,
+    ],
+    [
+      "recomputes scene layout when view padding changes",
+      testSceneLayoutServiceRecomputesOnViewPaddingChange,
     ],
     [
       "reports graph adapter sync state",

@@ -3,8 +3,11 @@ import {
   type DielineGeometryCapabilityOptions,
 } from "./capability";
 import { DielineTool, type DielineToolOptions } from "./DielineTool";
+import type { DielineState } from "./model";
 
-export interface DielineGeometryCapabilityExtensionOptions extends DielineGeometryCapabilityOptions {
+export interface DielineGeometryCapabilityExtensionOptions
+  extends DielineGeometryCapabilityOptions,
+    Partial<DielineState> {
   id?: string;
   contributeConfigurations?: boolean;
 }

@@ -28,7 +28,6 @@ import {
   upsertScenePathElement,
   type DielineGeometryCapabilityApi,
 } from "../src/extensions/dieline/capability";
-import { buildDielineRenderBundle } from "../src/extensions/dieline/renderBuilder";
 import {
   EDGE_DETECTION_CAPABILITY_ID,
   EdgeDetectionCapabilityExtension,
@@ -103,6 +102,7 @@ import {
   CANVAS_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
+  SURFACE_FRAME_SERVICE,
   containsGeometryPoint,
   evaluateRuntimeCondition,
   findNearestGeometryPoint,
@@ -187,10 +187,11 @@ async function testPaperPathGeometryProviderUtilities() {
   );
 }
 
-const TEST_DOCUMENT_CONFIG = {
-  "scene.previewBounds": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  "scene.productionFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  "scene.viewportFocusFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+const TEST_DOCUMENT_CONFIG = {};
+const TEST_SURFACE_FRAMES = {
+  previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
 };
 
 function imagePlacementCommittedVisibleWhen(placementId: string) {
@@ -1358,18 +1359,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     new FakeSceneExportService() as any,
     SCENE_EXPORT_SERVICE,
   );
-  runtime.services
-    .getOrThrow<CommandService>(COMMAND_SERVICE)
-    .registerCommand("getSceneGeometry", () => ({
-      x: 50,
-      y: 40,
-      width: 100,
-      height: 80,
-      radius: 0,
-      scale: 1,
-      shape: "rect",
-      shapeStyle: { fitMode: "stretch" },
-    }));
   runtime.extensions.register(createImagePlacementCapability());
   runtime.extensions.register(createImageMaskCapability());
   runtime.extensions.register(createDielineGeometryCapability());
@@ -1426,12 +1415,13 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
 
 function testCreateKitCapabilitiesForDocument() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -1483,12 +1473,13 @@ function testCreateKitCapabilitiesForDocument() {
 
 function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front.image.user",
@@ -1542,7 +1533,7 @@ async function testApplyKitEditorDocument() {
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
   const document = {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     assets: [
       { id: "template", type: "image", src: "/template.png" },
@@ -1553,6 +1544,7 @@ async function testApplyKitEditorDocument() {
         id: "front",
         title: "Front",
         size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front-template",
@@ -1631,6 +1623,7 @@ async function testApplyKitEditorDocument() {
       {
         id: "back",
         size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [{ id: "back-artwork" }],
       },
     ],
@@ -1774,9 +1767,11 @@ async function testApplyKitEditorDocument() {
     "feature effect should compile to declarative render graph data",
   );
   assertEqual(
-    runtime.config.get("scene.previewBounds"),
-    TEST_DOCUMENT_CONFIG["scene.previewBounds"],
-    "document apply should import document config",
+    runtime.services
+      .getOrThrow(SURFACE_FRAME_SERVICE)
+      .getFrames("front")?.previewBounds.widthMm,
+    TEST_SURFACE_FRAMES.previewBounds.widthMm,
+    "document apply should import surface frames",
   );
   await runtime.dispose();
 }
@@ -1787,12 +1782,13 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
   await runtime.extensions.flushActivation();
 
   const document = {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -1974,12 +1970,13 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
 
 async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
   const baseDocument = {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -2091,12 +2088,13 @@ async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
 async function testApplyKitEditorDocumentObjectInteraction() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -2185,12 +2183,13 @@ async function testApplyKitEditorDocumentObjectInteraction() {
 async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
   const runtime = new Pooder();
   const document = {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -2375,12 +2374,13 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
 async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -2433,12 +2433,13 @@ async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front-artwork",
@@ -2465,12 +2466,13 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 
   const optionalRuntime = new Pooder();
   const optionalResult = await applyKitEditorDocument(optionalRuntime, {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front-artwork",
@@ -2524,12 +2526,13 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   const missingCompilerResult = await applyKitEditorDocument(
     missingCompilerRuntime,
     {
-      version: 3,
+      version: 4,
       config: TEST_DOCUMENT_CONFIG,
       surfaces: [
         {
           id: "front",
           size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
           layers: [
             {
               id: "front-artwork",
@@ -2578,12 +2581,13 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   });
   await throwRuntime.extensions.flushActivation();
   const throwResult = await applyKitEditorDocument(throwRuntime, {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front-artwork",
@@ -2633,6 +2637,7 @@ async function testImagePlacementCapabilityExtension() {
     setTransform: async () => ({ ok: true }),
     validateSession: async () => ({ ok: true }),
     validatePlacement: async () => ({ ok: true }),
+    registerSessionOverlayProvider: () => ({ dispose() {} }),
     refresh: () => {},
   };
   runtime.extensions.register({
@@ -2706,31 +2711,23 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   });
   const layout: SceneLayoutSnapshot = {
     bleedRect: rectByCenter(400, 300, 360, 360),
-    canvasHeight: 600,
-    canvasWidth: 800,
-    cutHeightMm: 120,
     cutRect: rectByCenter(400, 300, 360, 360),
-    cutWidthMm: 120,
+    offsetX: 0,
+    offsetY: 0,
+    revision: 1,
     scale: 3,
-    trimHeightMm: 100,
+    surfaceId: "legacy",
     trimRect: rectByCenter(400, 300, 300, 300),
-    trimWidthMm: 100,
   };
+  runtime.services
+    .getOrThrow(SURFACE_FRAME_SERVICE)
+    .setFrames("legacy", TEST_SURFACE_FRAMES);
   runtime.services.register(
     {
       getLayout: () => layout,
-      getGeometry: () => ({
-        height: layout.trimRect.height,
-        offset: (layout.cutRect.width - layout.trimRect.width) / 2,
-        radius: 0,
-        scale: layout.scale,
-        shape: "circle",
-        shapeStyle: { fitMode: "stretch" },
-        unit: "px",
-        width: layout.trimRect.width,
-        x: layout.trimRect.centerX,
-        y: layout.trimRect.centerY,
-      }),
+      invalidateLayout: () => {},
+      onLayoutChange: () => ({ dispose() {} }),
+      recomputeLayout: () => layout,
     } as any,
     SCENE_LAYOUT_SERVICE,
   );
@@ -2937,6 +2934,12 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   ]);
   const imageExtension = createImagePlacementCapability();
   runtime.extensions.register(imageExtension);
+  runtime.extensions.register(
+    createDielineGeometryCapability({
+      shape: "circle",
+      shapeStyle: { fitMode: "stretch" },
+    }),
+  );
   await runtime.extensions.flushActivation();
 
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
@@ -3825,6 +3828,38 @@ async function testDielineOverlayConditionFollowsEditingSessions() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services
+    .getOrThrow(SURFACE_FRAME_SERVICE)
+    .setFrames("legacy", TEST_SURFACE_FRAMES);
+  const rectByCenter = (
+    centerX: number,
+    centerY: number,
+    width: number,
+    height: number,
+  ): SceneRect => ({
+    centerX,
+    centerY,
+    height,
+    left: centerX - width / 2,
+    top: centerY - height / 2,
+    width,
+  });
+  const layout: SceneLayoutSnapshot = {
+    bleedRect: rectByCenter(400, 300, 360, 360),
+    cutRect: rectByCenter(400, 300, 360, 360),
+    offsetX: 0,
+    offsetY: 0,
+    revision: 1,
+    scale: 3,
+    surfaceId: "legacy",
+    trimRect: rectByCenter(400, 300, 300, 360),
+  };
+  runtime.services.register(
+    {
+      getLayout: () => layout,
+    } as any,
+    SCENE_LAYOUT_SERVICE,
+  );
   runtime.extensions.register(createDielineGeometryCapability());
   await runtime.extensions.flushActivation();
   await Promise.resolve();
@@ -3893,7 +3928,7 @@ async function testDielineOverlayConditionFollowsEditingSessions() {
   await runtime.dispose();
 }
 
-function testImageSessionShapeOverlayUsesDielineGeometry() {
+function testImageSessionOverlayBuildsBaseCropControls() {
   const rectByCenter = (
     centerX: number,
     centerY: number,
@@ -3909,32 +3944,16 @@ function testImageSessionShapeOverlayUsesDielineGeometry() {
   });
   const layout: SceneLayoutSnapshot = {
     bleedRect: rectByCenter(400, 300, 360, 360),
-    canvasHeight: 600,
-    canvasWidth: 800,
-    cutHeightMm: 120,
     cutRect: rectByCenter(400, 300, 360, 360),
-    cutWidthMm: 120,
+    offsetX: 0,
+    offsetY: 0,
+    revision: 1,
     scale: 3,
-    trimHeightMm: 100,
+    surfaceId: "legacy",
     trimRect: rectByCenter(400, 300, 300, 300),
-    trimWidthMm: 100,
-  };
-  const shapeStyle = { fitMode: "stretch" as const };
-  const geometry = {
-    height: layout.trimRect.height,
-    offset: (layout.cutRect.width - layout.trimRect.width) / 2,
-    radius: 0,
-    scale: layout.scale,
-    shape: "circle" as const,
-    shapeStyle,
-    unit: "px" as const,
-    width: layout.trimRect.width,
-    x: layout.trimRect.centerX,
-    y: layout.trimRect.centerY,
   };
 
   const imageOverlaySpecs = buildImageSessionOverlaySpecs({
-    geometry,
     layout,
     viewport: { left: 0, top: 0, width: 800, height: 600 },
     visual: {
@@ -3946,45 +3965,90 @@ function testImageSessionShapeOverlayUsesDielineGeometry() {
       strokeWidth: 2,
     },
   });
-  const outline = imageOverlaySpecs.find(
-    (spec) => spec.id === "image.cropShapeOutline",
-  );
-  const hatch = imageOverlaySpecs.find(
-    (spec) => spec.id === "image.cropShapeHatch",
-  );
-  const dieline = buildDielineRenderBundle({
-    canvasHeight: layout.canvasHeight,
-    canvasWidth: layout.canvasWidth,
-    hasImages: true,
-    includeImageClipEffect: false,
-    sceneLayout: layout,
-    state: {
-      features: [],
-      height: 100,
-      insideColor: "transparent",
-      mainLine: { color: "#f00", dashLength: 1, style: "solid", width: 1 },
-      offset: 10,
-      offsetLine: { color: "#f00", dashLength: 1, style: "solid", width: 1 },
-      padding: 0,
-      radius: 0,
-      shape: "circle",
-      shapeStyle,
-      showBleedLines: true,
-      width: 100,
-    },
-  }).specs.find((spec) => spec.id === "dieline.border");
-
-  assert(outline, "image session should render a shape outline");
-  assert(hatch, "image session should render a shape hatch overlay");
-  assert(dieline, "dieline bundle should render the main border");
-  assertEqual(
-    (outline!.props as any).pathData,
-    (dieline!.props as any).pathData,
-    "image session shape outline should use the same geometry as the dieline border",
+  assert(
+    imageOverlaySpecs.some((spec) => spec.id === "image.cropMask.rect"),
+    "image session should render the crop mask",
   );
   assert(
-    String((hatch!.props as any).pathData).startsWith("M 220 120 L 580 120"),
-    "image session hatch should still cover the cut frame before subtracting the dieline",
+    imageOverlaySpecs.some((spec) => spec.id === "image.cropFrame"),
+    "image session should render the crop frame",
+  );
+  assert(
+    !imageOverlaySpecs.some((spec) => spec.id === "image.cropShapeOutline"),
+    "image session base overlay should not own dieline shape rendering",
+  );
+}
+
+function testImageSessionOverlayUsesPlacementSurfaceLayout() {
+  const rectByCenter = (
+    centerX: number,
+    centerY: number,
+    width: number,
+    height: number,
+  ): SceneRect => ({
+    centerX,
+    centerY,
+    height,
+    left: centerX - width / 2,
+    top: centerY - height / 2,
+    width,
+  });
+  const layout: SceneLayoutSnapshot = {
+    bleedRect: rectByCenter(400, 300, 360, 360),
+    cutRect: rectByCenter(400, 300, 360, 360),
+    offsetX: 0,
+    offsetY: 0,
+    revision: 7,
+    scale: 3,
+    surfaceId: "back",
+    trimRect: rectByCenter(400, 300, 300, 300),
+  };
+  const tool = createImagePlacementCapability() as any;
+  const requestedSurfaceIds: Array<string | undefined> = [];
+  let capturedContext: any = null;
+  tool.canvasService = {
+    getScreenViewportRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+  };
+  tool.sceneLayoutService = {
+    getLayout: (surfaceId?: string) => {
+      requestedSurfaceIds.push(surfaceId);
+      return surfaceId === "back" ? layout : null;
+    },
+  };
+  tool.surfaceFrameService = {
+    listSurfaceIds: () => ["front"],
+  };
+  tool.sessionOverlayProviders.set("capture", {
+    id: "capture",
+    getOverlaySpecs: (context: any) => {
+      capturedContext = context;
+      return [];
+    },
+  });
+
+  const entries = tool.buildSessionOverlayEntries(
+    {
+      id: "placement",
+      metadata: { documentSurfaceId: "back" },
+    },
+    "session",
+  );
+
+  assert(entries.length > 0, "image session should build base overlay specs");
+  assertEqual(
+    requestedSurfaceIds[0],
+    "back",
+    "image session should request the placement surface layout",
+  );
+  assertEqual(
+    capturedContext?.surfaceId,
+    "back",
+    "overlay providers should receive the snapshot surface id",
+  );
+  assertEqual(
+    capturedContext?.layout?.surfaceId,
+    "back",
+    "overlay providers should receive the matching layout snapshot",
   );
 }
 
@@ -4005,11 +4069,11 @@ async function testDielineGeometryCapabilityExtension() {
       runtime.config.update("storefrontDieline.shape", "custom");
       runtime.config.update("storefrontDieline.pathData", result.pathData);
       if (options.normalizeCutMode !== false) {
-        runtime.config.update("scene.exportFrame", {
-          heightMm: 100,
-          widthMm: 100,
-          xMm: 0,
-          yMm: 0,
+        runtime.services.getOrThrow(SURFACE_FRAME_SERVICE).setFrames("front", {
+          previewBounds: { heightMm: 100, widthMm: 100, xMm: 0, yMm: 0 },
+          productionFrame: { heightMm: 100, widthMm: 100, xMm: 0, yMm: 0 },
+          exportFrame: { heightMm: 100, widthMm: 100, xMm: 0, yMm: 0 },
+          viewportFocusFrame: { heightMm: 100, widthMm: 100, xMm: 0, yMm: 0 },
         });
       }
     },
@@ -4082,8 +4146,9 @@ async function testDielineGeometryCapabilityExtension() {
     "dieline geometry should write detected path to caller namespace",
   );
   assertDeepEqual(
-    runtime.config.get("scene.exportFrame"),
-    { heightMm: 100, widthMm: 100, xMm: 0, yMm: 0 },
+    runtime.services.getOrThrow(SURFACE_FRAME_SERVICE).getFrames("front")
+      ?.exportFrame,
+    { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
     "dieline geometry should normalize the export frame when requested",
   );
 
@@ -4177,12 +4242,13 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 200, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front.flash-base",
@@ -4289,7 +4355,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   );
   await runtimeWithPersistedConfig.extensions.flushActivation();
   await applyKitEditorDocument(runtimeWithPersistedConfig, {
-    version: 3,
+    version: 4,
     config: {
       ...TEST_DOCUMENT_CONFIG,
       configurableVisual: {
@@ -4303,6 +4369,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
       {
         id: "front",
         size: { width: 200, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front.flash-base",
@@ -4367,12 +4434,13 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 3,
+    version: 4,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "front.artwork",
@@ -4664,7 +4732,8 @@ async function main() {
   await testImagePlacementCanvasPressCanOnlyRequestSession();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayConditionFollowsEditingSessions();
-  testImageSessionShapeOverlayUsesDielineGeometry();
+  testImageSessionOverlayBuildsBaseCropControls();
+  testImageSessionOverlayUsesPlacementSurfaceLayout();
   await testDielineGeometryCapabilityExtension();
   await testImageMaskCapabilityExtension();
   await testConfigurableVisualConfigPatchesOriginalRenderIntents();

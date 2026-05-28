@@ -1,4 +1,4 @@
-import type { ConfigurationService } from "@pooder/core";
+import type { ConfigurationService, SurfaceSceneFrames } from "@pooder/core";
 import { parseLengthToMm } from "../../units";
 import {
   DEFAULT_DIELINE_SHAPE,
@@ -7,7 +7,6 @@ import {
   normalizeDielineShape,
 } from "../dielineShape";
 import type { DielineShape, DielineShapeStyle } from "../dielineShape";
-import { readSizeState } from "../../shared/scene/scene-layout-model";
 import type { DielineFeature } from "../geometry";
 
 export interface DielineGeometry {
@@ -98,6 +97,7 @@ export function readDielineState(
   configService: ConfigurationService,
   fallback?: Partial<DielineState>,
   namespace?: string,
+  frames?: SurfaceSceneFrames | null,
 ): DielineState {
   const base = createDefaultDielineState();
   if (fallback) {
@@ -116,7 +116,6 @@ export function readDielineState(
     }
   }
 
-  const sizeState = readSizeState(configService);
   const configKey = (path: string) => getDielineConfigKey(namespace, path);
   const sourceWidth = Number(
     configService.get(configKey("customSourceWidthPx"), 0),
@@ -124,8 +123,13 @@ export function readDielineState(
   const sourceHeight = Number(
     configService.get(configKey("customSourceHeightPx"), 0),
   );
-  const productionFrame = sizeState.sceneFrames.productionFrame;
-  const exportFrame = sizeState.sceneFrames.exportFrame ?? productionFrame;
+  const productionFrame = frames?.productionFrame ?? {
+    xMm: 0,
+    yMm: 0,
+    widthMm: base.width,
+    heightMm: base.height,
+  };
+  const exportFrame = frames?.exportFrame ?? productionFrame;
 
   return {
     ...base,
@@ -143,7 +147,7 @@ export function readDielineState(
       configService.get(configKey("radius"), base.radius),
       "mm",
     ),
-    padding: sizeState.viewPadding,
+    padding: base.padding,
     offset: (exportFrame.widthMm - productionFrame.widthMm) / 2,
     mainLine: {
       width: configService.get(configKey("strokeWidth"), base.mainLine.width),

@@ -425,15 +425,7 @@ export interface CanvasService extends Service {
   requestRenderAll(): void;
   resize(width: number, height: number): void;
   getViewportSize(): CanvasSize;
-  updateViewportLayout(options: {
-    containerWidth: number;
-    containerHeight: number;
-    padding: number;
-    widthMm: number;
-    heightMm: number;
-    offsetX?: number;
-    offsetY?: number;
-  }): CanvasViewportLayout | null;
+  setViewportLayout(layout: CanvasViewportLayout): void;
   selectObjects(selector?: CanvasObjectSelector): CanvasObjectLike[];
   selectOneObject(selector: CanvasObjectSelector): CanvasObjectLike | undefined;
   getActiveObject(): CanvasObjectLike | undefined;
@@ -538,7 +530,6 @@ export interface SizeState {
   sceneFrames: SurfaceSceneFrames;
   constraintMode: SizeConstraintMode;
   aspectRatio: number;
-  viewPadding: number | string;
   minMm: number;
   maxMm: number;
   stepMm: number;
@@ -554,16 +545,14 @@ export interface SceneRect {
 }
 
 export interface SceneLayoutSnapshot {
+  surfaceId: string;
+  revision: number;
   scale: number;
-  canvasWidth: number;
-  canvasHeight: number;
+  offsetX: number;
+  offsetY: number;
   trimRect: SceneRect;
   cutRect: SceneRect;
   bleedRect: SceneRect;
-  trimWidthMm: number;
-  trimHeightMm: number;
-  cutWidthMm: number;
-  cutHeightMm: number;
 }
 
 export interface SceneGeometrySnapshot {
@@ -583,6 +572,11 @@ export interface SceneGeometrySnapshot {
 }
 
 export interface SceneLayoutService extends Service {
-  getLayout(forceRefresh?: boolean): SceneLayoutSnapshot | null;
-  getGeometry(forceRefresh?: boolean): SceneGeometrySnapshot | null;
+  getLayout(surfaceId?: string): SceneLayoutSnapshot | null;
+  recomputeLayout(surfaceId?: string): SceneLayoutSnapshot | null;
+  invalidateLayout(surfaceId?: string): void;
+  onLayoutChange(
+    surfaceId: string,
+    listener: (layout: SceneLayoutSnapshot | null) => void,
+  ): Disposable;
 }

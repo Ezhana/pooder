@@ -1,6 +1,5 @@
 export {
   DEFAULT_SIZE_STATE,
-  buildSceneGeometry,
   computeSceneLayout,
   fromMm,
   normalizeConstraintMode,
@@ -14,7 +13,8 @@ export {
 } from "@pooder/core";
 export type {
   CutMode,
-  SceneGeometrySnapshot,
+  SceneLayoutFitOptions,
+  SceneLayoutInput,
   SceneLayoutSnapshot,
   SceneRect,
   SizeConstraintMode,

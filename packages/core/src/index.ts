@@ -21,6 +21,7 @@ import {
   ConfigurationService,
   DefaultConstraintResolverCapability,
   DefaultGeometrySourceCapability,
+  DefaultSurfaceFrameService,
   RenderEffectRegistryService,
   RenderIntentCompilerRegistryService,
   RenderIntentService,
@@ -45,6 +46,7 @@ export * from "./workflow-session";
 export * from "./interaction";
 export * from "./geometry-source";
 export * from "./constraint-resolver";
+export * from "./surface-frames";
 export * from "./services";
 export { default as EventBus } from "./event";
 
@@ -164,6 +166,7 @@ export class Pooder {
     new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
   private readonly sessionService = new SessionService();
+  private readonly surfaceFrameService = new DefaultSurfaceFrameService();
   private readonly geometrySourceService = new DefaultGeometrySourceCapability();
   private readonly constraintResolverService =
     new DefaultConstraintResolverCapability(this.geometrySourceService);
@@ -202,6 +205,10 @@ export class Pooder {
     this.registerService(
       this.sessionService,
       CORE_SERVICE_TOKENS.SESSION,
+    );
+    this.registerService(
+      this.surfaceFrameService,
+      CORE_SERVICE_TOKENS.SURFACE_FRAME,
     );
     this.registerService(
       this.geometrySourceService,

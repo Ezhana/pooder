@@ -35,10 +35,11 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
-const TEST_DOCUMENT_CONFIG = {
-  "scene.previewBounds": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  "scene.productionFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  "scene.viewportFocusFrame": { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+const TEST_DOCUMENT_CONFIG = {};
+const TEST_SURFACE_FRAMES = {
+  previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
 };
 
 function testNormalizeDefaults() {
@@ -50,6 +51,7 @@ function testNormalizeDefaults() {
         id: "front",
         title: "Front",
         size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -147,6 +149,7 @@ function testLegacyObjectInteractionIsIgnored() {
       {
         id: "front",
         size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -208,6 +211,7 @@ function testLegacyObjectConstraintsAreIgnored() {
       {
         id: "front",
         size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "artwork",
@@ -270,6 +274,7 @@ function testV2ImagePlacementImageDoesNotRequireSource() {
       {
         id: "front",
         size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "image.user",
@@ -302,6 +307,7 @@ function testImageObjectDoesNotRequireSource() {
       {
         id: "front",
         size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "image.user",
@@ -333,6 +339,7 @@ function testV2DocumentIsRejected() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [],
       },
     ],
@@ -351,6 +358,7 @@ function testDocumentConfigIsRequired() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [],
       },
     ],
@@ -370,6 +378,7 @@ function testImageObjectRequiresFrame() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "layer",
@@ -401,6 +410,7 @@ function testValidationStructureAndReferences() {
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "layer",
@@ -418,6 +428,7 @@ function testValidationStructureAndReferences() {
       {
         id: "front",
         size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [],
       },
     ],
@@ -448,6 +459,7 @@ function testCustomValidatorDiagnostics() {
         {
           id: "front",
           size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
           layers: [
             {
               id: "layer",
@@ -486,6 +498,7 @@ function testCustomEffectRequiresCapabilityId() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [{ id: "layer", effects: [{ type: "custom-effect" }] }],
       },
     ],
@@ -541,6 +554,7 @@ function testKitEffectCapabilityResolution() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "layer",
@@ -576,6 +590,7 @@ function testRequirePolicyDiagnostics() {
       {
         id: "front",
         size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
         layers: [
           {
             id: "layer",

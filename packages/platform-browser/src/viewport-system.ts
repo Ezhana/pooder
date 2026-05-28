@@ -70,6 +70,22 @@ export class ViewportSystem {
     };
   }
 
+  setLayout(layout: Layout) {
+    if (
+      !Number.isFinite(layout.scale) ||
+      !Number.isFinite(layout.offsetX) ||
+      !Number.isFinite(layout.offsetY) ||
+      !Number.isFinite(layout.width) ||
+      !Number.isFinite(layout.height) ||
+      layout.scale <= 0 ||
+      layout.width < 0 ||
+      layout.height < 0
+    ) {
+      return;
+    }
+    this._layout = { ...layout };
+  }
+
   private updateLayout() {
     this._layout = Coordinate.calculateLayout(
       this._containerSize,

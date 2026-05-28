@@ -1,4 +1,4 @@
-export const EDITOR_DOCUMENT_VERSION = 3 as const;
+export const EDITOR_DOCUMENT_VERSION = 4 as const;
 
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
@@ -68,9 +68,24 @@ export interface EditorSurface {
     bleed?: EditorRect;
     safe?: EditorRect;
   };
+  frames: EditorSurfaceFrames;
   layers: EditorLayer[];
   effects?: EditorEffect[];
   metadata?: Record<string, unknown>;
+}
+
+export interface EditorSceneFrameMm {
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+}
+
+export interface EditorSurfaceFrames {
+  previewBounds: EditorSceneFrameMm;
+  productionFrame: EditorSceneFrameMm;
+  exportFrame?: EditorSceneFrameMm;
+  viewportFocusFrame: EditorSceneFrameMm;
 }
 
 export interface EditorView {
@@ -202,12 +217,6 @@ export interface EditorDocumentCapabilityCollectionResult {
 
 const VALID_UNITS = new Set(["px", "mm", "cm", "in"]);
 const VALID_REQUIRE_POLICIES = new Set(["strict", "warn", "ignore"]);
-const REQUIRED_CONFIG_FRAME_KEYS = [
-  "scene.previewBounds",
-  "scene.productionFrame",
-  "scene.viewportFocusFrame",
-] as const;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -279,6 +288,43 @@ function normalizeSceneFrameMm(
     return undefined;
   }
   return { xMm, yMm, widthMm, heightMm };
+}
+
+function createDefaultSurfaceFrames(size: {
+  width: number;
+  height: number;
+}): EditorSurfaceFrames {
+  const previewBounds = {
+    xMm: 0,
+    yMm: 0,
+    widthMm: size.width,
+    heightMm: size.height,
+  };
+  return {
+    previewBounds,
+    productionFrame: { ...previewBounds },
+    viewportFocusFrame: { ...previewBounds },
+  };
+}
+
+function normalizeSurfaceFrames(
+  value: unknown,
+  fallback: EditorSurfaceFrames,
+): EditorSurfaceFrames {
+  const raw = isRecord(value) ? value : {};
+  const previewBounds =
+    normalizeSceneFrameMm(raw.previewBounds) ?? fallback.previewBounds;
+  const productionFrame =
+    normalizeSceneFrameMm(raw.productionFrame) ?? previewBounds;
+  const viewportFocusFrame =
+    normalizeSceneFrameMm(raw.viewportFocusFrame) ?? productionFrame;
+  const exportFrame = normalizeSceneFrameMm(raw.exportFrame);
+  return {
+    previewBounds,
+    productionFrame,
+    ...(exportFrame ? { exportFrame } : {}),
+    viewportFocusFrame,
+  };
 }
 
 function normalizeTransform(value: unknown): EditorTransform | undefined {
@@ -437,6 +483,13 @@ function normalizeSurface(value: unknown): EditorSurface | null {
         .map((item, index) => normalizeLayer(item, index))
         .filter((item): item is EditorLayer => Boolean(item))
     : [];
+  const size = {
+    width: normalizePositiveNumber(rawSize.width) ?? 1,
+    height: normalizePositiveNumber(rawSize.height) ?? 1,
+    unit: VALID_UNITS.has(String(rawSize.unit))
+      ? (rawSize.unit as EditorDocumentUnit)
+      : "px",
+  };
   const frame = isRecord(value.frame)
     ? {
         trim: normalizeRect(value.frame.trim),
@@ -448,15 +501,13 @@ function normalizeSurface(value: unknown): EditorSurface | null {
   return {
     id: normalizeId(value.id),
     title: typeof value.title === "string" ? value.title : undefined,
-    size: {
-      width: normalizePositiveNumber(rawSize.width) ?? 1,
-      height: normalizePositiveNumber(rawSize.height) ?? 1,
-      unit: VALID_UNITS.has(String(rawSize.unit))
-        ? (rawSize.unit as EditorDocumentUnit)
-        : "px",
-    },
+    size,
     frame:
       frame && (frame.trim || frame.bleed || frame.safe) ? frame : undefined,
+    frames: normalizeSurfaceFrames(
+      value.frames,
+      createDefaultSurfaceFrames(size),
+    ),
     layers,
     effects: normalizeEffects(value.effects),
     metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
@@ -594,7 +645,6 @@ function validateEffect(
 function validateDocumentConfig(
   diagnostics: EditorDocumentDiagnostic[],
   input: Record<string, unknown>,
-  document: EditorDocument,
 ) {
   if (!isRecord(input.config)) {
     addDiagnostic(diagnostics, {
@@ -603,19 +653,7 @@ function validateDocumentConfig(
       message: "EditorDocument config is required.",
       path: "config",
     });
-    return;
   }
-
-  REQUIRED_CONFIG_FRAME_KEYS.forEach((key) => {
-    if (!normalizeSceneFrameMm(document.config[key])) {
-      addDiagnostic(diagnostics, {
-        severity: "error",
-        code: "document-config-frame-required",
-        message: `EditorDocument config requires a valid "${key}" frame.`,
-        path: `config.${key}`,
-      });
-    }
-  });
 }
 
 function validateEffects(
@@ -668,7 +706,7 @@ export function validateEditorDocument(
   const objectIds = new Set<string>();
   const viewIds = new Set<string>();
 
-  validateDocumentConfig(diagnostics, input, document);
+  validateDocumentConfig(diagnostics, input);
 
   runValidators(diagnostics, options.validators, {
     document,
@@ -711,6 +749,31 @@ export function validateEditorDocument(
         path: `${surfacePath}.size`,
       });
     }
+    if (!isRecord((input.surfaces as unknown[])?.[surfaceIndex])) {
+      return;
+    }
+    const rawSurface = (input.surfaces as unknown[])[surfaceIndex];
+    const rawFrames = isRecord(rawSurface) ? rawSurface.frames : undefined;
+    if (!isRecord(rawFrames)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "surface-frames-required",
+        message: `Surface "${surface.id}" requires frames.`,
+        path: `${surfacePath}.frames`,
+      });
+    }
+    (["previewBounds", "productionFrame", "viewportFocusFrame"] as const).forEach(
+      (key) => {
+        if (!normalizeSceneFrameMm(isRecord(rawFrames) ? rawFrames[key] : undefined)) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "surface-frame-required",
+            message: `Surface "${surface.id}" requires a valid "${key}" frame.`,
+            path: `${surfacePath}.frames.${key}`,
+          });
+        }
+      },
+    );
     validateEffects(diagnostics, surface.effects, surfacePath, options);
     runValidators(diagnostics, options.validators, {
       document,

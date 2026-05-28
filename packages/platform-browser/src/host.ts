@@ -1,4 +1,10 @@
-import type { EventBus, Service, ServiceIdentifier } from "@pooder/core";
+import type {
+  EventBus,
+  Service,
+  ServiceIdentifier,
+  SurfaceFrameService,
+} from "@pooder/core";
+import { SURFACE_FRAME_SERVICE } from "@pooder/core";
 import { BrowserSceneExportService } from "./browser-scene-export-service";
 import CanvasService from "./canvas-service";
 import { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
@@ -11,6 +17,7 @@ import {
 } from "./tokens";
 
 interface BrowserHostRuntimeServices {
+  get<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined;
   register<T extends Service>(
     service: T,
     identifier?: ServiceIdentifier<T>,
@@ -154,6 +161,46 @@ export function attachBrowserHost(
 
   resizeObserver.observe(container);
 
+  const viewportDisposables: Array<{ dispose(): void }> = [];
+  const observedSurfaceIds = new Set<string>();
+  const surfaceFrameService =
+    runtime.services.get<SurfaceFrameService>(SURFACE_FRAME_SERVICE);
+  const applyViewportLayout = (surfaceId: string) => {
+    const layout = sceneLayoutService.getLayout(surfaceId);
+    const frames = surfaceFrameService?.getFrames(surfaceId);
+    if (!layout || !frames) return;
+    canvasService.setViewportLayout({
+      scale: layout.scale,
+      offsetX: layout.offsetX,
+      offsetY: layout.offsetY,
+      width: frames.previewBounds.widthMm * layout.scale,
+      height: frames.previewBounds.heightMm * layout.scale,
+    });
+    canvasService.requestRenderAll();
+  };
+  const getActiveSurfaceId = () => surfaceFrameService?.listSurfaceIds()[0] ?? "";
+  const observeSurface = (surfaceId: string) => {
+    if (!surfaceId || observedSurfaceIds.has(surfaceId)) return;
+    observedSurfaceIds.add(surfaceId);
+    viewportDisposables.push(
+      sceneLayoutService.onLayoutChange(surfaceId, () => {
+        if (surfaceId === getActiveSurfaceId()) {
+          applyViewportLayout(surfaceId);
+        }
+      }),
+    );
+  };
+  surfaceFrameService?.listSurfaceIds().forEach(observeSurface);
+  const surfaceFramesDisposable = surfaceFrameService?.onAnyFramesChange((event) => {
+      observeSurface(event.surfaceId);
+      if (event.surfaceId === getActiveSurfaceId()) {
+        applyViewportLayout(event.surfaceId);
+      }
+    });
+  if (surfaceFramesDisposable) {
+    viewportDisposables.push(surfaceFramesDisposable);
+  }
+
   return {
     browserSceneExportService,
     canvasService,
@@ -161,6 +208,7 @@ export function attachBrowserHost(
     sceneLayoutService,
     dispose() {
       resizeObserver.disconnect();
+      viewportDisposables.forEach((disposable) => disposable?.dispose());
       runtime.services.unregister(
         fabricRenderGraphAdapter,
         FABRIC_RENDER_GRAPH_ADAPTER,
