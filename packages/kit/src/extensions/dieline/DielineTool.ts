@@ -58,16 +58,12 @@ import {
 } from "../../shared/runtime/renderIntentPatches";
 
 const IMAGE_SESSION_CHANNEL = "image-placement";
-const LEGACY_IMAGE_TOOL_ID = "pooder.kit.image";
 
 export interface DielineToolOptions
   extends Partial<DielineState>, DielineGeometryCapabilityOptions {
   id?: string;
-  contributeTool?: boolean;
   contributeCommands?: boolean;
   contributeConfigurations?: boolean;
-  toolName?: string;
-  legacyVisibility?: boolean;
 }
 
 /**
@@ -96,7 +92,6 @@ export class DielineTool implements ExtensionDefinition {
   private readonly imageClipLayerIds: string[];
   private readonly contributeLegacyCommands: boolean;
   private readonly contributeConfigDefinitions: boolean;
-  private readonly legacyVisibility: boolean;
   private onCanvasResized = () => {
     this.updateDieline();
   };
@@ -117,7 +112,6 @@ export class DielineTool implements ExtensionDefinition {
     this.contributeLegacyCommands = options.contributeCommands !== false;
     this.contributeConfigDefinitions =
       options.contributeConfigurations !== false;
-    this.legacyVisibility = options.legacyVisibility ?? false;
 
     if (options) {
       const stateOptions: Partial<DielineState> = { ...options };
@@ -141,11 +135,8 @@ export class DielineTool implements ExtensionDefinition {
       delete (stateOptions as any).capabilityId;
       delete (stateOptions as any).configNamespace;
       delete (stateOptions as any).layers;
-      delete (stateOptions as any).contributeTool;
       delete (stateOptions as any).contributeCommands;
       delete (stateOptions as any).contributeConfigurations;
-      delete (stateOptions as any).toolName;
-      delete (stateOptions as any).legacyVisibility;
       Object.assign(this.state, stateOptions);
       this.state.shape = normalizeDielineShape(
         stateOptions.shape,
@@ -331,24 +322,7 @@ export class DielineTool implements ExtensionDefinition {
       },
     };
 
-    if (!this.legacyVisibility) {
-      return sessionCondition;
-    }
-
-    return {
-      op: "all",
-      exprs: [
-        sessionCondition,
-        {
-          op: "not",
-          expr: {
-            op: "in",
-            ref: { source: "activeToolId" },
-            values: [LEGACY_IMAGE_TOOL_ID],
-          },
-        },
-      ],
-    };
+    return sessionCondition;
   }
 
   private getConfigServiceOrThrow(): ConfigurationService {

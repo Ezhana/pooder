@@ -15,9 +15,7 @@ export class DielineGeometryCapabilityExtension extends DielineTool {
       ...options,
       capabilityId: options.capabilityId || DIELINE_GEOMETRY_CAPABILITY_ID,
       contributeCommands: false,
-      contributeTool: false,
       id: options.id || DIELINE_GEOMETRY_CAPABILITY_ID,
-      legacyVisibility: false,
     };
     super(toolOptions);
   }

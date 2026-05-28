@@ -8,8 +8,6 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  TOOL_REGISTRY_SERVICE,
-  ToolRegistryService,
   buildSceneGeometry,
   computeSceneLayout,
   computeDragInteraction,
@@ -577,87 +575,6 @@ async function testRuntimeCapabilityFacadeApiThrowsForMissingFacade() {
   });
 }
 
-async function testCapabilityIgnoresLegacyToolContribution() {
-  await withRuntime(async (runtime) => {
-    const toolRegistry = new ToolRegistryService();
-    runtime.services.register(toolRegistry, TOOL_REGISTRY_SERVICE);
-    runtime.extensions.register({
-      id: "capability-with-tool",
-      contribute() {
-        return {
-          capabilities: [
-            {
-              id: "pooder.test.capability-with-tool",
-            },
-          ],
-          tools: [
-            {
-              id: "legacy.tool",
-              name: "Legacy Tool",
-              interaction: "instant",
-            },
-          ],
-        };
-      },
-      activate() {},
-    });
-
-    await runtime.extensions.flushActivation();
-
-    assertEqual(
-      runtime.services
-        .getOrThrow(CAPABILITY_REGISTRY_SERVICE)
-        .hasCapability("pooder.test.capability-with-tool"),
-      true,
-    );
-    assertEqual(
-      toolRegistry.hasTool("legacy.tool"),
-      false,
-      "legacy tools contribution should not register a tool",
-    );
-    assertEqual(
-      runtime.services
-        .getOrThrow<SessionService>(SESSION_SERVICE)
-        .hasActiveSession(),
-      false,
-      "legacy tools contribution should not create workflow sessions",
-    );
-  });
-}
-
-async function testLegacyToolOnlyContributionIsInert() {
-  await withRuntime(async (runtime) => {
-    const toolRegistry = new ToolRegistryService();
-    runtime.services.register(toolRegistry, TOOL_REGISTRY_SERVICE);
-    runtime.extensions.register({
-      id: "tool-only",
-      contribute() {
-        return {
-          tools: [
-            {
-              id: "legacy.only",
-              name: "Legacy Only",
-              interaction: "session",
-            },
-          ],
-        };
-      },
-      activate() {},
-    });
-
-    await runtime.extensions.flushActivation();
-
-    assertEqual(toolRegistry.listTools().length, 0);
-    assertEqual(runtime.capabilities.list().length, 0);
-    assertEqual(
-      runtime.services
-        .getOrThrow<SessionService>(SESSION_SERVICE)
-        .hasActiveSession(),
-      false,
-    );
-  });
-}
-
 async function testEventBusOffMissingHandlerPreservesListeners() {
   const eventBus = new EventBus();
   const calls: string[] = [];
@@ -705,13 +622,6 @@ async function testUnregisterCleansDefinitionsCapabilitiesAndCommands() {
               command: "cleanup.command",
               title: "cleanup.command",
               handler: () => "cleanup",
-            },
-          ],
-          tools: [
-            {
-              id: "cleanup.tool",
-              name: "Cleanup Tool",
-              interaction: "instant",
             },
           ],
         };
@@ -1702,38 +1612,6 @@ async function testSessionDirtyTrackerCanBlockLeave() {
   });
 }
 
-async function testToolContributionDoesNotManageSessions() {
-  await withRuntime(async (runtime) => {
-    runtime.extensions.register({
-      id: "tool-session-decoupled",
-      contribute() {
-        return {
-          tools: [
-            {
-              id: "decoupled.session-tool",
-              name: "Decoupled Session Tool",
-              interaction: "session",
-            },
-          ],
-        };
-      },
-      activate() {},
-    });
-
-    await runtime.extensions.flushActivation();
-    const sessions = runtime.services.getOrThrow<SessionService>(
-      SESSION_SERVICE,
-    );
-
-    assertEqual(sessions.hasActiveSession(), false);
-
-    const result = await runtime.extensions.unregister("tool-session-decoupled");
-
-    assertEqual(result, true);
-    assertEqual(sessions.hasActiveSession(), false);
-  });
-}
-
 async function testRenderIntentRuntimePatchesAreSourceScoped() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
@@ -2439,10 +2317,6 @@ async function main() {
       testRuntimeCapabilityFacadeApiThrowsForMissingFacade,
     ],
     [
-      "ignores legacy tool contributions while registering capabilities",
-      testCapabilityIgnoresLegacyToolContribution,
-    ],
-    [
       "unregister cleans up config definitions, capabilities, and commands",
       testUnregisterCleansDefinitionsCapabilitiesAndCommands,
     ],
@@ -2494,14 +2368,6 @@ async function main() {
     [
       "session dirty trackers can block leave",
       testSessionDirtyTrackerCanBlockLeave,
-    ],
-    [
-      "tool contribution does not manage sessions",
-      testToolContributionDoesNotManageSessions,
-    ],
-    [
-      "legacy tool-only contribution is inert",
-      testLegacyToolOnlyContributionIsInert,
     ],
     [
       "EventBus off ignores missing handlers",

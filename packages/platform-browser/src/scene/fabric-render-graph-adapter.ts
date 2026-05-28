@@ -4,7 +4,6 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  WORKBENCH_SERVICE,
   evaluateRuntimeCondition,
   type CanvasService,
   type ConstraintResolverCapability,
@@ -27,7 +26,6 @@ import {
   type RuntimeConditionLayerState,
   type SessionService,
   type RenderIntentService,
-  type WorkbenchService,
 } from "@pooder/core";
 import type { FabricRenderTargetItem } from "../canvas-service";
 import { CANVAS_SERVICE } from "../tokens";
@@ -58,7 +56,6 @@ export class FabricRenderGraphAdapter implements Service {
   private sceneService?: SceneService;
   private geometrySource?: GeometrySourceCapability;
   private constraintResolver?: ConstraintResolverCapability;
-  private workbenchService?: WorkbenchService;
   private canvasService?: FabricRenderTargetCanvasService;
   private sessionService?: SessionService;
   private eventBus?: ServiceContext["eventBus"];
@@ -86,7 +83,6 @@ export class FabricRenderGraphAdapter implements Service {
     this.sceneService = context.get(SCENE_SERVICE);
     this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
     this.constraintResolver = context.get(CONSTRAINT_RESOLVER_SERVICE);
-    this.workbenchService = context.get(WORKBENCH_SERVICE);
     this.canvasService = context.get(CANVAS_SERVICE) as
       | FabricRenderTargetCanvasService
       | undefined;
@@ -149,7 +145,6 @@ export class FabricRenderGraphAdapter implements Service {
     this.sceneService = undefined;
     this.geometrySource = undefined;
     this.constraintResolver = undefined;
-    this.workbenchService = undefined;
     this.canvasService = undefined;
     this.sessionService = undefined;
     this.eventBus = undefined;
@@ -226,7 +221,6 @@ export class FabricRenderGraphAdapter implements Service {
     if (!eventBus) return;
     eventBus.on("session:change", this.onRuntimeConditionChange);
     eventBus.on("scene:layout:change", this.onRuntimeConditionChange);
-    eventBus.on("tool:switch", this.onRuntimeConditionChange);
   }
 
   private detachRuntimeConditionEvents() {
@@ -234,7 +228,6 @@ export class FabricRenderGraphAdapter implements Service {
     if (!eventBus) return;
     eventBus.off("session:change", this.onRuntimeConditionChange);
     eventBus.off("scene:layout:change", this.onRuntimeConditionChange);
-    eventBus.off("tool:switch", this.onRuntimeConditionChange);
   }
 
   private async runSyncLoop() {
@@ -470,7 +463,6 @@ export class FabricRenderGraphAdapter implements Service {
     });
 
     return this.requireRenderIntentService().createRuntimeConditionContext({
-      activeToolId: this.workbenchService?.activeToolId ?? null,
       getLayerState: (layerId: string) => layers.get(layerId),
       isSessionActive: (sessionId: string) =>
         this.sessionService?.isSessionActive(sessionId) ?? false,

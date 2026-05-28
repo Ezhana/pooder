@@ -12,27 +12,6 @@ export interface CommandContribution {
   handler?: (...args: any[]) => any;
 }
 
-export type ToolInteraction = "instant" | "session" | "hybrid";
-
-export interface ToolCommandBindings {
-  execute?: string;
-}
-
-/**
- * @deprecated Legacy toolbar metadata. Core no longer consumes
- * ExtensionContributions.tools automatically; applications should own tool
- * catalogs and explicitly register any app-level tools they still need.
- */
-export interface ToolContribution {
-  id: string;
-  name: string;
-  description?: string;
-  icon?: string;
-  interaction: ToolInteraction;
-  parameters?: Record<string, any>;
-  commands?: ToolCommandBindings;
-}
-
 export interface ConfigurationContribution {
   id: string;
   type:
@@ -59,10 +38,4 @@ export interface ExtensionContributions {
   renderEffectDefinitions?: RenderEffectDefinition[];
   renderEffectRenderers?: RenderEffectRendererContribution[];
   renderIntentCompilers?: RenderIntentCompilerContribution[];
-  /**
-   * @deprecated Core no longer consumes tools contributions automatically.
-   * Applications should own product tool catalogs and explicitly register any
-   * compatibility tools through app-level code.
-   */
-  tools?: ToolContribution[];
 }

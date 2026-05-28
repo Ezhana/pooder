@@ -464,11 +464,6 @@ function createCommandExtension(
     activation?: ExtensionDefinition["activation"];
     capabilities?: CapabilityDefinition[];
     commands?: CommandContribution[];
-    tools?: Array<{
-      id: string;
-      name: string;
-      interaction: "instant" | "session" | "hybrid";
-    }>;
   } = {},
 ): ExtensionDefinition {
   return {
@@ -478,7 +473,6 @@ function createCommandExtension(
       return {
         capabilities: options.capabilities ?? [],
         commands: options.commands ?? [],
-        tools: options.tools ?? [],
       };
     },
     activate() {},

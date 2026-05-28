@@ -96,9 +96,7 @@ interface MarkerData {
 
 export interface FeatureToolOptions extends FeatureCapabilityOptions {
   id?: string;
-  contributeTool?: boolean;
   contributeCommands?: boolean;
-  toolName?: string;
   requireDielineExtension?: boolean;
   features?: ConstraintFeature[];
 }
@@ -120,7 +118,6 @@ export class FeatureTool implements ExtensionDefinition {
   private renderIntentService?: RenderIntentService;
   private context?: ExtensionContext;
   private isUpdatingConfig = false;
-  private isToolActive = false;
   private isFeatureSessionActive = false;
   private sessionOriginalFeatures: ConstraintFeature[] | null = null;
   private hasWorkingChanges = false;
@@ -231,8 +228,6 @@ export class FeatureTool implements ExtensionDefinition {
       },
     );
 
-    this.subscriptions.on(context.eventBus, "tool:activated", this.onToolActivated);
-
     this.setup();
   }
 
@@ -247,14 +242,6 @@ export class FeatureTool implements ExtensionDefinition {
     this.renderIntentService = undefined;
     this.context = undefined;
   }
-
-  private onToolActivated = (event: { id: string | null }) => {
-    this.isToolActive = event.id === this.id;
-    if (!this.isToolActive) {
-      this.suspendFeatureSession();
-    }
-    this.updateVisibility();
-  };
 
   private updateVisibility() {
     this.redraw();

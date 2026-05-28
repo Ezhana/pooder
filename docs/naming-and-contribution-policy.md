@@ -59,8 +59,7 @@ but new public APIs should not copy the legacy `*Tool` pattern.
 - A `WorkflowSession` is caller-owned workflow state, not a kit tool id.
 - Type names use `WorkflowSession`, `WorkflowSessionId`,
   `WorkflowSessionState`, and `WorkflowSessionLeavePolicy`.
-- Session ids must be accepted from callers. Legacy tool ids may be used only
-  by compatibility wrappers.
+- Session ids must be accepted from callers.
 - New visibility/session predicates should refer to generic workflow context,
   not hard-coded kit ids such as `pooder.kit.image`.
 
@@ -77,8 +76,6 @@ but new public APIs should not copy the legacy `*Tool` pattern.
 - Service-local raw names such as `change` may stay private behind typed
   service APIs. New cross-package listeners must not depend on those raw local
   names directly.
-- Legacy global events such as `tool:activated` and `tool:session:change` remain
-  compatibility bridges until the deprecation/removal phase.
 
 ## Extension Contribution Rules
 
@@ -123,16 +120,13 @@ but new public APIs should not copy the legacy `*Tool` pattern.
 - New config schemas should keep layer ids, config namespaces, and session ids
   caller-controlled where ownership crosses package boundaries.
 
-### Compatibility Tools
+### Product Tools
 
-- `tools` contributions are allowed in `@pooder/kit` only for compatibility
-  wrappers around legacy public behavior.
+- Extension contributions do not include product toolbar metadata.
 - New kit capabilities must not introduce product toolbar items, product labels,
   icons, or workflow semantics.
 - Applications own tool catalogs, labels, icons, ordering, visibility, and
   workflow handlers.
-- A compatibility tool must delegate to the capability facade once that facade
-  exists, and must keep its old commands only as bridges.
 
 ## Deprecation Labels
 

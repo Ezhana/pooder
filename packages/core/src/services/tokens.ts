@@ -7,8 +7,6 @@ import type {
   RenderIntentService,
 } from "../render-intent";
 import type SceneService from "./SceneService";
-import type ToolRegistryService from "./ToolRegistryService";
-import type WorkbenchService from "./WorkbenchService";
 import type SessionService from "./SessionService";
 import type { DefaultConstraintResolverCapability } from "../constraint-resolver";
 import type { DefaultGeometrySourceCapability } from "../geometry-source";
@@ -41,10 +39,6 @@ export const SCENE_LAYOUT_SERVICE =
   createServiceToken<SceneLayoutService>("SceneLayoutService");
 export const SCENE_EXPORT_SERVICE =
   createServiceToken<SceneExportService>("SceneExportService");
-export const TOOL_REGISTRY_SERVICE =
-  createServiceToken<ToolRegistryService>("ToolRegistryService");
-export const WORKBENCH_SERVICE =
-  createServiceToken<WorkbenchService>("WorkbenchService");
 export const SESSION_SERVICE = createServiceToken<SessionService>("SessionService");
 export const GEOMETRY_SOURCE_SERVICE =
   createServiceToken<DefaultGeometrySourceCapability>("GeometrySourceService");
@@ -64,8 +58,6 @@ export const CORE_SERVICE_TOKENS = {
   SCENE: SCENE_SERVICE,
   SCENE_LAYOUT: SCENE_LAYOUT_SERVICE,
   SCENE_EXPORT: SCENE_EXPORT_SERVICE,
-  TOOL_REGISTRY: TOOL_REGISTRY_SERVICE,
-  WORKBENCH: WORKBENCH_SERVICE,
   SESSION: SESSION_SERVICE,
   GEOMETRY_SOURCE: GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER: CONSTRAINT_RESOLVER_SERVICE,

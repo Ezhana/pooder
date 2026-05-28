@@ -15,7 +15,6 @@ export class FeatureCapabilityExtension extends FeatureTool {
       ...options,
       capabilityId: options.capabilityId || FEATURE_CAPABILITY_ID,
       contributeCommands: false,
-      contributeTool: false,
       id: options.id || FEATURE_CAPABILITY_ID,
       requireDielineExtension: false,
     };

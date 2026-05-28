@@ -7,8 +7,6 @@ import {
   RenderIntentService,
 } from "../render-intent";
 import SceneService from "./SceneService";
-import ToolRegistryService from "./ToolRegistryService";
-import WorkbenchService from "./WorkbenchService";
 import SessionService from "./SessionService";
 import { DefaultConstraintResolverCapability } from "../constraint-resolver";
 import { DefaultGeometrySourceCapability } from "../geometry-source";
@@ -24,8 +22,6 @@ import {
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
-  TOOL_REGISTRY_SERVICE,
-  WORKBENCH_SERVICE,
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
@@ -39,8 +35,6 @@ export {
   RenderEffectRegistryService,
   RenderIntentService,
   SceneService,
-  ToolRegistryService,
-  WorkbenchService,
   SessionService,
   DefaultGeometrySourceCapability,
   DefaultConstraintResolverCapability,
@@ -54,8 +48,6 @@ export {
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  TOOL_REGISTRY_SERVICE,
-  WORKBENCH_SERVICE,
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
@@ -89,8 +81,3 @@ export type {
   ConfigurationDefinitionsChangeEvent,
   RegisteredConfigurationDefinition,
 } from "./ConfigurationService";
-export type {
-  ToolSwitchContext,
-  ToolSwitchGuard,
-  ToolSwitchResult,
-} from "./WorkbenchService";
