@@ -265,10 +265,6 @@ function readMetadataSourceSrc(
   return sourceSrc;
 }
 
-function isTemporaryImageSource(src: string): boolean {
-  return /^blob:/i.test(src) || /^data:/i.test(src);
-}
-
 function createCommittedImagePlacementTransform(
   frame: FrameRect | null | undefined,
   metadata: Record<string, unknown> | undefined,
@@ -1455,7 +1451,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
       const croppedSrc = croppedImage.url || image.src;
       const sourceSrc = readMetadataSourceSrc(image.metadata) || image.src;
-      const committedSourceSrc = isTemporaryImageSource(sourceSrc) ? "" : sourceSrc;
       const sourceTransform = resolveImageTransformSnapshot(image);
       const rawSourceMetadata = isRecord(image.metadata?.source)
         ? image.metadata.source
@@ -1477,7 +1472,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           ...stripDerivedImageMetadata(image.metadata),
           source: {
             ...sourceMetadata,
-            ...(committedSourceSrc ? { src: committedSourceSrc } : {}),
+            ...(sourceSrc ? { src: sourceSrc } : {}),
           },
           transform: sourceTransform,
           derived: {

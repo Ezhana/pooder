@@ -4413,18 +4413,27 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   });
 
   const driver = getImagePlacementTestDriver(imageExtension);
+  const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+  );
   const sessionInput = {
     placementId: "front.image.user",
     sessionId: "customization:image-placement:sku:new:front:front.image.user",
   };
   await driver.beginSession(sessionInput);
   await driver.setImageSource(sessionInput, {
-    src: "/draft.png",
+    src: "blob:front-image-original",
     metadata: { width: 100, height: 100 },
   });
   await driver.completeSession(sessionInput);
 
   const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+  const configurableVisualConfig = runtime.config.get("configurableVisual") as any;
+  assertEqual(
+    configurableVisualConfig?.["front.image.user"]?.source?.src,
+    "blob:front-image-original",
+    "configurable visual image placement commit should retain the editable original source",
+  );
   const committedGraphNode = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph()
@@ -4459,6 +4468,13 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     true,
     "configurable visual image placement commit should ignore stale active sessions once working state is gone",
   );
+  await driver.beginSession(sessionInput);
+  assertEqual(
+    facade.getViewState().focusedPlacement?.image?.src,
+    "blob:front-image-original",
+    "reopened configurable visual image session should edit from the retained original source",
+  );
+  driver.resetSession(sessionInput);
 
   await runtime.dispose();
 }
