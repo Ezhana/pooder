@@ -1,4 +1,14 @@
-import { Canvas, FabricObject, Image, Path, Pattern, Rect, Text } from "fabric";
+import {
+  Canvas,
+  Control,
+  FabricObject,
+  Image,
+  Path,
+  Pattern,
+  Rect,
+  Text,
+  controlsUtils,
+} from "fabric";
 import {
   EventBus,
   Service,
@@ -74,6 +84,35 @@ export class FabricEffectRendererRegistry {
 }
 
 const GRAPH_RENDER_TARGET = "render-graph";
+const POODER_INTERACTIVE_CONTROL_STYLE = {
+  borderColor: "#1677ff",
+  borderScaleFactor: 1.5,
+  cornerColor: "#1677ff",
+  cornerSize: 18,
+  cornerStrokeColor: "#ffffff",
+  cornerStyle: "circle" as const,
+  padding: 2,
+  touchCornerSize: 32,
+  transparentCorners: false,
+};
+
+function createPooderInteractiveControls() {
+  return {
+    tl: new Control({
+      x: -0.5,
+      y: -0.5,
+      actionHandler: controlsUtils.rotationWithSnapping,
+      cursorStyleHandler: controlsUtils.rotationStyleHandler,
+      actionName: "rotate",
+    }),
+    br: new Control({
+      x: 0.5,
+      y: 0.5,
+      actionHandler: controlsUtils.scalingEqually,
+      cursorStyleHandler: controlsUtils.scaleCursorStyleHandler,
+    }),
+  };
+}
 
 export default class CanvasService implements Service, CanvasServiceContract {
   public canvas: Canvas;
@@ -791,7 +830,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       evented: false,
       ...this.resolveRenderPatternProps(this.resolveLayoutProps(spec, props)),
     };
-    if (space === "screen") return next;
+    if (space === "screen") return this.resolveInteractiveControlProps(next);
 
     const hasLeft = Number.isFinite(next.left);
     const hasTop = Number.isFinite(next.top);
@@ -809,7 +848,18 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const sceneScale = this.getSceneScale();
     next.scaleX = rawScaleX * sceneScale;
     next.scaleY = rawScaleY * sceneScale;
-    return next;
+    return this.resolveInteractiveControlProps(next);
+  }
+
+  private resolveInteractiveControlProps(
+    props: Record<string, any>,
+  ): Record<string, any> {
+    if (props.hasControls !== true) return props;
+    return {
+      ...props,
+      ...POODER_INTERACTIVE_CONTROL_STYLE,
+      controls: createPooderInteractiveControls(),
+    };
   }
 
   private resolveRenderPatternProps(props: Record<string, any>): Record<string, any> {

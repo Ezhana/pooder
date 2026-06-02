@@ -1334,6 +1334,125 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
   );
 }
 
+async function testCanvasReconcileAppliesInteractiveControlDefaults() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+
+  await service.reconcileRenderGraphDrawList(
+    [
+      {
+        key: "interactive",
+        layerId: "art",
+        order: 0,
+        spec: {
+          id: "interactive",
+          type: "rect",
+          props: {
+            width: 10,
+            height: 10,
+            hasControls: true,
+          },
+          data: { subjectId: "interactive-subject" },
+        },
+      },
+      {
+        key: "non-interactive",
+        layerId: "controls",
+        order: 1,
+        spec: {
+          id: "non-interactive",
+          type: "rect",
+          props: {
+            width: 10,
+            height: 10,
+            hasControls: false,
+          },
+          data: { subjectId: "non-interactive-subject" },
+        },
+      },
+    ],
+  );
+
+  const interactive = canvas.objects.find(
+    (object) => object.data?.id === "interactive",
+  ) as any;
+  const nonInteractive = canvas.objects.find(
+    (object) => object.data?.id === "non-interactive",
+  ) as any;
+
+  assert(interactive, "interactive object should be reconciled");
+  assert(nonInteractive, "non-interactive object should be reconciled");
+  assertDeepEqual(
+    Object.keys(interactive.controls || {}).sort(),
+    ["br", "tl"],
+    "interactive controls should only expose top-left and bottom-right",
+  );
+  assertEqual(
+    interactive.controls.tl.actionName,
+    "rotate",
+    "top-left control should rotate",
+  );
+  assertEqual(
+    interactive.controls.br.actionName,
+    "scale",
+    "bottom-right control should scale",
+  );
+  assertEqual(
+    interactive.cornerStyle,
+    "circle",
+    "interactive controls should use circular corners",
+  );
+  assertEqual(
+    interactive.transparentCorners,
+    false,
+    "interactive controls should be solid",
+  );
+  assertEqual(
+    interactive.cornerSize,
+    18,
+    "interactive controls should use the prominent corner size",
+  );
+  assertEqual(
+    interactive.touchCornerSize,
+    32,
+    "interactive controls should use the prominent touch size",
+  );
+  assertEqual(
+    interactive.cornerColor,
+    "#1677ff",
+    "interactive controls should use the accent fill",
+  );
+  assertEqual(
+    interactive.cornerStrokeColor,
+    "#ffffff",
+    "interactive controls should use a white outline",
+  );
+  assertEqual(
+    interactive.borderColor,
+    "#1677ff",
+    "interactive border should match the accent fill",
+  );
+  assertEqual(
+    interactive.borderScaleFactor,
+    1.5,
+    "interactive border should be more visible",
+  );
+  assertEqual(
+    interactive.padding,
+    2,
+    "interactive controls should have a small visual gap",
+  );
+  assertEqual(
+    nonInteractive.controls,
+    undefined,
+    "non-interactive objects should not receive custom controls",
+  );
+  assertEqual(
+    nonInteractive.cornerStyle,
+    undefined,
+    "non-interactive objects should not receive custom control styling",
+  );
+}
+
 async function testCanvasReconcileAppliesClipPath() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
   await service.reconcileRenderGraphDrawList(
@@ -2194,6 +2313,10 @@ async function main() {
     [
       "reconciles stale objects and clip cleanup",
       testCanvasReconcileRemovesStaleObjectsAndClearsClip,
+    ],
+    [
+      "applies interactive control defaults",
+      testCanvasReconcileAppliesInteractiveControlDefaults,
     ],
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],
     ["applies graph image clip paths", testCanvasReconcileAppliesImageClipPath],
