@@ -1776,6 +1776,65 @@ async function testApplyKitEditorDocument() {
   await runtime.dispose();
 }
 
+async function testApplyKitEditorDocumentRefreshesImagePlacementOverlay() {
+  const runtime = new Pooder();
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  const document = {
+    version: 4,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 697, height: 957, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "front.image.user",
+            role: "content",
+            objects: [
+              {
+                id: "front.image.user",
+                type: "image",
+                frame: { x: 0, y: 0, width: 697, height: 957 },
+                effects: [
+                  {
+                    type: "image-placement",
+                    payload: {
+                      accepts: ["image"],
+                      fit: "cover",
+                      placementId: "image.user",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  runtime.extensions.registerMany(createKitCapabilitiesForDocument(document));
+  await runtime.extensions.flushActivation();
+
+  const result = await applyKitEditorDocument(runtime, document);
+  assert(result.ok, "document apply should succeed");
+
+  const graphNodes = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes);
+  assert(
+    graphNodes.some((node) => node.id === "upload:front.image.user"),
+    "document apply should refresh image placement upload overlay without waiting for resize",
+  );
+  assert(
+    graphNodes.some((node) => node.id === "upload-label:front.image.user"),
+    "document apply should refresh image placement upload label without waiting for resize",
+  );
+
+  await runtime.dispose();
+}
+
 async function testMirrorCapabilityDocumentEffectAndFacade() {
   const runtime = new Pooder();
   runtime.extensions.register(new MirrorCapabilityExtension());
@@ -2638,7 +2697,7 @@ async function testImagePlacementCapabilityExtension() {
     validateSession: async () => ({ ok: true }),
     validatePlacement: async () => ({ ok: true }),
     registerSessionOverlayProvider: () => ({ dispose() {} }),
-    refresh: () => {},
+    refresh: async () => {},
   };
   runtime.extensions.register({
     id: "test.image-placement",
@@ -4718,6 +4777,7 @@ async function main() {
   testCreateKitCapabilitiesForDocument();
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();
   await testApplyKitEditorDocument();
+  await testApplyKitEditorDocumentRefreshesImagePlacementOverlay();
   await testMirrorCapabilityDocumentEffectAndFacade();
   await testDocumentCompilerAndRuntimePatchUseSameMerge();
   await testApplyKitEditorDocumentObjectInteraction();

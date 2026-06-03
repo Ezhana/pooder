@@ -898,7 +898,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       validatePlacement: (placementId) => this.validateSession(placementId),
       registerSessionOverlayProvider: (provider) =>
         this.registerSessionOverlayProvider(provider),
-      refresh: () => this.updateImages(),
+      refresh: () => this.updateImagesAsync(),
     };
   }
 

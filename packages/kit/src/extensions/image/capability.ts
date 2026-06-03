@@ -120,7 +120,7 @@ export interface ImagePlacementCapabilityApi {
   registerSessionOverlayProvider(
     provider: ImageSessionOverlayProvider,
   ): { dispose(): void };
-  refresh(): void;
+  refresh(): Promise<void>;
 }
 
 export function normalizeImagePlacementLayerId(

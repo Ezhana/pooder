@@ -39,7 +39,10 @@ import { CLIP_CAPABILITY_ID } from "../extensions/clip";
 import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-visual";
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
-import { IMAGE_PLACEMENT_CAPABILITY_ID } from "../extensions/image";
+import {
+  IMAGE_PLACEMENT_CAPABILITY_ID,
+  type ImagePlacementCapabilityApi,
+} from "../extensions/image";
 import { INTERACTION_CAPABILITY_ID } from "../extensions/interaction";
 import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
 
@@ -234,6 +237,7 @@ export async function applyKitEditorDocument(
   }
 
   renderIntentService.setDocumentIntents(mergeResult.drafts);
+  await refreshDocumentRuntimeCapabilities(runtime);
 
   return createResult(
     true,
@@ -241,6 +245,14 @@ export async function applyKitEditorDocument(
     allDiagnostics,
     collectAppliedSurfaceIds(mergeResult.drafts),
   );
+}
+
+async function refreshDocumentRuntimeCapabilities(
+  runtime: KitEditorDocumentRuntime,
+): Promise<void> {
+  await runtime.capabilities
+    .get<ImagePlacementCapabilityApi>(IMAGE_PLACEMENT_CAPABILITY_ID)
+    ?.refresh();
 }
 
 function createResult(
