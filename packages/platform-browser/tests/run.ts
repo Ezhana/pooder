@@ -1383,19 +1383,21 @@ async function testCanvasReconcileAppliesInteractiveControlDefaults() {
   assert(nonInteractive, "non-interactive object should be reconciled");
   assertDeepEqual(
     Object.keys(interactive.controls || {}).sort(),
-    ["br", "tl"],
-    "interactive controls should only expose top-left and bottom-right",
+    ["bl", "br", "mtr", "tl", "tr"],
+    "interactive controls should expose corner scale handles and the rotation handle",
   );
   assertEqual(
-    interactive.controls.tl.actionName,
+    interactive.controls.mtr.actionName,
     "rotate",
-    "top-left control should rotate",
+    "rotation control should use Fabric's default rotation handle",
   );
-  assertEqual(
-    interactive.controls.br.actionName,
-    "scale",
-    "bottom-right control should scale",
-  );
+  ["tl", "tr", "bl", "br"].forEach((controlKey) => {
+    assertEqual(
+      interactive.controls[controlKey].actionName,
+      "scale",
+      `${controlKey} control should scale`,
+    );
+  });
   assertEqual(
     interactive.cornerStyle,
     "circle",

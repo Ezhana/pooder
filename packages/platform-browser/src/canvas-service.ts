@@ -1,6 +1,5 @@
 import {
   Canvas,
-  Control,
   FabricObject,
   Image,
   Path,
@@ -97,20 +96,13 @@ const POODER_INTERACTIVE_CONTROL_STYLE = {
 };
 
 function createPooderInteractiveControls() {
+  const defaultControls = controlsUtils.createObjectDefaultControls();
   return {
-    tl: new Control({
-      x: -0.5,
-      y: -0.5,
-      actionHandler: controlsUtils.rotationWithSnapping,
-      cursorStyleHandler: controlsUtils.rotationStyleHandler,
-      actionName: "rotate",
-    }),
-    br: new Control({
-      x: 0.5,
-      y: 0.5,
-      actionHandler: controlsUtils.scalingEqually,
-      cursorStyleHandler: controlsUtils.scaleCursorStyleHandler,
-    }),
+    tl: defaultControls.tl,
+    tr: defaultControls.tr,
+    bl: defaultControls.bl,
+    br: defaultControls.br,
+    mtr: defaultControls.mtr,
   };
 }
 
