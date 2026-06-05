@@ -3534,6 +3534,116 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   await runtime.dispose();
 }
 
+async function testImagePlacementCommittedExportUsesObjectUrl() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  const exportService = new FakeSceneExportService();
+  const dataUrl = "data:image/png;base64,c21hbGw=";
+  exportService.error = null;
+  exportService.response = {
+    crop: { left: 0, top: 0, width: 100, height: 100 },
+    format: "png",
+    height: 100,
+    multiplier: 1,
+    source: {
+      layerIds: ["artwork"],
+      elementIds: ["placement"],
+      tags: [],
+    },
+    url: dataUrl,
+    width: 100,
+  };
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+  runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "artwork" });
+  scene.addElement({
+    id: "placement",
+    layerId: "artwork",
+    type: "rect",
+    width: 100,
+    height: 100,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        frame: { x: 0, y: 0, width: 100, height: 100 },
+      },
+    },
+  });
+
+  const originalFetch = (globalThis as any).fetch;
+  const originalCreateObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
+    URL,
+    "createObjectURL",
+  );
+  let fetchedUrl = "";
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: () => "blob:cropped-large-placement",
+  });
+  (globalThis as any).fetch = async (url: string) => {
+    fetchedUrl = url;
+    return {
+      blob: async () => new Blob(["cropped"]),
+    };
+  };
+
+  try {
+    const imageExtension = createImagePlacementCapability();
+    runtime.extensions.register(imageExtension);
+    await runtime.extensions.flushActivation();
+    const driver = getImagePlacementTestDriver(imageExtension);
+
+    await driver.beginSession("placement");
+    await driver.setImageSource("placement", {
+      src: "/photo.png",
+      metadata: { height: 80, width: 100 },
+    });
+    await driver.completeSession("placement");
+
+    const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
+      ?.imagePlacement?.image;
+    assertEqual(
+      fetchedUrl,
+      dataUrl,
+      "committed image data URL should be converted through fetch",
+    );
+    assertEqual(
+      committedImage.src,
+      "blob:cropped-large-placement",
+      "committed image data URL should be stored as an object URL",
+    );
+    assertEqual(
+      committedImage.metadata?.derived?.src,
+      "blob:cropped-large-placement",
+      "committed image metadata should store the object URL",
+    );
+    const committedGraphNode = runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find((node) => node.id === "image:placement");
+    assertEqual(
+      committedGraphNode?.visual?.src,
+      "blob:cropped-large-placement",
+      "committed image render patch should avoid the inline data URL",
+    );
+  } finally {
+    if (originalCreateObjectUrlDescriptor) {
+      Object.defineProperty(
+        URL,
+        "createObjectURL",
+        originalCreateObjectUrlDescriptor,
+      );
+    } else {
+      delete (URL as any).createObjectURL;
+    }
+    (globalThis as any).fetch = originalFetch;
+    await runtime.dispose();
+  }
+}
+
 async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
@@ -4787,6 +4897,7 @@ async function main() {
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();
   await testImagePlacementCompleteSyncsCanvasTransform();
+  await testImagePlacementCommittedExportUsesObjectUrl();
   await testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches();
   await testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft();
   await testImagePlacementCanvasPressCanOnlyRequestSession();

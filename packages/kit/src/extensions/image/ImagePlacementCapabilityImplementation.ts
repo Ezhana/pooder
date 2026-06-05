@@ -371,6 +371,29 @@ function readMetadataDerivedImage(
   };
 }
 
+async function createObjectUrlFromDataUrl(dataUrl: string): Promise<string | null> {
+  if (
+    !dataUrl.startsWith("data:") ||
+    typeof URL === "undefined" ||
+    typeof URL.createObjectURL !== "function" ||
+    typeof Blob === "undefined" ||
+    typeof fetch !== "function"
+  ) {
+    return null;
+  }
+
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
+
+async function normalizeCommittedExportUrl(url: string): Promise<string> {
+  return (await createObjectUrlFromDataUrl(url)) ?? url;
+}
+
 function normalizeImage(value: unknown): ImagePlacementImageState | null {
   if (!isRecord(value)) return null;
   const src = typeof value.src === "string" ? value.src.trim() : "";
@@ -594,6 +617,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private pendingUploadPlacementIds = new Set<string>();
   private sessionIdsByPlacementId = new Map<string, string>();
   private sessionSceneIdsBySessionId = new Map<string, string>();
+  private generatedCommittedExportObjectUrls = new Set<string>();
   private activePlacementId: string | null = null;
   private activeImageSessionId: string | null = null;
   private sessionNotice: ImagePlacementSessionNotice | null = null;
@@ -687,6 +711,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.activeImageSessionId = null;
     this.clearWorkingPlacementConditionContext();
     this.sourceSizeCache.clear();
+    this.revokeAllGeneratedCommittedExportObjectUrls();
     this.endMoveSnapInteraction();
     this.unbindCanvasInteractionHandlers();
     this.canvasService?.requestRenderAll();
@@ -1481,7 +1506,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         return { ok: false, reason: "image-crop-export-failed" };
       }
 
-      const croppedSrc = croppedImage.url || image.src;
+      const croppedSrc = croppedImage.url
+        ? await normalizeCommittedExportUrl(croppedImage.url)
+        : image.src;
+      this.rememberGeneratedCommittedExportObjectUrl(croppedImage.url, croppedSrc);
       const sourceSrc = readMetadataSourceSrc(image.metadata) || image.src;
       const sourceTransform = resolveImageTransformSnapshot(image);
       const rawSourceMetadata = isRecord(image.metadata?.source)
@@ -1552,8 +1580,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     placementId: string,
     image: ImagePlacementImageState | null,
   ) {
-    const placementState = this.getPlacementElement(placementId)
-      ? this.getPlacementState(this.getPlacementElement(placementId)!)
+    const placementElement = this.getPlacementElement(placementId);
+    const previousCommittedImage = placementElement
+      ? this.getCommittedImage(placementElement)
+      : null;
+    const placementState = placementElement
+      ? this.getPlacementState(placementElement)
       : null;
     const commitTarget =
       placementState?.commitTarget ?? { type: "document-object" as const, objectId: placementId };
@@ -1561,7 +1593,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.commitConfigurableVisualImage(commitTarget, image);
     }
 
-    const placement = this.getPlacementElement(placementId);
+    const placement = placementElement;
     if (this.renderIntentService && placement) {
       const data = isRecord(placement.data) ? placement.data : {};
       const placementData = isRecord(data.imagePlacement) ? data.imagePlacement : {};
@@ -1646,6 +1678,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         });
       }
     }
+    if (previousCommittedImage?.src && previousCommittedImage.src !== image?.src) {
+      this.revokeGeneratedCommittedExportObjectUrl(previousCommittedImage.src);
+    }
     this.recordImageSessionCommitArtifacts(placementId, image);
     this.workingImages.delete(placementId);
     this.workingImageDraftsBySessionId.delete(
@@ -1685,6 +1720,41 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return registry
       ?.getFacade<ConfigurableVisualCapabilityApi>(CONFIGURABLE_VISUAL_CAPABILITY_ID) ??
       null;
+  }
+
+  private rememberGeneratedCommittedExportObjectUrl(
+    originalUrl: string,
+    committedUrl: string,
+  ) {
+    if (
+      originalUrl !== committedUrl &&
+      originalUrl.startsWith("data:") &&
+      committedUrl.startsWith("blob:")
+    ) {
+      this.generatedCommittedExportObjectUrls.add(committedUrl);
+    }
+  }
+
+  private revokeGeneratedCommittedExportObjectUrl(url: string) {
+    if (
+      !this.generatedCommittedExportObjectUrls.delete(url) ||
+      typeof URL === "undefined" ||
+      typeof URL.revokeObjectURL !== "function"
+    ) {
+      return;
+    }
+
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // Best-effort cleanup for browser-owned object URLs.
+    }
+  }
+
+  private revokeAllGeneratedCommittedExportObjectUrls() {
+    Array.from(this.generatedCommittedExportObjectUrls).forEach((url) => {
+      this.revokeGeneratedCommittedExportObjectUrl(url);
+    });
   }
 
   private retainWorkingImageBaseline(placementId: string) {
