@@ -585,7 +585,7 @@ async function testFabricRenderGraphAdapterRendersRenderableScenes() {
   await runtime.dispose();
 }
 
-async function testFabricRenderGraphAdapterUsesDerivedImageDimensions() {
+async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -638,23 +638,23 @@ async function testFabricRenderGraphAdapterUsesDerivedImageDimensions() {
   assert(image, "adapter should draw the committed image replacement");
   assertEqual(
     image.props.width,
-    undefined,
-    "derived-size images should not be rewritten to the slot frame width",
+    200,
+    "image replacements should render at the document frame width",
   );
   assertEqual(
     image.props.height,
-    undefined,
-    "derived-size images should not be rewritten to the slot frame height",
+    160,
+    "image replacements should render at the document frame height",
   );
   assertEqual(
     image.props.scaleX,
-    0.5,
-    "derived-size images should keep the committed bitmap scale",
+    1,
+    "image replacements should not depend on bitmap scale for frame sizing",
   );
   assertEqual(
     image.props.scaleY,
-    0.5,
-    "derived-size images should keep the committed bitmap scale",
+    1,
+    "image replacements should not depend on bitmap scale for frame sizing",
   );
 
   await runtime.dispose();
@@ -1331,6 +1331,51 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
     canvas.objects[0]?.clipPath,
     undefined,
     "missing clip effect should clear managed clip path",
+  );
+}
+
+function testCanvasServiceScalesImagesToTargetFrame() {
+  const { service } = createCanvasServiceForReconcileTests();
+  const image: any = new FakeFabricObject("image", {
+    height: 50,
+    width: 100,
+  });
+  image.getElement = () => ({ naturalHeight: 50, naturalWidth: 100 });
+
+  (service as any).patchFabricObject(image, {
+    id: "image",
+    type: "image",
+    src: "/image.png",
+    space: "scene",
+    props: {
+      height: 160,
+      left: 0,
+      scaleX: 1,
+      scaleY: 1,
+      top: 0,
+      width: 200,
+    },
+  });
+
+  assertEqual(
+    image.width,
+    100,
+    "image target frame should not overwrite the source width",
+  );
+  assertEqual(
+    image.height,
+    50,
+    "image target frame should not overwrite the source height",
+  );
+  assertClose(
+    image.scaleX,
+    2,
+    "image target frame should convert width into x scale",
+  );
+  assertClose(
+    image.scaleY,
+    3.2,
+    "image target frame should convert height into y scale",
   );
 }
 
@@ -2273,8 +2318,8 @@ async function main() {
       testFabricRenderGraphAdapterRendersRenderableScenes,
     ],
     [
-      "uses derived image dimensions for committed replacements",
-      testFabricRenderGraphAdapterUsesDerivedImageDimensions,
+      "stretches image replacements to document frames",
+      testFabricRenderGraphAdapterStretchesImageToDocumentFrame,
     ],
     [
       "resyncs graph adapter on layout change",
@@ -2315,6 +2360,10 @@ async function main() {
     [
       "reconciles stale objects and clip cleanup",
       testCanvasReconcileRemovesStaleObjectsAndClearsClip,
+    ],
+    [
+      "scales image target frames from source dimensions",
+      testCanvasServiceScalesImagesToTargetFrame,
     ],
     [
       "applies interactive control defaults",

@@ -679,31 +679,18 @@ export class FabricRenderGraphAdapter implements Service {
     const transform = node.transform ?? {};
     const hasTransformLeft = Number.isFinite(transform.left);
     const hasTransformTop = Number.isFinite(transform.top);
-    const nodeVisual = node.visual;
-    const visualMetadata = isRecord(nodeVisual?.metadata)
-      ? nodeVisual.metadata
-      : undefined;
-    const derivedMetadata = isRecord(visualMetadata?.derived)
-      ? visualMetadata.derived
-      : undefined;
-    const imageWidth = finitePositiveNumber(
-      derivedMetadata?.width ?? visualMetadata?.width,
-    );
-    const imageHeight = finitePositiveNumber(
-      derivedMetadata?.height ?? visualMetadata?.height,
-    );
-    const hasFrameSizedImage =
-      node.type === "image" && frame && imageWidth && imageHeight;
 
-    if (hasFrameSizedImage) {
+    if (node.type === "image" && frame) {
       return {
         ...transform,
         left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
         top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
         originX: hasTransformLeft ? transform.originX : "center",
         originY: hasTransformTop ? transform.originY : "center",
-        scaleX: transform.scaleX ?? frame.width / imageWidth,
-        scaleY: transform.scaleY ?? frame.height / imageHeight,
+        width: frame.width,
+        height: frame.height,
+        scaleX: normalizeFrameImageScale(transform.scaleX),
+        scaleY: normalizeFrameImageScale(transform.scaleY),
       };
     }
 
@@ -739,9 +726,9 @@ export class FabricRenderGraphAdapter implements Service {
   }
 }
 
-function finitePositiveNumber(value: unknown): number | null {
+function normalizeFrameImageScale(value: unknown): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return Number.isFinite(parsed) && parsed < 0 ? -1 : 1;
 }
 
 function finiteNumber(value: unknown, fallback: number): number {

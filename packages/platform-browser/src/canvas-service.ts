@@ -106,6 +106,11 @@ function createPooderInteractiveControls() {
   };
 }
 
+function finitePositiveNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export default class CanvasService implements Service, CanvasServiceContract {
   public canvas: Canvas;
   public viewport: ViewportSystem;
@@ -763,9 +768,18 @@ export default class CanvasService implements Service, CanvasServiceContract {
       id: spec.id,
     };
     nextData.renderSourceKey = this.getSpecRenderSourceKey(spec);
-    const props = this.resolveFabricProps(spec, spec.props || {});
+    const props = this.resolveObjectFabricProps(obj, spec);
     obj.set({ ...props, data: nextData });
     obj.setCoords();
+  }
+
+  private resolveObjectFabricProps(
+    obj: any,
+    spec: RenderObjectSpec,
+  ): Record<string, any> {
+    const props = this.resolveFabricProps(spec, spec.props || {});
+    if (spec.type !== "image") return props;
+    return this.resolveImageTargetSizeProps(obj, props);
   }
 
   private readPathDataFromSpec(spec: RenderObjectSpec): string | undefined {
@@ -841,6 +855,54 @@ export default class CanvasService implements Service, CanvasServiceContract {
     next.scaleX = rawScaleX * sceneScale;
     next.scaleY = rawScaleY * sceneScale;
     return this.resolveInteractiveControlProps(next);
+  }
+
+  private resolveImageTargetSizeProps(
+    obj: any,
+    props: Record<string, any>,
+  ): Record<string, any> {
+    const targetWidth = finitePositiveNumber(props.width);
+    const targetHeight = finitePositiveNumber(props.height);
+    if (!targetWidth && !targetHeight) return props;
+
+    const source = this.resolveImageSourceSize(obj);
+    const next = { ...props };
+    delete next.width;
+    delete next.height;
+
+    if (targetWidth && source.width) {
+      const scaleX = Number.isFinite(next.scaleX) ? Number(next.scaleX) : 1;
+      next.scaleX = scaleX * (targetWidth / source.width);
+    }
+    if (targetHeight && source.height) {
+      const scaleY = Number.isFinite(next.scaleY) ? Number(next.scaleY) : 1;
+      next.scaleY = scaleY * (targetHeight / source.height);
+    }
+    return next;
+  }
+
+  private resolveImageSourceSize(obj: any): CanvasSize {
+    const cachedWidth = finitePositiveNumber(obj?.__pooderSourceWidth);
+    const cachedHeight = finitePositiveNumber(obj?.__pooderSourceHeight);
+    if (cachedWidth && cachedHeight) {
+      return { width: cachedWidth, height: cachedHeight };
+    }
+
+    const element =
+      typeof obj?.getElement === "function" ? obj.getElement() : obj?._element;
+    const width =
+      finitePositiveNumber(element?.naturalWidth) ??
+      finitePositiveNumber(element?.width) ??
+      finitePositiveNumber(obj?.width) ??
+      1;
+    const height =
+      finitePositiveNumber(element?.naturalHeight) ??
+      finitePositiveNumber(element?.height) ??
+      finitePositiveNumber(obj?.height) ??
+      1;
+    obj.__pooderSourceWidth = width;
+    obj.__pooderSourceHeight = height;
+    return { width, height };
   }
 
   private resolveInteractiveControlProps(
@@ -955,11 +1017,15 @@ export default class CanvasService implements Service, CanvasServiceContract {
     if (spec.type === "image") {
       if (!spec.src) return undefined;
       const image = await Image.fromURL(spec.src, { crossOrigin: "anonymous" });
+      (image as any).__pooderSourceWidth = finitePositiveNumber(image.width) ?? 1;
+      (image as any).__pooderSourceHeight = finitePositiveNumber(image.height) ?? 1;
       const props = this.resolveFabricProps(spec, spec.props || {});
-      image.set({
-        ...props,
-        data: { ...(spec.data || {}), id: spec.id },
-      } as any);
+      image.set(
+        {
+          ...this.resolveImageTargetSizeProps(image, props),
+          data: { ...(spec.data || {}), id: spec.id },
+        } as any,
+      );
       image.setCoords();
       return image as any;
     }

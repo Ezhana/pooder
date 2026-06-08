@@ -233,6 +233,11 @@ function finitePositiveNumber(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizeFrameImageScale(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed < 0 ? -1 : 1;
+}
+
 function clampNormalized(value: number): number {
   return Math.max(-1, Math.min(2, value));
 }
@@ -2530,10 +2535,23 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
     const scale =
       getCoverScaleFromRect(placement.frame, source) * Math.max(0.05, image.scale ?? 1);
+    const stretchScale = Math.max(0.05, image.scale ?? 1);
     const id = options.committed
       ? `image:${placement.id}`
       : this.getWorkingImageNodeId(placement.id);
     const clipEffect = this.buildPlacementClipEffect(placement, id);
+    const stretchProps =
+      placement.fit === "stretch"
+        ? {
+            width: placement.frame.width,
+            height: placement.frame.height,
+            scaleX: stretchScale,
+            scaleY: stretchScale,
+          }
+        : {
+            scaleX: scale,
+            scaleY: scale,
+          };
     return {
       id,
       subjectId: placement.id,
@@ -2555,8 +2573,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         top: placement.frame.top + (image.top ?? 0.5) * placement.frame.height,
         originX: "center",
         originY: "center",
-        scaleX: scale,
-        scaleY: scale,
+        ...stretchProps,
         angle: image.angle ?? 0,
         opacity: image.opacity ?? 1,
         selectable: !options.committed,
@@ -2967,20 +2984,18 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const transform = node.transform ?? {};
     const hasTransformLeft = Number.isFinite(transform.left);
     const hasTransformTop = Number.isFinite(transform.top);
-    const metadata = isRecord(node.visual?.metadata) ? node.visual.metadata : undefined;
-    const derived = isRecord(metadata?.derived) ? metadata.derived : undefined;
-    const imageWidth = finitePositiveNumber(derived?.width ?? metadata?.width);
-    const imageHeight = finitePositiveNumber(derived?.height ?? metadata?.height);
 
-    if (node.type === "image" && frame && imageWidth && imageHeight) {
+    if (node.type === "image" && frame) {
       return {
         ...transform,
         left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
         top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
         originX: hasTransformLeft ? transform.originX : "center",
         originY: hasTransformTop ? transform.originY : "center",
-        scaleX: transform.scaleX ?? frame.width / imageWidth,
-        scaleY: transform.scaleY ?? frame.height / imageHeight,
+        width: frame.width,
+        height: frame.height,
+        scaleX: normalizeFrameImageScale(transform.scaleX),
+        scaleY: normalizeFrameImageScale(transform.scaleY),
       };
     }
 

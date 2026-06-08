@@ -3423,6 +3423,71 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   await runtime.dispose();
 }
 
+async function testImagePlacementStretchSessionUsesFrameSize() {
+  const runtime = new Pooder();
+  const canvasService = new FakeCanvasService();
+  runtime.services.register(canvasService as any, CANVAS_SERVICE);
+
+  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scene.addLayer({ id: "artwork" });
+  scene.addElement({
+    id: "placement",
+    layerId: "artwork",
+    type: "rect",
+    width: 200,
+    height: 160,
+    data: {
+      imagePlacement: {
+        enabled: true,
+        fit: "stretch",
+        frame: { x: 100, y: 120, width: 200, height: 160 },
+        image: {
+          src: "/wide-photo.png",
+          metadata: { width: 100, height: 50 },
+          left: 0.5,
+          top: 0.5,
+          scale: 1,
+          angle: 0,
+        },
+      },
+    },
+  });
+
+  const imageExtension = createImagePlacementCapability();
+  runtime.extensions.register(imageExtension);
+  await runtime.extensions.flushActivation();
+
+  const driver = getImagePlacementTestDriver(imageExtension);
+  await driver.beginSession("placement");
+  const sessionImage = scene.selectOneElement({
+    ids: ["session-image:image-placement:placement"],
+    sceneId: "pooder.kit.image-placement.session:image-placement:placement",
+  });
+
+  assertEqual(
+    sessionImage?.style?.width,
+    200,
+    "stretch image session should use the placement frame width",
+  );
+  assertEqual(
+    sessionImage?.style?.height,
+    160,
+    "stretch image session should use the placement frame height",
+  );
+  assertEqual(
+    sessionImage?.style?.scaleX,
+    1,
+    "stretch image session should not derive x scale from source dimensions",
+  );
+  assertEqual(
+    sessionImage?.style?.scaleY,
+    1,
+    "stretch image session should not derive y scale from source dimensions",
+  );
+
+  await runtime.dispose();
+}
+
 async function testImagePlacementCompleteSyncsCanvasTransform() {
   const runtime = new Pooder();
   const canvasService = new FakeCanvasService();
@@ -4896,6 +4961,7 @@ async function main() {
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
   await testImagePlacementSessionUsesEditableWorkingObject();
+  await testImagePlacementStretchSessionUsesFrameSize();
   await testImagePlacementCompleteSyncsCanvasTransform();
   await testImagePlacementCommittedExportUsesObjectUrl();
   await testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches();
