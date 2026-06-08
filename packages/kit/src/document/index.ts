@@ -3,6 +3,7 @@ import {
   RENDER_INTENT_SERVICE,
   SURFACE_FRAME_SERVICE,
   mergeRenderIntentPatchEntries,
+  resolveObjectSource,
   type ExtensionDefinition,
   type RenderIntentDiagnostic,
   type RenderIntentCompilerRegistryService,
@@ -25,6 +26,7 @@ import {
   type EditorLayer,
   type EditorObject,
   type EditorSurface,
+  type ObjectSource,
 } from "@pooder/document/kit";
 import {
   createConfigurableVisualCapability,
@@ -48,6 +50,7 @@ import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
 
 export interface KitEditorDocumentRuntime {
   readonly config?: {
+    export(): Record<string, unknown>;
     get<T = unknown>(key: string, defaultValue?: T): T;
     import(data: Record<string, unknown>): void;
     update(key: string, value: unknown): void;
@@ -91,6 +94,16 @@ const EFFECT_PHASE_ORDER = {
   interaction: 3,
   export: 4,
 } as const;
+
+export interface KitEditorDocumentController {
+  apply(value: unknown): Promise<ApplyKitEditorDocumentResult>;
+  export(): EditorDocument | null;
+  updateObjectSource(
+    objectId: string,
+    source: ObjectSource,
+    options?: { frame?: EditorObject["frame"]; style?: Record<string, unknown> },
+  ): Promise<boolean>;
+}
 
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [CLIP_CAPABILITY_ID]: () => createClipCapability(),
@@ -247,12 +260,133 @@ export async function applyKitEditorDocument(
   );
 }
 
+export function createKitEditorDocumentController(
+  runtime: KitEditorDocumentRuntime,
+): KitEditorDocumentController {
+  let currentDocument: EditorDocument | null = null;
+
+  return {
+    async apply(value) {
+      const result = await applyKitEditorDocument(runtime, value);
+      if (result.ok) {
+        currentDocument = cloneDocument(result.document);
+      }
+      return result;
+    },
+    export() {
+      return currentDocument ? cloneDocument(currentDocument) : null;
+    },
+    async updateObjectSource(objectId, source, options = {}) {
+      const id = normalizeObjectId(objectId);
+      if (!id || !currentDocument) return false;
+
+      const nextDocument = cloneDocument(currentDocument);
+      nextDocument.config = runtime.config?.export() ?? nextDocument.config;
+      const object = findSourceObject(nextDocument, id);
+      if (!object) return false;
+
+      object.source = cloneObjectSource(source);
+      if (options.frame) {
+        object.frame = { ...options.frame };
+      }
+      if (options.style) {
+        object.style = { ...object.style, ...options.style };
+      }
+      const result = await applyKitEditorDocument(runtime, nextDocument);
+      if (!result.ok) return false;
+
+      currentDocument = cloneDocument(result.document);
+      return true;
+    },
+  };
+}
+
 async function refreshDocumentRuntimeCapabilities(
   runtime: KitEditorDocumentRuntime,
 ): Promise<void> {
   await runtime.capabilities
     .get<ImagePlacementCapabilityApi>(IMAGE_PLACEMENT_CAPABILITY_ID)
     ?.refresh();
+}
+
+function normalizeObjectId(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function cloneObjectSource(source: ObjectSource): ObjectSource {
+  switch (source.kind) {
+    case "url":
+    case "data-url":
+    case "blob-url":
+      return {
+        ...source,
+        intrinsicSize: source.intrinsicSize
+          ? { ...source.intrinsicSize }
+          : undefined,
+      };
+    case "path":
+      return {
+        ...source,
+        sourceBounds: source.sourceBounds ? { ...source.sourceBounds } : undefined,
+        sourceSize: source.sourceSize ? { ...source.sourceSize } : undefined,
+      };
+    case "shape":
+      return { ...source, params: { ...source.params } };
+    default:
+      return source;
+  }
+}
+
+function cloneDocument(document: EditorDocument): EditorDocument {
+  return JSON.parse(JSON.stringify(document)) as EditorDocument;
+}
+
+function findSourceObject(
+  document: EditorDocument,
+  objectId: string,
+): Extract<EditorObject, { type: "object" }> | null {
+  for (const surface of document.surfaces) {
+    for (const layer of surface.layers) {
+      for (const object of layer.objects ?? []) {
+        if (object.id === objectId && object.type === "object") {
+          return object;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function createScaledPathTransform(
+  object: Extract<EditorObject, { type: "object" }>,
+  bounds: { left: number; top: number; width: number; height: number } | undefined,
+  contentBounds: { left: number; top: number; width: number; height: number } | undefined,
+) {
+  const transform = { ...(object.transform ?? {}) };
+  const frame = object.frame;
+  if (!frame || !bounds || bounds.width <= 0 || bounds.height <= 0) {
+    return transform;
+  }
+
+  const pathBounds = contentBounds ?? bounds;
+  const sourceScaleX = frame.width / bounds.width;
+  const sourceScaleY = frame.height / bounds.height;
+  const baseScaleX = Number(transform.scaleX);
+  const baseScaleY = Number(transform.scaleY);
+  return {
+    ...transform,
+    left:
+      Number.isFinite(Number(transform.left))
+        ? transform.left
+        : frame.x + (pathBounds.left - bounds.left) * sourceScaleX,
+    top:
+      Number.isFinite(Number(transform.top))
+        ? transform.top
+        : frame.y + (pathBounds.top - bounds.top) * sourceScaleY,
+    scaleX: (Number.isFinite(baseScaleX) ? baseScaleX : 1) * sourceScaleX,
+    scaleY: (Number.isFinite(baseScaleY) ? baseScaleY : 1) * sourceScaleY,
+  };
 }
 
 function createResult(
@@ -396,11 +530,53 @@ function createObjectRenderIntentDraft(
     };
   }
 
+  if (object.type === "object") {
+    const visual = resolveObjectSource(object.source);
+    if (!visual) return null;
+    if (visual.imageUrl) {
+      return {
+        ...base,
+        visual: {
+          type: "image",
+          src: visual.imageUrl,
+        },
+        props: {
+          ...base.props,
+          source: object.source,
+        },
+      };
+    }
+    if (visual.pathData) {
+      return {
+        ...base,
+        placement: {
+          ...base.placement,
+          transform: createScaledPathTransform(object, visual.bounds, visual.contentBounds),
+        },
+        visual: { type: "path" },
+        props: {
+          ...base.props,
+          path: visual.pathData,
+          pathData: visual.pathData,
+          source: object.source,
+        },
+      };
+    }
+    return null;
+  }
+
+  if (object.type === "text") {
+    return {
+      ...base,
+      visual: { type: "text" },
+      props: { ...base.props, text: object.text },
+    };
+  }
+
   return {
     ...base,
-    visual: { type: "text" },
-    props: { ...base.props, text: object.text },
-  };
+    visual: { type: "rect" },
+  } satisfies RenderIntentDraft;
 }
 
 function normalizeRenderIntentTransform(object: EditorObject) {
@@ -414,6 +590,7 @@ function normalizeRenderIntentTransform(object: EditorObject) {
 }
 
 function resolveLayerStack(layer: EditorLayer): number {
+  if (layer.role === "guide") return 900;
   return layer.role === "overlay" ? 780 : 0;
 }
 

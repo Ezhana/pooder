@@ -26,7 +26,11 @@ import {
   readSizeState,
   resolveViewPaddingPx,
   createServiceToken,
+  BooleanComposer,
+  InteractionSession,
+  SourceResolver,
   type CanvasService,
+  type EditorObject,
   type ExtensionDefinition,
   type RenderIntentService,
   type SceneChangeEvent,
@@ -1381,6 +1385,91 @@ async function testGeometryPrimitives() {
   );
 }
 
+async function testObjectSourceResolversAndSessions() {
+  const sourceResolver = new SourceResolver();
+  assertDeepEqual(
+    sourceResolver.resolve({
+      kind: "url",
+      url: "/art.png",
+      intrinsicSize: { width: 120, height: 80 },
+    }),
+    {
+      source: {
+        kind: "url",
+        url: "/art.png",
+        intrinsicSize: { width: 120, height: 80 },
+      },
+      imageUrl: "/art.png",
+      intrinsicSize: { width: 120, height: 80 },
+      bounds: { left: 0, top: 0, width: 120, height: 80 },
+    },
+    "url source should resolve to an image visual",
+  );
+
+  const circle = sourceResolver.resolve({
+    kind: "shape",
+    shape: "circle",
+    params: { radius: 10 },
+  });
+  assert(circle?.pathData?.startsWith("M10 0"), "circle should resolve to path data");
+  assertDeepEqual(
+    circle?.bounds,
+    { left: 0, top: 0, width: 20, height: 20 },
+    "circle shape should expose stable bounds",
+  );
+
+  const path = sourceResolver.resolve({
+    kind: "path",
+    pathData: "M5 10L15 10L15 30Z",
+  });
+  assertDeepEqual(
+    path?.bounds,
+    { left: 5, top: 10, width: 10, height: 20 },
+    "path source should infer simple numeric bounds",
+  );
+
+  const objects: EditorObject[] = [
+    {
+      id: "cutline",
+      type: "object",
+      source: { kind: "shape", shape: "rect", params: { width: 100, height: 80 } },
+    },
+    {
+      id: "hole",
+      type: "object",
+      source: { kind: "shape", shape: "circle", params: { radius: 5 } },
+      effects: [
+        {
+          type: "boolean",
+          targetId: "cutline",
+          operation: "subtract",
+          participation: "export",
+        },
+      ],
+    },
+  ];
+  const composed = new BooleanComposer().compose({
+    objects,
+    targetId: "cutline",
+    participation: "export",
+  });
+  assertEqual(composed?.steps[0]?.objectId, "hole");
+  assertEqual(composed?.steps[0]?.operation, "subtract");
+  assertEqual(composed?.fillRule, "evenodd");
+
+  const session = new InteractionSession(objects);
+  session.beginSession(["hole"]);
+  session.updateTransform("hole", { left: 8 });
+  assertEqual(session.getObject("hole")?.transform?.left, 8);
+  session.rollbackSession();
+  assertEqual(session.getObject("hole")?.transform?.left, undefined);
+
+  session.beginSession(["hole"]);
+  session.updateTransform("hole", { left: 12 });
+  session.completeSession();
+  assertEqual(session.getObject("hole")?.transform?.left, 12);
+}
+
 async function testDragInteractionSnapsAndConstrains() {
   const constrained = computeDragInteraction({
     frame: { left: 0, top: 0, width: 10, height: 10 },
@@ -2319,6 +2408,10 @@ async function main() {
       testSessionLifecycleEvents,
     ],
     ["computes geometry primitives", testGeometryPrimitives],
+    [
+      "resolves object sources and interaction sessions",
+      testObjectSourceResolversAndSessions,
+    ],
     ["computes drag interaction snaps and constraints", testDragInteractionSnapsAndConstrains],
     [
       "registers and queries geometry sources",

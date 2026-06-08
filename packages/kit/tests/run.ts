@@ -95,6 +95,7 @@ import {
 } from "../src/factories";
 import {
   applyKitEditorDocument,
+  createKitEditorDocumentController,
   createKitCapabilitiesForDocument,
 } from "../src/document";
 import {
@@ -1776,6 +1777,58 @@ async function testApplyKitEditorDocument() {
   await runtime.dispose();
 }
 
+async function testApplyKitEditorDocumentStacksGuideLayersAboveRuntimeOverlays() {
+  const runtime = new Pooder();
+  const document = {
+    version: 4 as const,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" as const },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "front.dieline-overlay",
+            role: "guide" as const,
+            order: 30,
+            objects: [
+              {
+                id: "front.dieline.cutline",
+                type: "object" as const,
+                frame: { x: 0, y: 0, width: 100, height: 100 },
+                source: {
+                  kind: "shape" as const,
+                  shape: "rect" as const,
+                  params: { width: 100, height: 100 },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = await applyKitEditorDocument(runtime, document);
+  assert(
+    result.ok,
+    `guide layer document should apply (${JSON.stringify(result.diagnostics)})`,
+  );
+
+  const guideLayer = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.find((layer) => layer.id === "front.dieline-overlay");
+  assertEqual(
+    guideLayer?.stack,
+    900,
+    "guide layers should stack above image upload overlays",
+  );
+
+  await runtime.dispose();
+}
+
 async function testApplyKitEditorDocumentRefreshesImagePlacementOverlay() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
@@ -2142,6 +2195,180 @@ async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
 
   await documentRuntime.dispose();
   await runtimePatchRuntime.dispose();
+}
+
+async function testKitEditorDocumentControllerMutatesObjectSource() {
+  const runtime = new Pooder();
+  const controller = createKitEditorDocumentController(runtime);
+  const document = {
+    version: 4,
+    config: {
+      ...TEST_DOCUMENT_CONFIG,
+      "dieline.shape": "rect",
+    },
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 50, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "guide",
+            objects: [
+              {
+                id: "cutline",
+                type: "object",
+                frame: { x: 0, y: 0, width: 100, height: 50 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 100, height: 50 },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const applyResult = await controller.apply(document);
+  assert(
+    applyResult.ok,
+    `document controller apply should succeed (${JSON.stringify(applyResult.diagnostics)})`,
+  );
+
+  const initialNode = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((item) => item.subjectId === "cutline");
+  assertEqual(
+    initialNode?.type,
+    "path",
+    "shape source object should render as a path on initial apply",
+  );
+  assertEqual(
+    initialNode?.props.pathData,
+    "M0 0H100V50H0Z",
+    "shape source object should resolve rect source path on initial apply",
+  );
+
+  runtime.config.update("dieline.shape", "custom");
+  const pathData = "M 0 0 L 40 0 L 40 20 Z";
+  const detectedFrame = { x: 10, y: 12, width: 80, height: 40 };
+  const updated = await controller.updateObjectSource("cutline", {
+    kind: "path",
+    pathData,
+    sourceSize: { width: 40, height: 20 },
+  }, {
+    frame: detectedFrame,
+    style: {
+      fill: "transparent",
+      stroke: "#ef4444",
+      strokeWidth: 2,
+    },
+  });
+
+  assert(updated, "document controller should update object sources");
+  const exported = controller.export() as any;
+  const exportedObject = exported?.surfaces[0]?.layers[0]?.objects[0];
+  assertEqual(
+    exported?.config?.["dieline.shape"],
+    "custom",
+    "document controller should sync current runtime config before mutation",
+  );
+  assertDeepEqual(
+    exportedObject?.source,
+    {
+      kind: "path",
+      pathData,
+      sourceSize: { width: 40, height: 20 },
+    },
+    "document controller export should include the mutated object source",
+  );
+  assertDeepEqual(
+    exportedObject?.frame,
+    detectedFrame,
+    "document controller export should include frame updates",
+  );
+  assertDeepEqual(
+    exportedObject?.style,
+    {
+      fill: "transparent",
+      stroke: "#ef4444",
+      strokeWidth: 2,
+    },
+    "document controller export should include object style updates",
+  );
+
+  const node = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((item) => item.subjectId === "cutline");
+  assertEqual(
+    node?.type,
+    "path",
+    "document controller mutation should update the render graph visual",
+  );
+  assertEqual(
+    node?.props.pathData,
+    pathData,
+    "document controller mutation should update the render graph path",
+  );
+  assertDeepEqual(
+    node?.frame,
+    detectedFrame,
+    "document controller mutation should update the render graph frame",
+  );
+  assertDeepEqual(
+    node?.transform,
+    {
+      left: 10,
+      top: 12,
+      scaleX: 2,
+      scaleY: 2,
+    },
+    "path source coordinates should scale into the updated frame",
+  );
+
+  exportedObject.source.pathData = "M 0 0 Z";
+  assertEqual(
+    (controller.export() as any)?.surfaces[0]?.layers[0]?.objects[0]?.source
+      ?.pathData,
+    pathData,
+    "document controller export should return a clone",
+  );
+
+  const offsetPathData = "M 20 30 L 60 30 L 60 50 L 20 50 Z";
+  const offsetFrame = { x: 10, y: 12, width: 80, height: 80 };
+  const offsetUpdated = await controller.updateObjectSource("cutline", {
+    kind: "path",
+    pathData: offsetPathData,
+    sourceBounds: { x: 20, y: 30, width: 40, height: 20 },
+    sourceSize: { width: 100, height: 100 },
+  }, {
+    frame: offsetFrame,
+  });
+  assert(offsetUpdated, "document controller should update offset path sources");
+
+  const offsetNode = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((item) => item.subjectId === "cutline");
+  assertDeepEqual(
+    offsetNode?.transform,
+    {
+      left: 26,
+      top: 36,
+      scaleX: 0.8,
+      scaleY: 0.8,
+    },
+    "path source bounds should preserve source-space offset inside the target frame",
+  );
+
+  await runtime.dispose();
 }
 
 async function testApplyKitEditorDocumentObjectInteraction() {
@@ -2681,6 +2908,15 @@ async function testImagePlacementCapabilityExtension() {
     applyOperation: async () => ({ ok: true }),
     clearImage: async () => ({ ok: true }),
     commitSession: async () => ({ ok: true }),
+    exportPlacementImage: async () => ({
+      url: "data:image/png;base64,image",
+      width: 1,
+      height: 1,
+      multiplier: 1,
+      format: "png",
+      placementIds: [],
+      frame: { left: 0, top: 0, width: 1, height: 1 },
+    }),
     focusPlacement: (id) => ({ ok: true, id }),
     getViewState: () => ({
       activePlacementId: null,
@@ -3299,6 +3535,10 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       type: "image-placement-image",
     },
     "completed placement should expose generic committed image interaction data",
+  );
+  assert(
+    committedGraphNode?.exportKeys.includes("image:placement"),
+    "completed placement should expose the committed image id as an export key",
   );
   assertDeepEqual(
     committedGraphNode?.visibleWhen,
@@ -4952,9 +5192,11 @@ async function main() {
   testCreateKitCapabilitiesForDocument();
   testCreateKitCapabilitiesForDocumentInfersDielineLayers();
   await testApplyKitEditorDocument();
+  await testApplyKitEditorDocumentStacksGuideLayersAboveRuntimeOverlays();
   await testApplyKitEditorDocumentRefreshesImagePlacementOverlay();
   await testMirrorCapabilityDocumentEffectAndFacade();
   await testDocumentCompilerAndRuntimePatchUseSameMerge();
+  await testKitEditorDocumentControllerMutatesObjectSource();
   await testApplyKitEditorDocumentObjectInteraction();
   await testApplyKitEditorDocumentDeclarativeInteractionEffects();
   await testApplyKitEditorDocumentRejectsInteractionComponentEffects();

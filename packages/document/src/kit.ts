@@ -92,6 +92,8 @@ export type {
   EditorImageObject,
   EditorLayer,
   EditorObject,
+  EditorSourceObject,
   EditorSurface,
   EditorView,
+  ObjectSource,
 } from "./index";

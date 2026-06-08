@@ -46,6 +46,7 @@ export * from "./workflow-session";
 export * from "./interaction";
 export * from "./geometry-source";
 export * from "./constraint-resolver";
+export * from "./object-source";
 export * from "./surface-frames";
 export * from "./services";
 export { default as EventBus } from "./event";

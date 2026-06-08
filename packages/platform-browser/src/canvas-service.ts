@@ -166,10 +166,19 @@ export default class CanvasService implements Service, CanvasServiceContract {
   init(context: ServiceContext) {
     this.context = context;
     this.setEventBus(context.eventBus);
+    if (typeof globalThis !== "undefined") {
+      (globalThis as any).__POODER_CANVAS_SERVICE__ = this;
+    }
   }
 
   dispose() {
     this.context = undefined;
+    if (
+      typeof globalThis !== "undefined" &&
+      (globalThis as any).__POODER_CANVAS_SERVICE__ === this
+    ) {
+      delete (globalThis as any).__POODER_CANVAS_SERVICE__;
+    }
     this.canvas.dispose();
   }
 
@@ -361,7 +370,8 @@ export default class CanvasService implements Service, CanvasServiceContract {
         layerId: String(item.layerId || item.spec.data?.layerId || "").trim(),
         order: Number.isFinite(item.order) ? Number(item.order) : index,
       }))
-      .filter((item) => item.key && item.layerId);
+      .filter((item) => item.key && item.layerId)
+      .sort((left, right) => left.order - right.order);
     const desiredKeys = new Set(normalizedItems.map((item) => item.key));
 
     this.canvas.getObjects().forEach((object: any) => {
@@ -778,8 +788,16 @@ export default class CanvasService implements Service, CanvasServiceContract {
     spec: RenderObjectSpec,
   ): Record<string, any> {
     const props = this.resolveFabricProps(spec, spec.props || {});
+    if (spec.type === "path") {
+      return this.omitPathSourceProps(props);
+    }
     if (spec.type !== "image") return props;
     return this.resolveImageTargetSizeProps(obj, props);
+  }
+
+  private omitPathSourceProps(props: Record<string, any>): Record<string, any> {
+    const { path: _path, pathData: _pathData, ...pathProps } = props;
+    return pathProps;
   }
 
   private readPathDataFromSpec(spec: RenderObjectSpec): string | undefined {
@@ -1005,7 +1023,9 @@ export default class CanvasService implements Service, CanvasServiceContract {
     if (spec.type === "path") {
       const pathData = this.readPathDataFromSpec(spec);
       if (!pathData) return undefined;
-      const props = this.resolveFabricProps(spec, spec.props || {});
+      const props = this.omitPathSourceProps(
+        this.resolveFabricProps(spec, spec.props || {}),
+      );
       const path = new Path(pathData, {
         ...props,
         data: { ...(spec.data || {}), id: spec.id },

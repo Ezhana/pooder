@@ -173,6 +173,7 @@ export interface ImageExportPlacementImageResult {
   multiplier: number;
   format: "png" | "jpeg";
   placementIds: string[];
+  frame: FrameRect;
 }
 
 export interface ImagePlacementCapabilityImplementationOptions
@@ -912,6 +913,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       applyOperation: (input, operation) => this.applyImageOperation(input, operation),
       clearImage: (input) => this.clearImage(input),
       commitSession: (input) => this.completeSession(input),
+      exportPlacementImage: (options) => this.exportPlacementImage(options),
       focusPlacement: (placementId, options) => this.focusPlacement(placementId, options),
       getViewState: () => this.getViewState(),
       openSession: (input) => this.beginSession(input),
@@ -1578,6 +1580,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       multiplier: result.multiplier,
       format: result.format,
       placementIds: [placement.id],
+      frame: { ...placement.frame },
     };
   }
 
@@ -1973,8 +1976,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const sourceLayerIds = Array.from(
       new Set(placements.map((placement) => placement.layerId || this.imageLayerId)),
     );
+    const frame = this.getSurfaceFrameRect();
     const result = await this.exportService.exportImage({
-      crop: { type: "sceneRect", rect: this.getSurfaceFrameRect() },
+      crop: { type: "sceneRect", rect: frame },
       format: options.format === "jpeg" ? "jpeg" : "png",
       includeHidden: true,
       multiplier: Math.max(1, options.multiplier ?? 2),
@@ -1990,6 +1994,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       multiplier: result.multiplier,
       format: result.format,
       placementIds,
+      frame,
     };
   }
 
@@ -2558,6 +2563,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       type: "image",
       src: image.src,
       space: "scene",
+      exportKeys: [id, placement.id],
       data: {
         id: placement.id,
         layerId: placement.layerId || this.imageLayerId,

@@ -29,6 +29,11 @@ export interface EditorRect {
   height: number;
 }
 
+export interface EditorSize {
+  width: number;
+  height: number;
+}
+
 export interface EditorTransform {
   left?: number;
   top?: number;
@@ -120,6 +125,42 @@ export interface EditorObjectBase {
   effects?: EditorEffect[];
 }
 
+export type ObjectSource =
+  | {
+      kind: "url";
+      url: string;
+      mimeType?: string;
+      intrinsicSize?: EditorSize;
+    }
+  | {
+      kind: "data-url";
+      dataUrl: string;
+      mimeType?: string;
+      intrinsicSize?: EditorSize;
+    }
+  | {
+      kind: "blob-url";
+      url: string;
+      transient: true;
+      intrinsicSize?: EditorSize;
+    }
+  | {
+      kind: "path";
+      pathData: string;
+      sourceBounds?: EditorRect;
+      sourceSize?: EditorSize;
+    }
+  | {
+      kind: "shape";
+      shape: "rect" | "circle" | "ellipse" | "heart";
+      params: Record<string, unknown>;
+    };
+
+export interface EditorSourceObject extends EditorObjectBase {
+  type: "object";
+  source: ObjectSource;
+}
+
 export interface EditorImageObject extends EditorObjectBase {
   type: "image";
   src?: string;
@@ -144,6 +185,7 @@ export interface EditorTextObject extends EditorObjectBase {
 }
 
 export type EditorObject =
+  | EditorSourceObject
   | EditorImageObject
   | EditorPathObject
   | EditorRectObject
@@ -269,6 +311,92 @@ function normalizeRect(value: unknown): EditorRect | undefined {
     return undefined;
   }
   return { x, y, width, height };
+}
+
+function normalizeSize(value: unknown): EditorSize | undefined {
+  if (!isRecord(value)) return undefined;
+  const width = normalizePositiveNumber(value.width);
+  const height = normalizePositiveNumber(value.height);
+  return width !== undefined && height !== undefined
+    ? { width, height }
+    : undefined;
+}
+
+function normalizeObjectSource(value: unknown): ObjectSource | null {
+  if (!isRecord(value)) return null;
+  switch (value.kind) {
+    case "url": {
+      const url = normalizeId(value.url);
+      if (!url) return null;
+      return {
+        kind: "url",
+        url,
+        ...(typeof value.mimeType === "string" && value.mimeType.trim()
+          ? { mimeType: value.mimeType.trim() }
+          : {}),
+        ...(normalizeSize(value.intrinsicSize)
+          ? { intrinsicSize: normalizeSize(value.intrinsicSize) }
+          : {}),
+      };
+    }
+    case "data-url": {
+      const dataUrl = normalizeId(value.dataUrl);
+      if (!dataUrl) return null;
+      return {
+        kind: "data-url",
+        dataUrl,
+        ...(typeof value.mimeType === "string" && value.mimeType.trim()
+          ? { mimeType: value.mimeType.trim() }
+          : {}),
+        ...(normalizeSize(value.intrinsicSize)
+          ? { intrinsicSize: normalizeSize(value.intrinsicSize) }
+          : {}),
+      };
+    }
+    case "blob-url": {
+      const url = normalizeId(value.url);
+      if (!url) return null;
+      return {
+        kind: "blob-url",
+        url,
+        transient: true,
+        ...(normalizeSize(value.intrinsicSize)
+          ? { intrinsicSize: normalizeSize(value.intrinsicSize) }
+          : {}),
+      };
+    }
+    case "path": {
+      const pathData = typeof value.pathData === "string"
+        ? value.pathData.trim()
+        : "";
+      if (!pathData) return null;
+      const sourceBounds = normalizeRect(value.sourceBounds);
+      const sourceSize = normalizeSize(value.sourceSize);
+      return {
+        kind: "path",
+        pathData,
+        ...(sourceBounds ? { sourceBounds } : {}),
+        ...(sourceSize ? { sourceSize } : {}),
+      };
+    }
+    case "shape": {
+      if (
+        value.shape !== "rect" &&
+        value.shape !== "circle" &&
+        value.shape !== "ellipse" &&
+        value.shape !== "heart"
+      ) {
+        return null;
+      }
+      return {
+        kind: "shape",
+        shape: value.shape,
+        params: isRecord(value.params) ? cloneRecord(value.params) : {},
+      };
+    }
+    default:
+      return null;
+  }
 }
 
 function normalizeSceneFrameMm(
@@ -424,6 +552,10 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
   };
 
   switch (type) {
+    case "object": {
+      const source = normalizeObjectSource(value.source);
+      return source ? { ...base, type, source } : null;
+    }
     case "image": {
       const src = normalizeId(value.src);
       return {

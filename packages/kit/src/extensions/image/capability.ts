@@ -4,6 +4,8 @@ import type {
   SceneLayoutSnapshot,
 } from "@pooder/core";
 import type {
+  ImageExportPlacementImageOptions,
+  ImageExportPlacementImageResult,
   ImagePlacementSource,
   ImagePlacementSessionNotice,
   ImagePlacementState,
@@ -98,6 +100,9 @@ export interface ImagePlacementCapabilityApi {
   ): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
   clearImage(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
   commitSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
+  exportPlacementImage(
+    options?: ImageExportPlacementImageOptions,
+  ): Promise<ImageExportPlacementImageResult>;
   getViewState(): ImagePlacementViewState;
   openSession(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
   rollbackSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;

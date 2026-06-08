@@ -331,6 +331,93 @@ function testImageObjectDoesNotRequireSource() {
   );
 }
 
+function testSourceObjectNormalizesSource() {
+  const doc = normalizeEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "production",
+            objects: [
+              {
+                id: "cutline",
+                type: "object",
+                frame: { x: 0, y: 0, width: 50, height: 50 },
+                source: {
+                  kind: "shape",
+                  shape: "circle",
+                  params: { radius: 25, ignored: true },
+                },
+                effects: [
+                  {
+                    type: "clip",
+                    capabilityId: "pooder.kit.clip",
+                    target: { objectId: " artwork " },
+                  },
+                ],
+              },
+              {
+                id: "artwork",
+                type: "object",
+                frame: { x: 0, y: 0, width: 50, height: 50 },
+                source: {
+                  kind: "url",
+                  url: " /art.png ",
+                  intrinsicSize: { width: "200", height: "100" },
+                },
+              },
+              {
+                id: "invalid",
+                type: "object",
+                frame: { x: 0, y: 0, width: 10, height: 10 },
+                source: { kind: "url", url: "" },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const objects = doc.surfaces[0].layers[0].objects;
+  assertEqual(objects?.length, 2, "invalid source object should be dropped");
+  const cutline = objects?.[0];
+  assertEqual(cutline?.type, "object", "shape source object should normalize");
+  assertDeepEqual(
+    cutline?.type === "object" ? cutline.source : undefined,
+    {
+      kind: "shape",
+      shape: "circle",
+      params: { radius: 25, ignored: true },
+    },
+    "shape source should normalize",
+  );
+  assertDeepEqual(
+    cutline?.effects?.[0],
+    {
+      type: "clip",
+      require: "strict",
+      capabilityId: "pooder.kit.clip",
+      target: { objectId: "artwork" },
+    },
+    "source object should keep existing effects",
+  );
+  assertDeepEqual(
+    objects?.[1]?.type === "object" ? objects[1].source : undefined,
+    {
+      kind: "url",
+      url: "/art.png",
+      intrinsicSize: { width: 200, height: 100 },
+    },
+    "url source should trim url and normalize intrinsic size",
+  );
+}
+
 function testV2DocumentIsRejected() {
   const diagnostics = validateKitEditorDocument({
     version: 2,
@@ -645,6 +732,7 @@ function main() {
   testLegacyObjectConstraintsAreIgnored();
   testV2ImagePlacementImageDoesNotRequireSource();
   testImageObjectDoesNotRequireSource();
+  testSourceObjectNormalizesSource();
   testV2DocumentIsRejected();
   testDocumentConfigIsRequired();
   testImageObjectRequiresFrame();

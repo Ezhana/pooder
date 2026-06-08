@@ -191,12 +191,15 @@ export function attachBrowserHost(
     );
   };
   surfaceFrameService?.listSurfaceIds().forEach(observeSurface);
-  const surfaceFramesDisposable = surfaceFrameService?.onAnyFramesChange((event) => {
+  applyViewportLayout(getActiveSurfaceId());
+  const surfaceFramesDisposable = surfaceFrameService?.onAnyFramesChange(
+    (event) => {
       observeSurface(event.surfaceId);
       if (event.surfaceId === getActiveSurfaceId()) {
         applyViewportLayout(event.surfaceId);
       }
-    });
+    },
+  );
   if (surfaceFramesDisposable) {
     viewportDisposables.push(surfaceFramesDisposable);
   }

@@ -5,6 +5,7 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SURFACE_FRAME_SERVICE,
+  type RenderIntentService,
 } from "@pooder/core";
 import type { SurfaceSceneFrames } from "@pooder/core";
 import {
@@ -65,6 +66,13 @@ class FakeCanvasService {
   objects: any[] = [];
   handlers = new Map<string, Array<(...args: any[]) => void>>();
   resizeCalls: Array<{ height: number; width: number }> = [];
+  viewportLayoutCalls: Array<{
+    height: number;
+    offsetX: number;
+    offsetY: number;
+    scale: number;
+    width: number;
+  }> = [];
   renderCalls = 0;
   reconcileCalls: Array<{
     items: FabricRenderTargetItem[];
@@ -76,6 +84,16 @@ class FakeCanvasService {
 
   requestRenderAll() {
     this.renderCalls += 1;
+  }
+
+  setViewportLayout(layout: {
+    height: number;
+    offsetX: number;
+    offsetY: number;
+    scale: number;
+    width: number;
+  }) {
+    this.viewportLayoutCalls.push(layout);
   }
 
   async reconcileRenderGraphDrawList(items: FabricRenderTargetItem[]) {
@@ -139,7 +157,51 @@ class FakeCanvasService {
   }
 }
 
-class FakeSceneLayoutService {}
+class FakeSceneLayoutService {
+  private listeners = new Map<string, Set<(layout: any) => void>>();
+
+  constructor(private layout: any = null) {}
+
+  getLayout() {
+    return this.layout;
+  }
+
+  onLayoutChange(surfaceId: string, listener: (layout: any) => void) {
+    const listeners =
+      this.listeners.get(surfaceId) ?? new Set<(layout: any) => void>();
+    listeners.add(listener);
+    this.listeners.set(surfaceId, listeners);
+    return {
+      dispose: () => {
+        listeners.delete(listener);
+      },
+    };
+  }
+}
+
+class FakeSurfaceFrameService {
+  private listeners = new Set<(event: { surfaceId: string }) => void>();
+
+  constructor(private framesBySurfaceId: Record<string, SurfaceSceneFrames>) {}
+
+  listSurfaceIds() {
+    return Object.keys(this.framesBySurfaceId);
+  }
+
+  getFrames(surfaceId: string) {
+    return this.framesBySurfaceId[surfaceId] ?? null;
+  }
+
+  onAnyFramesChange(listener: (event: { surfaceId: string }) => void) {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+}
+
 class FakeBrowserSceneExportService {}
 class FakeFabricRenderGraphAdapter {}
 
@@ -356,11 +418,45 @@ async function testCanvasServicePreservesViewportLayout() {
 function testAttachRegistersRenderGraphAdapter() {
   const { registered, runtime } = createRuntime();
   const canvasService = new FakeCanvasService();
-  const sceneLayoutService = new FakeSceneLayoutService();
+  const sceneLayoutService = new FakeSceneLayoutService({
+    bleedRect: {
+      centerX: 110,
+      centerY: 120,
+      height: 140,
+      left: 10,
+      top: 20,
+      width: 200,
+    },
+    cutRect: {
+      centerX: 110,
+      centerY: 120,
+      height: 140,
+      left: 10,
+      top: 20,
+      width: 200,
+    },
+    offsetX: 24,
+    offsetY: 36,
+    revision: 0,
+    scale: 2,
+    surfaceId: "front",
+    trimRect: {
+      centerX: 110,
+      centerY: 120,
+      height: 140,
+      left: 10,
+      top: 20,
+      width: 200,
+    },
+  });
+  const surfaceFrameService = new FakeSurfaceFrameService({
+    front: TEST_SURFACE_FRAMES,
+  });
   const browserSceneExportService = new FakeBrowserSceneExportService();
   const graphAdapter = new FakeFabricRenderGraphAdapter();
   let observerCallback: ResizeObserverCallback | null = null;
   let disconnected = false;
+  registered.set(SURFACE_FRAME_SERVICE, surfaceFrameService as any);
 
   const attachment = attachBrowserHost(runtime, {
     container: {
@@ -392,6 +488,17 @@ function testAttachRegistersRenderGraphAdapter() {
     attachment.fabricRenderGraphAdapter,
     graphAdapter as any,
     "graph adapter should be exposed",
+  );
+  assertDeepEqual(
+    canvasService.viewportLayoutCalls[0],
+    {
+      scale: 2,
+      offsetX: 24,
+      offsetY: 36,
+      width: TEST_SURFACE_FRAMES.previewBounds.widthMm * 2,
+      height: TEST_SURFACE_FRAMES.previewBounds.heightMm * 2,
+    },
+    "host should apply existing scene layout to the canvas viewport on attach",
   );
 
   const callback = observerCallback as ResizeObserverCallback | null;
@@ -997,6 +1104,192 @@ async function testFabricRenderGraphAdapterPreservesScreenSpace() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterDoesNotSizePathFromFrame() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "cutline",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "front.dieline-overlay",
+        objectId: "cutline",
+      },
+      visual: { type: "path" },
+      placement: {
+        frame: { x: 30, y: 30, width: 531, height: 531 },
+        transform: { scaleX: 1, scaleY: 1 },
+      },
+      ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
+      props: {
+        fill: "transparent",
+        pathData: "M0 0H531V531H0Z",
+        stroke: "#ef4444",
+        strokeWidth: 2,
+      },
+    },
+  ]);
+
+  await adapter.flush();
+  const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  const props = last?.items[0]?.spec.props ?? {};
+  assert(last, "adapter should reconcile path nodes");
+  assertEqual(props.left, 30, "path should still receive frame left placement");
+  assertEqual(props.top, 30, "path should still receive frame top placement");
+  assertEqual(
+    props.width,
+    undefined,
+    "path placement should not overwrite path intrinsic width",
+  );
+  assertEqual(
+    props.height,
+    undefined,
+    "path placement should not overwrite path intrinsic height",
+  );
+
+  await runtime.dispose();
+}
+
+async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "detected-cutline",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "front.dieline-overlay",
+        objectId: "detected-cutline",
+      },
+      visual: { type: "path" },
+      placement: {
+        frame: { x: 10, y: 12, width: 80, height: 40 },
+        transform: { left: 10, scaleX: 2, scaleY: 2, top: 12 },
+      },
+      ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
+      props: {
+        pathData: "M0 0H40V20H0Z",
+      },
+    },
+  ]);
+
+  await adapter.flush();
+  const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  const props = last?.items[0]?.spec.props ?? {};
+  assert(last, "adapter should reconcile transformed path nodes");
+  assertEqual(props.left, 10, "path should keep explicit transform left");
+  assertEqual(props.top, 12, "path should keep explicit transform top");
+  assertEqual(
+    props.originX,
+    "left",
+    "transformed paths should still default to left origin",
+  );
+  assertEqual(
+    props.originY,
+    "top",
+    "transformed paths should still default to top origin",
+  );
+
+  await runtime.dispose();
+}
+
+async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+
+  const renderIntentService =
+    runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
+  renderIntentService.setDocumentIntents([
+    {
+      id: "front.dieline.cutline",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "front.dieline-overlay",
+        objectId: "front.dieline.cutline",
+        objectType: "object",
+      },
+      visual: { type: "path" },
+      placement: {
+        frame: { x: 30, y: 30, width: 531, height: 531 },
+      },
+      ordering: {
+        layerId: "front.dieline-overlay",
+        layerOrder: 30,
+        objectOrder: 0,
+        stack: 0,
+      },
+      props: {
+        fill: "transparent",
+        pathData: "M0 0H531V531H0Z",
+        stroke: "#ef4444",
+        strokeWidth: 2,
+      },
+      data: {
+        documentLayerRole: "guide",
+      },
+    },
+  ]);
+  renderIntentService.patchIntent("image-upload", {
+    id: "upload:front.image.user",
+    subject: {
+      kind: "object",
+      surfaceId: "front",
+      layerId: "image.overlay",
+      objectId: "front.image.user",
+      objectType: "rect",
+    },
+    visual: { type: "rect" },
+    ordering: {
+      layerId: "image.overlay",
+      layerOrder: 0,
+      objectOrder: 0,
+      stack: 800,
+    },
+    props: {
+      fill: "rgba(22, 119, 255, 0.08)",
+      height: 531,
+      left: 30,
+      stroke: "#1677ff",
+      strokeDashArray: [12, 8],
+      strokeWidth: 2,
+      top: 30,
+      width: 531,
+    },
+  });
+
+  await adapter.flush();
+  const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
+  assert(last, "adapter should reconcile guide and upload overlay nodes");
+  const guideOrder = last.items.find(
+    (item) => item.key === "front.dieline.cutline",
+  )?.order;
+  const uploadOrder = last.items.find(
+    (item) => item.key === "upload:front.image.user",
+  )?.order;
+  assert(
+    typeof guideOrder === "number" &&
+      typeof uploadOrder === "number" &&
+      guideOrder > uploadOrder,
+    "document guide nodes should render above image upload overlays",
+  );
+
+  await runtime.dispose();
+}
+
 async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -1332,6 +1625,74 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
     undefined,
     "missing clip effect should clear managed clip path",
   );
+}
+
+async function testCanvasReconcileSortsByRenderOrder() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+
+  await service.reconcileRenderGraphDrawList(
+    [
+      {
+        key: "guide",
+        layerId: "guide",
+        order: 900,
+        spec: {
+          id: "guide",
+          type: "path",
+          props: { pathData: "M0 0H10V10H0Z" },
+          data: { subjectId: "guide" },
+        },
+      },
+      {
+        key: "content",
+        layerId: "content",
+        order: 10,
+        spec: {
+          id: "content",
+          type: "rect",
+          props: { height: 10, width: 10 },
+          data: { subjectId: "content" },
+        },
+      },
+    ],
+  );
+
+  assertDeepEqual(
+    canvas.objects.map((object) => object.data.renderKey),
+    ["content", "guide"],
+    "render graph objects should stack by resolved render order",
+  );
+}
+
+function testCanvasServiceOmitsPathSourcePropsFromFabricProps() {
+  const { service } = createCanvasServiceForReconcileTests();
+  const props = (service as any).resolveObjectFabricProps(
+    {},
+    {
+      id: "front.dieline.cutline",
+      type: "path",
+      props: {
+        fill: "transparent",
+        path: "M0 0H10V10H0Z",
+        pathData: "M0 0H10V10H0Z",
+        stroke: "#ef4444",
+        strokeWidth: 2,
+      },
+    },
+  );
+
+  assertEqual(
+    props.path,
+    undefined,
+    "path source data should not be written as a Fabric path property",
+  );
+  assertEqual(
+    props.pathData,
+    undefined,
+    "pathData source data should not be written as a Fabric path property",
+  );
+  assertEqual(props.stroke, "#ef4444", "path stroke style should be preserved");
+  assertEqual(props.strokeWidth, 2, "path stroke width should be preserved");
 }
 
 function testCanvasServiceScalesImagesToTargetFrame() {
@@ -2350,6 +2711,18 @@ async function main() {
       testFabricRenderGraphAdapterPreservesScreenSpace,
     ],
     [
+      "does not size path nodes from frame dimensions",
+      testFabricRenderGraphAdapterDoesNotSizePathFromFrame,
+    ],
+    [
+      "defaults transformed path placement to top-left origin",
+      testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft,
+    ],
+    [
+      "keeps document guide nodes above upload overlays",
+      testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay,
+    ],
+    [
       "maps declarative interaction state",
       testFabricRenderGraphAdapterMapsDeclarativeInteraction,
     ],
@@ -2360,6 +2733,14 @@ async function main() {
     [
       "reconciles stale objects and clip cleanup",
       testCanvasReconcileRemovesStaleObjectsAndClearsClip,
+    ],
+    [
+      "sorts reconciled render graph objects by render order",
+      testCanvasReconcileSortsByRenderOrder,
+    ],
+    [
+      "omits path source props from Fabric props",
+      testCanvasServiceOmitsPathSourcePropsFromFabricProps,
     ],
     [
       "scales image target frames from source dimensions",

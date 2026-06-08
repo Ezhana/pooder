@@ -297,7 +297,7 @@ export class FabricRenderGraphAdapter implements Service {
         items.push({
           key: node.id,
           layerId: layer.id,
-          order: layerIndex * 1_000_000 + nodeIndex,
+          order: this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex, node),
           spec,
         });
       });
@@ -337,6 +337,16 @@ export class FabricRenderGraphAdapter implements Service {
 
     await canvas.reconcileRenderGraphDrawList(items, { render: false });
     canvas.requestRenderAll();
+  }
+
+  private resolveGraphNodeRenderOrder(
+    layerIndex: number,
+    nodeIndex: number,
+    node: RenderGraphNode,
+  ): number {
+    return node.data?.documentLayerRole === "guide"
+      ? 900_000_000 + layerIndex * 1_000_000 + nodeIndex
+      : layerIndex * 1_000_000 + nodeIndex;
   }
 
   private handleRenderGraphObjectMoving(target: any) {
@@ -694,18 +704,29 @@ export class FabricRenderGraphAdapter implements Service {
       };
     }
 
+    if (!frame) {
+      return { ...transform };
+    }
+
+    const placement = {
+      left: hasTransformLeft ? transform.left : frame.x,
+      top: hasTransformTop ? transform.top : frame.y,
+      originX: transform.originX ?? "left",
+      originY: transform.originY ?? "top",
+    };
+
+    if (node.type === "path") {
+      return {
+        ...transform,
+        ...placement,
+      };
+    }
+
     return {
       ...transform,
-      ...(frame
-        ? {
-            left: hasTransformLeft ? transform.left : frame.x,
-            top: hasTransformTop ? transform.top : frame.y,
-            width: frame.width,
-            height: frame.height,
-            originX: hasTransformLeft ? transform.originX : "left",
-            originY: hasTransformTop ? transform.originY : "top",
-          }
-        : {}),
+      ...placement,
+      width: frame.width,
+      height: frame.height,
     };
   }
 
