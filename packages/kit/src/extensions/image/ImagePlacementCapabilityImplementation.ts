@@ -39,6 +39,7 @@ import type {
   EditorEffect,
   EditorImageObject,
   EditorLayer,
+  EditorObjectEffect,
   EditorSurface,
 } from "@pooder/document/kit";
 import {
@@ -46,7 +47,10 @@ import {
   getCoverScale as getCoverScaleFromRect,
   type SourceSize,
 } from "../../shared/imaging/sourceSizeCache";
-import { type FrameRect, resolveSurfaceFrameRect } from "../../shared/scene/frame";
+import {
+  type FrameRect,
+  resolveSurfaceFrameRect,
+} from "../../shared/scene/frame";
 import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import {
@@ -176,8 +180,7 @@ export interface ImageExportPlacementImageResult {
   frame: FrameRect;
 }
 
-export interface ImagePlacementCapabilityImplementationOptions
-  extends ImagePlacementCapabilityOptions {
+export interface ImagePlacementCapabilityImplementationOptions extends ImagePlacementCapabilityOptions {
   id?: string;
 }
 
@@ -216,12 +219,30 @@ const IMAGE_SESSION_UNDERLAY_LAYER_ID = "image.session.underlay";
 const IMAGE_SESSION_IMAGE_LAYER_ID = "image.session.image";
 const IMAGE_SESSION_OVERLAY_LAYER_ID = "image.session.overlay";
 const IMAGE_SESSION_CONTROLS_LAYER_ID = "image.session.controls";
-const IMAGE_ACTIVE_PLACEMENT_CONTEXT_PREFIX = "image-placement.active-placement";
+const IMAGE_ACTIVE_PLACEMENT_CONTEXT_PREFIX =
+  "image-placement.active-placement";
 const IMAGE_SESSION_CHANNEL = "image-placement";
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isEditorEffect(effect: EditorObjectEffect): effect is EditorEffect {
+  if (
+    effect.type === "constraint" &&
+    "targetId" in effect &&
+    "strategy" in effect
+  ) {
+    return false;
+  }
+
+  return !(
+    effect.type === "clip-source" ||
+    effect.type === "boolean" ||
+    effect.type === "interactive" ||
+    effect.type === "guide"
+  );
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -263,11 +284,12 @@ function readMetadataSourceSrc(
   metadata: Record<string, unknown> | undefined,
 ): string {
   const source = isRecord(metadata?.source) ? metadata.source : undefined;
-  const sourceSrc = typeof source?.src === "string"
-    ? source.src.trim()
-    : typeof metadata?.sourceSrc === "string"
-      ? metadata.sourceSrc.trim()
-      : "";
+  const sourceSrc =
+    typeof source?.src === "string"
+      ? source.src.trim()
+      : typeof metadata?.sourceSrc === "string"
+        ? metadata.sourceSrc.trim()
+        : "";
   return sourceSrc;
 }
 
@@ -360,13 +382,14 @@ function readMetadataDerivedImage(
   metadata: Record<string, unknown> | undefined,
 ): ImagePlacementImageState | undefined {
   const derived = isRecord(metadata?.derived) ? metadata.derived : undefined;
-  const src = typeof derived?.src === "string"
-    ? derived.src.trim()
-    : typeof derived?.url === "string"
-      ? derived.url.trim()
-      : typeof metadata?.committedSrc === "string"
-        ? metadata.committedSrc.trim()
-        : "";
+  const src =
+    typeof derived?.src === "string"
+      ? derived.src.trim()
+      : typeof derived?.url === "string"
+        ? derived.url.trim()
+        : typeof metadata?.committedSrc === "string"
+          ? metadata.committedSrc.trim()
+          : "";
   if (!src) return undefined;
   return {
     src,
@@ -377,7 +400,9 @@ function readMetadataDerivedImage(
   };
 }
 
-async function createObjectUrlFromDataUrl(dataUrl: string): Promise<string | null> {
+async function createObjectUrlFromDataUrl(
+  dataUrl: string,
+): Promise<string | null> {
   if (
     !dataUrl.startsWith("data:") ||
     typeof URL === "undefined" ||
@@ -443,7 +468,8 @@ function normalizePlaceholderStyle(
     : undefined;
   if (fill) style.fill = fill;
   if (stroke) style.stroke = stroke;
-  if (Number.isFinite(strokeWidth)) style.strokeWidth = Math.max(0, strokeWidth);
+  if (Number.isFinite(strokeWidth))
+    style.strokeWidth = Math.max(0, strokeWidth);
   if (strokeDashArray?.length) style.strokeDashArray = strokeDashArray;
   if (typeof label === "string") style.label = label;
   if (labelFill) style.labelFill = labelFill;
@@ -509,7 +535,12 @@ function normalizeCommitTarget(
   value: unknown,
   fallbackObjectId: string,
 ): ImagePlacementCommitTarget {
-  return readCommitTarget(value) ?? { type: "document-object", objectId: fallbackObjectId };
+  return (
+    readCommitTarget(value) ?? {
+      type: "document-object",
+      objectId: fallbackObjectId,
+    }
+  );
 }
 
 function readCommitTarget(value: unknown): ImagePlacementCommitTarget | null {
@@ -517,9 +548,8 @@ function readCommitTarget(value: unknown): ImagePlacementCommitTarget | null {
     const type = typeof value.type === "string" ? value.type.trim() : "";
     if (type === "configurable-visual") {
       const key = typeof value.key === "string" ? value.key.trim() : "";
-      const configKey = typeof value.configKey === "string"
-        ? value.configKey.trim()
-        : "";
+      const configKey =
+        typeof value.configKey === "string" ? value.configKey.trim() : "";
       if (key) {
         return {
           type: "configurable-visual",
@@ -529,9 +559,8 @@ function readCommitTarget(value: unknown): ImagePlacementCommitTarget | null {
       }
     }
     if (type === "document-object") {
-      const objectId = typeof value.objectId === "string"
-        ? value.objectId.trim()
-        : "";
+      const objectId =
+        typeof value.objectId === "string" ? value.objectId.trim() : "";
       if (objectId) return { type: "document-object", objectId };
     }
   }
@@ -544,7 +573,8 @@ function normalizeConfigurableVisualCommitTarget(
   if (!isRecord(value)) return null;
   const key = typeof value.key === "string" ? value.key.trim() : "";
   if (!key) return null;
-  const configKey = typeof value.configKey === "string" ? value.configKey.trim() : "";
+  const configKey =
+    typeof value.configKey === "string" ? value.configKey.trim() : "";
   return {
     type: "configurable-visual",
     key,
@@ -639,14 +669,17 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private canvasAfterRenderHandler?: (event?: any) => void;
   private pendingCanvasSessionPlacementId: string | null = null;
   private pendingCanvasSessionTarget: any = null;
-  private pendingCanvasSessionTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private pendingCanvasSessionTimer: ReturnType<
+    typeof globalThis.setTimeout
+  > | null = null;
   private readonly sessionOverlayProviders = new Map<
     string,
     ImageSessionOverlayProvider
   >();
 
   constructor(options: ImagePlacementCapabilityImplementationOptions = {}) {
-    this.id = String(options.id || IMAGE_PLACEMENT_CAPABILITY_ID).trim() ||
+    this.id =
+      String(options.id || IMAGE_PLACEMENT_CAPABILITY_ID).trim() ||
       IMAGE_PLACEMENT_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || IMAGE_PLACEMENT_CAPABILITY_ID;
     this.imageLayerId = normalizeImagePlacementLayerId(
@@ -657,27 +690,25 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       options.layers?.overlayLayerId,
       DEFAULT_OVERLAY_LAYER_ID,
     );
-    this.beginSessionOnCanvasInteraction = options.beginSessionOnCanvasInteraction !== false;
+    this.beginSessionOnCanvasInteraction =
+      options.beginSessionOnCanvasInteraction !== false;
   }
 
   activate(context: ExtensionContext) {
     this.context = context;
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
     this.sceneService = context.services.get<SceneService>(SCENE_SERVICE);
-    this.sceneLayoutService = context.services.get<SceneLayoutService>(
-      SCENE_LAYOUT_SERVICE,
-    );
+    this.sceneLayoutService =
+      context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.surfaceFrameService = context.services.get<SurfaceFrameService>(
       SURFACE_FRAME_SERVICE,
     );
-    this.exportService = context.services.get<SceneExportService>(
-      SCENE_EXPORT_SERVICE,
-    );
+    this.exportService =
+      context.services.get<SceneExportService>(SCENE_EXPORT_SERVICE);
     this.sessionService = context.services.get<SessionService>(SESSION_SERVICE);
 
     this.sceneSubscription?.dispose();
@@ -690,10 +721,26 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       }
       this.updateImages();
     });
-    this.subscriptions.on(context.eventBus, "selection:created", this.onSelectionChanged);
-    this.subscriptions.on(context.eventBus, "selection:updated", this.onSelectionChanged);
-    this.subscriptions.on(context.eventBus, "selection:cleared", this.onSelectionCleared);
-    this.subscriptions.on(context.eventBus, "object:modified", this.onObjectModified);
+    this.subscriptions.on(
+      context.eventBus,
+      "selection:created",
+      this.onSelectionChanged,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "selection:updated",
+      this.onSelectionChanged,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "selection:cleared",
+      this.onSelectionCleared,
+    );
+    this.subscriptions.on(
+      context.eventBus,
+      "object:modified",
+      this.onObjectModified,
+    );
     this.subscriptions.on(context.eventBus, "mouse:down", this.onMouseDown);
     this.attachLayoutSubscriptions();
     this.bindCanvasInteractionHandlers();
@@ -704,7 +751,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.subscriptions.disposeAll();
     this.sceneSubscription?.dispose();
     this.sceneSubscription = undefined;
-    clearRenderIntentSource(this.renderIntentService, IMAGE_RUNTIME_RENDER_SCOPE);
+    clearRenderIntentSource(
+      this.renderIntentService,
+      IMAGE_RUNTIME_RENDER_SCOPE,
+    );
     this.clearPendingCanvasSession();
     this.workingImages.clear();
     this.workingImageDraftsBySessionId.clear();
@@ -734,14 +784,18 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   contribute(): ExtensionContributions {
     return {
       capabilities: [
-        createImagePlacementCapabilityDefinition(this.getImagePlacementFacade(), {
-          beginSessionOnCanvasInteraction: this.beginSessionOnCanvasInteraction,
-          capabilityId: this.capabilityId,
-          layers: {
-            imageLayerId: this.imageLayerId,
-            overlayLayerId: this.overlayLayerId,
+        createImagePlacementCapabilityDefinition(
+          this.getImagePlacementFacade(),
+          {
+            beginSessionOnCanvasInteraction:
+              this.beginSessionOnCanvasInteraction,
+            capabilityId: this.capabilityId,
+            layers: {
+              imageLayerId: this.imageLayerId,
+              overlayLayerId: this.overlayLayerId,
+            },
           },
-        }),
+        ),
       ],
       renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
@@ -773,20 +827,28 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const { object } = resolved;
     if (!object.frame) return;
 
-    const payload = isRecord(context.effect.payload) ? context.effect.payload : {};
+    const payload = isRecord(context.effect.payload)
+      ? context.effect.payload
+      : {};
     const fit =
       payload.fit === "contain" || payload.fit === "stretch"
         ? payload.fit
         : "cover";
     const sessionKey = this.normalizeSessionKey(payload.sessionKey, object.id);
-    const commitTarget = this.resolveDocumentObjectCommitTarget(object, payload);
+    const commitTarget = this.resolveDocumentObjectCommitTarget(
+      object,
+      payload,
+    );
     const frame = {
       left: object.frame.x,
       top: object.frame.y,
       width: object.frame.width,
       height: object.frame.height,
     };
-    const committed = this.resolveDocumentCommittedImage(context.document, object);
+    const committed = this.resolveDocumentCommittedImage(
+      context.document,
+      object,
+    );
     const committedTransform = committed
       ? createCommittedImagePlacementTransform(frame, committed.metadata)
       : undefined;
@@ -839,22 +901,29 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (isRecord(payload.commitTarget)) {
       return normalizeCommitTarget(payload.commitTarget, object.id);
     }
-    const configurableVisualEffect = object.effects?.find((effect) =>
-      effect.type === "configurable-visual"
+    const configurableVisualEffect = object.effects?.find(
+      (effect): effect is EditorEffect =>
+        isEditorEffect(effect) && effect.type === "configurable-visual",
     );
     const configurableVisualTarget = normalizeConfigurableVisualCommitTarget(
       configurableVisualEffect?.payload,
     );
-    return configurableVisualTarget ?? { type: "document-object", objectId: object.id };
+    return (
+      configurableVisualTarget ?? {
+        type: "document-object",
+        objectId: object.id,
+      }
+    );
   }
 
-  private findDocumentImageObject(document: EditorDocument, objectId: string):
-    | {
-        surface: EditorSurface;
-        layer: EditorLayer;
-        object: EditorImageObject;
-      }
-    | null {
+  private findDocumentImageObject(
+    document: EditorDocument,
+    objectId: string,
+  ): {
+    surface: EditorSurface;
+    layer: EditorLayer;
+    object: EditorImageObject;
+  } | null {
     for (const surface of document.surfaces) {
       for (const layer of surface.layers) {
         const object = layer.objects?.find((item) => item.id === objectId);
@@ -876,9 +945,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const source = isRecord(placementMetadata?.source)
       ? placementMetadata.source
       : undefined;
-    const src = typeof source?.src === "string" && source.src
-      ? source.src
-      : object.src;
+    const src =
+      typeof source?.src === "string" && source.src ? source.src : object.src;
     const placementTransform = readMetadataSourceTransform(placementMetadata, {
       left: 0.5,
       top: 0.5,
@@ -910,22 +978,26 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getImagePlacementFacade(): ImagePlacementCapabilityApi {
     return {
-      applyOperation: (input, operation) => this.applyImageOperation(input, operation),
+      applyOperation: (input, operation) =>
+        this.applyImageOperation(input, operation),
       clearImage: (input) => this.clearImage(input),
       commitSession: (input) => this.completeSession(input),
       exportPlacementImage: (options) => this.exportPlacementImage(options),
-      focusPlacement: (placementId, options) => this.focusPlacement(placementId, options),
+      focusPlacement: (placementId, options) =>
+        this.focusPlacement(placementId, options),
       getViewState: () => this.getViewState(),
       openSession: (input) => this.beginSession(input),
       rollbackSession: async (input) => {
         this.resetSession(input);
         return { ok: true };
       },
-      setSource: (input, source) => this.setImageSource(
-        input,
-        typeof source === "string" ? { src: source } : source,
-      ),
-      setTransform: (input, transform) => this.setImageTransform(input, transform),
+      setSource: (input, source) =>
+        this.setImageSource(
+          input,
+          typeof source === "string" ? { src: source } : source,
+        ),
+      setTransform: (input, transform) =>
+        this.setImageTransform(input, transform),
       validateSession: (input) => this.validateSession(input),
       validatePlacement: (placementId) => this.validateSession(placementId),
       registerSessionOverlayProvider: (provider) =>
@@ -962,10 +1034,14 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       .sort((a, b) => a.order - b.order);
     if (graphPlacements.length === 0) return scenePlacements;
 
-    const graphPlacementIds = new Set(graphPlacements.map((placement) => placement.id));
+    const graphPlacementIds = new Set(
+      graphPlacements.map((placement) => placement.id),
+    );
     return [
       ...graphPlacements,
-      ...scenePlacements.filter((placement) => !graphPlacementIds.has(placement.id)),
+      ...scenePlacements.filter(
+        (placement) => !graphPlacementIds.has(placement.id),
+      ),
     ].sort((a, b) => a.order - b.order);
   }
 
@@ -980,7 +1056,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       .sort((a, b) => a.order - b.order);
   }
 
-  private graphNodeToPlacementElement(node: RenderGraphNode): SceneElement | null {
+  private graphNodeToPlacementElement(
+    node: RenderGraphNode,
+  ): SceneElement | null {
     const imagePlacement = isRecord(node.data.imagePlacement)
       ? node.data.imagePlacement
       : undefined;
@@ -1004,10 +1082,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             : node.subjectId,
         imagePlacement: {
           ...imagePlacement,
-          commitTarget:
-            readCommitTarget(imagePlacement.commitTarget) ??
-            normalizeConfigurableVisualCommitTarget(node.data.configurableVisual) ??
-            { type: "document-object", objectId: node.subjectId },
+          commitTarget: readCommitTarget(imagePlacement.commitTarget) ??
+            normalizeConfigurableVisualCommitTarget(
+              node.data.configurableVisual,
+            ) ?? { type: "document-object", objectId: node.subjectId },
           ...(node.visual?.src
             ? {
                 image: {
@@ -1034,14 +1112,20 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private getPlacementElement(placementId: string): SceneElement | undefined {
-    return this.getPlacementElements().find((placement) => placement.id === placementId);
+    return this.getPlacementElements().find(
+      (placement) => placement.id === placementId,
+    );
   }
 
-  private getCommittedImage(placement: SceneElement): ImagePlacementImageState | null {
+  private getCommittedImage(
+    placement: SceneElement,
+  ): ImagePlacementImageState | null {
     return normalizeImage(getImagePlacementData(placement).image);
   }
 
-  private getEffectiveImage(placement: SceneElement): ImagePlacementImageState | null {
+  private getEffectiveImage(
+    placement: SceneElement,
+  ): ImagePlacementImageState | null {
     if (this.workingImages.has(placement.id)) {
       return this.workingImages.get(placement.id) ?? null;
     }
@@ -1052,12 +1136,15 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const frame = getPlacementFrame(element);
     if (!frame) return null;
     const placementData = getImagePlacementData(element);
-    const fit = placementData.fit === "contain" || placementData.fit === "stretch"
-      ? placementData.fit
-      : "cover";
+    const fit =
+      placementData.fit === "contain" || placementData.fit === "stretch"
+        ? placementData.fit
+        : "cover";
     const committedImage = this.getCommittedImage(element);
     const image = this.getEffectiveImage(element);
-    const metadata = isRecord(element.metadata) ? { ...element.metadata } : undefined;
+    const metadata = isRecord(element.metadata)
+      ? { ...element.metadata }
+      : undefined;
     return {
       id: element.id,
       layerId: element.layerId,
@@ -1069,13 +1156,14 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       committedImage,
       hasImage: hasImageSource(image),
       hasCommittedImage: hasImageSource(committedImage),
-      sessionKey: typeof placementData.sessionKey === "string"
-        ? placementData.sessionKey
-        : this.getFallbackImageSessionId(element.id),
-      commitTarget:
-        readCommitTarget(placementData.commitTarget) ??
-        normalizeConfigurableVisualCommitTarget(metadata?.configurableVisual) ??
-        { type: "document-object", objectId: element.id },
+      sessionKey:
+        typeof placementData.sessionKey === "string"
+          ? placementData.sessionKey
+          : this.getFallbackImageSessionId(element.id),
+      commitTarget: readCommitTarget(placementData.commitTarget) ??
+        normalizeConfigurableVisualCommitTarget(
+          metadata?.configurableVisual,
+        ) ?? { type: "document-object", objectId: element.id },
       placeholderStyle: normalizePlaceholderStyle(placementData.placeholder),
       sessionProjections: normalizeSessionProjections(
         placementData.sessionProjections,
@@ -1087,7 +1175,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private getPlacementStates(): ImagePlacementState[] {
     return this.getPlacementElements()
       .map((placement) => this.getPlacementState(placement))
-      .filter((placement): placement is ImagePlacementState => Boolean(placement));
+      .filter((placement): placement is ImagePlacementState =>
+        Boolean(placement),
+      );
   }
 
   private getCommittedPlacementStates(): ImagePlacementState[] {
@@ -1105,13 +1195,16 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             }
           : null;
       })
-      .filter((placement): placement is ImagePlacementState => Boolean(placement));
+      .filter((placement): placement is ImagePlacementState =>
+        Boolean(placement),
+      );
   }
 
   private getViewState(): ImagePlacementViewState {
     const placements = this.getPlacementStates();
     const focusedPlacement =
-      placements.find((placement) => placement.id === this.activePlacementId) || null;
+      placements.find((placement) => placement.id === this.activePlacementId) ||
+      null;
     return {
       placements,
       activePlacementId: this.activePlacementId,
@@ -1133,15 +1226,16 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.emitStateChange();
   }
 
-  private normalizeSessionInput(
-    input?: ImagePlacementSessionInput | string,
-  ): { placementId: string; sessionId: string } {
-    const placementId = typeof input === "string"
-      ? input.trim()
-      : String(input?.placementId || "").trim();
-    const sessionId = typeof input === "object"
-      ? String(input.sessionId || "").trim()
-      : "";
+  private normalizeSessionInput(input?: ImagePlacementSessionInput | string): {
+    placementId: string;
+    sessionId: string;
+  } {
+    const placementId =
+      typeof input === "string"
+        ? input.trim()
+        : String(input?.placementId || "").trim();
+    const sessionId =
+      typeof input === "object" ? String(input.sessionId || "").trim() : "";
     return {
       placementId,
       sessionId: sessionId || this.getFallbackImageSessionId(placementId),
@@ -1155,7 +1249,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
     const placementId = this.activePlacementId || "";
     const sessionId = placementId
-      ? this.sessionIdsByPlacementId.get(placementId) || this.activeImageSessionId || ""
+      ? this.sessionIdsByPlacementId.get(placementId) ||
+        this.activeImageSessionId ||
+        ""
       : this.activeImageSessionId || "";
 
     return {
@@ -1200,14 +1296,21 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         placementId,
         cloneImageState(this.workingImageDraftsBySessionId.get(sessionId)),
       );
-    } else if (!this.workingImages.has(placementId) || previousSessionId !== sessionId) {
+    } else if (
+      !this.workingImages.has(placementId) ||
+      previousSessionId !== sessionId
+    ) {
       this.setWorkingImageDraft(
         placementId,
         sessionId,
         createEditableWorkingImage(this.getCommittedImage(placement)),
       );
     }
-    this.upsertImageSessionDraft(placementId, this.workingImages.get(placementId) ?? null, sessionId);
+    this.upsertImageSessionDraft(
+      placementId,
+      this.workingImages.get(placementId) ?? null,
+      sessionId,
+    );
     this.sessionService?.focusSession(sessionId);
     this.syncWorkingPlacementConditionContext();
     this.setSessionNotice(null);
@@ -1220,7 +1323,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (this.pendingUploadPlacementIds.has(placementId)) {
       return { ok: false, reason: "upload-pending" };
     }
-    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    const placement = this.getPlacementStates().find(
+      (item) => item.id === placementId,
+    );
     if (!placement) return { ok: false, reason: "placement-not-found" };
     void sessionId;
     return { ok: false, reason: "upload-unavailable" };
@@ -1238,7 +1343,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!this.workingImages.has(placementId)) {
       await this.beginSession({ placementId, sessionId });
     }
-    const current = this.workingImages.get(placementId) || this.getCommittedImage(placement) || {};
+    const current =
+      this.workingImages.get(placementId) ||
+      this.getCommittedImage(placement) ||
+      {};
     this.setWorkingImageDraft(placementId, sessionId, {
       ...current,
       src,
@@ -1256,7 +1364,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       angle: current.angle ?? 0,
       opacity: current.opacity ?? 1,
     });
-    this.upsertImageSessionDraft(placementId, this.workingImages.get(placementId) ?? null, sessionId);
+    this.upsertImageSessionDraft(
+      placementId,
+      this.workingImages.get(placementId) ?? null,
+      sessionId,
+    );
     this.syncWorkingPlacementConditionContext();
     this.rememberSourceSizeFromMetadata(src, source.metadata);
     if (!this.retainedWorkingImageBaselines.has(placementId)) {
@@ -1277,7 +1389,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!this.workingImages.has(placementId)) {
       await this.beginSession({ placementId, sessionId });
     }
-    const current = this.workingImages.get(placementId) || this.getCommittedImage(placement) || {};
+    const current =
+      this.workingImages.get(placementId) ||
+      this.getCommittedImage(placement) ||
+      {};
     const next: ImagePlacementImageState = { ...current };
     if (Number.isFinite(updates.left as number)) {
       next.left = clampNormalized(Number(updates.left));
@@ -1314,7 +1429,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     operation: ImageOperation,
   ) {
     const { placementId, sessionId } = this.normalizeSessionInput(input);
-    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    const placement = this.getPlacementStates().find(
+      (item) => item.id === placementId,
+    );
     const image = placement?.image;
     if (!placement) return { ok: false, reason: "placement-not-found" };
     if (!image?.src) return { ok: false, reason: "image-missing" };
@@ -1350,9 +1467,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const { placementId, sessionId } = this.getActiveSessionInput(input);
     this.clearPendingCanvasSession(placementId);
     this.resolveSessionTargetIds(placementId).forEach((id) => {
-      const targetSessionId = id === placementId
-        ? sessionId
-        : this.sessionIdsByPlacementId.get(id) || this.getFallbackImageSessionId(id);
+      const targetSessionId =
+        id === placementId
+          ? sessionId
+          : this.sessionIdsByPlacementId.get(id) ||
+            this.getFallbackImageSessionId(id);
       void this.sessionService?.cancelSession(targetSessionId, {
         placementId: id,
       });
@@ -1384,13 +1503,19 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const targetIds = this.resolveSessionTargetIds(placementId);
     await this.syncWorkingImageTransformsFromCanvas(targetIds);
     const targetIdSet = new Set(targetIds);
-    const placements = this.getPlacementStates().filter((placement) => targetIdSet.has(placement.id));
+    const placements = this.getPlacementStates().filter((placement) =>
+      targetIdSet.has(placement.id),
+    );
     const missing = placements.filter((placement) => !placement.image?.src);
     if (missing.length) {
-      const notice = this.createNotice("image-missing", missing.map((placement) => placement.id), {
-        level: "error",
-        policy,
-      });
+      const notice = this.createNotice(
+        "image-missing",
+        missing.map((placement) => placement.id),
+        {
+          level: "error",
+          policy,
+        },
+      );
       this.setSessionNotice(notice);
       return notice;
     }
@@ -1438,7 +1563,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const targetIds = this.resolveSessionTargetIds(placementId);
     if (
       targetIds.length > 0 &&
-      targetIds.every((id) => this.workingImages.has(id) && !this.workingImages.get(id)?.src)
+      targetIds.every(
+        (id) => this.workingImages.has(id) && !this.workingImages.get(id)?.src,
+      )
     ) {
       const commitResult = await this.commitWorkingImagesAsCropped(targetIds);
       if (!commitResult.ok) return commitResult;
@@ -1468,22 +1595,29 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.activePlacementId = null;
       this.activeImageSessionId = null;
     }
-    await Promise.all(targetIds.map(async (id) => {
-      const targetSessionId = id === placementId
-        ? sessionId
-        : this.sessionIdsByPlacementId.get(id) || this.getFallbackImageSessionId(id);
-      await this.sessionService?.commitSession(targetSessionId);
-      this.removeImageSessionScene(targetSessionId);
-      this.sessionIdsByPlacementId.delete(id);
-      this.workingImageDraftsBySessionId.delete(targetSessionId);
-    }));
+    await Promise.all(
+      targetIds.map(async (id) => {
+        const targetSessionId =
+          id === placementId
+            ? sessionId
+            : this.sessionIdsByPlacementId.get(id) ||
+              this.getFallbackImageSessionId(id);
+        await this.sessionService?.commitSession(targetSessionId);
+        this.removeImageSessionScene(targetSessionId);
+        this.sessionIdsByPlacementId.delete(id);
+        this.workingImageDraftsBySessionId.delete(targetSessionId);
+      }),
+    );
     this.sessionService?.focusSession(null);
     this.syncWorkingPlacementConditionContext();
   }
 
   private resolveSessionTargetIds(placementId?: string): string[] {
     if (placementId) return [placementId];
-    if (this.activePlacementId && this.workingImages.has(this.activePlacementId)) {
+    if (
+      this.activePlacementId &&
+      this.workingImages.has(this.activePlacementId)
+    ) {
       return [this.activePlacementId];
     }
     return Array.from(this.workingImages.keys());
@@ -1498,7 +1632,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
     for (const placementId of placementIds) {
       if (!this.workingImages.has(placementId)) continue;
-      const placement = this.getPlacementStates().find((item) => item.id === placementId);
+      const placement = this.getPlacementStates().find(
+        (item) => item.id === placementId,
+      );
       if (!placement) return { ok: false, reason: "placement-not-found" };
       const image = this.workingImages.get(placementId);
       if (!image?.src) {
@@ -1516,7 +1652,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       const croppedSrc = croppedImage.url
         ? await normalizeCommittedExportUrl(croppedImage.url)
         : image.src;
-      this.rememberGeneratedCommittedExportObjectUrl(croppedImage.url, croppedSrc);
+      this.rememberGeneratedCommittedExportObjectUrl(
+        croppedImage.url,
+        croppedSrc,
+      );
       const sourceSrc = readMetadataSourceSrc(image.metadata) || image.src;
       const sourceTransform = resolveImageTransformSnapshot(image);
       const rawSourceMetadata = isRecord(image.metadata?.source)
@@ -1595,8 +1734,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const placementState = placementElement
       ? this.getPlacementState(placementElement)
       : null;
-    const commitTarget =
-      placementState?.commitTarget ?? { type: "document-object" as const, objectId: placementId };
+    const commitTarget = placementState?.commitTarget ?? {
+      type: "document-object" as const,
+      objectId: placementId,
+    };
     if (commitTarget.type === "configurable-visual") {
       this.commitConfigurableVisualImage(commitTarget, image);
     }
@@ -1604,13 +1745,18 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const placement = placementElement;
     if (this.renderIntentService && placement) {
       const data = isRecord(placement.data) ? placement.data : {};
-      const placementData = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+      const placementData = isRecord(data.imagePlacement)
+        ? data.imagePlacement
+        : {};
       const frame = getPlacementFrame(placement);
       const committedTransform = image
         ? createCommittedImagePlacementTransform(frame, image.metadata)
         : undefined;
       this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
-        id: commitTarget.type === "document-object" ? commitTarget.objectId : placementId,
+        id:
+          commitTarget.type === "document-object"
+            ? commitTarget.objectId
+            : placementId,
         subject: {
           kind: "object",
           surfaceId:
@@ -1618,7 +1764,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
               ? placement.metadata.documentSurfaceId
               : "legacy",
           layerId: placement.layerId,
-          objectId: commitTarget.type === "document-object" ? commitTarget.objectId : placementId,
+          objectId:
+            commitTarget.type === "document-object"
+              ? commitTarget.objectId
+              : placementId,
           objectType: "image",
         },
         visual: {
@@ -1674,7 +1823,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       });
       if (scenePlacement) {
         const data = isRecord(scenePlacement.data) ? scenePlacement.data : {};
-        const placement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+        const placement = isRecord(data.imagePlacement)
+          ? data.imagePlacement
+          : {};
         this.sceneService.updateElement(placementId, {
           data: {
             ...data,
@@ -1686,7 +1837,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         });
       }
     }
-    if (previousCommittedImage?.src && previousCommittedImage.src !== image?.src) {
+    if (
+      previousCommittedImage?.src &&
+      previousCommittedImage.src !== image?.src
+    ) {
       this.revokeGeneratedCommittedExportObjectUrl(previousCommittedImage.src);
     }
     this.recordImageSessionCommitArtifacts(placementId, image);
@@ -1700,7 +1854,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private commitConfigurableVisualImage(
-    target: Extract<ImagePlacementCommitTarget, { type: "configurable-visual" }>,
+    target: Extract<
+      ImagePlacementCommitTarget,
+      { type: "configurable-visual" }
+    >,
     image: ImagePlacementImageState | null,
   ) {
     const configurableVisual = this.getConfigurableVisualFacade();
@@ -1725,9 +1882,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const registry = this.context?.services.get<CapabilityRegistryService>(
       CAPABILITY_REGISTRY_SERVICE,
     );
-    return registry
-      ?.getFacade<ConfigurableVisualCapabilityApi>(CONFIGURABLE_VISUAL_CAPABILITY_ID) ??
-      null;
+    return (
+      registry?.getFacade<ConfigurableVisualCapabilityApi>(
+        CONFIGURABLE_VISUAL_CAPABILITY_ID,
+      ) ?? null
+    );
   }
 
   private rememberGeneratedCommittedExportObjectUrl(
@@ -1778,7 +1937,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.workingImages.delete(placementId);
       return;
     }
-    const baseline = cloneImageState(this.retainedWorkingImageBaselines.get(placementId));
+    const baseline = cloneImageState(
+      this.retainedWorkingImageBaselines.get(placementId),
+    );
     if (baseline) {
       this.workingImages.set(placementId, baseline);
     } else {
@@ -1786,7 +1947,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     }
   }
 
-  private getCommittedImageVisibleWhen(placementId: string): RuntimeConditionExpr {
+  private getCommittedImageVisibleWhen(
+    placementId: string,
+  ): RuntimeConditionExpr {
     return {
       op: "not",
       expr: {
@@ -1805,14 +1968,18 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.getCommittedPlacementStates()
         .filter((placement) => placement.hasImage)
         .map((placement) => placement.id);
-    targetIds.forEach((placementId) => this.patchCommittedImageConditions(placementId));
+    targetIds.forEach((placementId) =>
+      this.patchCommittedImageConditions(placementId),
+    );
   }
 
   private patchCommittedImageConditions(placementId: string) {
     const placement = this.getPlacementElement(placementId);
     if (!placement || !this.renderIntentService) return;
     const data = isRecord(placement.data) ? placement.data : {};
-    const placementData = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+    const placementData = isRecord(data.imagePlacement)
+      ? data.imagePlacement
+      : {};
     const image = this.getCommittedImage(placement);
     const frame = getPlacementFrame(placement);
     const committedTransform = image
@@ -1910,7 +2077,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     placementId: string | null,
     options: { syncCanvasSelection?: boolean; skipRender?: boolean } = {},
   ) {
-    const placement = placementId ? this.getPlacementElement(placementId) : undefined;
+    const placement = placementId
+      ? this.getPlacementElement(placementId)
+      : undefined;
     if (placementId && !placement) {
       return { ok: false, reason: "placement-not-found" as const };
     }
@@ -1946,8 +2115,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ].filter((id): id is string => Boolean(id));
         const obj = candidates.find((candidate: any) => {
           const data = candidate?.data ?? {};
-          return preferredIds.includes(String(data.id || "").trim()) &&
-            preferredLayerIds.includes(String(data.layerId || "").trim());
+          return (
+            preferredIds.includes(String(data.id || "").trim()) &&
+            preferredLayerIds.includes(String(data.layerId || "").trim())
+          );
         });
         if (obj) this.canvasService.setActiveObject(obj as any);
       }
@@ -1974,7 +2145,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const placementIds = placements.map((placement) => placement.id);
     if (!placementIds.length) throw new Error("image-ids-required");
     const sourceLayerIds = Array.from(
-      new Set(placements.map((placement) => placement.layerId || this.imageLayerId)),
+      new Set(
+        placements.map((placement) => placement.layerId || this.imageLayerId),
+      ),
     );
     const frame = this.getSurfaceFrameRect();
     const result = await this.exportService.exportImage({
@@ -2043,7 +2216,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const data = isRecord(target?.data) ? target.data : {};
     const session = isRecord(data.session) ? data.session : {};
     const payload = isRecord(session.payload) ? session.payload : {};
-    const imagePlacement = isRecord(data.imagePlacement) ? data.imagePlacement : {};
+    const imagePlacement = isRecord(data.imagePlacement)
+      ? data.imagePlacement
+      : {};
     const type = typeof data.type === "string" ? data.type.trim() : "";
     const placementId =
       typeof data.placementId === "string"
@@ -2052,7 +2227,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           ? payload.placementId
           : typeof imagePlacement.placementId === "string"
             ? imagePlacement.placementId
-            : type.startsWith("image-placement-") && typeof data.subjectId === "string"
+            : type.startsWith("image-placement-") &&
+                typeof data.subjectId === "string"
               ? data.subjectId
               : "";
     return placementId.trim();
@@ -2064,7 +2240,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!placementId) {
       return;
     }
-    if (this.activePlacementId === placementId && this.workingImages.has(placementId)) {
+    if (
+      this.activePlacementId === placementId &&
+      this.workingImages.has(placementId)
+    ) {
       this.emitStateChange();
       return;
     }
@@ -2087,7 +2266,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.pendingCanvasSessionTimer = null;
 
       if (!nextPlacementId) return;
-      if (this.activePlacementId === nextPlacementId && this.workingImages.has(nextPlacementId)) {
+      if (
+        this.activePlacementId === nextPlacementId &&
+        this.workingImages.has(nextPlacementId)
+      ) {
         this.emitStateChange();
         this.emitCanvasSessionOpen(nextPlacementId, nextTarget);
         return;
@@ -2102,7 +2284,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private emitCanvasSessionOpen(placementId: string, target?: any) {
-    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    const placement = this.getPlacementStates().find(
+      (item) => item.id === placementId,
+    );
     if (!placement) {
       return;
     }
@@ -2121,7 +2305,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private clearPendingCanvasSession(placementId?: string) {
-    if (placementId && this.pendingCanvasSessionPlacementId !== placementId) return;
+    if (placementId && this.pendingCanvasSessionPlacementId !== placementId)
+      return;
     if (this.pendingCanvasSessionTimer !== null) {
       globalThis.clearTimeout(this.pendingCanvasSessionTimer);
     }
@@ -2167,9 +2352,18 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.handleCanvasAfterRender();
     };
     this.canvasService.onCanvasEvent("mouse:up", this.canvasMouseUpHandler);
-    this.canvasService.onCanvasEvent("object:moving", this.canvasObjectMovingHandler);
-    this.canvasService.onCanvasEvent("before:render", this.canvasBeforeRenderHandler);
-    this.canvasService.onCanvasEvent("after:render", this.canvasAfterRenderHandler);
+    this.canvasService.onCanvasEvent(
+      "object:moving",
+      this.canvasObjectMovingHandler,
+    );
+    this.canvasService.onCanvasEvent(
+      "before:render",
+      this.canvasBeforeRenderHandler,
+    );
+    this.canvasService.onCanvasEvent(
+      "after:render",
+      this.canvasAfterRenderHandler,
+    );
   }
 
   private unbindCanvasInteractionHandlers() {
@@ -2178,13 +2372,22 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.canvasService.offCanvasEvent("mouse:up", this.canvasMouseUpHandler);
     }
     if (this.canvasObjectMovingHandler) {
-      this.canvasService.offCanvasEvent("object:moving", this.canvasObjectMovingHandler);
+      this.canvasService.offCanvasEvent(
+        "object:moving",
+        this.canvasObjectMovingHandler,
+      );
     }
     if (this.canvasBeforeRenderHandler) {
-      this.canvasService.offCanvasEvent("before:render", this.canvasBeforeRenderHandler);
+      this.canvasService.offCanvasEvent(
+        "before:render",
+        this.canvasBeforeRenderHandler,
+      );
     }
     if (this.canvasAfterRenderHandler) {
-      this.canvasService.offCanvasEvent("after:render", this.canvasAfterRenderHandler);
+      this.canvasService.offCanvasEvent(
+        "after:render",
+        this.canvasAfterRenderHandler,
+      );
     }
     this.canvasMouseUpHandler = undefined;
     this.canvasObjectMovingHandler = undefined;
@@ -2208,8 +2411,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         : {
             left: finiteNumber(target.left, 0),
             top: finiteNumber(target.top, 0),
-            width: finiteNumber(target.width, 0) * finiteNumber(target.scaleX, 1),
-            height: finiteNumber(target.height, 0) * finiteNumber(target.scaleY, 1),
+            width:
+              finiteNumber(target.width, 0) * finiteNumber(target.scaleX, 1),
+            height:
+              finiteNumber(target.height, 0) * finiteNumber(target.scaleY, 1),
           };
     return this.canvasService.toSceneRect({
       left: finiteNumber(rawBounds.left, 0),
@@ -2269,8 +2474,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       },
     });
     return {
-      x: this.toImageSnapMatch(result.matches.find((match) => match.axis === "x") ?? null),
-      y: this.toImageSnapMatch(result.matches.find((match) => match.axis === "y") ?? null),
+      x: this.toImageSnapMatch(
+        result.matches.find((match) => match.axis === "x") ?? null,
+      ),
+      y: this.toImageSnapMatch(
+        result.matches.find((match) => match.axis === "y") ?? null,
+      ),
     };
   }
 
@@ -2287,13 +2496,19 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
   }
 
-  private areSnapMatchesEqual(a: SnapMatch | null, b: SnapMatch | null): boolean {
+  private areSnapMatchesEqual(
+    a: SnapMatch | null,
+    b: SnapMatch | null,
+  ): boolean {
     if (!a && !b) return true;
     if (!a || !b) return false;
     return a.axis === b.axis && a.lineId === b.lineId && a.kind === b.kind;
   }
 
-  private updateSnapMatchState(nextX: SnapMatch | null, nextY: SnapMatch | null) {
+  private updateSnapMatchState(
+    nextX: SnapMatch | null,
+    nextY: SnapMatch | null,
+  ) {
     const changed =
       !this.areSnapMatchesEqual(this.activeSnapX, nextX) ||
       !this.areSnapMatchesEqual(this.activeSnapY, nextY);
@@ -2306,7 +2521,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private clearSnapPreview() {
     const shouldClear =
-      this.hasRenderedSnapGuides || Boolean(this.activeSnapX) || Boolean(this.activeSnapY);
+      this.hasRenderedSnapGuides ||
+      Boolean(this.activeSnapX) ||
+      Boolean(this.activeSnapY);
     this.activeSnapX = null;
     this.activeSnapY = null;
     this.hasRenderedSnapGuides = false;
@@ -2327,14 +2544,20 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   } {
     if (!this.canvasService) return { x: null, y: null };
     const placementId = target?.data?.placementId;
-    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    const placement = this.getPlacementStates().find(
+      (item) => item.id === placementId,
+    );
     if (!placement) return { x: null, y: null };
     const matches = this.computeMoveSnapMatches(
       this.getTargetBoundsScene(target),
       placement.frame,
     );
-    const deltaScreenX = this.canvasService.toScreenLength(matches.x?.deltaScene ?? 0);
-    const deltaScreenY = this.canvasService.toScreenLength(matches.y?.deltaScene ?? 0);
+    const deltaScreenX = this.canvasService.toScreenLength(
+      matches.x?.deltaScene ?? 0,
+    );
+    const deltaScreenY = this.canvasService.toScreenLength(
+      matches.y?.deltaScene ?? 0,
+    );
     if (deltaScreenX || deltaScreenY) {
       target.set?.({
         left: finiteNumber(target.left, 0) + deltaScreenX,
@@ -2349,7 +2572,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const target = this.getActiveImageTarget(event?.target);
     if (!target || !this.canvasService) return;
     const placementId = target.data.placementId;
-    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    const placement = this.getPlacementStates().find(
+      (item) => item.id === placementId,
+    );
     if (!placement) {
       this.endMoveSnapInteraction();
       return;
@@ -2437,7 +2662,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     void this.syncWorkingImageTransformFromTarget(target);
   };
 
-  private async syncWorkingImageTransformsFromCanvas(placementIds: readonly string[]) {
+  private async syncWorkingImageTransformsFromCanvas(
+    placementIds: readonly string[],
+  ) {
     for (const placementId of placementIds) {
       const target = this.getWorkingImageCanvasTarget(placementId);
       if (target) {
@@ -2448,15 +2675,21 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getWorkingImageCanvasTarget(placementId: string): any | null {
     const normalizedPlacementId = String(placementId || "").trim();
-    if (!normalizedPlacementId || !this.workingImages.has(normalizedPlacementId)) return null;
+    if (
+      !normalizedPlacementId ||
+      !this.workingImages.has(normalizedPlacementId)
+    )
+      return null;
     const layerId = `image.session.image`;
     const target =
       this.canvasService?.selectOneObject({
         ids: [this.getWorkingImageNodeId(normalizedPlacementId)],
         layerIds: [layerId],
-      }) ||
-      this.canvasService?.getActiveObject();
-    return this.getWorkingImageTargetPlacementId(target) === normalizedPlacementId ? target : null;
+      }) || this.canvasService?.getActiveObject();
+    return this.getWorkingImageTargetPlacementId(target) ===
+      normalizedPlacementId
+      ? target
+      : null;
   }
 
   private getWorkingImageTargetPlacementId(target: any): string | null {
@@ -2477,9 +2710,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ? this.getPlacementStates().find((item) => item.id === placementId)
       : null;
     if (!placement || !this.canvasService || !placementId) return;
-    const rawCenter = typeof target.getCenterPoint === "function"
-      ? target.getCenterPoint()
-      : { x: finiteNumber(target.left, 0), y: finiteNumber(target.top, 0) };
+    const rawCenter =
+      typeof target.getCenterPoint === "function"
+        ? target.getCenterPoint()
+        : { x: finiteNumber(target.left, 0), y: finiteNumber(target.top, 0) };
     const center = this.canvasService.toScenePoint({
       x: finiteNumber(rawCenter?.x, finiteNumber(target.left, 0)),
       y: finiteNumber(rawCenter?.y, finiteNumber(target.top, 0)),
@@ -2492,20 +2726,24 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (image?.src) {
       this.sourceSizeCache.rememberSourceSize(image.src, source);
     }
-    const objectScaling = typeof target.getObjectScaling === "function"
-      ? target.getObjectScaling()
-      : null;
+    const objectScaling =
+      typeof target.getObjectScaling === "function"
+        ? target.getObjectScaling()
+        : null;
     const coverScale = getCoverScaleFromRect(placement.frame, source);
     const sceneScale = this.canvasService.getSceneScale();
-    const objectScale = finiteNumber(
-      objectScaling?.x,
-      finiteNumber(target.scaleX, 1),
-    ) / Math.max(0.0001, sceneScale);
+    const objectScale =
+      finiteNumber(objectScaling?.x, finiteNumber(target.scaleX, 1)) /
+      Math.max(0.0001, sceneScale);
     await this.setImageTransform(
       placementId,
       {
-        left: (center.x - placement.frame.left) / Math.max(1, placement.frame.width),
-        top: (center.y - placement.frame.top) / Math.max(1, placement.frame.height),
+        left:
+          (center.x - placement.frame.left) /
+          Math.max(1, placement.frame.width),
+        top:
+          (center.y - placement.frame.top) /
+          Math.max(1, placement.frame.height),
         scale: objectScale / Math.max(0.0001, coverScale),
         angle: finiteNumber(target.angle, 0),
       },
@@ -2515,7 +2753,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private buildWorkingImageSpecs(): RenderObjectSpec[] {
     return this.getPlacementStates()
-      .filter((placement) => this.shouldRenderWorkingImagePlacement(placement.id) && placement.image?.src)
+      .filter(
+        (placement) =>
+          this.shouldRenderWorkingImagePlacement(placement.id) &&
+          placement.image?.src,
+      )
       .map((placement) => this.buildImageSpec(placement, { committed: false }))
       .filter((spec): spec is RenderObjectSpec => Boolean(spec));
   }
@@ -2539,7 +2781,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       height: placement.frame.height,
     };
     const scale =
-      getCoverScaleFromRect(placement.frame, source) * Math.max(0.05, image.scale ?? 1);
+      getCoverScaleFromRect(placement.frame, source) *
+      Math.max(0.05, image.scale ?? 1);
     const stretchScale = Math.max(0.05, image.scale ?? 1);
     const id = options.committed
       ? `image:${placement.id}`
@@ -2571,11 +2814,14 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         placementId: placement.id,
         source: options.committed ? "committed" : "working",
         session: this.createImagePlacementSessionData(placement, {
-          source: options.committed ? "image-placement-committed" : "image-placement-working",
+          source: options.committed
+            ? "image-placement-committed"
+            : "image-placement-working",
         }),
       },
       props: {
-        left: placement.frame.left + (image.left ?? 0.5) * placement.frame.width,
+        left:
+          placement.frame.left + (image.left ?? 0.5) * placement.frame.width,
         top: placement.frame.top + (image.top ?? 0.5) * placement.frame.height,
         originX: "center",
         originY: "center",
@@ -2643,26 +2889,28 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   ): Array<{ layerId: string; spec: RenderObjectSpec }> {
     if (!this.canvasService || !this.sceneLayoutService) return [];
     const requestedSurfaceId = this.resolveImageSessionSurfaceId(placement);
-    const layout = this.sceneLayoutService.getLayout(requestedSurfaceId ?? undefined);
+    const layout = this.sceneLayoutService.getLayout(
+      requestedSurfaceId ?? undefined,
+    );
     if (!layout) return [];
     const viewport = this.canvasService.getScreenViewportRect();
     const surfaceId = layout.surfaceId;
     const entries: Array<{ layerId: string; spec: RenderObjectSpec }> =
       buildImageSessionOverlaySpecs({
-      layout,
-      viewport,
-      visual: {
-        dashLength: 8,
-        innerBackground: "rgba(0, 0, 0, 0)",
-        outerBackground: "rgba(245, 245, 245, 0.72)",
-        strokeColor: "rgba(80, 80, 80, 0.9)",
-        strokeStyle: "dashed",
-        strokeWidth: 1,
-      },
-    }).map((spec) => ({
-      layerId: IMAGE_SESSION_CONTROLS_LAYER_ID,
-      spec,
-    }));
+        layout,
+        viewport,
+        visual: {
+          dashLength: 8,
+          innerBackground: "rgba(0, 0, 0, 0)",
+          outerBackground: "rgba(245, 245, 245, 0.72)",
+          strokeColor: "rgba(80, 80, 80, 0.9)",
+          strokeStyle: "dashed",
+          strokeWidth: 1,
+        },
+      }).map((spec) => ({
+        layerId: IMAGE_SESSION_CONTROLS_LAYER_ID,
+        spec,
+      }));
 
     const context = {
       placement,
@@ -2672,7 +2920,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       viewport,
     };
     Array.from(this.sessionOverlayProviders.values())
-      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.id.localeCompare(b.id))
+      .sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0) || a.id.localeCompare(b.id),
+      )
       .forEach((provider) => {
         const provided = provider.getOverlaySpecs(context);
         provided.forEach((entry) => {
@@ -2736,10 +2986,16 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ...(event.scenes?.removed ?? []),
       ...Object.keys(event.sceneChanges ?? {}),
     ];
-    return sceneIds.length > 0 && sceneIds.every((id) => this.isImageSessionSceneId(id));
+    return (
+      sceneIds.length > 0 &&
+      sceneIds.every((id) => this.isImageSessionSceneId(id))
+    );
   }
 
-  private ensureImageSessionScene(placementId: string, sessionId: string): string | null {
+  private ensureImageSessionScene(
+    placementId: string,
+    sessionId: string,
+  ): string | null {
     if (!this.sceneService) return null;
     const sceneId = this.getImageSessionSceneId(sessionId);
     if (!this.sceneService.getScene(sceneId)) {
@@ -2798,30 +3054,44 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.sceneService.transaction(() => {
         const renderedSceneIds = new Set<string>();
         this.getPlacementStates()
-          .filter((placement) => this.shouldRenderWorkingPlacement(placement.id))
+          .filter((placement) =>
+            this.shouldRenderWorkingPlacement(placement.id),
+          )
           .forEach((placement) => {
             const sessionId =
               this.sessionIdsByPlacementId.get(placement.id) ||
               this.getFallbackImageSessionId(placement.id);
-            const sceneId = this.ensureImageSessionScene(placement.id, sessionId);
+            const sceneId = this.ensureImageSessionScene(
+              placement.id,
+              sessionId,
+            );
             if (!sceneId) return;
             renderedSceneIds.add(sceneId);
             this.sceneService!.clearScene(sceneId);
             this.addImageSessionSceneLayers(sceneId);
-            this.buildImageSessionSceneSpecs(placement, sessionId).forEach(({ layerId, spec }, index) => {
-              const element = this.renderSpecToSceneElement(spec, layerId, index);
-              if (element) this.sceneService!.addElement(element, { sceneId });
-            });
+            this.buildImageSessionSceneSpecs(placement, sessionId).forEach(
+              ({ layerId, spec }, index) => {
+                const element = this.renderSpecToSceneElement(
+                  spec,
+                  layerId,
+                  index,
+                );
+                if (element)
+                  this.sceneService!.addElement(element, { sceneId });
+              },
+            );
           });
 
-        Array.from(this.sessionSceneIdsBySessionId.entries()).forEach(([sessionId, sceneId]) => {
-          if (!renderedSceneIds.has(sceneId)) {
-            if (this.sceneService?.getScene(sceneId)) {
-              this.sceneService.removeScene(sceneId);
+        Array.from(this.sessionSceneIdsBySessionId.entries()).forEach(
+          ([sessionId, sceneId]) => {
+            if (!renderedSceneIds.has(sceneId)) {
+              if (this.sceneService?.getScene(sceneId)) {
+                this.sceneService.removeScene(sceneId);
+              }
+              this.sessionSceneIdsBySessionId.delete(sessionId);
             }
-            this.sessionSceneIdsBySessionId.delete(sessionId);
-          }
-        });
+          },
+        );
       });
     } finally {
       this.isPublishingImageSessionScenes = wasPublishing;
@@ -2835,7 +3105,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       [IMAGE_SESSION_OVERLAY_LAYER_ID, 2],
       [IMAGE_SESSION_CONTROLS_LAYER_ID, 3],
     ].forEach(([id, order]) => {
-      this.sceneService!.addLayer({ id: String(id), order: Number(order) }, { sceneId });
+      this.sceneService!.addLayer(
+        { id: String(id), order: Number(order) },
+        { sceneId },
+      );
     });
   }
 
@@ -2887,7 +3160,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const sourceNodes = this.getProjectionSourceNodes();
     return projections.flatMap((projection) =>
       sourceNodes
-        .filter((node) => this.matchesSessionProjectionSource(placement, node, projection))
+        .filter((node) =>
+          this.matchesSessionProjectionSource(placement, node, projection),
+        )
         .map((node, index) => {
           const spec = this.graphNodeToSessionProjectionSpec(
             placement,
@@ -2914,7 +3189,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     node: RenderGraphNode,
     projection: ImageSessionProjection,
   ): boolean {
-    if (projection.surfaceScope !== "all" && node.surfaceId !== this.getPlacementSurfaceId(placement)) {
+    if (
+      projection.surfaceScope !== "all" &&
+      node.surfaceId !== this.getPlacementSurfaceId(placement)
+    ) {
       return false;
     }
     const sourceTags = new Set(projection.sourceTags);
@@ -2923,7 +3201,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private getPlacementSurfaceId(placement: ImagePlacementState): string {
-    return String(placement.metadata?.documentSurfaceId || "").trim() || "legacy";
+    return (
+      String(placement.metadata?.documentSurfaceId || "").trim() || "legacy"
+    );
   }
 
   private graphNodeToSessionProjectionSpec(
@@ -2970,16 +3250,17 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private isSessionProjectionSourceVisible(node: RenderGraphNode): boolean {
     if (node.visible === false) return false;
-    const conditionContext = this.renderIntentService?.createRuntimeConditionContext({
-      isSessionActive: (sessionId: string) =>
-        this.sessionService?.isSessionActive(sessionId) ?? false,
-      isSessionScopeActive: (scope) =>
-        this.sessionService?.hasActiveSession({ scope }) ?? false,
-      isSessionFocused: (sessionId: string) =>
-        this.sessionService?.getFocusedSessionId() === sessionId,
-      hasAnyActiveSession: (scope) =>
-        this.sessionService?.hasActiveSession({ scope }) ?? false,
-    });
+    const conditionContext =
+      this.renderIntentService?.createRuntimeConditionContext({
+        isSessionActive: (sessionId: string) =>
+          this.sessionService?.isSessionActive(sessionId) ?? false,
+        isSessionScopeActive: (scope) =>
+          this.sessionService?.hasActiveSession({ scope }) ?? false,
+        isSessionFocused: (sessionId: string) =>
+          this.sessionService?.getFocusedSessionId() === sessionId,
+        hasAnyActiveSession: (scope) =>
+          this.sessionService?.hasActiveSession({ scope }) ?? false,
+      });
     return evaluateRuntimeCondition(node.visibleWhen, conditionContext ?? {});
   }
 
@@ -3058,7 +3339,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       };
     }
     if (spec.type === "path") {
-      const path = String((props as any).pathData || (props as any).path || "").trim();
+      const path = String(
+        (props as any).pathData || (props as any).path || "",
+      ).trim();
       if (!path) return null;
       return { ...common, type: "path", path };
     }
@@ -3143,9 +3426,15 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
               text: label,
               fontSize:
                 style.labelFontSize ??
-                Math.max(18, Math.min(placement.frame.width, placement.frame.height) * 0.16),
+                Math.max(
+                  18,
+                  Math.min(placement.frame.width, placement.frame.height) *
+                    0.16,
+                ),
               fill: style.labelFill ?? style.stroke ?? "#1677ff",
-              ...(style.labelFontFamily ? { fontFamily: style.labelFontFamily } : {}),
+              ...(style.labelFontFamily
+                ? { fontFamily: style.labelFontFamily }
+                : {}),
               selectable: false,
               evented: false,
             },
@@ -3163,7 +3452,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!this.canvasService) return;
     const seq = ++this.renderSeq;
     const imageSources = new Set<string>();
-    [...this.getPlacementStates(), ...this.getCommittedPlacementStates()].forEach((placement) => {
+    [
+      ...this.getPlacementStates(),
+      ...this.getCommittedPlacementStates(),
+    ].forEach((placement) => {
       if (placement.image?.src) imageSources.add(placement.image.src);
     });
     await Promise.all(
@@ -3187,7 +3479,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       layerOrder: 0,
       channel: "overlay",
     });
-
   }
 
   private getFallbackImageSessionId(placementId: string): string {
@@ -3209,7 +3500,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     sessionId = this.sessionIdsByPlacementId.get(placementId) ||
       this.getFallbackImageSessionId(placementId),
   ) {
-    const placement = this.getPlacementStates().find((item) => item.id === placementId);
+    const placement = this.getPlacementStates().find(
+      (item) => item.id === placementId,
+    );
     if (!placement || !this.sessionService) return;
     const draft: ImagePlacementSessionDraft = {
       placementId,
@@ -3237,7 +3530,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     image: ImagePlacementImageState | null,
   ) {
     if (!this.sessionService) return;
-    const sessionId = this.sessionIdsByPlacementId.get(placementId) ||
+    const sessionId =
+      this.sessionIdsByPlacementId.get(placementId) ||
       this.getFallbackImageSessionId(placementId);
     if (!this.sessionService.getSession(sessionId)) return;
     const artifacts: SessionArtifact[] = [
@@ -3272,7 +3566,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     options: { source: string },
   ) {
     return {
-      sessionId: this.sessionIdsByPlacementId.get(placement.id) ||
+      sessionId:
+        this.sessionIdsByPlacementId.get(placement.id) ||
         this.getFallbackImageSessionId(placement.id),
       scope: {
         surfaceId: this.resolvePlacementSurfaceId(placement),
@@ -3288,7 +3583,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
   }
 
-  private resolvePlacementSurfaceId(placement: ImagePlacementState): string | null {
+  private resolvePlacementSurfaceId(
+    placement: ImagePlacementState,
+  ): string | null {
     const metadata = isRecord(placement.metadata) ? placement.metadata : {};
     const subject = isRecord(metadata.subject) ? metadata.subject : {};
     const surfaceId =
@@ -3382,7 +3679,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     };
     surfaceFrameService.listSurfaceIds().forEach(observe);
     this.subscriptions.add(
-      surfaceFrameService.onAnyFramesChange((event) => observe(event.surfaceId)),
+      surfaceFrameService.onAnyFramesChange((event) =>
+        observe(event.surfaceId),
+      ),
     );
   }
 }

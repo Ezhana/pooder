@@ -122,7 +122,7 @@ export interface EditorObjectBase {
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  effects?: EditorEffect[];
+  effects?: EditorObjectEffect[];
 }
 
 export type ObjectSource =
@@ -203,6 +203,38 @@ export interface EditorEffect<TPayload = Record<string, unknown>> {
   metadata?: Record<string, unknown>;
 }
 
+type EditorObjectEffectCommon = Partial<Omit<EditorEffect, "type">>;
+
+export type EditorObjectEffect =
+  | EditorEffect
+  | (EditorObjectEffectCommon & {
+      type: "clip-source";
+      targetIds: string[];
+    })
+  | (EditorObjectEffectCommon & {
+      type: "boolean";
+      targetId: string;
+      operation: "add" | "subtract" | "intersect" | "exclude";
+      participation?: "preview" | "export" | "both";
+    })
+  | (EditorObjectEffectCommon & {
+      type: "constraint";
+      targetId: string;
+      strategy: "path" | "edge" | "inside" | "lowest-tangent";
+      params?: Record<string, unknown>;
+    })
+  | (EditorObjectEffectCommon & {
+      type: "interactive";
+      enabled: boolean;
+      session?: boolean;
+      groupId?: string;
+    })
+  | (EditorObjectEffectCommon & {
+      type: "guide";
+      role: "cut" | "bleed" | "safe-area";
+      style?: Record<string, unknown>;
+    });
+
 export interface EditorDocumentDiagnostic {
   severity: EditorDocumentDiagnosticSeverity;
   code: string;
@@ -217,8 +249,7 @@ export interface EditorDocumentValidationOptions {
   validators?: readonly EditorDocumentValidator[];
 }
 
-export interface EditorDocumentCapabilityCollectionOptions
-  extends EditorDocumentValidationOptions {
+export interface EditorDocumentCapabilityCollectionOptions extends EditorDocumentValidationOptions {
   availableCapabilityIds?: Iterable<string>;
   includeIgnored?: boolean;
 }
@@ -227,8 +258,10 @@ export type EditorDocumentEffectCapabilityResolver = (
   effect: EditorEffect,
 ) => string | undefined;
 
-export type EditorDocumentValidatorDiagnostic =
-  Omit<EditorDocumentDiagnostic, "path"> & { path?: string };
+export type EditorDocumentValidatorDiagnostic = Omit<
+  EditorDocumentDiagnostic,
+  "path"
+> & { path?: string };
 
 export interface EditorDocumentValidatorContext {
   document: EditorDocument;
@@ -236,7 +269,7 @@ export interface EditorDocumentValidatorContext {
   surface?: EditorSurface;
   layer?: EditorLayer;
   object?: EditorObject;
-  effect?: EditorEffect;
+  effect?: EditorObjectEffect;
   addDiagnostic(diagnostic: EditorDocumentValidatorDiagnostic): void;
 }
 
@@ -278,9 +311,7 @@ function normalizeIdList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const values = Array.from(
     new Set(
-      value
-        .map((item) => normalizeId(item))
-        .filter((item) => item.length > 0),
+      value.map((item) => normalizeId(item)).filter((item) => item.length > 0),
     ),
   );
   return values.length ? values : undefined;
@@ -366,9 +397,8 @@ function normalizeObjectSource(value: unknown): ObjectSource | null {
       };
     }
     case "path": {
-      const pathData = typeof value.pathData === "string"
-        ? value.pathData.trim()
-        : "";
+      const pathData =
+        typeof value.pathData === "string" ? value.pathData.trim() : "";
       if (!pathData) return null;
       const sourceBounds = normalizeRect(value.sourceBounds);
       const sourceSize = normalizeSize(value.sourceSize);
@@ -531,6 +561,93 @@ function normalizeEffects(value: unknown): EditorEffect[] | undefined {
   return effects.length ? effects : undefined;
 }
 
+function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
+  if (!isRecord(value)) return null;
+  const type = normalizeId(value.type);
+
+  if (type === "clip-source") {
+    const targetIds = normalizeIdList(value.targetIds);
+    return targetIds ? { type, targetIds } : null;
+  }
+
+  if (type === "boolean") {
+    const targetId = normalizeId(value.targetId);
+    const operation = normalizeId(value.operation);
+    if (
+      !targetId ||
+      !["add", "subtract", "intersect", "exclude"].includes(operation)
+    ) {
+      return null;
+    }
+
+    const participation = normalizeId(value.participation);
+    return {
+      type,
+      targetId,
+      operation: operation as "add" | "subtract" | "intersect" | "exclude",
+      ...(participation === "preview" ||
+      participation === "export" ||
+      participation === "both"
+        ? { participation }
+        : {}),
+    };
+  }
+
+  if (type === "constraint") {
+    const targetId = normalizeId(value.targetId);
+    const strategy = normalizeId(value.strategy);
+    if (
+      !targetId ||
+      !["path", "edge", "inside", "lowest-tangent"].includes(strategy)
+    ) {
+      return normalizeEffect(value);
+    }
+
+    return {
+      type,
+      targetId,
+      strategy: strategy as "path" | "edge" | "inside" | "lowest-tangent",
+      ...(isRecord(value.params) ? { params: cloneRecord(value.params) } : {}),
+    };
+  }
+
+  if (type === "interactive") {
+    return {
+      type,
+      enabled: value.enabled === true,
+      ...(typeof value.session === "boolean" ? { session: value.session } : {}),
+      ...(normalizeId(value.groupId)
+        ? { groupId: normalizeId(value.groupId) }
+        : {}),
+    };
+  }
+
+  if (type === "guide") {
+    const role = normalizeId(value.role);
+    if (role !== "cut" && role !== "bleed" && role !== "safe-area") {
+      return null;
+    }
+
+    return {
+      type,
+      role,
+      ...(isRecord(value.style) ? { style: cloneRecord(value.style) } : {}),
+    };
+  }
+
+  return normalizeEffect(value);
+}
+
+function normalizeObjectEffects(
+  value: unknown,
+): EditorObjectEffect[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const effects = value
+    .map((item) => normalizeObjectEffect(item))
+    .filter((item): item is EditorObjectEffect => Boolean(item));
+  return effects.length ? effects : undefined;
+}
+
 function normalizeObject(value: unknown, order: number): EditorObject | null {
   if (!isRecord(value)) return null;
   const id = normalizeId(value.id);
@@ -546,8 +663,10 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     tags: normalizeIdList(value.tags),
     transform: normalizeTransform(value.transform),
     style: isRecord(value.style) ? cloneRecord(value.style) : undefined,
-    metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
-    effects: normalizeEffects(value.effects),
+    metadata: isRecord(value.metadata)
+      ? cloneRecord(value.metadata)
+      : undefined,
+    effects: normalizeObjectEffects(value.effects),
     frame: normalizeRect(value.frame),
   };
 
@@ -571,7 +690,11 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
       };
     }
     case "path":
-      return { ...base, type, path: typeof value.path === "string" ? value.path : "" };
+      return {
+        ...base,
+        type,
+        path: typeof value.path === "string" ? value.path : "",
+      };
     case "rect":
       return {
         ...base,
@@ -580,7 +703,11 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
         height: normalizePositiveNumber(value.height) ?? 1,
       };
     case "text":
-      return { ...base, type, text: typeof value.text === "string" ? value.text : "" };
+      return {
+        ...base,
+        type,
+        text: typeof value.text === "string" ? value.text : "",
+      };
     default:
       return null;
   }
@@ -603,7 +730,9 @@ function normalizeLayer(value: unknown, order: number): EditorLayer | null {
     tags: normalizeIdList(value.tags),
     objects: objects?.length ? objects : undefined,
     effects: normalizeEffects(value.effects),
-    metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
+    metadata: isRecord(value.metadata)
+      ? cloneRecord(value.metadata)
+      : undefined,
   };
 }
 
@@ -642,7 +771,9 @@ function normalizeSurface(value: unknown): EditorSurface | null {
     ),
     layers,
     effects: normalizeEffects(value.effects),
-    metadata: isRecord(value.metadata) ? cloneRecord(value.metadata) : undefined,
+    metadata: isRecord(value.metadata)
+      ? cloneRecord(value.metadata)
+      : undefined,
   };
 }
 
@@ -655,7 +786,9 @@ function normalizeAsset(value: unknown): EditorAsset | null {
     id,
     type,
     ...(src ? { src } : {}),
-    ...(isRecord(value.metadata) ? { metadata: cloneRecord(value.metadata) } : {}),
+    ...(isRecord(value.metadata)
+      ? { metadata: cloneRecord(value.metadata) }
+      : {}),
   };
 }
 
@@ -668,7 +801,9 @@ function normalizeView(value: unknown): EditorView | null {
     id: normalizeId(value.id),
     title: typeof value.title === "string" ? value.title : undefined,
     surfaceIds,
-    ...(isRecord(value.metadata) ? { metadata: cloneRecord(value.metadata) } : {}),
+    ...(isRecord(value.metadata)
+      ? { metadata: cloneRecord(value.metadata) }
+      : {}),
   };
 }
 
@@ -701,7 +836,9 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
   return {
     version: EDITOR_DOCUMENT_VERSION,
     config,
-    ...(isRecord(input.metadata) ? { metadata: cloneRecord(input.metadata) } : {}),
+    ...(isRecord(input.metadata)
+      ? { metadata: cloneRecord(input.metadata) }
+      : {}),
     ...(assets.length ? { assets } : {}),
     surfaces,
     ...(views.length ? { views } : {}),
@@ -747,6 +884,23 @@ function resolveEffectCapabilityId(
   options: EditorDocumentValidationOptions,
 ): string | undefined {
   return effect.capabilityId || options.resolveEffectCapabilityId?.(effect);
+}
+
+function isEditorEffect(effect: EditorObjectEffect): effect is EditorEffect {
+  if (
+    effect.type === "constraint" &&
+    "targetId" in effect &&
+    "strategy" in effect
+  ) {
+    return false;
+  }
+
+  return !(
+    effect.type === "clip-source" ||
+    effect.type === "boolean" ||
+    effect.type === "interactive" ||
+    effect.type === "guide"
+  );
 }
 
 function validateEffect(
@@ -797,6 +951,19 @@ function validateEffects(
   effects?.forEach((effect, index) =>
     validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options),
   );
+}
+
+function validateObjectEffects(
+  diagnostics: EditorDocumentDiagnostic[],
+  effects: EditorObjectEffect[] | undefined,
+  path: string,
+  options: EditorDocumentValidationOptions,
+) {
+  effects?.forEach((effect, index) => {
+    if (isEditorEffect(effect)) {
+      validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options);
+    }
+  });
 }
 
 function runValidators(
@@ -894,18 +1061,20 @@ export function validateEditorDocument(
         path: `${surfacePath}.frames`,
       });
     }
-    (["previewBounds", "productionFrame", "viewportFocusFrame"] as const).forEach(
-      (key) => {
-        if (!normalizeSceneFrameMm(isRecord(rawFrames) ? rawFrames[key] : undefined)) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "surface-frame-required",
-            message: `Surface "${surface.id}" requires a valid "${key}" frame.`,
-            path: `${surfacePath}.frames.${key}`,
-          });
-        }
-      },
-    );
+    (
+      ["previewBounds", "productionFrame", "viewportFocusFrame"] as const
+    ).forEach((key) => {
+      if (
+        !normalizeSceneFrameMm(isRecord(rawFrames) ? rawFrames[key] : undefined)
+      ) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "surface-frame-required",
+          message: `Surface "${surface.id}" requires a valid "${key}" frame.`,
+          path: `${surfacePath}.frames.${key}`,
+        });
+      }
+    });
     validateEffects(diagnostics, surface.effects, surfacePath, options);
     runValidators(diagnostics, options.validators, {
       document,
@@ -963,7 +1132,7 @@ export function validateEditorDocument(
             path: `${objectPath}.frame`,
           });
         }
-        validateEffects(diagnostics, object.effects, objectPath, options);
+        validateObjectEffects(diagnostics, object.effects, objectPath, options);
         runValidators(diagnostics, options.validators, {
           document,
           path: objectPath,
@@ -1027,9 +1196,11 @@ function collectEffects(
       );
       layer.objects?.forEach((object, objectIndex) => {
         const objectPath = `${layerPath}.objects[${objectIndex}]`;
-        object.effects?.forEach((effect, effectIndex) =>
-          visit(effect, `${objectPath}.effects[${effectIndex}]`),
-        );
+        object.effects?.forEach((effect, effectIndex) => {
+          if (isEditorEffect(effect)) {
+            visit(effect, `${objectPath}.effects[${effectIndex}]`);
+          }
+        });
       });
     });
   });

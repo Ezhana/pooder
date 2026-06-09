@@ -54,7 +54,10 @@ export function normalizeKitEditorDocument(value: unknown) {
 
 export function validateKitEditorDocument(
   value: unknown,
-  options: Omit<EditorDocumentValidationOptions, "resolveEffectCapabilityId"> = {},
+  options: Omit<
+    EditorDocumentValidationOptions,
+    "resolveEffectCapabilityId"
+  > = {},
 ) {
   return validateEditorDocument(value, {
     ...options,
@@ -92,6 +95,7 @@ export type {
   EditorImageObject,
   EditorLayer,
   EditorObject,
+  EditorObjectEffect,
   EditorSourceObject,
   EditorSurface,
   EditorView,

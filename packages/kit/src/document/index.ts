@@ -8,6 +8,7 @@ import {
   type RenderIntentDiagnostic,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDraft,
+  type RenderIntentInteractionAspect,
   type RenderIntentPatch,
   type RenderIntentPatchEntry,
   type RenderIntentService,
@@ -25,6 +26,7 @@ import {
   type EditorEffect,
   type EditorLayer,
   type EditorObject,
+  type EditorObjectEffect,
   type EditorSurface,
   type ObjectSource,
 } from "@pooder/document/kit";
@@ -101,13 +103,17 @@ export interface KitEditorDocumentController {
   updateObjectSource(
     objectId: string,
     source: ObjectSource,
-    options?: { frame?: EditorObject["frame"]; style?: Record<string, unknown> },
+    options?: {
+      frame?: EditorObject["frame"];
+      style?: Record<string, unknown>;
+    },
   ): Promise<boolean>;
 }
 
 const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [CLIP_CAPABILITY_ID]: () => createClipCapability(),
-  [CONFIGURABLE_VISUAL_CAPABILITY_ID]: () => createConfigurableVisualCapability(),
+  [CONFIGURABLE_VISUAL_CAPABILITY_ID]: () =>
+    createConfigurableVisualCapability(),
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
   [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),
   [IMAGE_PLACEMENT_CAPABILITY_ID]: () => createImagePlacementCapability(),
@@ -170,7 +176,8 @@ export async function applyKitEditorDocument(
         {
           severity: "error",
           code: "runtime-config-required",
-          message: "ConfigurationService runtime facade is required to apply an EditorDocument.",
+          message:
+            "ConfigurationService runtime facade is required to apply an EditorDocument.",
           path: "config",
         },
       ],
@@ -208,15 +215,18 @@ export async function applyKitEditorDocument(
     runtime.services.getOrThrow<RenderIntentCompilerRegistryService>(
       RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
       "RenderIntentCompilerRegistryService is required to apply an EditorDocument.",
-  );
+    );
   const intentDrafts = createBaseRenderIntentDrafts(document);
-  const effectEntries = collectEffectEntries(document).sort(compareEffectEntries);
+  const effectEntries =
+    collectEffectEntries(document).sort(compareEffectEntries);
   const patchEntries: RenderIntentPatchEntry[] = [];
   let patchSequence = 0;
 
   for (const entry of effectEntries) {
     if (entry.effect.require === "ignore") continue;
-    const capabilityId = resolveKitEditorDocumentEffectCapabilityId(entry.effect);
+    const capabilityId = resolveKitEditorDocumentEffectCapabilityId(
+      entry.effect,
+    );
     if (!capabilityId || !runtime.capabilities.has(capabilityId)) continue;
 
     const patches = await compileRenderIntentPatches(
@@ -327,7 +337,9 @@ function cloneObjectSource(source: ObjectSource): ObjectSource {
     case "path":
       return {
         ...source,
-        sourceBounds: source.sourceBounds ? { ...source.sourceBounds } : undefined,
+        sourceBounds: source.sourceBounds
+          ? { ...source.sourceBounds }
+          : undefined,
         sourceSize: source.sourceSize ? { ...source.sourceSize } : undefined,
       };
     case "shape":
@@ -339,6 +351,14 @@ function cloneObjectSource(source: ObjectSource): ObjectSource {
 
 function cloneDocument(document: EditorDocument): EditorDocument {
   return JSON.parse(JSON.stringify(document)) as EditorDocument;
+}
+
+function cloneObjectEffects(
+  effects: EditorObjectEffect[] | undefined,
+): EditorObjectEffect[] | undefined {
+  return effects?.length
+    ? (JSON.parse(JSON.stringify(effects)) as EditorObjectEffect[])
+    : undefined;
 }
 
 function findSourceObject(
@@ -360,8 +380,12 @@ function findSourceObject(
 
 function createScaledPathTransform(
   object: Extract<EditorObject, { type: "object" }>,
-  bounds: { left: number; top: number; width: number; height: number } | undefined,
-  contentBounds: { left: number; top: number; width: number; height: number } | undefined,
+  bounds:
+    | { left: number; top: number; width: number; height: number }
+    | undefined,
+  contentBounds:
+    | { left: number; top: number; width: number; height: number }
+    | undefined,
 ) {
   const transform = { ...(object.transform ?? {}) };
   const frame = object.frame;
@@ -376,14 +400,12 @@ function createScaledPathTransform(
   const baseScaleY = Number(transform.scaleY);
   return {
     ...transform,
-    left:
-      Number.isFinite(Number(transform.left))
-        ? transform.left
-        : frame.x + (pathBounds.left - bounds.left) * sourceScaleX,
-    top:
-      Number.isFinite(Number(transform.top))
-        ? transform.top
-        : frame.y + (pathBounds.top - bounds.top) * sourceScaleY,
+    left: Number.isFinite(Number(transform.left))
+      ? transform.left
+      : frame.x + (pathBounds.left - bounds.left) * sourceScaleX,
+    top: Number.isFinite(Number(transform.top))
+      ? transform.top
+      : frame.y + (pathBounds.top - bounds.top) * sourceScaleY,
     scaleX: (Number.isFinite(baseScaleX) ? baseScaleX : 1) * sourceScaleX,
     scaleY: (Number.isFinite(baseScaleY) ? baseScaleY : 1) * sourceScaleY,
   };
@@ -422,7 +444,9 @@ function collectAvailableCapabilityIds(
   );
 }
 
-function createBaseRenderIntentDrafts(document: EditorDocument): RenderIntentDraft[] {
+function createBaseRenderIntentDrafts(
+  document: EditorDocument,
+): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
   document.surfaces.forEach((surface) => {
     surface.layers.forEach((layer) => {
@@ -450,6 +474,8 @@ function createObjectRenderIntentDraft(
   const objectOrder = object.order ?? index;
   const layerOrder = layer.order ?? 0;
   const locked = object.locked;
+  const interaction = createObjectInteractionAspect(object);
+  const objectEffects = cloneObjectEffects(object.effects);
   const outputMaskKeys = normalizeOutputMaskKeys(
     object.metadata?.outputMaskKeys ?? object.metadata?.outputMaskKey,
   );
@@ -466,12 +492,14 @@ function createObjectRenderIntentDraft(
     placement: {
       frame: object.frame,
       transform: normalizeRenderIntentTransform(object),
-      width: object.type === "image" || object.type === "rect"
-        ? object.width ?? object.frame.width
-        : object.frame.width,
-      height: object.type === "image" || object.type === "rect"
-        ? object.height ?? object.frame.height
-        : object.frame.height,
+      width:
+        object.type === "image" || object.type === "rect"
+          ? (object.width ?? object.frame.width)
+          : object.frame.width,
+      height:
+        object.type === "image" || object.type === "rect"
+          ? (object.height ?? object.frame.height)
+          : object.frame.height,
     },
     ordering: {
       layerId: layer.id,
@@ -485,6 +513,7 @@ function createObjectRenderIntentDraft(
       visible: (layer.visible ?? true) && (object.visible ?? true),
       tags,
     },
+    ...(interaction ? { interaction } : {}),
     props: {
       ...(object.style ?? {}),
       ...(object.transform ?? {}),
@@ -495,6 +524,7 @@ function createObjectRenderIntentDraft(
       documentSurfaceId: surface.id,
       documentObjectType: object.type,
       documentLayerRole: layer.role,
+      ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
       ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
     },
@@ -551,7 +581,11 @@ function createObjectRenderIntentDraft(
         ...base,
         placement: {
           ...base.placement,
-          transform: createScaledPathTransform(object, visual.bounds, visual.contentBounds),
+          transform: createScaledPathTransform(
+            object,
+            visual.bounds,
+            visual.contentBounds,
+          ),
         },
         visual: { type: "path" },
         props: {
@@ -602,7 +636,11 @@ async function compileRenderIntentPatches(
   runtime: KitEditorDocumentRuntime,
   diagnostics: EditorDocumentDiagnostic[],
 ): Promise<RenderIntentPatch[]> {
-  const target = resolveRenderIntentTarget(entry.effect, entry.context, document);
+  const target = resolveRenderIntentTarget(
+    entry.effect,
+    entry.context,
+    document,
+  );
   if (!target) {
     diagnostics.push(
       createDiagnostic(
@@ -684,19 +722,86 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
         }),
       );
       layer.objects?.forEach((object, objectIndex) => {
-        object.effects?.forEach((effect, effectIndex) =>
-          entries.push({
-            effect,
-            context: { surface, layer, object },
-            path:
-              `/surfaces/${surfaceIndex}/layers/${layerIndex}` +
-              `/objects/${objectIndex}/effects/${effectIndex}`,
-          }),
-        );
+        object.effects?.forEach((effect, effectIndex) => {
+          if (isEditorEffect(effect)) {
+            entries.push({
+              effect,
+              context: { surface, layer, object },
+              path:
+                `/surfaces/${surfaceIndex}/layers/${layerIndex}` +
+                `/objects/${objectIndex}/effects/${effectIndex}`,
+            });
+          }
+        });
       });
     });
   });
   return entries;
+}
+
+function isEditorEffect(effect: EditorObjectEffect): effect is EditorEffect {
+  if (
+    effect.type === "constraint" &&
+    "targetId" in effect &&
+    "strategy" in effect
+  ) {
+    return false;
+  }
+
+  return !(
+    effect.type === "clip-source" ||
+    effect.type === "boolean" ||
+    effect.type === "interactive" ||
+    effect.type === "guide"
+  );
+}
+
+function createObjectInteractionAspect(
+  object: EditorObject,
+): RenderIntentInteractionAspect | undefined {
+  const effects = object.effects ?? [];
+  const interactive = effects.find(isObjectInteractiveEffect);
+  const constraints = effects
+    .filter(
+      (
+        effect,
+      ): effect is Extract<
+        EditorObjectEffect,
+        { type: "constraint"; targetId: string }
+      > =>
+        effect.type === "constraint" &&
+        "targetId" in effect &&
+        "strategy" in effect,
+    )
+    .map((effect) => ({
+      spec: {
+        type: mapObjectConstraintStrategy(effect.strategy),
+        source: { sourceId: "render-graph", geometryId: effect.targetId },
+        ...(effect.params ? { params: { ...effect.params } } : {}),
+      },
+    }));
+
+  if (!interactive && constraints.length === 0) return undefined;
+
+  return {
+    ...(typeof interactive?.enabled === "boolean"
+      ? { enabled: interactive.enabled }
+      : {}),
+    ...(constraints.length ? { constraints } : {}),
+  };
+}
+
+function isObjectInteractiveEffect(
+  effect: EditorObjectEffect,
+): effect is Extract<EditorObjectEffect, { type: "interactive" }> {
+  return effect.type === "interactive" && "enabled" in effect;
+}
+
+function mapObjectConstraintStrategy(strategy: string): string {
+  if (strategy === "path" || strategy === "lowest-tangent")
+    return "path.follow";
+  if (strategy === "inside") return "rect.contain";
+  return strategy;
 }
 
 function compareEffectEntries(a: EffectEntry, b: EffectEntry) {
@@ -780,7 +885,9 @@ function findObjectContext(document: EditorDocument, objectId: string) {
   return null;
 }
 
-function severityForEffect(effect: EditorEffect): EditorDocumentDiagnostic["severity"] {
+function severityForEffect(
+  effect: EditorEffect,
+): EditorDocumentDiagnostic["severity"] {
   return effect.require === "warn" ? "warning" : "error";
 }
 
@@ -816,7 +923,9 @@ function createRenderIntentDiagnostic(
   };
 }
 
-function collectAppliedSurfaceIds(drafts: readonly RenderIntentDraft[]): string[] {
+function collectAppliedSurfaceIds(
+  drafts: readonly RenderIntentDraft[],
+): string[] {
   return Array.from(
     new Set(
       drafts

@@ -55,6 +55,23 @@ export interface FabricObjectEffectRenderer {
   clear(context: Omit<FabricObjectEffectRendererContext, "effect">): void;
 }
 
+declare const process:
+  | {
+      env?: {
+        NODE_ENV?: string;
+      };
+    }
+  | undefined;
+
+const isDevelopmentRuntime = () => {
+  if (typeof process === "undefined") {
+    return false;
+  }
+
+  return process.env?.NODE_ENV === "development" ||
+    process.env?.NODE_ENV === "test";
+};
+
 export class FabricEffectRendererRegistry {
   private readonly renderers = new Map<string, FabricObjectEffectRenderer>();
 
@@ -166,7 +183,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
   init(context: ServiceContext) {
     this.context = context;
     this.setEventBus(context.eventBus);
-    if (typeof globalThis !== "undefined") {
+    if (isDevelopmentRuntime() && typeof globalThis !== "undefined") {
       (globalThis as any).__POODER_CANVAS_SERVICE__ = this;
     }
   }
