@@ -101,11 +101,5 @@ export function createDielineConfigurations(
       label: "Inside Color",
       default: state.insideColor,
     },
-    {
-      id: configKey("features"),
-      type: "json",
-      label: "Edge Features",
-      default: state.features,
-    },
   ];
 }

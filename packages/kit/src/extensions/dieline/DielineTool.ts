@@ -563,11 +563,8 @@ export class DielineTool implements ExtensionDefinition {
   }
 
   public updateFeaturePosition(groupId: string, x: number, y: number) {
-    const configService = this.getConfigServiceOrThrow();
-    const features = configService.get(this.getConfigKey("features")) || [];
-
     let changed = false;
-    const nextFeatures = features.map((feature: any) => {
+    const nextFeatures = this.state.features.map((feature: any) => {
       if (feature.groupId === groupId && (feature.x !== x || feature.y !== y)) {
         changed = true;
         return { ...feature, x, y };
@@ -576,7 +573,8 @@ export class DielineTool implements ExtensionDefinition {
     });
 
     if (changed) {
-      configService.update(this.getConfigKey("features"), nextFeatures);
+      this.state = { ...this.state, features: nextFeatures };
+      this.updateDieline();
     }
   }
 

@@ -41,8 +41,12 @@ import {
 } from "../factories";
 import { CLIP_CAPABILITY_ID } from "../extensions/clip";
 import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-visual";
+import type { ConstraintFeature } from "../extensions/constraints";
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
-import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
+import {
+  FEATURE_CAPABILITY_ID,
+  type FeatureCapabilityApi,
+} from "../extensions/feature";
 import {
   IMAGE_PLACEMENT_CAPABILITY_ID,
   type ImagePlacementCapabilityApi,
@@ -107,6 +111,10 @@ export interface KitEditorDocumentController {
       frame?: EditorObject["frame"];
       style?: Record<string, unknown>;
     },
+  ): Promise<boolean>;
+  updateObjectEffects(
+    objectId: string,
+    effects: readonly EditorObjectEffect[],
   ): Promise<boolean>;
 }
 
@@ -260,7 +268,7 @@ export async function applyKitEditorDocument(
   }
 
   renderIntentService.setDocumentIntents(mergeResult.drafts);
-  await refreshDocumentRuntimeCapabilities(runtime);
+  await refreshDocumentRuntimeCapabilities(runtime, document);
 
   return createResult(
     true,
@@ -308,15 +316,66 @@ export function createKitEditorDocumentController(
       currentDocument = cloneDocument(result.document);
       return true;
     },
+    async updateObjectEffects(objectId, effects) {
+      const id = normalizeObjectId(objectId);
+      if (!id || !currentDocument) return false;
+
+      const nextDocument = cloneDocument(currentDocument);
+      nextDocument.config = runtime.config?.export() ?? nextDocument.config;
+      const object = findSourceObject(nextDocument, id);
+      if (!object) return false;
+
+      object.effects = cloneObjectEffects([...effects]);
+      const result = await applyKitEditorDocument(runtime, nextDocument);
+      if (!result.ok) return false;
+
+      currentDocument = cloneDocument(result.document);
+      return true;
+    },
   };
 }
 
 async function refreshDocumentRuntimeCapabilities(
   runtime: KitEditorDocumentRuntime,
+  document: EditorDocument,
 ): Promise<void> {
+  const featureState = readObjectFeatureEffectState(document);
+  runtime.capabilities
+    .get<FeatureCapabilityApi>(FEATURE_CAPABILITY_ID)
+    ?.replaceFeatures(featureState?.features ?? [], {
+      markDirty: false,
+      target: "both",
+    });
+
   await runtime.capabilities
     .get<ImagePlacementCapabilityApi>(IMAGE_PLACEMENT_CAPABILITY_ID)
     ?.refresh();
+}
+
+function readObjectFeatureEffectState(
+  document: EditorDocument,
+): { features: ConstraintFeature[] } | null {
+  for (const surface of document.surfaces) {
+    for (const layer of surface.layers) {
+      for (const object of layer.objects ?? []) {
+        for (const effect of object.effects ?? []) {
+          if (!isEditorEffect(effect) || effect.type !== "feature") continue;
+          const payload =
+            effect.payload && typeof effect.payload === "object"
+              ? effect.payload
+              : {};
+          const features = (payload as Record<string, unknown>).features;
+          if (Array.isArray(features)) {
+            return {
+              features: JSON.parse(JSON.stringify(features)) as ConstraintFeature[],
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function normalizeObjectId(value: unknown): string {

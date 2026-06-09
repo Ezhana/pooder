@@ -178,7 +178,7 @@ export function readDielineState(
       configKey("showBleedLines"),
       base.showBleedLines,
     ),
-    features: configService.get(configKey("features"), base.features),
+    features: base.features,
     pathData: configService.get(configKey("pathData"), base.pathData),
     customSourceWidthPx:
       Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : undefined,

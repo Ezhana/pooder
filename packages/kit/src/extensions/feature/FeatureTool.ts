@@ -4,6 +4,7 @@ import {
   CONFIGURATION_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SURFACE_FRAME_SERVICE,
+  resolveObjectSource,
   ExtensionContext,
   ExtensionContributions,
   ExtensionDefinition,
@@ -24,9 +25,10 @@ import {
   RenderEffectSpec,
   RenderObjectSpec,
 } from "@pooder/core";
-import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
+import type { EditorDocument, EditorEffect, EditorObject } from "@pooder/document/kit";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
+import { generateDielinePath } from "../geometry";
 import {
   projectPlacedFeatures,
   resolveFeaturePlacements,
@@ -53,7 +55,6 @@ import {
 import {
   createFeatureCapabilityDefinition,
   FEATURE_CAPABILITY_ID,
-  getFeatureConfigKey,
   normalizeFeatureConfigNamespace,
   normalizeFeatureLayerId,
   type FeatureCapabilityApi,
@@ -68,6 +69,7 @@ const DEFAULT_RECT_SIZE = 10;
 const DEFAULT_CIRCLE_RADIUS = 5;
 
 type MarkerPoint = { x: number; y: number };
+type FeatureSourceObject = Extract<EditorObject, { type: "object" }>;
 
 interface GroupMemberOffset {
   index: number;
@@ -122,7 +124,6 @@ export class FeatureTool implements ExtensionDefinition {
   private sceneLayoutService?: SceneLayoutService;
   private surfaceFrameService?: SurfaceFrameService;
   private context?: ExtensionContext;
-  private isUpdatingConfig = false;
   private isFeatureSessionActive = false;
   private sessionOriginalFeatures: ConstraintFeature[] | null = null;
   private hasWorkingChanges = false;
@@ -134,7 +135,6 @@ export class FeatureTool implements ExtensionDefinition {
   private readonly subscriptions = new SubscriptionBag();
   private readonly capabilityId: string;
   private readonly configNamespace: string;
-  private readonly featuresConfigKey: string;
   private readonly markerLayerId: string;
   private readonly baseDielineLayerId: string;
   private readonly sessionDielineLayerId: string;
@@ -144,16 +144,15 @@ export class FeatureTool implements ExtensionDefinition {
   private handleMoving: ((e: any) => void) | null = null;
   private handleModified: ((e: any) => void) | null = null;
   private currentGeometry: DielineGeometry | null = null;
+  private committedFeatures: ConstraintFeature[] = [];
+  private featureSubjectIntentIds: string[] = [];
+  private compiledFeatureDocument?: EditorDocument;
 
   constructor(options: FeatureToolOptions = {}) {
     this.id = normalizeFeatureLayerId(options.id, FEATURE_CAPABILITY_ID);
     this.capabilityId = options.capabilityId || FEATURE_CAPABILITY_ID;
     this.configNamespace = normalizeFeatureConfigNamespace(
       options.configNamespace,
-    );
-    this.featuresConfigKey = getFeatureConfigKey(
-      this.configNamespace,
-      "features",
     );
     this.markerLayerId = normalizeFeatureLayerId(
       options.layers?.markerLayerId,
@@ -171,7 +170,8 @@ export class FeatureTool implements ExtensionDefinition {
       normalizeFeatureLayerId(id, KIT_LEGACY_LAYER_PRESET.imageObject),
     ) || [KIT_LEGACY_LAYER_PRESET.imageObject];
     this.contributeLegacyCommands = options.contributeCommands !== false;
-    this.workingFeatures = this.cloneFeatures(options.features || []);
+    this.committedFeatures = this.cloneFeatures(options.features || []);
+    this.workingFeatures = this.cloneFeatures(this.committedFeatures);
 
     const requireDielineExtension = options.requireDielineExtension ?? false;
     this.activation = {
@@ -199,31 +199,12 @@ export class FeatureTool implements ExtensionDefinition {
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    const features = (configService.get(this.featuresConfigKey, []) ||
-      []) as ConstraintFeature[];
-    this.workingFeatures = this.cloneFeatures(features);
+    this.workingFeatures = this.cloneFeatures(this.committedFeatures);
     this.hasWorkingChanges = false;
 
     this.subscriptions.onConfigChange(
       configService,
       (e: { key: string; value: any }) => {
-        if (this.isUpdatingConfig) return;
-
-        if (e.key === this.featuresConfigKey) {
-          if (this.isFeatureSessionActive && this.hasFeatureSessionDraft()) {
-            return;
-          }
-          if (this.hasFeatureSessionDraft()) {
-            this.clearFeatureSessionState();
-          }
-          const next = (e.value || []) as ConstraintFeature[];
-          this.workingFeatures = this.cloneFeatures(next);
-          this.hasWorkingChanges = false;
-          this.redraw();
-          this.emitWorkingChange();
-          return;
-        }
-
         if (
           e.key.startsWith("size.") ||
           e.key.startsWith("scene.") ||
@@ -240,7 +221,6 @@ export class FeatureTool implements ExtensionDefinition {
 
   deactivate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
-    this.restoreCommittedFeaturesToConfig();
     this.clearFeatureSessionState();
     this.dirtyTrackerDisposable?.dispose();
     this.dirtyTrackerDisposable = undefined;
@@ -357,6 +337,11 @@ export class FeatureTool implements ExtensionDefinition {
   private compileDocumentFeatureEffect(
     context: RenderIntentCompilerContext<EditorEffect, EditorDocument>,
   ): RenderIntentPatch[] | void {
+    if (this.compiledFeatureDocument !== context.document) {
+      this.compiledFeatureDocument = context.document;
+      this.featureSubjectIntentIds = [];
+    }
+
     const payload =
       context.effect.payload && typeof context.effect.payload === "object"
         ? context.effect.payload
@@ -366,7 +351,14 @@ export class FeatureTool implements ExtensionDefinition {
       Record<string, unknown>
     >;
     const layerId = context.target.layerId || this.markerLayerId;
-    return features.map((feature, index) => {
+    if (context.target.kind === "object" && context.target.objectId) {
+      this.rememberFeatureSubjectIntent(context.target.objectId);
+    }
+    const targetPatch = this.compileFeatureTargetPatch(
+      context,
+      features as unknown as ConstraintFeature[],
+    );
+    const markerPatches: RenderIntentPatch[] = features.map((feature, index) => {
       const id =
         typeof feature.id === "string" && feature.id.trim()
           ? feature.id.trim()
@@ -374,7 +366,7 @@ export class FeatureTool implements ExtensionDefinition {
       return {
         id: `${layerId}.${id}`,
         subject: {
-          kind: "object",
+          kind: "object" as const,
           surfaceId: context.target.surfaceId,
           layerId,
           objectId: `${layerId}.${id}`,
@@ -384,10 +376,10 @@ export class FeatureTool implements ExtensionDefinition {
           layerId,
           layerOrder: 0,
           objectOrder: index,
-          channel: "overlay",
+          channel: "overlay" as const,
           stack: 760,
         },
-        visual: { type: "rect" },
+        visual: { type: "rect" as const },
         placement: {
           width: DEFAULT_RECT_SIZE,
           height: DEFAULT_RECT_SIZE,
@@ -409,10 +401,176 @@ export class FeatureTool implements ExtensionDefinition {
         },
       };
     });
+
+    return targetPatch ? [targetPatch, ...markerPatches] : markerPatches;
+  }
+
+  private compileFeatureTargetPatch(
+    context: RenderIntentCompilerContext<EditorEffect, EditorDocument>,
+    features: ConstraintFeature[],
+  ): RenderIntentPatch | null {
+    if (
+      context.target.kind !== "object" ||
+      !context.target.objectId ||
+      features.length === 0
+    ) {
+      return null;
+    }
+
+    const object = this.findFeatureSourceObject(context.document, {
+      layerId: context.target.layerId,
+      objectId: context.target.objectId,
+      surfaceId: context.target.surfaceId,
+    });
+    const geometry = object ? this.resolveFeatureSourceGeometry(object) : null;
+    if (!geometry) return null;
+
+    const pathData = generateDielinePath({
+      canvasHeight: geometry.height * 2,
+      canvasWidth: geometry.width * 2,
+      customSourceHeightPx: geometry.customSourceHeightPx,
+      customSourceWidthPx: geometry.customSourceWidthPx,
+      features: this.cloneFeatures(features),
+      height: geometry.height,
+      pathData: geometry.pathData,
+      radius: geometry.radius,
+      shape: geometry.shape,
+      width: geometry.width,
+      x: geometry.width / 2,
+      y: geometry.height / 2,
+    });
+    if (!pathData) return null;
+
+    return {
+      id: context.target.objectId,
+      visual: { type: "path" },
+      props: {
+        path: pathData,
+        pathData,
+        source: {
+          kind: "path",
+          pathData,
+          sourceSize: {
+            height: geometry.height,
+            width: geometry.width,
+          },
+        },
+      },
+      data: {
+        featureEffectApplied: true,
+      },
+    };
+  }
+
+  private findFeatureSourceObject(
+    document: EditorDocument,
+    target: { surfaceId?: string; layerId?: string; objectId: string },
+  ): FeatureSourceObject | null {
+    for (const surface of document.surfaces) {
+      if (target.surfaceId && surface.id !== target.surfaceId) continue;
+      for (const layer of surface.layers) {
+        if (target.layerId && layer.id !== target.layerId) continue;
+        for (const object of layer.objects ?? []) {
+          if (object.id === target.objectId && object.type === "object") {
+            return object;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  private resolveFeatureSourceGeometry(object: FeatureSourceObject): {
+    customSourceHeightPx?: number;
+    customSourceWidthPx?: number;
+    height: number;
+    pathData?: string;
+    radius: number;
+    shape: "rect" | "circle" | "ellipse" | "heart" | "custom";
+    width: number;
+  } | null {
+    const source = object.source;
+    const resolved = resolveObjectSource(source as any);
+    const frame = object.frame;
+    const frameWidth = this.firstPositiveNumber(frame?.width);
+    const frameHeight = this.firstPositiveNumber(frame?.height);
+    const resolvedWidth = this.firstPositiveNumber(
+      resolved?.intrinsicSize?.width,
+      resolved?.bounds?.width,
+      frameWidth,
+    );
+    const resolvedHeight = this.firstPositiveNumber(
+      resolved?.intrinsicSize?.height,
+      resolved?.bounds?.height,
+      frameHeight,
+    );
+
+    if (source.kind === "path") {
+      const pathData =
+        typeof source.pathData === "string" && source.pathData.trim()
+          ? source.pathData.trim()
+          : "";
+      if (!pathData || !resolvedWidth || !resolvedHeight) return null;
+      const customSourceWidthPx = this.firstPositiveNumber(
+        source.sourceSize?.width,
+        source.sourceBounds?.width,
+        resolvedWidth,
+      );
+      const customSourceHeightPx = this.firstPositiveNumber(
+        source.sourceSize?.height,
+        source.sourceBounds?.height,
+        resolvedHeight,
+      );
+      return {
+        customSourceHeightPx,
+        customSourceWidthPx,
+        height: resolvedHeight,
+        pathData,
+        radius: 0,
+        shape: "custom",
+        width: resolvedWidth,
+      };
+    }
+
+    if (source.kind !== "shape") return null;
+    const shape = this.normalizeFeatureSourceShape(source.shape);
+    if (!shape || !resolvedWidth || !resolvedHeight) return null;
+
+    return {
+      height: resolvedHeight,
+      radius: this.firstPositiveNumber((source.params || {}).radius) || 0,
+      shape,
+      width: resolvedWidth,
+    };
+  }
+
+  private normalizeFeatureSourceShape(
+    shape: string,
+  ): "rect" | "circle" | "ellipse" | "heart" | null {
+    return shape === "rect" ||
+      shape === "circle" ||
+      shape === "ellipse" ||
+      shape === "heart"
+      ? shape
+      : null;
+  }
+
+  private firstPositiveNumber(...values: unknown[]): number | undefined {
+    for (const value of values) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return undefined;
   }
 
   private cloneFeatures(features: ConstraintFeature[]): ConstraintFeature[] {
     return cloneWithJson(features || []) as ConstraintFeature[];
+  }
+
+  private rememberFeatureSubjectIntent(intentId: string) {
+    const normalized = String(intentId || "").trim();
+    if (!normalized || this.featureSubjectIntentIds.includes(normalized)) return;
+    this.featureSubjectIntentIds.push(normalized);
   }
 
   private getConfigService(): ConfigurationService | undefined {
@@ -420,21 +578,11 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private getCommittedFeatures(): ConstraintFeature[] {
-    const configService = this.getConfigService();
-    const committed = (configService?.get(this.featuresConfigKey, []) ||
-      []) as ConstraintFeature[];
-    return this.cloneFeatures(committed);
+    return this.cloneFeatures(this.committedFeatures);
   }
 
   private updateCommittedFeatures(next: ConstraintFeature[]) {
-    const configService = this.getConfigService();
-    if (!configService) return;
-    this.isUpdatingConfig = true;
-    try {
-      configService.update(this.featuresConfigKey, next);
-    } finally {
-      this.isUpdatingConfig = false;
-    }
+    this.committedFeatures = this.cloneFeatures(next);
   }
 
   private getFeatureFacade(): FeatureCapabilityApi {
@@ -539,17 +687,8 @@ export class FeatureTool implements ExtensionDefinition {
     this.sessionOriginalFeatures = null;
   }
 
-  private restoreCommittedFeaturesToConfig() {
-    if (!this.hasFeatureSessionDraft()) return;
-    const original = this.cloneFeatures(
-      this.sessionOriginalFeatures || this.getCommittedFeatures(),
-    );
-    this.updateCommittedFeatures(original);
-  }
-
   private suspendFeatureSession() {
     if (!this.isFeatureSessionActive) return;
-    this.restoreCommittedFeaturesToConfig();
     this.isFeatureSessionActive = false;
   }
 
@@ -595,11 +734,6 @@ export class FeatureTool implements ExtensionDefinition {
   private updateWorkingGroupPosition(groupId: string, x: number, y: number) {
     if (!groupId) return { ok: false };
 
-    const configService = this.context?.services.get<ConfigurationService>(
-      CONFIGURATION_SERVICE,
-    );
-    if (!configService) return { ok: false };
-
     const geometry = this.currentGeometry ?? this.getDielineGeometry();
     const scale = geometry?.scale || 1;
     const dielineWidth = geometry ? geometry.width / scale : 0;
@@ -637,18 +771,6 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private completeFeatures(): FeatureCompletionResult {
-    const configService = this.context?.services.get<ConfigurationService>(
-      CONFIGURATION_SERVICE,
-    );
-    if (!configService) {
-      return {
-        ok: false,
-        issues: [
-          { featureId: "unknown", reason: "ConfigurationService not found" },
-        ],
-      };
-    }
-
     const geometry = this.currentGeometry ?? this.getDielineGeometry();
     const scale = geometry?.scale || 1;
     const dielineWidth = geometry ? geometry.width / scale : 0;
@@ -1019,6 +1141,12 @@ export class FeatureTool implements ExtensionDefinition {
       channel: "overlay",
     });
     if (!this.isSessionVisible()) return;
+    this.featureSubjectIntentIds.forEach((intentId) => {
+      this.renderIntentService?.patchIntent(this.id, {
+        id: intentId,
+        export: { visible: false },
+      });
+    });
     patchRenderObjectSpecs(this.renderIntentService, this.sessionDielineSpecs, {
       sourceId: this.id,
       layerId: this.sessionDielineLayerId,

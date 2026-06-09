@@ -972,7 +972,6 @@ function testContributionCompatibility() {
     "dieline.offsetDashLength",
     "dieline.offsetStyle",
     "dieline.insideColor",
-    "dieline.features",
   ];
 
   assert(
@@ -5083,6 +5082,271 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   }
 }
 
+async function testFeatureCapabilityUsesObjectEffectState() {
+  const runtime = new Pooder();
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  const rectByCenter = (
+    centerX: number,
+    centerY: number,
+    width: number,
+    height: number,
+  ): SceneRect => ({
+    centerX,
+    centerY,
+    height,
+    left: centerX - width / 2,
+    top: centerY - height / 2,
+    width,
+  });
+  const layout: SceneLayoutSnapshot = {
+    bleedRect: rectByCenter(400, 300, 360, 360),
+    cutRect: rectByCenter(400, 300, 360, 360),
+    offsetX: 0,
+    offsetY: 0,
+    revision: 1,
+    scale: 3,
+    surfaceId: "front",
+    trimRect: rectByCenter(400, 300, 300, 300),
+  };
+  runtime.services.register(
+    {
+      getLayout: () => layout,
+      invalidateLayout: () => {},
+      onLayoutChange: () => ({ dispose() {} }),
+      recomputeLayout: () => layout,
+    } as any,
+    SCENE_LAYOUT_SERVICE,
+  );
+  const initialFeature = {
+    id: "initial-hole",
+    operation: "subtract" as const,
+    shape: "circle" as const,
+    x: 0.5,
+    y: 0.1,
+    radius: 4,
+  };
+  const document = {
+    version: 4 as const,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" as const },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "front.dieline-overlay",
+            role: "guide" as const,
+            order: 30,
+            objects: [
+              {
+                id: "front.dieline.cutline",
+                type: "object" as const,
+                frame: { x: 0, y: 0, width: 100, height: 100 },
+                metadata: { role: "dieline" },
+                source: {
+                  kind: "shape" as const,
+                  shape: "rect" as const,
+                  params: { width: 100, height: 100 },
+                },
+                effects: [
+                  {
+                    type: "feature",
+                    payload: { features: [initialFeature], target: "both" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  runtime.extensions.registerMany(createKitCapabilitiesForDocument(document));
+  await runtime.extensions.flushActivation();
+
+  const result = await applyKitEditorDocument(runtime, document);
+  assert(
+    result.ok,
+    `feature object document should apply (${JSON.stringify(result.diagnostics)})`,
+  );
+  const initialCutlineNode = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.dieline.cutline");
+  assert(
+    typeof initialCutlineNode?.props.pathData === "string" &&
+      initialCutlineNode.props.pathData !== "M0 0H100V100H0Z",
+    "object feature effect should render into the static cutline path",
+  );
+  assertEqual(
+    initialCutlineNode?.data.featureEffectApplied,
+    true,
+    "object feature effect should mark the patched cutline render intent",
+  );
+
+  const facade = runtime.capabilities.get<FeatureCapabilityApi>(
+    FEATURE_CAPABILITY_ID,
+  );
+  if (!facade) {
+    throw new Error("feature capability facade should be registered");
+  }
+
+  assertEqual(
+    facade.getFeatures()[0]?.id,
+    "initial-hole",
+    "feature capability should initialize committed state from object effect",
+  );
+
+  await facade.beginSession();
+  assertEqual(
+    facade.getWorkingFeatures()[0]?.id,
+    "initial-hole",
+    "feature session should initialize working state from object effect",
+  );
+
+  const sessionGraph = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph();
+  const cutlineNode = sessionGraph.layers
+    .flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.dieline.cutline");
+  assertEqual(
+    cutlineNode?.visible,
+    false,
+    "active feature session should hide the static cutline guide",
+  );
+  assert(
+    sessionGraph.layers
+      .flatMap((layer) => layer.nodes)
+      .some((node) => node.id.startsWith("feature.session.dieline") && node.visible),
+    "active feature session should render the session dieline",
+  );
+
+  const replacementFeature = {
+    ...initialFeature,
+    id: "replacement-hole",
+    x: 0.25,
+  };
+  facade.replaceFeatures([replacementFeature], { target: "both" });
+  assertEqual(
+    facade.getFeatures()[0]?.id,
+    "replacement-hole",
+    "replaceFeatures target both should update committed feature state",
+  );
+
+  const completion = facade.completeSession();
+  assert(completion.ok, "feature completion should succeed");
+  assertEqual(
+    facade.getFeatures()[0]?.id,
+    "replacement-hole",
+    "completeSession should preserve committed feature state",
+  );
+  const completedCutlineNode = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.subjectId === "front.dieline.cutline");
+  assertEqual(
+    completedCutlineNode?.visible,
+    true,
+    "completed feature session should restore static cutline guide visibility",
+  );
+
+  await runtime.dispose();
+}
+
+async function testKitEditorDocumentControllerMutatesObjectEffects() {
+  const runtime = new Pooder();
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  const document = {
+    version: 4 as const,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" as const },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "front.dieline-overlay",
+            role: "guide" as const,
+            objects: [
+              {
+                id: "front.dieline.cutline",
+                type: "object" as const,
+                frame: { x: 0, y: 0, width: 100, height: 100 },
+                source: {
+                  kind: "shape" as const,
+                  shape: "rect" as const,
+                  params: { width: 100, height: 100 },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const documentWithFeatureEffect = {
+    ...document,
+    surfaces: [
+      {
+        ...document.surfaces[0]!,
+        layers: [
+          {
+            ...document.surfaces[0]!.layers[0]!,
+            objects: [
+              {
+                ...(document.surfaces[0]!.layers[0]!.objects![0] as any),
+                effects: [{ type: "feature", payload: { features: [] } }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const controller = createKitEditorDocumentController(runtime);
+
+  runtime.extensions.registerMany(
+    createKitCapabilitiesForDocument(documentWithFeatureEffect),
+  );
+  await runtime.extensions.flushActivation();
+  const applyResult = await controller.apply(document);
+  assert(applyResult.ok, "document controller should apply source object document");
+
+  const nextFeature = {
+    id: "saved-hole",
+    operation: "subtract" as const,
+    shape: "circle" as const,
+    x: 0.4,
+    y: 0.2,
+    radius: 3,
+  };
+  const updated = await controller.updateObjectEffects("front.dieline.cutline", [
+    {
+      type: "feature",
+      payload: { features: [nextFeature], target: "both" },
+    },
+  ]);
+  assert(updated, "document controller should update object effects");
+  const cutline = controller
+    .export()
+    ?.surfaces[0]?.layers[0]?.objects?.find(
+      (object) => object.id === "front.dieline.cutline",
+    );
+  assertEqual(
+    (cutline?.effects?.[0]?.payload as any)?.features?.[0]?.id,
+    "saved-hole",
+    "document controller export should include updated object feature effect",
+  );
+
+  await runtime.dispose();
+}
+
 async function testFeatureCapabilityDefinition() {
   const runtime = new Pooder();
   let committedFeatures: any[] = [];
@@ -5285,6 +5549,8 @@ async function main() {
   await testImageMaskCapabilityExtension();
   await testConfigurableVisualConfigPatchesOriginalRenderIntents();
   await testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisible();
+  await testFeatureCapabilityUsesObjectEffectState();
+  await testKitEditorDocumentControllerMutatesObjectEffects();
   await testFeatureCapabilityDefinition();
   console.log("ok");
 }
