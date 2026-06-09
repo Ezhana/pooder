@@ -46,7 +46,9 @@ const TEST_SURFACE_FRAMES = {
   viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
 };
 
-function resolveTestEffectCapabilityId(effect: EditorEffect): string | undefined {
+function resolveTestEffectCapabilityId(
+  effect: EditorEffect,
+): string | undefined {
   return effect.capabilityId || TEST_EFFECT_CAPABILITY_IDS[effect.type];
 }
 
@@ -68,10 +70,10 @@ function testNormalizeDefaults() {
             objects: [
               {
                 id: "image-1",
-                type: "image",
                 exportable: false,
                 tags: [" mockup ", "", "mockup"],
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: { kind: "url", url: "/image.png" },
                 effects: [
                   {
                     type: "image-placement",
@@ -90,7 +92,11 @@ function testNormalizeDefaults() {
 
   assertEqual(doc.version, EDITOR_DOCUMENT_VERSION, "version should normalize");
   assertDeepEqual(doc.config, TEST_DOCUMENT_CONFIG, "config should normalize");
-  assertEqual(doc.views?.[0]?.id, "front", "default view should use surface id");
+  assertEqual(
+    doc.views?.[0]?.id,
+    "front",
+    "default view should use surface id",
+  );
   assertEqual(
     doc.surfaces[0].layers[0].visible,
     true,
@@ -102,7 +108,8 @@ function testNormalizeDefaults() {
     "layer tags should normalize",
   );
   assertEqual(
-    "exportable" in (doc.surfaces[0].layers[0] as unknown as Record<string, unknown>),
+    "exportable" in
+      (doc.surfaces[0].layers[0] as unknown as Record<string, unknown>),
     false,
     "layer exportable should be ignored",
   );
@@ -117,9 +124,11 @@ function testNormalizeDefaults() {
     "object tags should normalize",
   );
   assertEqual(
-    "exportable" in (
-      doc.surfaces[0].layers[0].objects?.[0] as unknown as Record<string, unknown>
-    ),
+    "exportable" in
+      (doc.surfaces[0].layers[0].objects?.[0] as unknown as Record<
+        string,
+        unknown
+      >),
     false,
     "object exportable should be ignored",
   );
@@ -164,8 +173,12 @@ function testLegacyObjectInteractionIsIgnored() {
             objects: [
               {
                 id: "valid",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 interaction: {
                   selectable: true,
                   evented: false,
@@ -175,8 +188,12 @@ function testLegacyObjectInteractionIsIgnored() {
               },
               {
                 id: "invalid",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 interaction: {
                   selectable: "true",
                   evented: 1,
@@ -185,8 +202,12 @@ function testLegacyObjectInteractionIsIgnored() {
               },
               {
                 id: "empty",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 interaction: {},
               },
             ],
@@ -226,8 +247,12 @@ function testLegacyObjectConstraintsAreIgnored() {
             objects: [
               {
                 id: "valid",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 constraints: {
                   drag: [
                     {
@@ -243,7 +268,10 @@ function testLegacyObjectConstraintsAreIgnored() {
                       source: "frame",
                       mode: "contain",
                     },
-                    { type: "rect", rect: { x: 0, y: 0, width: -1, height: 1 } },
+                    {
+                      type: "rect",
+                      rect: { x: 0, y: 0, width: -1, height: 1 },
+                    },
                     { type: "object", objectId: "" },
                     { type: "path", pathId: "future" },
                   ],
@@ -252,8 +280,12 @@ function testLegacyObjectConstraintsAreIgnored() {
               },
               {
                 id: "empty",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 constraints: { drag: [] },
               },
             ],
@@ -274,7 +306,7 @@ function testLegacyObjectConstraintsAreIgnored() {
   );
 }
 
-function testV2ImagePlacementImageDoesNotRequireSource() {
+function testImagePlacementObjectDoesNotRequireLegacySrc() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
@@ -289,8 +321,8 @@ function testV2ImagePlacementImageDoesNotRequireSource() {
             objects: [
               {
                 id: "image-target",
-                type: "image",
                 frame: { x: 0, y: 0, width: 100, height: 120 },
+                source: { kind: "url", url: "/placeholder.png" },
                 effects: [
                   {
                     type: "image-placement",
@@ -307,15 +339,14 @@ function testV2ImagePlacementImageDoesNotRequireSource() {
 
   assert(
     !diagnostics.some((item) => item.code.includes("src")),
-    "image-placement image objects should not require asset or src",
+    "image-placement source objects should not require legacy src fields",
   );
 }
 
-function testImageObjectDoesNotRequireSource() {
-  const diagnostics = validateEditorDocument({
+function testObjectWithoutSourceIsDropped() {
+  const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
-    assets: [{ id: "template", type: "image" }],
     surfaces: [
       {
         id: "front",
@@ -327,7 +358,30 @@ function testImageObjectDoesNotRequireSource() {
             objects: [
               {
                 id: "image-target",
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+              },
+              {
+                id: "legacy-image",
                 type: "image",
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+              },
+              {
+                id: "legacy-path",
+                type: "path",
+                path: "M0 0H1V1Z",
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+              },
+              {
+                id: "legacy-rect",
+                type: "rect",
+                width: 100,
+                height: 120,
+                frame: { x: 0, y: 0, width: 100, height: 120 },
+              },
+              {
+                id: "legacy-text",
+                type: "text",
+                text: "Legacy",
                 frame: { x: 0, y: 0, width: 100, height: 120 },
               },
             ],
@@ -337,10 +391,10 @@ function testImageObjectDoesNotRequireSource() {
     ],
   });
 
-  assertDeepEqual(
-    diagnostics,
-    [],
-    "image objects and image assets should allow empty src",
+  assertEqual(
+    doc.surfaces[0].layers[0].objects?.length ?? 0,
+    0,
+    "objects without source and legacy type-only objects should be dropped",
   );
 }
 
@@ -359,7 +413,6 @@ function testSourceObjectNormalizesSource() {
             objects: [
               {
                 id: "cutline",
-                type: "object",
                 frame: { x: 0, y: 0, width: 50, height: 50 },
                 source: {
                   kind: "shape",
@@ -376,7 +429,6 @@ function testSourceObjectNormalizesSource() {
               },
               {
                 id: "artwork",
-                type: "object",
                 frame: { x: 0, y: 0, width: 50, height: 50 },
                 source: {
                   kind: "url",
@@ -386,7 +438,6 @@ function testSourceObjectNormalizesSource() {
               },
               {
                 id: "invalid",
-                type: "object",
                 frame: { x: 0, y: 0, width: 10, height: 10 },
                 source: { kind: "url", url: "" },
               },
@@ -400,9 +451,8 @@ function testSourceObjectNormalizesSource() {
   const objects = doc.surfaces[0].layers[0].objects;
   assertEqual(objects?.length, 2, "invalid source object should be dropped");
   const cutline = objects?.[0];
-  assertEqual(cutline?.type, "object", "shape source object should normalize");
   assertDeepEqual(
-    cutline?.type === "object" ? cutline.source : undefined,
+    cutline?.source,
     {
       kind: "shape",
       shape: "circle",
@@ -421,7 +471,7 @@ function testSourceObjectNormalizesSource() {
     "source object should keep existing effects",
   );
   assertDeepEqual(
-    objects?.[1]?.type === "object" ? objects[1].source : undefined,
+    objects?.[1]?.source,
     {
       kind: "url",
       url: "/art.png",
@@ -485,8 +535,8 @@ function testImageObjectRequiresFrame() {
             objects: [
               {
                 id: "image",
-                type: "image",
                 src: "/image.png",
+                source: { kind: "url", url: "/image.png" },
               },
             ],
           },
@@ -505,7 +555,6 @@ function testValidationStructureAndReferences() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
-    assets: [{ id: "template", type: "image", src: "/template.png" }],
     surfaces: [
       {
         id: "front",
@@ -517,8 +566,8 @@ function testValidationStructureAndReferences() {
             objects: [
               {
                 id: "img",
-                type: "image",
                 frame: { x: 0, y: 0, width: 1, height: 1 },
+                source: { kind: "url", url: "/template.png" },
               },
             ],
           },
@@ -559,7 +608,7 @@ function testCustomValidatorDiagnostics() {
         {
           id: "front",
           size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
+          frames: TEST_SURFACE_FRAMES,
           layers: [
             {
               id: "layer",
@@ -627,10 +676,12 @@ function testInjectedEffectCapabilityResolution() {
               objects: [
                 {
                   id: "image",
-                  type: "rect",
                   frame: { x: 0, y: 0, width: 1, height: 1 },
-                  width: 1,
-                  height: 1,
+                  source: {
+                    kind: "shape",
+                    shape: "rect",
+                    params: { width: 1, height: 1 },
+                  },
                   effects: [
                     { type: "constraint" },
                     {
@@ -668,10 +719,12 @@ function testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint() {
             objects: [
               {
                 id: "image",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 1, height: 1 },
-                width: 1,
-                height: 1,
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 1, height: 1 },
+                },
                 effects: [
                   { type: "constraint" },
                   {
@@ -690,7 +743,11 @@ function testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint() {
   });
 
   const effects = doc.surfaces[0].layers[0].objects?.[0]?.effects ?? [];
-  assertEqual(effects.length, 2, "generic and object constraints should both remain");
+  assertEqual(
+    effects.length,
+    2,
+    "generic and object constraints should both remain",
+  );
   assert(
     isGenericEditorEffect(effects[0]),
     "generic constraint should remain a generic editor effect",
@@ -757,15 +814,19 @@ function testRequirePolicyDiagnostics() {
   const generic = collectEditorDocumentCapabilityRequirements(doc, {
     resolveEffectCapabilityId: resolveTestEffectCapabilityId,
   });
-  assertEqual(generic.requirements.length, 2, "ignored effect should be skipped");
+  assertEqual(
+    generic.requirements.length,
+    2,
+    "ignored effect should be skipped",
+  );
 }
 
 function main() {
   testNormalizeDefaults();
   testLegacyObjectInteractionIsIgnored();
   testLegacyObjectConstraintsAreIgnored();
-  testV2ImagePlacementImageDoesNotRequireSource();
-  testImageObjectDoesNotRequireSource();
+  testImagePlacementObjectDoesNotRequireLegacySrc();
+  testObjectWithoutSourceIsDropped();
   testSourceObjectNormalizesSource();
   testV2DocumentIsRejected();
   testDocumentConfigIsRequired();

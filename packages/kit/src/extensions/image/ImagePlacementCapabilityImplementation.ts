@@ -37,8 +37,8 @@ import {
 import type {
   EditorDocument,
   EditorEffect,
-  EditorImageObject,
   EditorLayer,
+  EditorObject,
   EditorObjectEffect,
   EditorSurface,
 } from "@pooder/document";
@@ -231,6 +231,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isEditorEffect(effect: EditorObjectEffect): effect is EditorEffect {
   return isGenericEditorEffect(effect);
+}
+
+function isImageObjectSource(source: EditorObject["source"]): boolean {
+  return (
+    source.kind === "url" ||
+    source.kind === "data-url" ||
+    source.kind === "blob-url"
+  );
+}
+
+function readImageObjectSourceUrl(
+  source: EditorObject["source"],
+): string | undefined {
+  if (source.kind === "url" || source.kind === "blob-url") return source.url;
+  if (source.kind === "data-url") return source.dataUrl;
+  return undefined;
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -883,7 +899,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private resolveDocumentObjectCommitTarget(
-    object: EditorImageObject,
+    object: EditorObject,
     payload: ImagePlacementEffectPayload,
   ): ImagePlacementCommitTarget {
     if (isRecord(payload.commitTarget)) {
@@ -910,12 +926,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   ): {
     surface: EditorSurface;
     layer: EditorLayer;
-    object: EditorImageObject;
+    object: EditorObject;
   } | null {
     for (const surface of document.surfaces) {
       for (const layer of surface.layers) {
         const object = layer.objects?.find((item) => item.id === objectId);
-        if (object?.type === "image") {
+        if (object && isImageObjectSource(object.source)) {
           return { surface, layer, object };
         }
       }
@@ -925,7 +941,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private resolveDocumentImageState(
     _document: EditorDocument,
-    object: EditorImageObject,
+    object: EditorObject,
   ): ImagePlacementImageState | undefined {
     const placementMetadata = isRecord(object.metadata?.imagePlacement)
       ? object.metadata.imagePlacement
@@ -934,7 +950,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ? placementMetadata.source
       : undefined;
     const src =
-      typeof source?.src === "string" && source.src ? source.src : object.src;
+      typeof source?.src === "string" && source.src
+        ? source.src
+        : readImageObjectSourceUrl(object.source);
     const placementTransform = readMetadataSourceTransform(placementMetadata, {
       left: 0.5,
       top: 0.5,
@@ -956,7 +974,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private resolveDocumentCommittedImage(
     _document: EditorDocument,
-    object: EditorImageObject,
+    object: EditorObject,
   ): ImagePlacementImageState | undefined {
     const metadata = isRecord(object.metadata?.imagePlacement)
       ? object.metadata.imagePlacement
@@ -1074,16 +1092,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             normalizeConfigurableVisualCommitTarget(
               node.data.configurableVisual,
             ) ?? { type: "document-object", objectId: node.subjectId },
-          ...(node.visual?.src
-            ? {
-                image: {
-                  src: node.visual.src,
-                  ...(node.visual.metadata
-                    ? { metadata: node.visual.metadata }
-                    : {}),
-                },
-              }
-            : {}),
         },
       },
       effects: node.effects,

@@ -178,10 +178,7 @@ async function testPaperPathGeometryProviderUtilities() {
     { x: 0, y: 0 },
     "paper path geometry should expose sampling through core utilities",
   );
-  const normal = snapshot.utilities?.normalAt?.(
-    { x: 50, y: 10 },
-    { snapshot },
-  );
+  const normal = snapshot.utilities?.normalAt?.({ x: 50, y: 10 }, { snapshot });
   assert(
     Boolean(normal && Number.isFinite(normal.x) && Number.isFinite(normal.y)),
     "paper path geometry should expose normals through core utilities",
@@ -296,7 +293,10 @@ class FakeCanvasService {
       const data = object?.data ?? {};
       const layerId = data.layerId ?? data.passId ?? object.layerId;
       const type = data.type ?? object.type;
-      if (options.visible !== undefined && object?.visible !== options.visible) {
+      if (
+        options.visible !== undefined &&
+        object?.visible !== options.visible
+      ) {
         return false;
       }
       if (options.layerIds?.length && !options.layerIds.includes(layerId)) {
@@ -914,7 +914,8 @@ function testContributionCompatibility() {
   );
   for (const command of [...designExportCommands, ...dielineCommands]) {
     assert(
-      command.command.includes(".") || allowedLegacyCommands.has(command.command),
+      command.command.includes(".") ||
+        allowedLegacyCommands.has(command.command),
       `unnamespaced command "${command.command}" must be listed as a legacy bridge`,
     );
   }
@@ -927,7 +928,11 @@ function testContributionCompatibility() {
     },
   })[0];
   void exportCommand.handler?.({});
-  assertEqual(exportCalls, 1, "exportImage bridge should delegate export facade");
+  assertEqual(
+    exportCalls,
+    1,
+    "exportImage bridge should delegate export facade",
+  );
 
   const calls: string[] = [];
   const delegatedDielineCommands = createDielineCommands({
@@ -1335,7 +1340,9 @@ async function testSceneExportCapabilityExtension() {
     );
   }
 
-  exportService.error = new Error("browser-scene-export-output-mask-source-missing");
+  exportService.error = new Error(
+    "browser-scene-export-output-mask-source-missing",
+  );
   try {
     await facade.exportImage({
       outputMask: { sourceKey: "templateFrame" },
@@ -1406,8 +1413,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     "mirror capability factory should activate",
   );
   assert(
-    runtime.extensions.getState(SCENE_EXPORT_CAPABILITY_ID)?.state ===
-      "active",
+    runtime.extensions.getState(SCENE_EXPORT_CAPABILITY_ID)?.state === "active",
     "scene export capability factory should activate",
   );
   await runtime.dispose();
@@ -1415,7 +1421,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
 
 function testCreateKitCapabilitiesForDocument() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1434,8 +1440,8 @@ function testCreateKitCapabilitiesForDocument() {
             objects: [
               {
                 id: "placement",
-                type: "image",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: { kind: "url", url: "/placement.png" },
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
                   { type: "clip", payload: { source: { type: "dieline" } } },
@@ -1473,7 +1479,7 @@ function testCreateKitCapabilitiesForDocument() {
 
 function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1486,8 +1492,8 @@ function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
             objects: [
               {
                 id: "front.image.user",
-                type: "image",
                 frame: { x: 0, y: 0, width: 100, height: 100 },
+                source: { kind: "url", url: "/placement.png" },
                 effects: [{ type: "image-placement" }],
               },
             ],
@@ -1533,12 +1539,8 @@ async function testApplyKitEditorDocument() {
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
   const document = {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
-    assets: [
-      { id: "template", type: "image", src: "/template.png" },
-      { id: "photo", type: "image", src: "/photo.png" },
-    ],
     surfaces: [
       {
         id: "front",
@@ -1553,17 +1555,20 @@ async function testApplyKitEditorDocument() {
             objects: [
               {
                 id: "front-bg",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 100, height: 120 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 100, height: 120 },
+                },
                 style: { fill: "#eeeeee" },
                 locked: true,
               },
               {
                 id: "front-template-image",
-                type: "image",
-                src: "/template.png",
                 tags: [" mockup ", "object-overlay", "shared", "mockup", ""],
                 frame: { x: 0, y: 0, width: 100, height: 120 },
+                source: { kind: "url", url: "/template.png" },
                 effects: [
                   {
                     type: "configurable-visual",
@@ -1586,8 +1591,7 @@ async function testApplyKitEditorDocument() {
             objects: [
               {
                 id: "front-placement",
-                type: "image",
-                src: "/photo.png",
+                source: { kind: "url", url: "/photo.png" },
                 metadata: {
                   imagePlacement: {
                     source: { src: "/photo.png" },
@@ -1748,12 +1752,14 @@ async function testApplyKitEditorDocument() {
     "clip render intent should attach a local object clip effect",
   );
   assertEqual(
-    "targetLayerIds" in ((clipEffect ?? {}) as unknown as Record<string, unknown>),
+    "targetLayerIds" in
+      ((clipEffect ?? {}) as unknown as Record<string, unknown>),
     false,
     "clip render intent should not emit global target selectors",
   );
   assertEqual(
-    "targetSubjectIds" in ((clipEffect ?? {}) as unknown as Record<string, unknown>),
+    "targetSubjectIds" in
+      ((clipEffect ?? {}) as unknown as Record<string, unknown>),
     false,
     "clip render intent should not emit global subject selectors",
   );
@@ -1767,9 +1773,8 @@ async function testApplyKitEditorDocument() {
     "feature effect should compile to declarative render graph data",
   );
   assertEqual(
-    runtime.services
-      .getOrThrow(SURFACE_FRAME_SERVICE)
-      .getFrames("front")?.previewBounds.widthMm,
+    runtime.services.getOrThrow(SURFACE_FRAME_SERVICE).getFrames("front")
+      ?.previewBounds.widthMm,
     TEST_SURFACE_FRAMES.previewBounds.widthMm,
     "document apply should import surface frames",
   );
@@ -1779,7 +1784,7 @@ async function testApplyKitEditorDocument() {
 async function testApplyKitEditorDocumentStacksGuideLayersAboveRuntimeOverlays() {
   const runtime = new Pooder();
   const document = {
-    version: 4 as const,
+    version: 5 as const,
     config: {},
     surfaces: [
       {
@@ -1794,7 +1799,6 @@ async function testApplyKitEditorDocumentStacksGuideLayersAboveRuntimeOverlays()
             objects: [
               {
                 id: "front.dieline.cutline",
-                type: "object" as const,
                 frame: { x: 0, y: 0, width: 100, height: 100 },
                 source: {
                   kind: "shape" as const,
@@ -1832,7 +1836,7 @@ async function testApplyKitEditorDocumentRefreshesImagePlacementOverlay() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
   const document = {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1846,8 +1850,8 @@ async function testApplyKitEditorDocumentRefreshesImagePlacementOverlay() {
             objects: [
               {
                 id: "front.image.user",
-                type: "image",
                 frame: { x: 0, y: 0, width: 697, height: 957 },
+                source: { kind: "url", url: "/placeholder.png" },
                 effects: [
                   {
                     type: "image-placement",
@@ -1893,7 +1897,7 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
   await runtime.extensions.flushActivation();
 
   const document = {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1906,10 +1910,12 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
             objects: [
               {
                 id: "horizontal-object",
-                type: "rect",
-                width: 10,
-                height: 20,
                 frame: { x: 1, y: 2, width: 10, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 10, height: 20 },
+                },
                 transform: {
                   left: 4,
                   top: 6,
@@ -1928,10 +1934,12 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
               },
               {
                 id: "vertical-object",
-                type: "rect",
-                width: 10,
-                height: 20,
                 frame: { x: 10, y: 20, width: 10, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 10, height: 20 },
+                },
                 transform: { scaleX: -4, scaleY: -5 },
                 effects: [
                   {
@@ -1943,10 +1951,12 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
               },
               {
                 id: "both-object",
-                type: "rect",
-                width: 10,
-                height: 20,
                 frame: { x: 20, y: 30, width: 10, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 10, height: 20 },
+                },
                 transform: { scaleX: -2, scaleY: 3 },
                 effects: [
                   {
@@ -2012,9 +2022,8 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
     "double-axis mirror effect should force both scale signs",
   );
 
-  const facade = runtime.capabilities.getOrThrow<MirrorCapabilityApi>(
-    MIRROR_CAPABILITY_ID,
-  );
+  const facade =
+    runtime.capabilities.getOrThrow<MirrorCapabilityApi>(MIRROR_CAPABILITY_ID);
   assertDeepEqual(
     facade.getObjectMirror({ objectId: "horizontal-object" }),
     { horizontal: true, vertical: false },
@@ -2071,8 +2080,10 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
     "mirror facade clear should restore document effect state",
   );
   assert(
-    facade.setObjectMirror({ objectId: "missing-object" }, { horizontal: true }) ===
-      false,
+    facade.setObjectMirror(
+      { objectId: "missing-object" },
+      { horizontal: true },
+    ) === false,
     "mirror facade should reject missing objects",
   );
 
@@ -2081,7 +2092,7 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
 
 async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
   const baseDocument = {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2094,10 +2105,12 @@ async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
             objects: [
               {
                 id: "object",
-                type: "rect",
-                width: 10,
-                height: 20,
                 frame: { x: 1, y: 2, width: 10, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 10, height: 20 },
+                },
                 effects: [
                   {
                     type: "mirror",
@@ -2114,15 +2127,17 @@ async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
   const documentRuntime = new Pooder();
   documentRuntime.extensions.register(new MirrorCapabilityExtension());
   await documentRuntime.extensions.flushActivation();
-  const documentResult = await applyKitEditorDocument(documentRuntime, baseDocument);
+  const documentResult = await applyKitEditorDocument(
+    documentRuntime,
+    baseDocument,
+  );
   assert(
     documentResult.ok,
     `document patch apply should succeed (${JSON.stringify(documentResult.diagnostics)})`,
   );
   const documentNode = documentRuntime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
-    .getGraph()
-    .layers[0]?.nodes[0];
+    .getGraph().layers[0]?.nodes[0];
 
   const runtimeDocument = {
     ...baseDocument,
@@ -2177,8 +2192,7 @@ async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
     });
   const runtimeNode = runtimePatchRuntime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
-    .getGraph()
-    .layers[0]?.nodes[0];
+    .getGraph().layers[0]?.nodes[0];
 
   assertDeepEqual(
     {
@@ -2200,7 +2214,7 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
   const runtime = new Pooder();
   const controller = createKitEditorDocumentController(runtime);
   const document = {
-    version: 4,
+    version: 5,
     config: {
       ...TEST_DOCUMENT_CONFIG,
       "dieline.shape": "rect",
@@ -2216,7 +2230,6 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
             objects: [
               {
                 id: "cutline",
-                type: "object",
                 frame: { x: 0, y: 0, width: 100, height: 50 },
                 source: {
                   kind: "shape",
@@ -2255,18 +2268,22 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
   runtime.config.update("dieline.shape", "custom");
   const pathData = "M 0 0 L 40 0 L 40 20 Z";
   const detectedFrame = { x: 10, y: 12, width: 80, height: 40 };
-  const updated = await controller.updateObjectSource("cutline", {
-    kind: "path",
-    pathData,
-    sourceSize: { width: 40, height: 20 },
-  }, {
-    frame: detectedFrame,
-    style: {
-      fill: "transparent",
-      stroke: "#ef4444",
-      strokeWidth: 2,
+  const updated = await controller.updateObjectSource(
+    "cutline",
+    {
+      kind: "path",
+      pathData,
+      sourceSize: { width: 40, height: 20 },
     },
-  });
+    {
+      frame: detectedFrame,
+      style: {
+        fill: "transparent",
+        stroke: "#ef4444",
+        strokeWidth: 2,
+      },
+    },
+  );
 
   assert(updated, "document controller should update object sources");
   const exported = controller.export() as any;
@@ -2341,15 +2358,22 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
 
   const offsetPathData = "M 20 30 L 60 30 L 60 50 L 20 50 Z";
   const offsetFrame = { x: 10, y: 12, width: 80, height: 80 };
-  const offsetUpdated = await controller.updateObjectSource("cutline", {
-    kind: "path",
-    pathData: offsetPathData,
-    sourceBounds: { x: 20, y: 30, width: 40, height: 20 },
-    sourceSize: { width: 100, height: 100 },
-  }, {
-    frame: offsetFrame,
-  });
-  assert(offsetUpdated, "document controller should update offset path sources");
+  const offsetUpdated = await controller.updateObjectSource(
+    "cutline",
+    {
+      kind: "path",
+      pathData: offsetPathData,
+      sourceBounds: { x: 20, y: 30, width: 40, height: 20 },
+      sourceSize: { width: 100, height: 100 },
+    },
+    {
+      frame: offsetFrame,
+    },
+  );
+  assert(
+    offsetUpdated,
+    "document controller should update offset path sources",
+  );
 
   const offsetNode = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
@@ -2373,7 +2397,7 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
 async function testApplyKitEditorDocumentObjectInteraction() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2386,14 +2410,22 @@ async function testApplyKitEditorDocumentObjectInteraction() {
             objects: [
               {
                 id: "legacy-locked",
-                type: "rect",
                 locked: true,
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
               },
               {
                 id: "explicit-interaction",
-                type: "rect",
                 locked: true,
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 interaction: {
                   selectable: true,
                   evented: true,
@@ -2403,8 +2435,12 @@ async function testApplyKitEditorDocumentObjectInteraction() {
               },
               {
                 id: "interaction-locked",
-                type: "rect",
                 locked: false,
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 interaction: { locked: true },
                 frame: { x: 50, y: 0, width: 20, height: 20 },
               },
@@ -2420,7 +2456,10 @@ async function testApplyKitEditorDocumentObjectInteraction() {
     `document interaction apply should succeed (${JSON.stringify(result.diagnostics)})`,
   );
   assert(
-    !("interaction" in (result.document.surfaces[0].layers[0].objects?.[1] ?? {})),
+    !(
+      "interaction" in
+      (result.document.surfaces[0].layers[0].objects?.[1] ?? {})
+    ),
     "legacy object interaction should not remain on the normalized document",
   );
 
@@ -2468,7 +2507,7 @@ async function testApplyKitEditorDocumentObjectInteraction() {
 async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
   const runtime = new Pooder();
   const document = {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2481,8 +2520,12 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
             objects: [
               {
                 id: "interaction-only",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 effects: [
                   {
                     type: "interaction",
@@ -2503,8 +2546,12 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
               },
               {
                 id: "constraint-only",
-                type: "rect",
                 frame: { x: 25, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 effects: [
                   {
                     type: "constraint",
@@ -2524,8 +2571,12 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
               },
               {
                 id: "interactive-constrained",
-                type: "rect",
                 frame: { x: 50, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 effects: [
                   {
                     type: "constraint",
@@ -2659,7 +2710,7 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
 async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2672,8 +2723,12 @@ async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
             objects: [
               {
                 id: "legacy",
-                type: "rect",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
                 effects: [
                   {
                     type: "interaction-component",
@@ -2718,7 +2773,7 @@ async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2751,7 +2806,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 
   const optionalRuntime = new Pooder();
   const optionalResult = await applyKitEditorDocument(optionalRuntime, {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2811,22 +2866,21 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   const missingCompilerResult = await applyKitEditorDocument(
     missingCompilerRuntime,
     {
-      version: 4,
+      version: 5,
       config: TEST_DOCUMENT_CONFIG,
       surfaces: [
         {
           id: "front",
           size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
+          frames: TEST_SURFACE_FRAMES,
           layers: [
             {
               id: "front-artwork",
               objects: [
                 {
                   id: "template",
-                  type: "image",
-                  src: "/template.png",
                   frame: { x: 0, y: 0, width: 1, height: 1 },
+                  source: { kind: "url", url: "/template.png" },
                   effects: [{ type: "configurable-visual", require: "strict" }],
                 },
               ],
@@ -2866,7 +2920,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   });
   await throwRuntime.extensions.flushActivation();
   const throwResult = await applyKitEditorDocument(throwRuntime, {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2879,9 +2933,8 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
             objects: [
               {
                 id: "template",
-                type: "image",
-                src: "/template.png",
                 frame: { x: 0, y: 0, width: 1, height: 1 },
+                source: { kind: "url", url: "/template.png" },
                 effects: [{ type: "configurable-visual", require: "warn" }],
               },
             ],
@@ -3418,8 +3471,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     top: 0.4,
   });
   await driver.completeSession();
-  const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
-    ?.imagePlacement?.image;
+  const committedImage = (
+    scene.selectOneElement({ ids: ["placement"] })?.data as any
+  )?.imagePlacement?.image;
   assertEqual(
     committedImage.src,
     "data:image/png;base64,cropped-placement",
@@ -3816,8 +3870,9 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   };
 
   await driver.completeSession("placement");
-  const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
-    ?.imagePlacement?.image;
+  const committedImage = (
+    scene.selectOneElement({ ids: ["placement"] })?.data as any
+  )?.imagePlacement?.image;
   assertDeepEqual(
     committedImage.metadata?.transform,
     {
@@ -3906,8 +3961,9 @@ async function testImagePlacementCommittedExportUsesObjectUrl() {
     });
     await driver.completeSession("placement");
 
-    const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
-      ?.imagePlacement?.image;
+    const committedImage = (
+      scene.selectOneElement({ ids: ["placement"] })?.data as any
+    )?.imagePlacement?.image;
     assertEqual(
       fetchedUrl,
       dataUrl,
@@ -4186,8 +4242,9 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
   );
 
   await driver.completeSession(sessionInput);
-  const committedImage = (scene.selectOneElement({ ids: ["placement"] })?.data as any)
-    ?.imagePlacement?.image;
+  const committedImage = (
+    scene.selectOneElement({ ids: ["placement"] })?.data as any
+  )?.imagePlacement?.image;
   assertEqual(
     committedImage.src,
     "data:image/png;base64,business-session",
@@ -4715,7 +4772,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -4728,9 +4785,8 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
             objects: [
               {
                 id: "front.flash-base",
-                type: "image",
-                src: "/default-flash.png",
                 frame: { x: 0, y: 0, width: 200, height: 100 },
+                source: { kind: "url", url: "/default-flash.png" },
                 effects: [
                   {
                     type: "configurable-visual",
@@ -4828,7 +4884,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   );
   await runtimeWithPersistedConfig.extensions.flushActivation();
   await applyKitEditorDocument(runtimeWithPersistedConfig, {
-    version: 4,
+    version: 5,
     config: {
       ...TEST_DOCUMENT_CONFIG,
       configurableVisual: {
@@ -4849,8 +4905,8 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
             objects: [
               {
                 id: "front.flash-base",
-                type: "image",
                 frame: { x: 0, y: 0, width: 200, height: 100 },
+                source: { kind: "url", url: "/default-flash.png" },
                 effects: [
                   {
                     type: "configurable-visual",
@@ -4907,7 +4963,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 4,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -4920,8 +4976,8 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
             objects: [
               {
                 id: "front.image.user",
-                type: "image",
                 frame: { x: 0, y: 0, width: 100, height: 100 },
+                source: { kind: "url", url: "/placeholder.png" },
                 effects: [
                   {
                     type: "image-placement",
@@ -5004,7 +5060,9 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   }
 
   const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
-  const configurableVisualConfig = runtime.config.get("configurableVisual") as any;
+  const configurableVisualConfig = runtime.config.get(
+    "configurableVisual",
+  ) as any;
   assertEqual(
     configurableVisualConfig?.["front.image.user"]?.source?.src,
     "blob:front-image-original",
@@ -5126,7 +5184,7 @@ async function testFeatureCapabilityUsesObjectEffectState() {
     radius: 4,
   };
   const document = {
-    version: 4 as const,
+    version: 5 as const,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -5141,7 +5199,6 @@ async function testFeatureCapabilityUsesObjectEffectState() {
             objects: [
               {
                 id: "front.dieline.cutline",
-                type: "object" as const,
                 frame: { x: 0, y: 0, width: 100, height: 100 },
                 metadata: { role: "dieline" },
                 source: {
@@ -5221,7 +5278,9 @@ async function testFeatureCapabilityUsesObjectEffectState() {
   assert(
     sessionGraph.layers
       .flatMap((layer) => layer.nodes)
-      .some((node) => node.id.startsWith("feature.session.dieline") && node.visible),
+      .some(
+        (node) => node.id.startsWith("feature.session.dieline") && node.visible,
+      ),
     "active feature session should render the session dieline",
   );
 
@@ -5262,7 +5321,7 @@ async function testKitEditorDocumentControllerMutatesObjectEffects() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
   const document = {
-    version: 4 as const,
+    version: 5 as const,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -5276,7 +5335,6 @@ async function testKitEditorDocumentControllerMutatesObjectEffects() {
             objects: [
               {
                 id: "front.dieline.cutline",
-                type: "object" as const,
                 frame: { x: 0, y: 0, width: 100, height: 100 },
                 source: {
                   kind: "shape" as const,
@@ -5316,7 +5374,10 @@ async function testKitEditorDocumentControllerMutatesObjectEffects() {
   );
   await runtime.extensions.flushActivation();
   const applyResult = await controller.apply(document);
-  assert(applyResult.ok, "document controller should apply source object document");
+  assert(
+    applyResult.ok,
+    "document controller should apply source object document",
+  );
 
   const nextFeature = {
     id: "saved-hole",
@@ -5326,12 +5387,15 @@ async function testKitEditorDocumentControllerMutatesObjectEffects() {
     y: 0.2,
     radius: 3,
   };
-  const updated = await controller.updateObjectEffects("front.dieline.cutline", [
-    {
-      type: "feature",
-      payload: { features: [nextFeature], target: "both" },
-    },
-  ]);
+  const updated = await controller.updateObjectEffects(
+    "front.dieline.cutline",
+    [
+      {
+        type: "feature",
+        payload: { features: [nextFeature], target: "both" },
+      },
+    ],
+  );
   assert(updated, "document controller should update object effects");
   const cutline = controller
     .export()

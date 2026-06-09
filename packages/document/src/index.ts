@@ -1,4 +1,4 @@
-export const EDITOR_DOCUMENT_VERSION = 4 as const;
+export const EDITOR_DOCUMENT_VERSION = 5 as const;
 
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
@@ -48,16 +48,8 @@ export interface EditorDocument {
   version: EditorDocumentVersion;
   config: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  assets?: EditorAsset[];
   surfaces: EditorSurface[];
   views?: EditorView[];
-}
-
-export interface EditorAsset {
-  id: string;
-  type: "image" | string;
-  src?: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface EditorSurface {
@@ -154,42 +146,15 @@ export type ObjectSource =
       kind: "shape";
       shape: "rect" | "circle" | "ellipse" | "heart";
       params: Record<string, unknown>;
+    }
+  | {
+      kind: "text";
+      text: string;
     };
 
-export interface EditorSourceObject extends EditorObjectBase {
-  type: "object";
+export interface EditorObject extends EditorObjectBase {
   source: ObjectSource;
 }
-
-export interface EditorImageObject extends EditorObjectBase {
-  type: "image";
-  src?: string;
-  width?: number;
-  height?: number;
-}
-
-export interface EditorPathObject extends EditorObjectBase {
-  type: "path";
-  path: string;
-}
-
-export interface EditorRectObject extends EditorObjectBase {
-  type: "rect";
-  width: number;
-  height: number;
-}
-
-export interface EditorTextObject extends EditorObjectBase {
-  type: "text";
-  text: string;
-}
-
-export type EditorObject =
-  | EditorSourceObject
-  | EditorImageObject
-  | EditorPathObject
-  | EditorRectObject
-  | EditorTextObject;
 
 export interface EditorEffect<TPayload = Record<string, unknown>> {
   id?: string;
@@ -425,6 +390,12 @@ function normalizeObjectSource(value: unknown): ObjectSource | null {
         params: isRecord(value.params) ? cloneRecord(value.params) : {},
       };
     }
+    case "text": {
+      return {
+        kind: "text",
+        text: typeof value.text === "string" ? value.text : "",
+      };
+    }
     default:
       return null;
   }
@@ -652,7 +623,8 @@ function normalizeObjectEffects(
 function normalizeObject(value: unknown, order: number): EditorObject | null {
   if (!isRecord(value)) return null;
   const id = normalizeId(value.id);
-  const type = normalizeId(value.type);
+  const source = normalizeObjectSource(value.source);
+  if (!source) return null;
   const base = {
     id,
     order:
@@ -670,48 +642,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     effects: normalizeObjectEffects(value.effects),
     frame: normalizeRect(value.frame),
   };
-
-  switch (type) {
-    case "object": {
-      const source = normalizeObjectSource(value.source);
-      return source ? { ...base, type, source } : null;
-    }
-    case "image": {
-      const src = normalizeId(value.src);
-      return {
-        ...base,
-        type,
-        ...(src ? { src } : {}),
-        ...(normalizePositiveNumber(value.width) !== undefined
-          ? { width: normalizePositiveNumber(value.width) }
-          : {}),
-        ...(normalizePositiveNumber(value.height) !== undefined
-          ? { height: normalizePositiveNumber(value.height) }
-          : {}),
-      };
-    }
-    case "path":
-      return {
-        ...base,
-        type,
-        path: typeof value.path === "string" ? value.path : "",
-      };
-    case "rect":
-      return {
-        ...base,
-        type,
-        width: normalizePositiveNumber(value.width) ?? 1,
-        height: normalizePositiveNumber(value.height) ?? 1,
-      };
-    case "text":
-      return {
-        ...base,
-        type,
-        text: typeof value.text === "string" ? value.text : "",
-      };
-    default:
-      return null;
-  }
+  return { ...base, source };
 }
 
 function normalizeLayer(value: unknown, order: number): EditorLayer | null {
@@ -778,21 +709,6 @@ function normalizeSurface(value: unknown): EditorSurface | null {
   };
 }
 
-function normalizeAsset(value: unknown): EditorAsset | null {
-  if (!isRecord(value)) return null;
-  const id = normalizeId(value.id);
-  const type = normalizeId(value.type) || "image";
-  const src = normalizeId(value.src);
-  return {
-    id,
-    type,
-    ...(src ? { src } : {}),
-    ...(isRecord(value.metadata)
-      ? { metadata: cloneRecord(value.metadata) }
-      : {}),
-  };
-}
-
 function normalizeView(value: unknown): EditorView | null {
   if (!isRecord(value)) return null;
   const surfaceIds = Array.isArray(value.surfaceIds)
@@ -816,11 +732,6 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
         .map(normalizeSurface)
         .filter((item): item is EditorSurface => Boolean(item))
     : [];
-  const assets = Array.isArray(input.assets)
-    ? input.assets
-        .map(normalizeAsset)
-        .filter((item): item is EditorAsset => Boolean(item))
-    : [];
   const explicitViews = Array.isArray(input.views)
     ? input.views
         .map(normalizeView)
@@ -840,7 +751,6 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
     ...(isRecord(input.metadata)
       ? { metadata: cloneRecord(input.metadata) }
       : {}),
-    ...(assets.length ? { assets } : {}),
     surfaces,
     ...(views.length ? { views } : {}),
   };
@@ -1001,7 +911,6 @@ export function validateEditorDocument(
   }
 
   const document = normalizeEditorDocument(value);
-  const assetIdentifiers = new Set<string>();
   const surfaceIds = new Set<string>();
   const layerIds = new Set<string>();
   const objectIds = new Set<string>();
@@ -1012,16 +921,6 @@ export function validateEditorDocument(
   runValidators(diagnostics, options.validators, {
     document,
     path: "",
-  });
-
-  document.assets?.forEach((asset, index) => {
-    validateUniqueId(
-      diagnostics,
-      assetIdentifiers,
-      asset.id,
-      `assets[${index}].id`,
-      "asset",
-    );
   });
 
   if (!document.surfaces.length) {
@@ -1198,11 +1097,11 @@ function collectEffects(
       );
       layer.objects?.forEach((object, objectIndex) => {
         const objectPath = `${layerPath}.objects[${objectIndex}]`;
-          object.effects?.forEach((effect, effectIndex) => {
-            if (isGenericEditorEffect(effect)) {
-              visit(effect, `${objectPath}.effects[${effectIndex}]`);
-            }
-          });
+        object.effects?.forEach((effect, effectIndex) => {
+          if (isGenericEditorEffect(effect)) {
+            visit(effect, `${objectPath}.effects[${effectIndex}]`);
+          }
+        });
       });
     });
   });

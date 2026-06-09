@@ -74,7 +74,9 @@ function createRuntime() {
       },
       services: {
         getOrThrow<T extends Service>(identifier: ServiceIdentifier<T>): T {
-          const service = services.get(identifier as ServiceIdentifier<Service>);
+          const service = services.get(
+            identifier as ServiceIdentifier<Service>,
+          );
           if (!service) throw new Error("service missing");
           return service as T;
         },
@@ -93,8 +95,13 @@ function createRuntime() {
   };
 }
 
-function resolveTestEffectCapabilityId(effect: EditorEffect): string | undefined {
-  return effect.capabilityId || (effect.type === "custom" ? "test.effect" : undefined);
+function resolveTestEffectCapabilityId(
+  effect: EditorEffect,
+): string | undefined {
+  return (
+    effect.capabilityId ||
+    (effect.type === "custom" ? "test.effect" : undefined)
+  );
 }
 
 function testSourceResolver() {
@@ -109,9 +116,17 @@ function testSourceResolver() {
     "url source should resolve intrinsic bounds",
   );
   assert(
-    resolveObjectSource({ kind: "shape", shape: "circle", params: { radius: 10 } })
-      ?.pathData?.startsWith("M10 0"),
+    resolveObjectSource({
+      kind: "shape",
+      shape: "circle",
+      params: { radius: 10 },
+    })?.pathData?.startsWith("M10 0"),
     "shape source should resolve path data",
+  );
+  assertEqual(
+    resolveObjectSource({ kind: "text", text: "Label" })?.text,
+    "Label",
+    "text source should resolve text content",
   );
 }
 
@@ -131,7 +146,7 @@ async function testApplyEditorDocument() {
   const result = await applyEditorDocument(
     runtime,
     {
-      version: 4,
+      version: 5,
       config: { mode: "test" },
       surfaces: [
         {
@@ -144,9 +159,12 @@ async function testApplyEditorDocument() {
               objects: [
                 {
                   id: "shape",
-                  type: "object",
                   frame: { x: 10, y: 20, width: 40, height: 40 },
-                  source: { kind: "shape", shape: "rect", params: { width: 20, height: 20 } },
+                  source: {
+                    kind: "shape",
+                    shape: "rect",
+                    params: { width: 20, height: 20 },
+                  },
                   effects: [
                     { type: "custom" },
                     { type: "interactive", enabled: true },
@@ -156,6 +174,11 @@ async function testApplyEditorDocument() {
                       strategy: "inside",
                     },
                   ],
+                },
+                {
+                  id: "label",
+                  frame: { x: 5, y: 6, width: 30, height: 10 },
+                  source: { kind: "text", text: "Label" },
                 },
               ],
             },
@@ -168,11 +191,26 @@ async function testApplyEditorDocument() {
 
   assertEqual(result.ok, true, "document should apply");
   const graph = renderIntentService.getGraph();
-  const node = graph.layers[0]?.nodes[0];
+  const node = graph.layers[0]?.nodes.find((item) => item.id === "shape");
+  const labelNode = graph.layers[0]?.nodes.find((item) => item.id === "label");
   assertEqual(node?.id, "shape", "source object should become a render node");
   assertEqual(node?.type, "path", "shape source should render as path");
-  assertEqual(node?.props.compiled, true, "generic effect compiler should patch node");
-  assertEqual(node?.interaction?.enabled, true, "interactive object effect should translate");
+  assertEqual(labelNode?.type, "text", "text source should render as text");
+  assertEqual(
+    labelNode?.props.text,
+    "Label",
+    "text source should write text props",
+  );
+  assertEqual(
+    node?.props.compiled,
+    true,
+    "generic effect compiler should patch node",
+  );
+  assertEqual(
+    node?.interaction?.enabled,
+    true,
+    "interactive object effect should translate",
+  );
   assertEqual(
     node?.interaction?.constraints?.[0]?.spec.type,
     "rect.contain",

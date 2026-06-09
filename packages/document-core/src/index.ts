@@ -51,6 +51,7 @@ export interface ResolvedVisual {
   source: ObjectSource;
   pathData?: string;
   imageUrl?: string;
+  text?: string;
   bounds?: GeometryRect;
   contentBounds?: GeometryRect;
   intrinsicSize?: ObjectSize;
@@ -68,7 +69,9 @@ export class DefaultGeometryResolver implements GeometryResolver {
       const pathData = source.pathData.trim();
       if (!pathData) return null;
       const contentBounds =
-        rectToBounds(source.sourceBounds) ?? inferPathBounds(pathData) ?? undefined;
+        rectToBounds(source.sourceBounds) ??
+        inferPathBounds(pathData) ??
+        undefined;
       return {
         source,
         pathData,
@@ -93,7 +96,9 @@ export class DefaultGeometryResolver implements GeometryResolver {
 }
 
 export class SourceResolver {
-  constructor(private readonly geometryResolver: GeometryResolver = new DefaultGeometryResolver()) {}
+  constructor(
+    private readonly geometryResolver: GeometryResolver = new DefaultGeometryResolver(),
+  ) {}
 
   resolve(source: ObjectSource): ResolvedVisual | null {
     switch (source.kind) {
@@ -103,7 +108,9 @@ export class SourceResolver {
           imageUrl: source.url,
           mimeType: source.mimeType,
           intrinsicSize: source.intrinsicSize,
-          bounds: source.intrinsicSize ? sizeToBounds(source.intrinsicSize) : undefined,
+          bounds: source.intrinsicSize
+            ? sizeToBounds(source.intrinsicSize)
+            : undefined,
         };
       case "data-url":
         return {
@@ -111,25 +118,36 @@ export class SourceResolver {
           imageUrl: source.dataUrl,
           mimeType: source.mimeType,
           intrinsicSize: source.intrinsicSize,
-          bounds: source.intrinsicSize ? sizeToBounds(source.intrinsicSize) : undefined,
+          bounds: source.intrinsicSize
+            ? sizeToBounds(source.intrinsicSize)
+            : undefined,
         };
       case "blob-url":
         return {
           source,
           imageUrl: source.url,
           intrinsicSize: source.intrinsicSize,
-          bounds: source.intrinsicSize ? sizeToBounds(source.intrinsicSize) : undefined,
+          bounds: source.intrinsicSize
+            ? sizeToBounds(source.intrinsicSize)
+            : undefined,
         };
       case "path":
       case "shape":
         return this.geometryResolver.resolve(source);
+      case "text":
+        return {
+          source,
+          text: source.text,
+        };
       default:
         return null;
     }
   }
 }
 
-export function resolveObjectSource(source: ObjectSource): ResolvedVisual | null {
+export function resolveObjectSource(
+  source: ObjectSource,
+): ResolvedVisual | null {
   return new SourceResolver().resolve(source);
 }
 
@@ -431,6 +449,8 @@ function cloneObjectSource(source: ObjectSource): ObjectSource {
       };
     case "shape":
       return { ...source, params: { ...source.params } };
+    case "text":
+      return { ...source };
     default:
       return source;
   }
@@ -451,13 +471,11 @@ function cloneObjectEffects(
 function findSourceObject(
   document: EditorDocument,
   objectId: string,
-): Extract<EditorObject, { type: "object" }> | null {
+): EditorObject | null {
   for (const surface of document.surfaces) {
     for (const layer of surface.layers) {
       for (const object of layer.objects ?? []) {
-        if (object.id === objectId && object.type === "object") {
-          return object;
-        }
+        if (object.id === objectId) return object;
       }
     }
   }
@@ -466,7 +484,7 @@ function findSourceObject(
 }
 
 function createScaledPathTransform(
-  object: Extract<EditorObject, { type: "object" }>,
+  object: EditorObject,
   bounds:
     | { left: number; top: number; width: number; height: number }
     | undefined,
@@ -575,19 +593,13 @@ function createObjectRenderIntentDraft(
       surfaceId: surface.id,
       layerId: layer.id,
       objectId: object.id,
-      objectType: object.type,
+      objectType: object.source.kind,
     },
     placement: {
       frame: object.frame,
       transform: normalizeRenderIntentTransform(object),
-      width:
-        object.type === "image" || object.type === "rect"
-          ? (object.width ?? object.frame.width)
-          : object.frame.width,
-      height:
-        object.type === "image" || object.type === "rect"
-          ? (object.height ?? object.frame.height)
-          : object.frame.height,
+      width: object.frame.width,
+      height: object.frame.height,
     },
     ordering: {
       layerId: layer.id,
@@ -610,7 +622,7 @@ function createObjectRenderIntentDraft(
       id: object.id,
       layerId: layer.id,
       documentSurfaceId: surface.id,
-      documentObjectType: object.type,
+      documentObjectSourceKind: object.source.kind,
       documentLayerRole: layer.role,
       ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
@@ -618,87 +630,49 @@ function createObjectRenderIntentDraft(
     },
   } satisfies Omit<RenderIntentDraft, "visual">;
 
-  if (object.type === "image") {
+  const visual = resolveObjectSource(object.source);
+  if (!visual) return null;
+  if (visual.imageUrl) {
     return {
       ...base,
       visual: {
         type: "image",
-        ...(object.src ? { src: object.src } : {}),
+        src: visual.imageUrl,
       },
-    };
-  }
-
-  if (object.type === "path") {
-    return {
-      ...base,
-      visual: { type: "path" },
-      props: { ...base.props, path: object.path, pathData: object.path },
-    };
-  }
-
-  if (object.type === "rect") {
-    return {
-      ...base,
-      visual: { type: "rect" },
       props: {
         ...base.props,
-        width: object.width ?? object.frame.width,
-        height: object.height ?? object.frame.height,
+        source: object.source,
       },
     };
   }
-
-  if (object.type === "object") {
-    const visual = resolveObjectSource(object.source);
-    if (!visual) return null;
-    if (visual.imageUrl) {
-      return {
-        ...base,
-        visual: {
-          type: "image",
-          src: visual.imageUrl,
-        },
-        props: {
-          ...base.props,
-          source: object.source,
-        },
-      };
-    }
-    if (visual.pathData) {
-      return {
-        ...base,
-        placement: {
-          ...base.placement,
-          transform: createScaledPathTransform(
-            object,
-            visual.bounds,
-            visual.contentBounds,
-          ),
-        },
-        visual: { type: "path" },
-        props: {
-          ...base.props,
-          path: visual.pathData,
-          pathData: visual.pathData,
-          source: object.source,
-        },
-      };
-    }
-    return null;
+  if (visual.pathData) {
+    return {
+      ...base,
+      placement: {
+        ...base.placement,
+        transform: createScaledPathTransform(
+          object,
+          visual.bounds,
+          visual.contentBounds,
+        ),
+      },
+      visual: { type: "path" },
+      props: {
+        ...base.props,
+        path: visual.pathData,
+        pathData: visual.pathData,
+        source: object.source,
+      },
+    };
   }
-
-  if (object.type === "text") {
+  if (visual.text !== undefined) {
     return {
       ...base,
       visual: { type: "text" },
-      props: { ...base.props, text: object.text },
+      props: { ...base.props, text: visual.text, source: object.source },
     };
   }
-
-  return {
-    ...base,
-    visual: { type: "rect" },
-  } satisfies RenderIntentDraft;
+  return null;
 }
 
 function normalizeRenderIntentTransform(object: EditorObject) {
@@ -891,7 +865,7 @@ function resolveRenderIntentTarget(
         surfaceId: context.surface.id,
         layerId: context.layer.id,
         objectId: context.object.id,
-        objectType: context.object.type,
+        objectType: context.object.source.kind,
       };
     }
     if (context.layer) {
@@ -912,7 +886,7 @@ function resolveRenderIntentTarget(
           surfaceId: resolved.surface.id,
           layerId: resolved.layer.id,
           objectId: resolved.object.id,
-          objectType: resolved.object.type,
+          objectType: resolved.object.source.kind,
         }
       : null;
   }
@@ -1050,8 +1024,14 @@ function resolveShapeSource(
       };
     }
     case "ellipse": {
-      const rx = positiveNumber(source.params.rx, positiveNumber(source.params.width, 2) / 2);
-      const ry = positiveNumber(source.params.ry, positiveNumber(source.params.height, 2) / 2);
+      const rx = positiveNumber(
+        source.params.rx,
+        positiveNumber(source.params.width, 2) / 2,
+      );
+      const ry = positiveNumber(
+        source.params.ry,
+        positiveNumber(source.params.height, 2) / 2,
+      );
       return {
         pathData: ellipsePath(rx, ry, rx, ry),
         bounds: { left: 0, top: 0, width: rx * 2, height: ry * 2 },
@@ -1102,7 +1082,8 @@ function heartPath(width: number, height: number): string {
 }
 
 function inferPathBounds(pathData: string): GeometryRect | null {
-  const numbers = pathData.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi)?.map(Number) ?? [];
+  const numbers =
+    pathData.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi)?.map(Number) ?? [];
   const points: GeometryPoint[] = [];
   for (let index = 0; index + 1 < numbers.length; index += 2) {
     const x = numbers[index];
@@ -1151,10 +1132,12 @@ function rectToBounds(rect: ObjectRect | undefined): GeometryRect | null {
 }
 
 function containsPoint(bounds: GeometryRect, point: GeometryPoint): boolean {
-  return point.x >= bounds.left &&
+  return (
+    point.x >= bounds.left &&
     point.x <= bounds.left + bounds.width &&
     point.y >= bounds.top &&
-    point.y <= bounds.top + bounds.height;
+    point.y <= bounds.top + bounds.height
+  );
 }
 
 function positiveNumber(value: unknown, fallback: number): number {

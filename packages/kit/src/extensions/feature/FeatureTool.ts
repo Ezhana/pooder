@@ -25,7 +25,11 @@ import {
   RenderEffectSpec,
   RenderObjectSpec,
 } from "@pooder/core";
-import type { EditorDocument, EditorEffect, EditorObject } from "@pooder/document";
+import type {
+  EditorDocument,
+  EditorEffect,
+  EditorObject,
+} from "@pooder/document";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
 import { generateDielinePath } from "../geometry";
@@ -69,7 +73,7 @@ const DEFAULT_RECT_SIZE = 10;
 const DEFAULT_CIRCLE_RADIUS = 5;
 
 type MarkerPoint = { x: number; y: number };
-type FeatureSourceObject = Extract<EditorObject, { type: "object" }>;
+type FeatureSourceObject = EditorObject;
 
 interface GroupMemberOffset {
   index: number;
@@ -176,22 +180,24 @@ export class FeatureTool implements ExtensionDefinition {
     const requireDielineExtension = options.requireDielineExtension ?? false;
     this.activation = {
       requiresExtensions: requireDielineExtension ? ["pooder.kit.dieline"] : [],
-      requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
+      requiresServices: [
+        CANVAS_SERVICE,
+        CONFIGURATION_SERVICE,
+        RENDER_INTENT_SERVICE,
+      ],
     };
   }
 
   activate(context: ExtensionContext) {
     this.subscriptions.disposeAll();
     this.context = context;
-    this.canvasService = context.services.getOrThrow<CanvasService>(
-      CANVAS_SERVICE,
-    );
+    this.canvasService =
+      context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
-    this.sceneLayoutService = context.services.get<SceneLayoutService>(
-      SCENE_LAYOUT_SERVICE,
-    );
+    this.sceneLayoutService =
+      context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.surfaceFrameService = context.services.get<SurfaceFrameService>(
       SURFACE_FRAME_SERVICE,
     );
@@ -271,13 +277,9 @@ export class FeatureTool implements ExtensionDefinition {
             return this.addFeature(type);
           },
         ),
-        createLegacyCommandBridge(
-          "addHole",
-          "Add Hole",
-          () => {
-            return this.addFeature("subtract");
-          },
-        ),
+        createLegacyCommandBridge("addHole", "Add Hole", () => {
+          return this.addFeature("subtract");
+        }),
         createLegacyCommandBridge(
           "addDoubleLayerHole",
           "Add Double Layer Hole",
@@ -285,10 +287,8 @@ export class FeatureTool implements ExtensionDefinition {
             return this.addDoubleLayerHole();
           },
         ),
-        createLegacyCommandBridge(
-          "clearFeatures",
-          "Clear Features",
-          () => this.clearFeatures(),
+        createLegacyCommandBridge("clearFeatures", "Clear Features", () =>
+          this.clearFeatures(),
         ),
         createLegacyCommandBridge(
           "rollbackFeatureSession",
@@ -358,49 +358,51 @@ export class FeatureTool implements ExtensionDefinition {
       context,
       features as unknown as ConstraintFeature[],
     );
-    const markerPatches: RenderIntentPatch[] = features.map((feature, index) => {
-      const id =
-        typeof feature.id === "string" && feature.id.trim()
-          ? feature.id.trim()
-          : `feature-${index + 1}`;
-      return {
-        id: `${layerId}.${id}`,
-        subject: {
-          kind: "object" as const,
-          surfaceId: context.target.surfaceId,
-          layerId,
-          objectId: `${layerId}.${id}`,
-          objectType: "rect",
-        },
-        ordering: {
-          layerId,
-          layerOrder: 0,
-          objectOrder: index,
-          channel: "overlay" as const,
-          stack: 760,
-        },
-        visual: { type: "rect" as const },
-        placement: {
-          width: DEFAULT_RECT_SIZE,
-          height: DEFAULT_RECT_SIZE,
-        },
-        props: {
-          fill: "rgba(255,255,255,0.85)",
-          stroke: "#111827",
-          strokeWidth: FEATURE_STROKE_WIDTH,
-          selectable: false,
-          evented: false,
-          excludeFromExport: true,
-        },
-        export: {
-          visible: true,
-        },
-        data: {
-          type: "feature",
-          feature,
-        },
-      };
-    });
+    const markerPatches: RenderIntentPatch[] = features.map(
+      (feature, index) => {
+        const id =
+          typeof feature.id === "string" && feature.id.trim()
+            ? feature.id.trim()
+            : `feature-${index + 1}`;
+        return {
+          id: `${layerId}.${id}`,
+          subject: {
+            kind: "object" as const,
+            surfaceId: context.target.surfaceId,
+            layerId,
+            objectId: `${layerId}.${id}`,
+            objectType: "rect",
+          },
+          ordering: {
+            layerId,
+            layerOrder: 0,
+            objectOrder: index,
+            channel: "overlay" as const,
+            stack: 760,
+          },
+          visual: { type: "rect" as const },
+          placement: {
+            width: DEFAULT_RECT_SIZE,
+            height: DEFAULT_RECT_SIZE,
+          },
+          props: {
+            fill: "rgba(255,255,255,0.85)",
+            stroke: "#111827",
+            strokeWidth: FEATURE_STROKE_WIDTH,
+            selectable: false,
+            evented: false,
+            excludeFromExport: true,
+          },
+          export: {
+            visible: true,
+          },
+          data: {
+            type: "feature",
+            feature,
+          },
+        };
+      },
+    );
 
     return targetPatch ? [targetPatch, ...markerPatches] : markerPatches;
   }
@@ -471,9 +473,7 @@ export class FeatureTool implements ExtensionDefinition {
       for (const layer of surface.layers) {
         if (target.layerId && layer.id !== target.layerId) continue;
         for (const object of layer.objects ?? []) {
-          if (object.id === target.objectId && object.type === "object") {
-            return object;
-          }
+          if (object.id === target.objectId) return object;
         }
       }
     }
@@ -569,12 +569,15 @@ export class FeatureTool implements ExtensionDefinition {
 
   private rememberFeatureSubjectIntent(intentId: string) {
     const normalized = String(intentId || "").trim();
-    if (!normalized || this.featureSubjectIntentIds.includes(normalized)) return;
+    if (!normalized || this.featureSubjectIntentIds.includes(normalized))
+      return;
     this.featureSubjectIntentIds.push(normalized);
   }
 
   private getConfigService(): ConfigurationService | undefined {
-    return this.context?.services.get<ConfigurationService>(CONFIGURATION_SERVICE);
+    return this.context?.services.get<ConfigurationService>(
+      CONFIGURATION_SERVICE,
+    );
   }
 
   private getCommittedFeatures(): ConstraintFeature[] {
@@ -603,9 +606,10 @@ export class FeatureTool implements ExtensionDefinition {
       },
       replaceFeatures: (features, options) =>
         this.replaceFeatures(features, options),
-      resetSession: () => this.resetWorkingFeaturesFromSource().then(() => ({
-        ok: true,
-      })),
+      resetSession: () =>
+        this.resetWorkingFeaturesFromSource().then(() => ({
+          ok: true,
+        })),
       resolvePlacements: (features, geometry) =>
         resolveFeaturePlacements(features, geometry),
       rollbackSession: () => this.rollbackFeatureSession(),
@@ -880,7 +884,10 @@ export class FeatureTool implements ExtensionDefinition {
         if (!target || !this.currentGeometry) return;
 
         const feature = this.getFeatureForMarker(target);
-        const geometry = this.getGeometryForFeature(this.currentGeometry, feature);
+        const geometry = this.getGeometryForFeature(
+          this.currentGeometry,
+          feature,
+        );
         const snapped = this.constrainPosition(
           {
             x: Number(target.left || 0),
@@ -951,7 +958,9 @@ export class FeatureTool implements ExtensionDefinition {
     };
     surfaceFrameService.listSurfaceIds().forEach(observe);
     this.subscriptions.add(
-      surfaceFrameService.onAnyFramesChange((event) => observe(event.surfaceId)),
+      surfaceFrameService.onAnyFramesChange((event) =>
+        observe(event.surfaceId),
+      ),
     );
   }
 
@@ -1071,7 +1080,10 @@ export class FeatureTool implements ExtensionDefinition {
 
     const indices = this.readGroupIndices(target.data?.indices);
     if (indices.length === 0) return;
-    const offsets = this.readGroupMemberOffsets(target.data?.memberOffsets, indices);
+    const offsets = this.readGroupMemberOffsets(
+      target.data?.memberOffsets,
+      indices,
+    );
 
     const anchorCenter = {
       x: Number(target.left || 0),
@@ -1084,7 +1096,10 @@ export class FeatureTool implements ExtensionDefinition {
       const index = entry.index;
       if (index < 0 || index >= next.length) return;
       const feature = next[index];
-      const geometry = this.getGeometryForFeature(this.currentGeometry!, feature);
+      const geometry = this.getGeometryForFeature(
+        this.currentGeometry!,
+        feature,
+      );
       const normalized = this.toNormalizedPoint(
         {
           x: anchorCenter.x + entry.dx,
@@ -1238,26 +1253,26 @@ export class FeatureTool implements ExtensionDefinition {
 
     const groups = new Map<string, MarkerRenderState[]>();
     const singles: MarkerRenderState[] = [];
-    const placements = resolveFeaturePlacements(
-      this.workingFeatures,
-      {
-        shape: this.currentGeometry.shape,
-        shapeStyle: this.currentGeometry.shapeStyle,
-        pathData: this.currentGeometry.pathData,
-        customSourceWidthPx: this.currentGeometry.customSourceWidthPx,
-        customSourceHeightPx: this.currentGeometry.customSourceHeightPx,
-        x: this.currentGeometry.x,
-        y: this.currentGeometry.y,
-        width: this.currentGeometry.width,
-        height: this.currentGeometry.height,
-        radius: this.currentGeometry.radius,
-        scale: this.currentGeometry.scale || 1,
-      },
-    );
+    const placements = resolveFeaturePlacements(this.workingFeatures, {
+      shape: this.currentGeometry.shape,
+      shapeStyle: this.currentGeometry.shapeStyle,
+      pathData: this.currentGeometry.pathData,
+      customSourceWidthPx: this.currentGeometry.customSourceWidthPx,
+      customSourceHeightPx: this.currentGeometry.customSourceHeightPx,
+      x: this.currentGeometry.x,
+      y: this.currentGeometry.y,
+      width: this.currentGeometry.width,
+      height: this.currentGeometry.height,
+      radius: this.currentGeometry.radius,
+      scale: this.currentGeometry.scale || 1,
+    });
 
     placements.forEach((placement, index) => {
       const feature = placement.feature;
-      const geometry = this.getGeometryForFeature(this.currentGeometry!, feature);
+      const geometry = this.getGeometryForFeature(
+        this.currentGeometry!,
+        feature,
+      );
       const position = {
         x: placement.centerX,
         y: placement.centerY,
@@ -1470,7 +1485,8 @@ export class FeatureTool implements ExtensionDefinition {
     };
     if (options.groupId) data.groupId = options.groupId;
     if (options.indices) data.indices = options.indices;
-    if (options.anchorIndex !== undefined) data.anchorIndex = options.anchorIndex;
+    if (options.anchorIndex !== undefined)
+      data.anchorIndex = options.anchorIndex;
     if (options.memberOffsets) data.memberOffsets = options.memberOffsets;
     return data;
   }
@@ -1521,7 +1537,10 @@ export class FeatureTool implements ExtensionDefinition {
   private syncMarkerVisualsByTarget(target: any, center: MarkerPoint) {
     if (target.data?.isGroup) {
       const indices = this.readGroupIndices(target.data?.indices);
-      const offsets = this.readGroupMemberOffsets(target.data?.memberOffsets, indices);
+      const offsets = this.readGroupMemberOffsets(
+        target.data?.memberOffsets,
+        indices,
+      );
       offsets.forEach((entry) => {
         this.syncMarkerVisualObjectsToCenter(entry.index, {
           x: center.x + entry.dx,
@@ -1566,7 +1585,10 @@ export class FeatureTool implements ExtensionDefinition {
     handles.forEach((marker: any) => {
       const feature = this.getFeatureForMarker(marker);
       if (!feature) return;
-      const geometry = this.getGeometryForFeature(this.currentGeometry!, feature);
+      const geometry = this.getGeometryForFeature(
+        this.currentGeometry!,
+        feature,
+      );
       const snapped = this.constrainPosition(
         {
           x: Number(marker.left || 0),
