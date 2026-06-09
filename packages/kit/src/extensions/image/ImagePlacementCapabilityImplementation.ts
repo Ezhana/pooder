@@ -856,6 +856,22 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const committedTransform = committed
       ? createCommittedImagePlacementTransform(frame, committed.metadata)
       : undefined;
+    const imagePlacementData = {
+      enabled: true,
+      placementId: object.id,
+      sessionKey,
+      commitTarget,
+      frame: object.frame,
+      ...(committed ? { image: committed } : {}),
+      fit,
+      accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
+      ...(isRecord(payload.placeholder)
+        ? { placeholder: payload.placeholder }
+        : {}),
+      sessionProjections: normalizeSessionProjections(
+        payload.sessionProjections,
+      ),
+    };
     return {
       id: object.id,
       ...(committed
@@ -867,28 +883,16 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         fit,
         ...(committedTransform ? { transform: committedTransform } : {}),
       },
-      interaction: {
-        imagePlacement: {
-          enabled: true,
-          placementId: object.id,
-          sessionKey,
-          commitTarget,
-          frame: object.frame,
-          ...(committed ? { image: committed } : {}),
-          fit,
-          accepts: Array.isArray(payload.accepts) ? payload.accepts : ["image"],
-          ...(isRecord(payload.placeholder)
-            ? { placeholder: payload.placeholder }
-            : {}),
-          sessionProjections: normalizeSessionProjections(
-            payload.sessionProjections,
-          ),
-        },
-        enabled: true,
+      props: {
+        selectable: false,
+        evented: true,
+        hasControls: false,
+        hasBorders: false,
       },
       data: {
         id: object.id,
         layerId: resolved.layer.id,
+        imagePlacement: imagePlacementData,
         placementId: object.id,
         sessionKey,
         commitTarget,
@@ -1795,26 +1799,25 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         export: {
           visibleWhen: this.getCommittedImageVisibleWhen(placementId),
         },
-        interaction: {
+        props: {
+          selectable: false,
+          evented: true,
+          hasControls: false,
+          hasBorders: false,
+        },
+        data: {
           imagePlacement: {
             ...placementData,
             image: image ?? undefined,
           },
           ...(image
             ? {
-                enabled: true,
-              }
-            : {}),
-        },
-        ...(image
-          ? {
-              data: {
                 placementId,
                 source: "committed",
                 type: "image-placement-image",
-              },
-            }
-          : {}),
+              }
+            : {}),
+        },
       });
     }
     if (this.sceneService) {
@@ -2022,26 +2025,25 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             },
           }
         : undefined,
-      interaction: {
+      props: {
+        selectable: false,
+        evented: true,
+        hasControls: false,
+        hasBorders: false,
+      },
+      data: {
         imagePlacement: {
           ...placementData,
           image: image ?? undefined,
         },
         ...(image
           ? {
-              enabled: true,
-            }
-          : {}),
-      },
-      ...(image
-        ? {
-            data: {
               placementId,
               source: "committed",
               type: "image-placement-image",
-            },
-          }
-        : {}),
+            }
+          : {}),
+      },
     });
   }
 
@@ -2214,8 +2216,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getCanvasTargetPlacementId(target: any): string {
     const data = isRecord(target?.data) ? target.data : {};
-    const session = isRecord(data.session) ? data.session : {};
-    const payload = isRecord(session.payload) ? session.payload : {};
     const imagePlacement = isRecord(data.imagePlacement)
       ? data.imagePlacement
       : {};
@@ -2223,14 +2223,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const placementId =
       typeof data.placementId === "string"
         ? data.placementId
-        : typeof payload.placementId === "string"
-          ? payload.placementId
-          : typeof imagePlacement.placementId === "string"
-            ? imagePlacement.placementId
-            : type.startsWith("image-placement-") &&
-                typeof data.subjectId === "string"
-              ? data.subjectId
-              : "";
+        : typeof imagePlacement.placementId === "string"
+          ? imagePlacement.placementId
+          : type.startsWith("image-placement-") &&
+              typeof data.subjectId === "string"
+            ? data.subjectId
+            : "";
     return placementId.trim();
   }
 

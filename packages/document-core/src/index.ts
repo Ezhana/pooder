@@ -3,6 +3,7 @@ import {
   RENDER_INTENT_SERVICE,
   SURFACE_FRAME_SERVICE,
   mergeRenderIntentPatchEntries,
+  type ConstraintSpec,
   type GeometryPoint,
   type GeometryRect,
   type RenderIntentCompilerRegistryService,
@@ -12,6 +13,7 @@ import {
   type RenderIntentPatch,
   type RenderIntentPatchEntry,
   type RenderIntentService,
+  type RuntimeConditionExpr,
   type Service,
   type ServiceIdentifier,
   type SurfaceFrameService,
@@ -28,6 +30,7 @@ import {
   type EditorDocumentValidationOptions,
   type EditorBuiltinObjectEffect,
   type EditorEffect,
+  type EditorInteractionConstraint,
   type EditorLayer,
   type EditorObject,
   type EditorObjectEffect,
@@ -806,7 +809,7 @@ function createObjectInteractionAspect(
 ): RenderIntentInteractionAspect | undefined {
   const effects = object.effects ?? [];
   const interactive = effects.find(isObjectInteractiveEffect);
-  const constraints = effects
+  const effectConstraints = effects
     .filter(isObjectConstraintEffect)
     .map((effect) => ({
       spec: {
@@ -815,14 +818,62 @@ function createObjectInteractionAspect(
         ...(effect.params ? { params: { ...effect.params } } : {}),
       },
     }));
+  const documentConstraints =
+    object.interaction?.drag?.constraints
+      ?.map(normalizeDocumentInteractionConstraint)
+      .filter(
+        (constraint): constraint is NonNullable<typeof constraint> =>
+          Boolean(constraint),
+      ) ?? [];
+  const constraints = [...documentConstraints, ...effectConstraints];
+  const transformEnabled = object.interaction?.transform?.enabled;
+  const dragEnabled =
+    object.interaction?.drag?.enabled ??
+    (typeof interactive?.enabled === "boolean" ? interactive.enabled : undefined);
 
-  if (!interactive && constraints.length === 0) return undefined;
+  if (
+    transformEnabled === undefined &&
+    dragEnabled === undefined &&
+    !object.interaction?.enabledWhen &&
+    constraints.length === 0
+  )
+    return undefined;
 
   return {
-    ...(typeof interactive?.enabled === "boolean"
-      ? { enabled: interactive.enabled }
+    ...(object.interaction?.enabledWhen
+      ? {
+          enabledWhen:
+            object.interaction.enabledWhen as RuntimeConditionExpr,
+        }
       : {}),
-    ...(constraints.length ? { constraints } : {}),
+    ...(transformEnabled !== undefined
+      ? { transform: { enabled: transformEnabled } }
+      : {}),
+    ...(dragEnabled !== undefined || constraints.length
+      ? {
+          drag: {
+            ...(dragEnabled !== undefined ? { enabled: dragEnabled } : {}),
+            ...(constraints.length ? { constraints } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizeDocumentInteractionConstraint(
+  constraint: EditorInteractionConstraint,
+) {
+  const spec = constraint.spec;
+  const type = typeof spec.type === "string" ? spec.type.trim() : "";
+  if (!type) return null;
+  return {
+    ...(constraint.activeWhen
+      ? { activeWhen: constraint.activeWhen as RuntimeConditionExpr }
+      : {}),
+    spec: {
+      ...((spec as unknown) as ConstraintSpec),
+      type,
+    },
   };
 }
 

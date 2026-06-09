@@ -44,6 +44,22 @@ export interface EditorTransform {
   originY?: "top" | "center" | "bottom";
 }
 
+export interface EditorInteractionConstraint {
+  activeWhen?: Record<string, unknown>;
+  spec: Record<string, unknown>;
+}
+
+export interface EditorObjectInteraction {
+  enabledWhen?: Record<string, unknown>;
+  transform?: {
+    enabled?: boolean;
+  };
+  drag?: {
+    enabled?: boolean;
+    constraints?: EditorInteractionConstraint[];
+  };
+}
+
 export interface EditorDocument {
   version: EditorDocumentVersion;
   config: Record<string, unknown>;
@@ -114,6 +130,7 @@ export interface EditorObjectBase {
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  interaction?: EditorObjectInteraction;
   effects?: EditorObjectEffect[];
 }
 
@@ -482,6 +499,65 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
   return Object.keys(transform).length ? transform : undefined;
 }
 
+function normalizeRuntimeCondition(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? cloneRecord(value) : undefined;
+}
+
+function normalizeInteractionConstraint(
+  value: unknown,
+): EditorInteractionConstraint | null {
+  if (!isRecord(value)) return null;
+  const rawSpec = isRecord(value.spec) ? value.spec : value;
+  const type = normalizeId(rawSpec.type);
+  if (!type) return null;
+  return {
+    ...(normalizeRuntimeCondition(value.activeWhen)
+      ? { activeWhen: normalizeRuntimeCondition(value.activeWhen) }
+      : {}),
+    spec: {
+      ...cloneRecord(rawSpec),
+      type,
+    },
+  };
+}
+
+function normalizeInteractionConstraints(
+  value: unknown,
+): EditorInteractionConstraint[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const constraints = value
+    .map((item) => normalizeInteractionConstraint(item))
+    .filter(
+      (item): item is EditorInteractionConstraint => Boolean(item),
+    );
+  return constraints.length ? constraints : undefined;
+}
+
+function normalizeObjectInteraction(
+  value: unknown,
+): EditorObjectInteraction | undefined {
+  if (!isRecord(value)) return undefined;
+  const interaction: EditorObjectInteraction = {};
+  const enabledWhen = normalizeRuntimeCondition(value.enabledWhen);
+  if (enabledWhen) interaction.enabledWhen = enabledWhen;
+
+  if (isRecord(value.transform)) {
+    interaction.transform = {
+      enabled: value.transform.enabled === true,
+    };
+  }
+
+  if (isRecord(value.drag)) {
+    const constraints = normalizeInteractionConstraints(value.drag.constraints);
+    interaction.drag = {
+      enabled: value.drag.enabled === true,
+      ...(constraints ? { constraints } : {}),
+    };
+  }
+
+  return Object.keys(interaction).length ? interaction : undefined;
+}
+
 function normalizeEffectTarget(value: unknown): EditorEffectTarget | undefined {
   if (value === undefined || value === "self") return "self";
   if (!isRecord(value)) return undefined;
@@ -625,6 +701,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
   const id = normalizeId(value.id);
   const source = normalizeObjectSource(value.source);
   if (!source) return null;
+  const interaction = normalizeObjectInteraction(value.interaction);
   const base = {
     id,
     order:
@@ -639,6 +716,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     metadata: isRecord(value.metadata)
       ? cloneRecord(value.metadata)
       : undefined,
+    ...(interaction ? { interaction } : {}),
     effects: normalizeObjectEffects(value.effects),
     frame: normalizeRect(value.frame),
   };

@@ -1310,7 +1310,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       visual: { type: "rect" },
       ordering: { layerId: "art", objectOrder: 0 },
       props: { width: 10, height: 10 },
-      interaction: { enabled: true },
+      interaction: { drag: { enabled: true } },
     },
     {
       id: "constraint-only",
@@ -1324,14 +1324,16 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       ordering: { layerId: "art", objectOrder: 1 },
       props: { width: 10, height: 10 },
       interaction: {
-        constraints: [
-          {
-            spec: {
-              type: "rect.contain",
-              params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+        drag: {
+          constraints: [
+            {
+              spec: {
+                type: "rect.contain",
+                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+              },
             },
-          },
-        ],
+          ],
+        },
       },
     },
     {
@@ -1346,17 +1348,19 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       ordering: { layerId: "art", objectOrder: 2 },
       props: { width: 10, height: 10 },
       interaction: {
-        enabled: true,
         enabledWhen: {
           op: "truthy",
           ref: { source: "context", key: "can.interact" },
         },
-        constraints: [
-          {
-            activeWhen: { op: "const", value: true },
-            spec: { type: "grid.snap", params: { size: 5 } },
-          },
-        ],
+        drag: {
+          enabled: true,
+          constraints: [
+            {
+              activeWhen: { op: "const", value: true },
+              spec: { type: "grid.snap", params: { size: 5 } },
+            },
+          ],
+        },
       },
     },
     {
@@ -1376,6 +1380,19 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         evented: true,
       },
     },
+    {
+      id: "transform-only",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "transform-only",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", objectOrder: 4 },
+      props: { width: 10, height: 10 },
+      interaction: { transform: { enabled: true } },
+    },
   ]);
 
   await adapter.flush();
@@ -1385,6 +1402,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   const constraintOnly = last.items.find((item) => item.key === "constraint-only");
   const conditional = last.items.find((item) => item.key === "conditional");
   const runtimeEvented = last.items.find((item) => item.key === "runtime-evented");
+  const transformOnly = last.items.find((item) => item.key === "transform-only");
   assertEqual(
     interactive?.spec.props.selectable,
     true,
@@ -1394,6 +1412,16 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     interactive?.spec.props.evented,
     true,
     "interaction alone should enable Fabric events",
+  );
+  assertEqual(
+    interactive?.spec.props.hasControls,
+    false,
+    "drag interaction alone should not expose transform controls",
+  );
+  assertEqual(
+    interactive?.spec.props.lockMovementX,
+    false,
+    "drag interaction should unlock movement",
   );
   assertEqual(
     constraintOnly?.spec.props.selectable,
@@ -1429,6 +1457,26 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     runtimeEvented?.spec.data?.interactionEnabled,
     false,
     "runtime evented props should not opt into declarative drag handling",
+  );
+  assertEqual(
+    transformOnly?.spec.props.selectable,
+    true,
+    "transform interaction should make objects selectable for controls",
+  );
+  assertEqual(
+    transformOnly?.spec.props.hasControls,
+    true,
+    "transform interaction should expose transform controls",
+  );
+  assertEqual(
+    transformOnly?.spec.props.lockMovementX,
+    true,
+    "transform-only interaction should keep movement locked",
+  );
+  assertEqual(
+    transformOnly?.spec.data?.interactionEnabled,
+    true,
+    "transform interaction should mark the live object interactive",
   );
 
   intents.setRuntimeConditionValue("can.interact", true);

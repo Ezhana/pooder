@@ -527,12 +527,17 @@ export class FabricRenderGraphAdapter implements Service {
     conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
     layerEffects: RenderEffectSpec[] = [],
   ): RenderObjectSpec | null {
-    const hasDeclarativeInteraction =
-      typeof node.interaction?.enabled === "boolean" ||
-      node.interaction?.enabledWhen !== undefined;
-    const interactionEnabled =
-      node.interaction?.enabled === true &&
-      evaluateRuntimeCondition(node.interaction.enabledWhen, conditionContext);
+    const hasDeclarativeInteraction = Boolean(node.interaction);
+    const interactionConditionMatched = evaluateRuntimeCondition(
+      node.interaction?.enabledWhen,
+      conditionContext,
+    );
+    const dragEnabled =
+      node.interaction?.drag?.enabled === true && interactionConditionMatched;
+    const transformEnabled =
+      node.interaction?.transform?.enabled === true &&
+      interactionConditionMatched;
+    const interactionEnabled = dragEnabled || transformEnabled;
     const selectable = hasDeclarativeInteraction
       ? interactionEnabled
       : node.props.selectable === true;
@@ -541,9 +546,9 @@ export class FabricRenderGraphAdapter implements Service {
       : typeof node.props.evented === "boolean"
         ? node.props.evented
         : selectable;
-    const interactionConstraints = interactionEnabled
+    const interactionConstraints = dragEnabled
       ? normalizeRenderInteractionConstraints(
-          node.interaction?.constraints,
+          node.interaction?.drag?.constraints,
           conditionContext,
         )
       : [];
@@ -552,6 +557,10 @@ export class FabricRenderGraphAdapter implements Service {
       ...this.resolvePlacementProps(node),
       selectable,
       evented,
+      hasControls: transformEnabled,
+      hasBorders: transformEnabled,
+      lockMovementX: !dragEnabled,
+      lockMovementY: !dragEnabled,
       visible: layer.visible && node.visible,
     };
     const commonData = {

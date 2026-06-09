@@ -1860,18 +1860,21 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         props: { fill: "red" },
         data: { locked: false },
         interaction: {
-          enabled: true,
+          transform: { enabled: true },
+          drag: {
+            enabled: true,
+            constraints: [
+              {
+                activeWhen: { op: "const", value: true },
+                spec: { type: "grid.snap", params: { size: 10 } },
+              },
+            ],
+          },
           enabledWhen: {
             op: "truthy",
             ref: { source: "context", key: "can-interact" },
           },
           locked: true,
-          constraints: [
-            {
-              activeWhen: { op: "const", value: true },
-              spec: { type: "grid.snap", params: { size: 10 } },
-            },
-          ],
         },
       },
     ]);
@@ -1882,14 +1885,16 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       patch: {
         id: "image",
         interaction: {
-          constraints: [
-            {
-              spec: {
-                type: "rect.contain",
-                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+          drag: {
+            constraints: [
+              {
+                spec: {
+                  type: "rect.contain",
+                  params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       },
     });
@@ -1900,16 +1905,18 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       patch: {
         id: "image",
         interaction: {
-          constraints: [
-            {
-              activeWhen: {
-                op: "in",
-                ref: { source: "activeToolId" },
-                values: ["move"],
+          drag: {
+            constraints: [
+              {
+                activeWhen: {
+                  op: "in",
+                  ref: { source: "activeToolId" },
+                  values: ["move"],
+                },
+                spec: { type: "axis.lock", mode: "x" },
               },
-              spec: { type: "axis.lock", mode: "x" },
-            },
-          ],
+            ],
+          },
         },
       },
     });
@@ -1933,32 +1940,35 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
     assertDeepEqual(
       node?.interaction,
       {
-        enabled: true,
+        transform: { enabled: true },
+        drag: {
+          enabled: true,
+          constraints: [
+            {
+              activeWhen: { op: "const", value: true },
+              spec: { type: "grid.snap", params: { size: 10 } },
+            },
+            {
+              spec: {
+                type: "rect.contain",
+                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+              },
+            },
+            {
+              activeWhen: {
+                op: "in",
+                ref: { source: "activeToolId" },
+                values: ["move"],
+              },
+              spec: { type: "axis.lock", mode: "x" },
+            },
+          ],
+        },
         enabledWhen: {
           op: "truthy",
           ref: { source: "context", key: "can-interact" },
         },
         locked: true,
-        constraints: [
-          {
-            activeWhen: { op: "const", value: true },
-            spec: { type: "grid.snap", params: { size: 10 } },
-          },
-          {
-            spec: {
-              type: "rect.contain",
-              params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
-            },
-          },
-          {
-            activeWhen: {
-              op: "in",
-              ref: { source: "activeToolId" },
-              values: ["move"],
-            },
-            spec: { type: "axis.lock", mode: "x" },
-          },
-        ],
       },
       "interaction aspect should carry merged constraints in patch order",
     );

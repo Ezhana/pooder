@@ -64,25 +64,24 @@ export interface RenderIntentPlacementAspect {
   fit?: "cover" | "contain" | "stretch";
 }
 
-export interface RenderIntentInteractionSessionAspect {
-  sessionId: string;
-  scope?: SessionScope;
-  source?: string;
-  mode?: string;
-  payload?: Record<string, unknown>;
-}
-
 export interface RenderIntentInteractionConstraint {
   activeWhen?: RuntimeConditionExpr;
   spec: ConstraintSpec;
 }
 
-export interface RenderIntentInteractionAspect {
-  session?: RenderIntentInteractionSessionAspect;
-  imagePlacement?: Record<string, unknown>;
+export interface RenderIntentTransformInteractionAspect {
   enabled?: boolean;
-  enabledWhen?: RuntimeConditionExpr;
+}
+
+export interface RenderIntentDragInteractionAspect {
+  enabled?: boolean;
   constraints?: readonly RenderIntentInteractionConstraint[];
+}
+
+export interface RenderIntentInteractionAspect {
+  transform?: RenderIntentTransformInteractionAspect;
+  drag?: RenderIntentDragInteractionAspect;
+  enabledWhen?: RuntimeConditionExpr;
   locked?: boolean;
 }
 
@@ -278,7 +277,6 @@ const CRITICAL_PATCH_FIELDS = [
   "visual.replacement",
   "placement.frame",
   "ordering.layerId",
-  "interaction.session",
   "export.visibleWhen",
 ] as const;
 
@@ -856,12 +854,6 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       ...(typeof draft.interaction?.locked === "boolean"
         ? { locked: draft.interaction.locked }
         : {}),
-      ...(draft.interaction?.imagePlacement
-        ? { imagePlacement: draft.interaction.imagePlacement }
-        : {}),
-      ...(draft.interaction?.session
-        ? { session: draft.interaction.session }
-        : {}),
     },
     effects: draft.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
@@ -1037,18 +1029,36 @@ function mergeInteractionAspect(
   patch: RenderIntentInteractionAspect | undefined,
 ): RenderIntentInteractionAspect | undefined {
   if (patch === undefined) return cloneRecord(base);
-  const constraints = [
-    ...(base?.constraints ?? []),
-    ...(patch.constraints ?? []),
+  const dragConstraints = [
+    ...(base?.drag?.constraints ?? []),
+    ...(patch.drag?.constraints ?? []),
   ].map(cloneRecord);
   const merged = {
     ...((base ?? {}) as object),
     ...((patch ?? {}) as object),
+    ...(base?.transform || patch.transform
+      ? {
+          transform: {
+            ...(base?.transform ?? {}),
+            ...(patch.transform ?? {}),
+          },
+        }
+      : {}),
+    ...(base?.drag || patch.drag
+      ? {
+          drag: {
+            ...(base?.drag ?? {}),
+            ...(patch.drag ?? {}),
+          },
+        }
+      : {}),
   } as RenderIntentInteractionAspect;
-  if (constraints.length) {
-    merged.constraints = constraints;
-  } else {
-    delete merged.constraints;
+  if (merged.drag) {
+    if (dragConstraints.length) {
+      merged.drag.constraints = dragConstraints;
+    } else {
+      delete merged.drag.constraints;
+    }
   }
   return Object.keys(merged).length ? merged : undefined;
 }

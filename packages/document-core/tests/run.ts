@@ -207,12 +207,12 @@ async function testApplyEditorDocument() {
     "generic effect compiler should patch node",
   );
   assertEqual(
-    node?.interaction?.enabled,
+    node?.interaction?.drag?.enabled,
     true,
     "interactive object effect should translate",
   );
   assertEqual(
-    node?.interaction?.constraints?.[0]?.spec.type,
+    node?.interaction?.drag?.constraints?.[0]?.spec.type,
     "rect.contain",
     "object-constraint should translate to render intent interaction constraint",
   );

@@ -1703,18 +1703,18 @@ async function testApplyKitEditorDocument() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    undefined,
-    "document apply should not write renderer-specific selectable props",
+    false,
+    "document apply should keep image placement targets non-selectable",
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    undefined,
-    "document apply should not write renderer-specific evented props",
+    true,
+    "document apply should keep image placement targets evented",
   );
   assertEqual(
-    committedGraphNode?.interaction?.enabled,
-    true,
-    "document apply should mark committed images interactive declaratively",
+    committedGraphNode?.props.hasControls,
+    false,
+    "document apply should not expose controls for image placement targets",
   );
   assertDeepEqual(
     {
@@ -2427,21 +2427,23 @@ async function testApplyKitEditorDocumentObjectInteraction() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  selectable: true,
-                  evented: true,
-                  locked: false,
+                  transform: { enabled: true },
+                  drag: {
+                    enabled: true,
+                    constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+                  },
                 },
                 frame: { x: 25, y: 0, width: 20, height: 20 },
               },
               {
-                id: "interaction-locked",
+                id: "unsupported-interaction",
                 locked: false,
                 source: {
                   kind: "shape",
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                interaction: { locked: true },
+                interaction: { selectable: true, evented: true, locked: true },
                 frame: { x: 50, y: 0, width: 20, height: 20 },
               },
             ],
@@ -2458,9 +2460,9 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   assert(
     !(
       "interaction" in
-      (result.document.surfaces[0].layers[0].objects?.[1] ?? {})
+      (result.document.surfaces[0].layers[0].objects?.[2] ?? {})
     ),
-    "legacy object interaction should not remain on the normalized document",
+    "unsupported renderer interaction should not remain on the normalized document",
   );
 
   const renderGraph = runtime.services
@@ -2471,8 +2473,8 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   const explicitInteractionNode = nodes.find(
     (node) => node.id === "explicit-interaction",
   );
-  const interactionLockedNode = nodes.find(
-    (node) => node.id === "interaction-locked",
+  const unsupportedInteractionNode = nodes.find(
+    (node) => node.id === "unsupported-interaction",
   );
 
   assertEqual(
@@ -2490,15 +2492,21 @@ async function testApplyKitEditorDocumentObjectInteraction() {
     true,
     "legacy locked should remain render graph locked data",
   );
-  assertEqual(
+  assertDeepEqual(
     explicitInteractionNode?.interaction,
-    undefined,
-    "legacy object interaction should not create render intent interaction",
+    {
+      transform: { enabled: true },
+      drag: {
+        enabled: true,
+        constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+      },
+    },
+    "document object interaction should create render intent interaction",
   );
   assertEqual(
-    interactionLockedNode?.data.locked,
+    unsupportedInteractionNode?.data.locked,
     false,
-    "legacy interaction.locked should not override object locked",
+    "unsupported interaction.locked should not override object locked",
   );
 
   await runtime.dispose();
@@ -2644,7 +2652,8 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
   assertDeepEqual(
     nodes.find((node) => node.id === "interaction-only")?.interaction,
     {
-      enabled: true,
+      transform: { enabled: true },
+      drag: { enabled: true },
       enabledWhen: {
         op: "truthy",
         ref: {
@@ -2654,46 +2663,51 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
         },
       },
     },
-    "interaction effect should compile to enabled/enabledWhen",
+    "interaction effect should compile to transform/drag enabledWhen",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "constraint-only")?.interaction,
     {
-      constraints: [
-        {
-          spec: {
-            type: "rect.contain",
-            params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+      drag: {
+        constraints: [
+          {
+            spec: {
+              type: "rect.contain",
+              params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+            },
           },
-        },
-      ],
+        ],
+      },
     },
     "constraint effect alone should not enable interaction",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "interactive-constrained")?.interaction,
     {
-      enabled: true,
-      constraints: [
-        {
-          activeWhen: {
-            op: "in",
-            ref: { source: "activeToolId" },
-            values: ["move"],
+      transform: { enabled: true },
+      drag: {
+        enabled: true,
+        constraints: [
+          {
+            activeWhen: {
+              op: "in",
+              ref: { source: "activeToolId" },
+              values: ["move"],
+            },
+            spec: {
+              type: "rect.contain",
+              params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+            },
           },
-          spec: {
-            type: "rect.contain",
-            params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+          {
+            activeWhen: {
+              op: "truthy",
+              ref: { source: "context", key: "snap.enabled" },
+            },
+            spec: { type: "grid.snap", params: { size: 5 } },
           },
-        },
-        {
-          activeWhen: {
-            op: "truthy",
-            ref: { source: "context", key: "snap.enabled" },
-          },
-          spec: { type: "grid.snap", params: { size: 5 } },
-        },
-      ],
+        ],
+      },
     },
     "interaction and constraint effects should merge constraints in order",
   );
@@ -3563,18 +3577,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    undefined,
-    "completed placement should not write renderer-specific selectable props",
+    false,
+    "completed placement should keep committed image non-selectable",
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    undefined,
-    "completed placement should not write renderer-specific evented props",
+    true,
+    "completed placement should keep committed image evented",
   );
   assertEqual(
-    committedGraphNode?.interaction?.enabled,
-    true,
-    "completed placement committed image should remain interactive declaratively",
+    committedGraphNode?.props.hasControls,
+    false,
+    "completed placement should not expose committed image controls",
   );
   assertDeepEqual(
     {
@@ -3659,18 +3673,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     resetGraphNode?.props.selectable,
-    undefined,
-    "resetting a reopened image session should not write selectable props",
+    false,
+    "resetting a reopened image session should keep committed images non-selectable",
   );
   assertEqual(
     resetGraphNode?.props.evented,
-    undefined,
-    "resetting a reopened image session should not write evented props",
+    true,
+    "resetting a reopened image session should keep committed images evented",
   );
   assertEqual(
-    resetGraphNode?.interaction?.enabled,
-    true,
-    "resetting a reopened image session should keep committed images interactive declaratively",
+    resetGraphNode?.props.hasControls,
+    false,
+    "resetting a reopened image session should not expose committed image controls",
   );
   assertDeepEqual(
     {
@@ -4299,11 +4313,7 @@ async function testImagePlacementCanvasPressCanOnlyRequestSession() {
   runtime.eventBus.emit("mouse:down", {
     target: {
       data: {
-        session: {
-          payload: {
-            placementId: "placement",
-          },
-        },
+        placementId: "placement",
         type: "image-placement-image",
       },
     },
@@ -5089,9 +5099,9 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     "configurable visual image placement commit should keep a committed image in the render graph",
   );
   assertEqual(
-    committedGraphNode?.interaction?.enabled,
+    committedGraphNode?.props.evented,
     true,
-    "configurable visual image placement commit should keep the committed image interactive declaratively",
+    "configurable visual image placement commit should keep the committed image evented",
   );
   assertEqual(
     evaluateRuntimeCondition(committedGraphNode?.visibleWhen, {

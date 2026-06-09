@@ -26,6 +26,8 @@ export const INTERACTION_CAPABILITY_ID = "pooder.kit.interaction";
 interface InteractionEffectPayload {
   enabled?: boolean;
   enabledWhen?: RuntimeConditionExpr;
+  transform?: { enabled?: boolean };
+  drag?: { enabled?: boolean };
 }
 
 interface ConstraintEffectPayload {
@@ -99,7 +101,12 @@ export class InteractionCapabilityExtension implements ExtensionDefinition {
     return {
       id,
       interaction: {
-        enabled: payload.enabled ?? true,
+        transform: {
+          enabled: payload.transform?.enabled ?? payload.enabled ?? true,
+        },
+        drag: {
+          enabled: payload.drag?.enabled ?? payload.enabled ?? true,
+        },
         ...(payload.enabledWhen ? { enabledWhen: payload.enabledWhen } : {}),
       },
     };
@@ -121,7 +128,9 @@ export class InteractionCapabilityExtension implements ExtensionDefinition {
     return {
       id,
       interaction: {
-        constraints,
+        drag: {
+          constraints,
+        },
       },
     };
   }
@@ -176,6 +185,22 @@ function normalizeInteractionPayload(value: unknown): InteractionEffectPayload {
   return {
     enabled: typeof value.enabled === "boolean" ? value.enabled : undefined,
     enabledWhen: normalizeRuntimeCondition(value.enabledWhen),
+    transform: isRecord(value.transform)
+      ? {
+          enabled:
+            typeof value.transform.enabled === "boolean"
+              ? value.transform.enabled
+              : undefined,
+        }
+      : undefined,
+    drag: isRecord(value.drag)
+      ? {
+          enabled:
+            typeof value.drag.enabled === "boolean"
+              ? value.drag.enabled
+              : undefined,
+        }
+      : undefined,
   };
 }
 

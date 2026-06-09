@@ -154,11 +154,11 @@ function testNormalizeDefaults() {
   );
   assert(
     !("interaction" in (doc.surfaces[0].layers[0].objects?.[0] ?? {})),
-    "objects should not expose legacy interaction fields",
+    "objects should not expose absent interaction fields",
   );
 }
 
-function testLegacyObjectInteractionIsIgnored() {
+function testObjectInteractionNormalizesSupportedFields() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
@@ -180,10 +180,20 @@ function testLegacyObjectInteractionIsIgnored() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  selectable: true,
-                  evented: false,
-                  locked: true,
-                  cursor: "move",
+                  transform: { enabled: true },
+                  drag: {
+                    enabled: true,
+                    constraints: [
+                      {
+                        activeWhen: { op: "const", value: true },
+                        spec: { type: "grid.snap", params: { size: 5 } },
+                      },
+                    ],
+                  },
+                  enabledWhen: {
+                    op: "truthy",
+                    ref: { source: "context", key: "can.interact" },
+                  },
                 },
               },
               {
@@ -218,13 +228,29 @@ function testLegacyObjectInteractionIsIgnored() {
   });
 
   const objects = doc.surfaces[0].layers[0].objects;
-  assert(
-    !("interaction" in (objects?.[0] ?? {})),
-    "legacy interaction fields should not be part of normalized document objects",
+  assertDeepEqual(
+    objects?.[0]?.interaction,
+    {
+      enabledWhen: {
+        op: "truthy",
+        ref: { source: "context", key: "can.interact" },
+      },
+      transform: { enabled: true },
+      drag: {
+        enabled: true,
+        constraints: [
+          {
+            activeWhen: { op: "const", value: true },
+            spec: { type: "grid.snap", params: { size: 5 } },
+          },
+        ],
+      },
+    },
+    "supported interaction fields should normalize",
   );
   assert(
     !("interaction" in (objects?.[1] ?? {})),
-    "invalid legacy interaction fields should not be part of normalized document objects",
+    "unsupported renderer interaction fields should not be part of normalized document objects",
   );
   assert(
     !("interaction" in (objects?.[2] ?? {})),
@@ -823,7 +849,7 @@ function testRequirePolicyDiagnostics() {
 
 function main() {
   testNormalizeDefaults();
-  testLegacyObjectInteractionIsIgnored();
+  testObjectInteractionNormalizesSupportedFields();
   testLegacyObjectConstraintsAreIgnored();
   testImagePlacementObjectDoesNotRequireLegacySrc();
   testObjectWithoutSourceIsDropped();
