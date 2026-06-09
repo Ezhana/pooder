@@ -14,7 +14,7 @@ import type {
   EditorDocument,
   EditorEffect,
   EditorObject,
-} from "@pooder/document/kit";
+} from "@pooder/document";
 import {
   MIRROR_CAPABILITY_ID,
   createMirrorCapabilityDefinition,

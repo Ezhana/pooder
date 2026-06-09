@@ -19,7 +19,7 @@ import {
   type RenderIntentSubject,
   type RuntimeConditionExpr,
 } from "@pooder/core";
-import type { EditorEffect } from "@pooder/document/kit";
+import type { EditorEffect } from "@pooder/document";
 
 export const INTERACTION_CAPABILITY_ID = "pooder.kit.interaction";
 

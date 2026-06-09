@@ -13,7 +13,7 @@ import {
 import type {
   EditorDocument,
   EditorEffect,
-} from "@pooder/document/kit";
+} from "@pooder/document";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,

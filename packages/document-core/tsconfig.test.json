@@ -13,7 +13,7 @@
     "paths": {
       "@pooder/core": ["../core/src/index.ts"],
       "@pooder/document": ["../document/src/index.ts"],
-      "@pooder/document-core": ["../document-core/src/index.ts"]
+      "@pooder/document-core": ["src/index.ts"]
     }
   },
   "include": ["tests/**/*.ts", "src/**/*.ts"]

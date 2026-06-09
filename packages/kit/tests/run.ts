@@ -96,8 +96,8 @@ import {
 import {
   applyKitEditorDocument,
   createKitEditorDocumentController,
-  createKitCapabilitiesForDocument,
 } from "../src/document";
+import { createKitCapabilitiesForDocument } from "../src/document/capabilities";
 import {
   SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,

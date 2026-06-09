@@ -21,7 +21,7 @@ import {
   type SceneService,
   type SurfaceFrameService,
 } from "@pooder/core";
-import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
+import type { EditorDocument, EditorEffect } from "@pooder/document";
 import { buildDielineClipSourceSpec } from "../dieline/renderBuilder";
 import { readDielineState } from "../dieline/model";
 import {

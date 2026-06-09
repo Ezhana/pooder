@@ -1,6 +1,7 @@
 export * from "./extensions";
 export * from "./factories";
 export * from "./document";
+export { createKitCapabilitiesForDocument } from "./document/capabilities";
 export {
   KIT_LEGACY_LAYER_PRESET,
   type KitLegacyLayerPreset,

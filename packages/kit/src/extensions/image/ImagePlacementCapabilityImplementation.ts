@@ -41,7 +41,8 @@ import type {
   EditorLayer,
   EditorObjectEffect,
   EditorSurface,
-} from "@pooder/document/kit";
+} from "@pooder/document";
+import { isGenericEditorEffect } from "@pooder/document";
 import {
   createSourceSizeCache,
   getCoverScale as getCoverScaleFromRect,
@@ -229,20 +230,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isEditorEffect(effect: EditorObjectEffect): effect is EditorEffect {
-  if (
-    effect.type === "constraint" &&
-    "targetId" in effect &&
-    "strategy" in effect
-  ) {
-    return false;
-  }
-
-  return !(
-    effect.type === "clip-source" ||
-    effect.type === "boolean" ||
-    effect.type === "interactive" ||
-    effect.type === "guide"
-  );
+  return isGenericEditorEffect(effect);
 }
 
 function finiteNumber(value: unknown, fallback: number): number {

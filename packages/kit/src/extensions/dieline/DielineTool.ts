@@ -22,7 +22,7 @@ import {
   type SceneLayoutService,
   type SurfaceFrameService,
 } from "@pooder/core";
-import type { EditorDocument, EditorEffect } from "@pooder/document/kit";
+import type { EditorDocument, EditorEffect } from "@pooder/document";
 import {
   CANVAS_SERVICE,
   CanvasService,

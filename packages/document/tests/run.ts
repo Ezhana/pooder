@@ -1,15 +1,12 @@
 import {
   EDITOR_DOCUMENT_VERSION,
   collectEditorDocumentCapabilityRequirements,
+  isGenericEditorEffect,
   normalizeEditorDocument,
   validateEditorDocument,
   type EditorDocument,
+  type EditorEffect,
 } from "../src";
-import {
-  collectKitEditorDocumentCapabilityRequirements,
-  resolveKitEditorDocumentEffectCapabilityId,
-  validateKitEditorDocument,
-} from "../src/kit";
 
 declare const process: {
   exit(code: number): never;
@@ -36,11 +33,22 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
 }
 
 const TEST_DOCUMENT_CONFIG = {};
+const TEST_EFFECT_CAPABILITY_IDS: Record<string, string> = {
+  dieline: "test.dieline",
+  feature: "test.feature",
+  "configurable-visual": "test.configurable-visual",
+  "image-placement": "test.image-placement",
+  constraint: "test.constraint",
+};
 const TEST_SURFACE_FRAMES = {
   previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
   productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
   viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
 };
+
+function resolveTestEffectCapabilityId(effect: EditorEffect): string | undefined {
+  return effect.capabilityId || TEST_EFFECT_CAPABILITY_IDS[effect.type];
+}
 
 function testNormalizeDefaults() {
   const doc = normalizeEditorDocument({
@@ -267,7 +275,7 @@ function testLegacyObjectConstraintsAreIgnored() {
 }
 
 function testV2ImagePlacementImageDoesNotRequireSource() {
-  const diagnostics = validateKitEditorDocument({
+  const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
@@ -283,7 +291,12 @@ function testV2ImagePlacementImageDoesNotRequireSource() {
                 id: "image-target",
                 type: "image",
                 frame: { x: 0, y: 0, width: 100, height: 120 },
-                effects: [{ type: "image-placement" }],
+                effects: [
+                  {
+                    type: "image-placement",
+                    capabilityId: "test.image-placement",
+                  },
+                ],
               },
             ],
           },
@@ -299,7 +312,7 @@ function testV2ImagePlacementImageDoesNotRequireSource() {
 }
 
 function testImageObjectDoesNotRequireSource() {
-  const diagnostics = validateKitEditorDocument({
+  const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
     assets: [{ id: "template", type: "image" }],
@@ -419,7 +432,7 @@ function testSourceObjectNormalizesSource() {
 }
 
 function testV2DocumentIsRejected() {
-  const diagnostics = validateKitEditorDocument({
+  const diagnostics = validateEditorDocument({
     version: 2,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
@@ -439,7 +452,7 @@ function testV2DocumentIsRejected() {
 }
 
 function testDocumentConfigIsRequired() {
-  const diagnostics = validateKitEditorDocument({
+  const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     surfaces: [
       {
@@ -458,7 +471,7 @@ function testDocumentConfigIsRequired() {
 }
 
 function testImageObjectRequiresFrame() {
-  const diagnostics = validateKitEditorDocument({
+  const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
@@ -489,7 +502,7 @@ function testImageObjectRequiresFrame() {
 }
 
 function testValidationStructureAndReferences() {
-  const diagnostics = validateKitEditorDocument({
+  const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
     assets: [{ id: "template", type: "image", src: "/template.png" }],
@@ -597,44 +610,50 @@ function testCustomEffectRequiresCapabilityId() {
   );
 }
 
-function testKitEffectCapabilityResolution() {
-  assertEqual(
-    resolveKitEditorDocumentEffectCapabilityId({ type: "dieline" }),
-    "pooder.kit.dieline-geometry",
-    "dieline should resolve to kit capability",
+function testInjectedEffectCapabilityResolution() {
+  const diagnostics = validateEditorDocument(
+    {
+      version: EDITOR_DOCUMENT_VERSION,
+      config: TEST_DOCUMENT_CONFIG,
+      surfaces: [
+        {
+          id: "front",
+          size: { width: 1, height: 1, unit: "px" },
+          frames: TEST_SURFACE_FRAMES,
+          layers: [
+            {
+              id: "layer",
+              effects: [{ type: "dieline" }, { type: "feature" }],
+              objects: [
+                {
+                  id: "image",
+                  type: "rect",
+                  frame: { x: 0, y: 0, width: 1, height: 1 },
+                  width: 1,
+                  height: 1,
+                  effects: [
+                    { type: "constraint" },
+                    {
+                      type: "object-constraint",
+                      targetId: "frame",
+                      strategy: "inside",
+                    },
+                    { type: "interactive", enabled: true },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    { resolveEffectCapabilityId: resolveTestEffectCapabilityId },
   );
-  assertEqual(
-    resolveKitEditorDocumentEffectCapabilityId({ type: "clip" }),
-    "pooder.kit.clip",
-    "clip should resolve to kit capability",
-  );
-  assertEqual(
-    resolveKitEditorDocumentEffectCapabilityId({ type: "feature" }),
-    "pooder.kit.feature",
-    "feature should resolve to kit capability",
-  );
-  assertEqual(
-    resolveKitEditorDocumentEffectCapabilityId({ type: "mirror" }),
-    "pooder.kit.mirror",
-    "mirror should resolve to kit capability",
-  );
-  assertEqual(
-    resolveKitEditorDocumentEffectCapabilityId({ type: "interaction" }),
-    "pooder.kit.interaction",
-    "interaction should resolve to kit capability",
-  );
-  assertEqual(
-    resolveKitEditorDocumentEffectCapabilityId({ type: "constraint" }),
-    "pooder.kit.interaction",
-    "constraint should resolve to kit interaction capability",
-  );
-  assertEqual(
-    resolveKitEditorDocumentEffectCapabilityId({ type: "interaction-component" }),
-    undefined,
-    "legacy interaction-component should not resolve to a kit capability",
-  );
+  assertDeepEqual(diagnostics, [], "injected known effects should validate");
+}
 
-  const diagnostics = validateKitEditorDocument({
+function testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint() {
+  const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
@@ -654,10 +673,13 @@ function testKitEffectCapabilityResolution() {
                 width: 1,
                 height: 1,
                 effects: [
-                  { type: "clip" },
-                  { type: "mirror" },
-                  { type: "interaction" },
                   { type: "constraint" },
+                  {
+                    type: "object-constraint",
+                    targetId: "frame",
+                    strategy: "inside",
+                    params: { padding: 2 },
+                  },
                 ],
               },
             ],
@@ -666,7 +688,18 @@ function testKitEffectCapabilityResolution() {
       },
     ],
   });
-  assertDeepEqual(diagnostics, [], "known kit effect should validate");
+
+  const effects = doc.surfaces[0].layers[0].objects?.[0]?.effects ?? [];
+  assertEqual(effects.length, 2, "generic and object constraints should both remain");
+  assert(
+    isGenericEditorEffect(effects[0]),
+    "generic constraint should remain a generic editor effect",
+  );
+  assertEqual(
+    effects[1].type,
+    "object-constraint",
+    "object-local constraint should use a distinct type",
+  );
 }
 
 function testRequirePolicyDiagnostics() {
@@ -692,7 +725,8 @@ function testRequirePolicyDiagnostics() {
     ],
   };
 
-  const result = collectKitEditorDocumentCapabilityRequirements(doc, {
+  const result = collectEditorDocumentCapabilityRequirements(doc, {
+    resolveEffectCapabilityId: resolveTestEffectCapabilityId,
     availableCapabilityIds: [],
   });
   assert(
@@ -700,7 +734,7 @@ function testRequirePolicyDiagnostics() {
       (item) =>
         item.code === "capability-required" &&
         item.severity === "error" &&
-        item.capabilityId === "pooder.kit.dieline-geometry",
+        item.capabilityId === "test.dieline",
     ),
     "strict missing capability should produce error",
   );
@@ -709,19 +743,19 @@ function testRequirePolicyDiagnostics() {
       (item) =>
         item.code === "capability-optional-missing" &&
         item.severity === "warning" &&
-        item.capabilityId === "pooder.kit.configurable-visual",
+        item.capabilityId === "test.configurable-visual",
     ),
     "warn missing capability should produce warning",
   );
   assert(
     !result.diagnostics.some(
-      (item) => item.capabilityId === "pooder.kit.image-placement",
+      (item) => item.capabilityId === "test.image-placement",
     ),
     "ignore missing capability should not produce diagnostic",
   );
 
   const generic = collectEditorDocumentCapabilityRequirements(doc, {
-    resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
+    resolveEffectCapabilityId: resolveTestEffectCapabilityId,
   });
   assertEqual(generic.requirements.length, 2, "ignored effect should be skipped");
 }
@@ -739,7 +773,8 @@ function main() {
   testValidationStructureAndReferences();
   testCustomValidatorDiagnostics();
   testCustomEffectRequiresCapabilityId();
-  testKitEffectCapabilityResolution();
+  testInjectedEffectCapabilityResolution();
+  testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint();
   testRequirePolicyDiagnostics();
   console.log("ok");
 }

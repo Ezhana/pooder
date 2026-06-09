@@ -205,8 +205,7 @@ export interface EditorEffect<TPayload = Record<string, unknown>> {
 
 type EditorObjectEffectCommon = Partial<Omit<EditorEffect, "type">>;
 
-export type EditorObjectEffect =
-  | EditorEffect
+export type EditorBuiltinObjectEffect =
   | (EditorObjectEffectCommon & {
       type: "clip-source";
       targetIds: string[];
@@ -218,7 +217,7 @@ export type EditorObjectEffect =
       participation?: "preview" | "export" | "both";
     })
   | (EditorObjectEffectCommon & {
-      type: "constraint";
+      type: "object-constraint";
       targetId: string;
       strategy: "path" | "edge" | "inside" | "lowest-tangent";
       params?: Record<string, unknown>;
@@ -234,6 +233,8 @@ export type EditorObjectEffect =
       role: "cut" | "bleed" | "safe-area";
       style?: Record<string, unknown>;
     });
+
+export type EditorObjectEffect = EditorEffect | EditorBuiltinObjectEffect;
 
 export interface EditorDocumentDiagnostic {
   severity: EditorDocumentDiagnosticSeverity;
@@ -593,14 +594,14 @@ function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
     };
   }
 
-  if (type === "constraint") {
+  if (type === "object-constraint") {
     const targetId = normalizeId(value.targetId);
     const strategy = normalizeId(value.strategy);
     if (
       !targetId ||
       !["path", "edge", "inside", "lowest-tangent"].includes(strategy)
     ) {
-      return normalizeEffect(value);
+      return null;
     }
 
     return {
@@ -886,21 +887,22 @@ function resolveEffectCapabilityId(
   return effect.capabilityId || options.resolveEffectCapabilityId?.(effect);
 }
 
-function isEditorEffect(effect: EditorObjectEffect): effect is EditorEffect {
-  if (
-    effect.type === "constraint" &&
-    "targetId" in effect &&
-    "strategy" in effect
-  ) {
-    return false;
-  }
-
-  return !(
+export function isEditorBuiltinObjectEffect(
+  effect: EditorObjectEffect,
+): effect is EditorBuiltinObjectEffect {
+  return (
     effect.type === "clip-source" ||
     effect.type === "boolean" ||
+    effect.type === "object-constraint" ||
     effect.type === "interactive" ||
     effect.type === "guide"
   );
+}
+
+export function isGenericEditorEffect(
+  effect: EditorObjectEffect,
+): effect is EditorEffect {
+  return !isEditorBuiltinObjectEffect(effect);
 }
 
 function validateEffect(
@@ -960,7 +962,7 @@ function validateObjectEffects(
   options: EditorDocumentValidationOptions,
 ) {
   effects?.forEach((effect, index) => {
-    if (isEditorEffect(effect)) {
+    if (isGenericEditorEffect(effect)) {
       validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options);
     }
   });
@@ -1196,11 +1198,11 @@ function collectEffects(
       );
       layer.objects?.forEach((object, objectIndex) => {
         const objectPath = `${layerPath}.objects[${objectIndex}]`;
-        object.effects?.forEach((effect, effectIndex) => {
-          if (isEditorEffect(effect)) {
-            visit(effect, `${objectPath}.effects[${effectIndex}]`);
-          }
-        });
+          object.effects?.forEach((effect, effectIndex) => {
+            if (isGenericEditorEffect(effect)) {
+              visit(effect, `${objectPath}.effects[${effectIndex}]`);
+            }
+          });
       });
     });
   });

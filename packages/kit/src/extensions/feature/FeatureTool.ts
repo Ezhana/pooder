@@ -4,7 +4,6 @@ import {
   CONFIGURATION_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SURFACE_FRAME_SERVICE,
-  resolveObjectSource,
   ExtensionContext,
   ExtensionContributions,
   ExtensionDefinition,
@@ -17,6 +16,7 @@ import {
   type SceneLayoutService,
   type SurfaceFrameService,
 } from "@pooder/core";
+import { resolveObjectSource } from "@pooder/document-core";
 import {
   CANVAS_SERVICE,
   CanvasService,
@@ -25,7 +25,7 @@ import {
   RenderEffectSpec,
   RenderObjectSpec,
 } from "@pooder/core";
-import type { EditorDocument, EditorEffect, EditorObject } from "@pooder/document/kit";
+import type { EditorDocument, EditorEffect, EditorObject } from "@pooder/document";
 import { ConstraintRegistry, ConstraintFeature } from "../constraints";
 import { completeFeaturesStrict } from "../featureComplete";
 import { generateDielinePath } from "../geometry";
