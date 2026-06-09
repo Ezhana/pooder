@@ -4956,12 +4956,53 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     placementId: "front.image.user",
     sessionId: "customization:image-placement:sku:new:front:front.image.user",
   };
+  const originalCreateObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
+    URL,
+    "createObjectURL",
+  );
+  const originalRevokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
+    URL,
+    "revokeObjectURL",
+  );
+  const originalFetch = (globalThis as any).fetch;
+  let createObjectUrlCalls = 0;
+  const revokedObjectUrls: string[] = [];
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: () => {
+      createObjectUrlCalls += 1;
+      return "blob:committed-configurable-placement";
+    },
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: (url: string) => {
+      revokedObjectUrls.push(url);
+    },
+  });
+  (globalThis as any).fetch = async () => ({
+    blob: async () => new Blob(["committed-configurable-placement"]),
+  });
+
   await driver.beginSession(sessionInput);
   await driver.setImageSource(sessionInput, {
     src: "blob:front-image-original",
     metadata: { width: 100, height: 100 },
   });
-  await driver.completeSession(sessionInput);
+  try {
+    await driver.completeSession(sessionInput);
+  } finally {
+    if (originalCreateObjectUrlDescriptor) {
+      Object.defineProperty(
+        URL,
+        "createObjectURL",
+        originalCreateObjectUrlDescriptor,
+      );
+    } else {
+      delete (URL as any).createObjectURL;
+    }
+    (globalThis as any).fetch = originalFetch;
+  }
 
   const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
   const configurableVisualConfig = runtime.config.get("configurableVisual") as any;
@@ -4970,6 +5011,16 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     "blob:front-image-original",
     "configurable visual image placement commit should retain the editable original source",
   );
+  assertEqual(
+    configurableVisualConfig?.["front.image.user"]?.src,
+    "blob:committed-configurable-placement",
+    "configurable visual image placement commit should store a compact committed object URL",
+  );
+  assertEqual(
+    createObjectUrlCalls,
+    1,
+    "configurable visual image placement commit should convert exported data URLs to object URLs",
+  );
   const committedGraphNode = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph()
@@ -4977,7 +5028,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     .find((node) => node.subjectId === "front.image.user" && node.visual?.src);
   assertEqual(
     committedGraphNode?.visual?.src,
-    "data:image/png;base64,committed-configurable-placement",
+    "blob:committed-configurable-placement",
     "configurable visual image placement commit should keep a committed image in the render graph",
   );
   assertEqual(
@@ -5012,7 +5063,24 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   );
   driver.resetSession(sessionInput);
 
-  await runtime.dispose();
+  try {
+    await runtime.dispose();
+    assertDeepEqual(
+      revokedObjectUrls,
+      [],
+      "configurable visual committed object URLs should outlive the runtime that generated them",
+    );
+  } finally {
+    if (originalRevokeObjectUrlDescriptor) {
+      Object.defineProperty(
+        URL,
+        "revokeObjectURL",
+        originalRevokeObjectUrlDescriptor,
+      );
+    } else {
+      delete (URL as any).revokeObjectURL;
+    }
+  }
 }
 
 async function testFeatureCapabilityDefinition() {

@@ -1649,13 +1649,17 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         return { ok: false, reason: "image-crop-export-failed" };
       }
 
+      const persistsCommittedVisual =
+        placement.commitTarget.type === "configurable-visual";
       const croppedSrc = croppedImage.url
         ? await normalizeCommittedExportUrl(croppedImage.url)
         : image.src;
-      this.rememberGeneratedCommittedExportObjectUrl(
-        croppedImage.url,
-        croppedSrc,
-      );
+      if (!persistsCommittedVisual) {
+        this.rememberGeneratedCommittedExportObjectUrl(
+          croppedImage.url,
+          croppedSrc,
+        );
+      }
       const sourceSrc = readMetadataSourceSrc(image.metadata) || image.src;
       const sourceTransform = resolveImageTransformSnapshot(image);
       const rawSourceMetadata = isRecord(image.metadata?.source)
