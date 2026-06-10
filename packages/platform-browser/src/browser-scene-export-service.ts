@@ -55,6 +55,13 @@ function normalizeOutputMaskMode(mode: unknown): "alpha" | "outline" | "shape" {
   throw new Error("browser-scene-export-output-mask-mode-unsupported");
 }
 
+function isInvalidOutputMaskError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "browser-scene-export-output-mask-invalid"
+  );
+}
+
 function normalizeMultiplier(multiplier: unknown): number {
   const numeric = Number(multiplier);
   return Number.isFinite(numeric) ? Math.max(1, numeric) : 2;
@@ -220,16 +227,27 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
       exportCanvas.renderAll();
       const exportedUrl = exportCanvas.toDataURL({ format, multiplier: 1 });
-      const url = outputMask
-        ? await this.applyOutputMask(exportedUrl, {
+      let url = exportedUrl;
+      if (outputMask) {
+        try {
+          url = await this.applyOutputMask(exportedUrl, {
             crop,
             height,
             multiplier,
             outputMask,
             sceneScale: scaleBase,
             width,
-          })
-        : exportedUrl;
+          });
+        } catch (error) {
+          if (!isInvalidOutputMaskError(error)) {
+            throw error;
+          }
+          console.warn(
+            "[BrowserSceneExportService] Output mask is invalid; using the unmasked export.",
+            error,
+          );
+        }
+      }
       if (!url) {
         throw new Error("browser-scene-export-failed");
       }

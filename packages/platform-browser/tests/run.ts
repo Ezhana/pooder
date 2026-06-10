@@ -2566,6 +2566,85 @@ async function testSceneExportAppliesOutputMask() {
   );
 }
 
+async function testSceneExportFallsBackWhenOutputMaskIsInvalid() {
+  const source = {
+    data: {
+      exportKeys: ["element"],
+      layerId: "image.user",
+    },
+    visible: true,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    getCenterPoint() {
+      return { x: 50, y: 40 };
+    },
+    async clone() {
+      return {
+        set(values: Record<string, unknown>) {
+          Object.assign(this, values);
+        },
+        setCoords() {},
+      };
+    },
+  };
+  const exportCanvas = {
+    add() {},
+    dispose() {},
+    renderAll() {},
+    setDimensions() {},
+    toDataURL() {
+      return "data:image/png;base64,raw";
+    },
+  };
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    selectObjects: () => [source],
+    getSceneScale: () => 1,
+    toScenePoint: (point: { x: number; y: number }) => point,
+    toSceneRect: (rect: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }) => rect,
+  };
+  service.sceneLayoutService = {};
+  service.createExportCanvas = () => exportCanvas;
+  service.applyOutputMask = async () => {
+    throw new Error("browser-scene-export-output-mask-invalid");
+  };
+
+  const originalWarn = console.warn;
+  let warning: unknown[] | null = null;
+  console.warn = (...args: unknown[]) => {
+    warning = args;
+  };
+
+  try {
+    const result = await service.exportImage({
+      crop: {
+        type: "sceneRect",
+        rect: { left: 0, top: 0, width: 100, height: 80 },
+      },
+      outputMask: { mode: "outline", sourceKey: "templateFrame" },
+      source: { layerIds: ["image.user"] },
+    });
+
+    assertEqual(
+      result.url,
+      "data:image/png;base64,raw",
+      "scene export should fall back to the unmasked export when the mask is invalid",
+    );
+    assert(
+      String(warning?.[0] || "").includes("Output mask is invalid"),
+      "scene export should warn when falling back from an invalid output mask",
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
 async function testSceneExportRejectsMissingOutputMaskSource() {
   const source = {
     data: {
@@ -2823,6 +2902,10 @@ async function main() {
     [
       "applies output masks during scene export",
       testSceneExportAppliesOutputMask,
+    ],
+    [
+      "falls back from invalid output masks during scene export",
+      testSceneExportFallsBackWhenOutputMaskIsInvalid,
     ],
     [
       "rejects missing output mask source",
