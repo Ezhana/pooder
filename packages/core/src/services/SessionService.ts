@@ -9,6 +9,7 @@ import type {
   SessionId,
   SessionLeavePolicy,
   SessionLeaveResult,
+  SessionRequestResult,
   SessionLifecycle,
   SessionScope,
   SessionState,
@@ -47,6 +48,8 @@ export default class SessionService implements Service {
         ...existing.state,
         scope: normalizeScope(input.scope ?? existing.state.scope),
         status: "active",
+        interactionMode:
+          input.interactionMode ?? existing.state.interactionMode,
         dirty: input.draft === undefined ? existing.state.dirty : true,
         ...(input.draft === undefined ? {} : { draft: clone(input.draft) }),
         artifacts: cloneArtifacts(input.artifacts ?? []),
@@ -64,6 +67,7 @@ export default class SessionService implements Service {
     const state: SessionState = {
       sessionId,
       scope: normalizeScope(input.scope),
+      interactionMode: input.interactionMode ?? "cooperative",
       status: "active",
       dirty: input.draft !== undefined,
       ...(input.draft === undefined ? {} : { draft: clone(input.draft) }),
@@ -79,6 +83,54 @@ export default class SessionService implements Service {
     void input.lifecycle?.begin?.();
     this.emitSessionChange(sessionId, "create");
     return cloneState(state) as SessionState<TDraft>;
+  }
+
+  async requestSession<TDraft = unknown>(
+    input: CreateSessionInput<TDraft> = {},
+  ): Promise<SessionRequestResult<TDraft>> {
+    const sessionId = this.normalizeSessionId(
+      input.sessionId || this.createSessionId(input.scope),
+    );
+    const scope = normalizeScope(input.scope);
+    const interactionMode = input.interactionMode ?? "cooperative";
+    const conflicts = this.listSessions({ status: "active" }).filter(
+      (state) => {
+        if (state.sessionId === sessionId) return false;
+        if (!scope.groupId || state.scope.groupId !== scope.groupId)
+          return false;
+        return (
+          interactionMode === "exclusive" ||
+          state.interactionMode === "exclusive"
+        );
+      },
+    );
+
+    for (const conflict of conflicts) {
+      const leave = await this.handleBeforeLeave(conflict.sessionId);
+      if (leave.decision === "blocked") {
+        return {
+          ok: false,
+          reason: "session-conflict",
+          conflictingSessionId: conflict.sessionId,
+          detail: leave.detail ?? leave.reason,
+        };
+      }
+      if (this.isSessionActive(conflict.sessionId)) {
+        await this.cancelSession(conflict.sessionId, {
+          reason: "exclusive-session-replaced",
+          nextSessionId: sessionId,
+        });
+      }
+    }
+
+    const state = this.createSession({
+      ...input,
+      sessionId,
+      scope,
+      interactionMode,
+    });
+    this.focusSession(sessionId);
+    return { ok: true, state };
   }
 
   updateSession<TDraft = unknown>(
@@ -104,7 +156,10 @@ export default class SessionService implements Service {
     return cloneState(record.state) as SessionState<TDraft>;
   }
 
-  registerDirtyTracker(sessionId: SessionId, callback: () => boolean): Disposable {
+  registerDirtyTracker(
+    sessionId: SessionId,
+    callback: () => boolean,
+  ): Disposable {
     const id = this.normalizeSessionId(sessionId);
     const wrapped = () => {
       try {
@@ -127,7 +182,9 @@ export default class SessionService implements Service {
     sessionId: SessionId,
   ): SessionState<TDraft, TResult> | undefined {
     const record = this.sessions.get(this.normalizeSessionId(sessionId));
-    return record ? (cloneState(record.state) as SessionState<TDraft, TResult>) : undefined;
+    return record
+      ? (cloneState(record.state) as SessionState<TDraft, TResult>)
+      : undefined;
   }
 
   listSessions(query: ListSessionsQuery = {}): SessionState[] {
@@ -138,7 +195,8 @@ export default class SessionService implements Service {
       .map((record) => record.state)
       .filter((state) => {
         if (statuses && !statuses.has(state.status)) return false;
-        if (query.scope && !scopeMatches(state.scope, query.scope)) return false;
+        if (query.scope && !scopeMatches(state.scope, query.scope))
+          return false;
         return true;
       })
       .map(cloneState)
@@ -146,11 +204,16 @@ export default class SessionService implements Service {
   }
 
   isSessionActive(sessionId: SessionId): boolean {
-    return this.sessions.get(this.normalizeSessionId(sessionId))?.state.status === "active";
+    return (
+      this.sessions.get(this.normalizeSessionId(sessionId))?.state.status ===
+      "active"
+    );
   }
 
   hasActiveSession(query: { scope?: Partial<SessionScope> } = {}): boolean {
-    return this.listSessions({ status: "active", scope: query.scope }).length > 0;
+    return (
+      this.listSessions({ status: "active", scope: query.scope }).length > 0
+    );
   }
 
   isDirty(sessionId: SessionId): boolean {
@@ -191,7 +254,9 @@ export default class SessionService implements Service {
     return this.focusedSessionId;
   }
 
-  async validateSession(sessionId: SessionId): Promise<SessionValidationResult> {
+  async validateSession(
+    sessionId: SessionId,
+  ): Promise<SessionValidationResult> {
     const id = this.normalizeSessionId(sessionId);
     const result = await this.sessions.get(id)?.lifecycle?.validate?.();
     if (result === undefined || result === true) {
@@ -231,6 +296,7 @@ export default class SessionService implements Service {
       updatedAt: Date.now(),
     };
     this.emitSessionChange(id, "commit", result);
+    this.releaseFocus(id);
     return { ok: true, result };
   }
 
@@ -245,6 +311,7 @@ export default class SessionService implements Service {
       updatedAt: Date.now(),
     };
     this.emitSessionChange(id, "rollback");
+    this.releaseFocus(id);
   }
 
   async cancelSession(sessionId: SessionId, detail?: unknown): Promise<void> {
@@ -258,6 +325,7 @@ export default class SessionService implements Service {
       updatedAt: Date.now(),
     };
     this.emitSessionChange(id, "cancel", detail);
+    this.releaseFocus(id);
   }
 
   async handleBeforeLeave(
@@ -310,6 +378,12 @@ export default class SessionService implements Service {
     return this.sessions.get(sessionId)!;
   }
 
+  private releaseFocus(sessionId: SessionId) {
+    if (this.focusedSessionId === sessionId) {
+      this.focusSession(null);
+    }
+  }
+
   private emitSessionChange(
     sessionId: SessionId,
     reason: string,
@@ -349,6 +423,7 @@ function normalizeScope(scope?: SessionScope): SessionScope {
     surfaceId: normalizeNullableText(scope?.surfaceId),
     subjectId: normalizeNullableText(scope?.subjectId),
     channel: normalizeNullableText(scope?.channel),
+    groupId: normalizeNullableText(scope?.groupId),
   };
 }
 
@@ -357,10 +432,14 @@ export function scopeMatches(
   query: Partial<SessionScope>,
 ): boolean {
   const normalizedQuery = normalizeScope(query);
-  return (["surfaceId", "subjectId", "channel"] as const).every((key) => {
-    const expected = normalizedQuery[key];
-    return expected === null || expected === undefined || scope[key] === expected;
-  });
+  return (["surfaceId", "subjectId", "channel", "groupId"] as const).every(
+    (key) => {
+      const expected = normalizedQuery[key];
+      return (
+        expected === null || expected === undefined || scope[key] === expected
+      );
+    },
+  );
 }
 
 function normalizeNullableText(value: unknown): string | null {

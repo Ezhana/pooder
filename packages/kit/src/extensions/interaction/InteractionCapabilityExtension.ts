@@ -1,138 +1,171 @@
 import {
+  COMMAND_SERVICE,
   CONSTRAINT_RESOLVER_CAPABILITY_ID,
   CONSTRAINT_RESOLVER_SERVICE,
   GEOMETRY_SOURCE_CAPABILITY_ID,
   GEOMETRY_SOURCE_SERVICE,
+  SESSION_SERVICE,
   createConstraintResolverCapabilityDefinition,
   createGeometrySourceCapabilityDefinition,
+  type CommandService,
   type ConstraintResolverCapability,
-  type ConstraintSpec,
   type DefaultConstraintResolverCapability,
   type DefaultGeometrySourceCapability,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
   type GeometrySourceCapability,
-  type RenderIntentCompilerContext,
-  type RenderIntentInteractionConstraint,
-  type RenderIntentPatch,
-  type RenderIntentSubject,
-  type RuntimeConditionExpr,
+  type SessionInteractionMode,
+  type SessionLeavePolicy,
+  type SessionScope,
+  type SessionService,
 } from "@pooder/core";
-import type { EditorEffect } from "@pooder/document";
 
 export const INTERACTION_CAPABILITY_ID = "pooder.kit.interaction";
 
-interface InteractionEffectPayload {
-  enabled?: boolean;
-  enabledWhen?: RuntimeConditionExpr;
-  transform?: { enabled?: boolean };
-  drag?: { enabled?: boolean };
-}
-
-interface ConstraintEffectPayload {
-  activeWhen?: RuntimeConditionExpr;
-  constraints: unknown[];
+interface InteractionActivationEvent {
+  activation?: unknown;
+  layerId?: unknown;
+  renderIntentId?: unknown;
+  subjectId?: unknown;
+  surfaceId?: unknown;
+  targetData?: unknown;
+  trigger?: unknown;
 }
 
 export class InteractionCapabilityExtension implements ExtensionDefinition {
   readonly id = "pooder.kit.interaction";
+  readonly activation = {
+    requiresServices: [
+      COMMAND_SERVICE,
+      CONSTRAINT_RESOLVER_SERVICE,
+      GEOMETRY_SOURCE_SERVICE,
+      SESSION_SERVICE,
+    ],
+  };
   private geometrySource?: GeometrySourceCapability;
   private constraintResolver?: ConstraintResolverCapability;
+  private commandService?: CommandService;
+  private sessionService?: SessionService;
+  private context?: ExtensionContext;
 
   contribute(): ExtensionContributions {
     return {
       capabilities: [
         createGeometrySourceCapabilityDefinition(this.getGeometryFacade()),
-        createConstraintResolverCapabilityDefinition(this.getConstraintFacade()),
+        createConstraintResolverCapabilityDefinition(
+          this.getConstraintFacade(),
+        ),
         {
           id: INTERACTION_CAPABILITY_ID,
           metadata: {
             name: "Interaction",
             description:
-              "Compile declarative interaction and constraint effects.",
+              "Dispatch document-declared object interactions and constraints.",
             tags: ["core", "interaction", "constraint"],
           },
-        },
-      ],
-      renderIntentCompilers: [
-        {
-          capabilityId: INTERACTION_CAPABILITY_ID,
-          effectType: "interaction",
-          compile: (context) =>
-            this.compileInteractionEffect(
-              context as RenderIntentCompilerContext<EditorEffect, unknown>,
-            ),
-        },
-        {
-          capabilityId: INTERACTION_CAPABILITY_ID,
-          effectType: "constraint",
-          compile: (context) =>
-            this.compileConstraintEffect(
-              context as RenderIntentCompilerContext<EditorEffect, unknown>,
-            ),
         },
       ],
     };
   }
 
   activate(context: ExtensionContext): void {
-    this.geometrySource =
-      context.services.get<DefaultGeometrySourceCapability>(
-        GEOMETRY_SOURCE_SERVICE,
-      );
+    this.context = context;
+    this.geometrySource = context.services.get<DefaultGeometrySourceCapability>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
     this.constraintResolver =
       context.services.get<DefaultConstraintResolverCapability>(
         CONSTRAINT_RESOLVER_SERVICE,
       );
+    this.commandService =
+      context.services.getOrThrow<CommandService>(COMMAND_SERVICE);
+    this.sessionService =
+      context.services.getOrThrow<SessionService>(SESSION_SERVICE);
     if (!this.geometrySource || !this.constraintResolver) {
       throw new Error(
-        "GeometrySource and ConstraintResolver services are required.",
+        "GeometrySource, ConstraintResolver, and CommandService are required.",
       );
     }
+    context.eventBus.on("interaction:activate", this.onInteractionActivate);
   }
 
-  private compileInteractionEffect(
-    context: RenderIntentCompilerContext<EditorEffect, unknown>,
-  ): RenderIntentPatch | void {
-    const id = getTargetIntentId(context.target);
-    if (!id) return;
-    const payload = normalizeInteractionPayload(context.effect.payload);
-    return {
-      id,
-      interaction: {
-        transform: {
-          enabled: payload.transform?.enabled ?? payload.enabled ?? true,
-        },
-        drag: {
-          enabled: payload.drag?.enabled ?? payload.enabled ?? true,
-        },
-        ...(payload.enabledWhen ? { enabledWhen: payload.enabledWhen } : {}),
-      },
-    };
+  deactivate(): void {
+    this.context?.eventBus.off(
+      "interaction:activate",
+      this.onInteractionActivate,
+    );
+    this.context = undefined;
+    this.geometrySource = undefined;
+    this.constraintResolver = undefined;
+    this.commandService = undefined;
+    this.sessionService = undefined;
   }
 
-  private compileConstraintEffect(
-    context: RenderIntentCompilerContext<EditorEffect, unknown>,
-  ): RenderIntentPatch | void {
-    const id = getTargetIntentId(context.target);
-    if (!id) return;
-    const payload = normalizeConstraintPayload(context.effect.payload);
-    const constraints = payload.constraints
-      .map((constraint) => normalizeConstraint(constraint, payload.activeWhen))
-      .filter(
-        (constraint): constraint is RenderIntentInteractionConstraint =>
-          Boolean(constraint),
-      );
-    if (!constraints.length) return;
-    return {
-      id,
-      interaction: {
-        drag: {
-          constraints,
-        },
-      },
-    };
+  private readonly onInteractionActivate = (
+    rawEvent: InteractionActivationEvent,
+  ) => {
+    void this.dispatchInteraction(rawEvent);
+  };
+
+  private async dispatchInteraction(event: InteractionActivationEvent) {
+    const activation = isRecord(event.activation) ? event.activation : {};
+    const action = isRecord(activation.action) ? activation.action : {};
+    const command = normalizeId(action.command);
+    if (!command) return;
+
+    const subjectId = normalizeId(event.subjectId);
+    const surfaceId = normalizeId(event.surfaceId);
+    const targetData = isRecord(event.targetData) ? event.targetData : {};
+    const actionPayload = isRecord(action.payload)
+      ? cloneRecord(action.payload)
+      : {};
+    const session = isRecord(activation.session)
+      ? activation.session
+      : undefined;
+    let sessionId: string | undefined;
+
+    if (session) {
+      const channel = normalizeId(session.channel) || command;
+      const placement = isRecord(targetData.imagePlacement)
+        ? targetData.imagePlacement
+        : {};
+      sessionId =
+        normalizeId(session.sessionId) ||
+        normalizeId(actionPayload.sessionId) ||
+        normalizeId(placement.sessionKey) ||
+        `${channel}:${subjectId || "editor"}`;
+      const scope = createSessionScope(session, {
+        channel,
+        subjectId,
+        surfaceId,
+      });
+      const result = await this.sessionService?.requestSession({
+        sessionId,
+        scope,
+        interactionMode: normalizeInteractionMode(session.mode),
+        leavePolicy: normalizeLeavePolicy(session.leavePolicy),
+      });
+      if (result && !result.ok) {
+        this.context?.eventBus.emit("interaction:activation-blocked", {
+          command,
+          event,
+          result,
+        });
+        return;
+      }
+    }
+
+    await this.commandService?.executeCommand(command, {
+      ...actionPayload,
+      layerId: normalizeId(event.layerId) || undefined,
+      renderIntentId: normalizeId(event.renderIntentId) || undefined,
+      sessionId,
+      subjectId: subjectId || undefined,
+      surfaceId: surfaceId || undefined,
+      targetData: cloneRecord(targetData),
+      trigger: normalizeId(event.trigger) || undefined,
+    });
   }
 
   private getGeometryFacade(): GeometrySourceCapability {
@@ -174,92 +207,33 @@ export class InteractionCapabilityExtension implements ExtensionDefinition {
   }
 }
 
-function getTargetIntentId(target: RenderIntentSubject): string {
-  return String(
-    target.objectId ?? target.layerId ?? target.surfaceId ?? "",
-  ).trim();
-}
-
-function normalizeInteractionPayload(value: unknown): InteractionEffectPayload {
-  if (!isRecord(value)) return {};
+function createSessionScope(
+  session: Record<string, unknown>,
+  context: { channel: string; subjectId: string; surfaceId: string },
+): SessionScope {
+  const scope = normalizeId(session.scope) || "subject";
   return {
-    enabled: typeof value.enabled === "boolean" ? value.enabled : undefined,
-    enabledWhen: normalizeRuntimeCondition(value.enabledWhen),
-    transform: isRecord(value.transform)
-      ? {
-          enabled:
-            typeof value.transform.enabled === "boolean"
-              ? value.transform.enabled
-              : undefined,
-        }
-      : undefined,
-    drag: isRecord(value.drag)
-      ? {
-          enabled:
-            typeof value.drag.enabled === "boolean"
-              ? value.drag.enabled
-              : undefined,
-        }
-      : undefined,
+    channel: context.channel,
+    groupId: normalizeId(session.groupId) || null,
+    surfaceId: scope === "editor" ? null : context.surfaceId || null,
+    subjectId: scope === "subject" ? context.subjectId || null : null,
   };
 }
 
-function normalizeConstraintPayload(value: unknown): ConstraintEffectPayload {
-  if (!isRecord(value)) return { constraints: [] };
-  return {
-    activeWhen: normalizeRuntimeCondition(value.activeWhen),
-    constraints: Array.isArray(value.constraints) ? value.constraints : [],
-  };
+function normalizeInteractionMode(value: unknown): SessionInteractionMode {
+  return value === "cooperative" || value === "passive" ? value : "exclusive";
 }
 
-function normalizeConstraint(
-  value: unknown,
-  payloadActiveWhen?: RuntimeConditionExpr,
-): RenderIntentInteractionConstraint | null {
-  if (!isRecord(value)) return null;
-  const entryActiveWhen = normalizeRuntimeCondition(value.activeWhen);
-  const rawSpec = isRecord(value.spec) ? value.spec : value;
-  if (!isRecord(rawSpec)) return null;
-  const type = normalizeId(rawSpec.type);
-  if (!type) return null;
-  const spec: ConstraintSpec = {
-    type,
-    ...(rawSpec.source !== undefined
-      ? { source: cloneRecord(rawSpec.source) as ConstraintSpec["source"] }
-      : {}),
-    ...(typeof rawSpec.mode === "string" ? { mode: rawSpec.mode } : {}),
-    ...(isRecord(rawSpec.params)
-      ? { params: cloneRecord(rawSpec.params) }
-      : {}),
-  };
-  const activeWhen = combineRuntimeConditions(payloadActiveWhen, entryActiveWhen);
-  return {
-    ...(activeWhen ? { activeWhen } : {}),
-    spec,
-  };
-}
-
-function combineRuntimeConditions(
-  first?: RuntimeConditionExpr,
-  second?: RuntimeConditionExpr,
-): RuntimeConditionExpr | undefined {
-  if (first && second) return { op: "all", exprs: [first, second] };
-  return first ?? second;
-}
-
-function normalizeRuntimeCondition(
-  value: unknown,
-): RuntimeConditionExpr | undefined {
-  return isRecord(value) ? (cloneRecord(value) as RuntimeConditionExpr) : undefined;
+function normalizeLeavePolicy(value: unknown): SessionLeavePolicy {
+  return value === "commit" || value === "rollback" ? value : "block";
 }
 
 function normalizeId(value: unknown): string {
-  return String(value || "").trim();
+  return typeof value === "string" ? value.trim() : "";
 }
 
-function cloneRecord<T>(value: T): T {
-  if (value === undefined || value === null) return value;
-  return JSON.parse(JSON.stringify(value)) as T;
+function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

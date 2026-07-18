@@ -69,8 +69,14 @@ class FakeLayoutCanvasService implements CanvasService {
     offsetX?: number;
     offsetY?: number;
   }) {
-    const availableWidth = Math.max(0, options.containerWidth - options.padding * 2);
-    const availableHeight = Math.max(0, options.containerHeight - options.padding * 2);
+    const availableWidth = Math.max(
+      0,
+      options.containerWidth - options.padding * 2,
+    );
+    const availableHeight = Math.max(
+      0,
+      options.containerHeight - options.padding * 2,
+    );
     const scale = Math.min(
       availableWidth / options.widthMm,
       availableHeight / options.heightMm,
@@ -129,10 +135,20 @@ class FakeLayoutCanvasService implements CanvasService {
   toSceneLength(value: number) {
     return value;
   }
-  toScreenRect(rect: { left: number; top: number; width: number; height: number }) {
+  toScreenRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) {
     return rect;
   }
-  toSceneRect(rect: { left: number; top: number; width: number; height: number }) {
+  toSceneRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) {
     return rect;
   }
   getSceneViewportRect() {
@@ -184,10 +200,7 @@ function assertClose(
   }
 }
 
-function computeTestSceneLayout(
-  canvas: FakeLayoutCanvasService,
-  state: any,
-) {
+function computeTestSceneLayout(canvas: FakeLayoutCanvasService, state: any) {
   return computeSceneLayout({
     frames: state.sceneFrames,
     fitOptions: { viewPadding: state.viewPadding ?? "16%" },
@@ -309,11 +322,16 @@ async function testPendingUntilRequiredServiceArrives() {
       cycle: undefined,
     });
     assertEqual(
-      runtime.services.getOrThrow(COMMAND_SERVICE).getCommand("dependent.command"),
+      runtime.services
+        .getOrThrow(COMMAND_SERVICE)
+        .getCommand("dependent.command"),
       undefined,
     );
 
-    runtime.services.register(new DeferredDependencyService(), REQUIRED_SERVICE);
+    runtime.services.register(
+      new DeferredDependencyService(),
+      REQUIRED_SERVICE,
+    );
     await runtime.extensions.flushActivation();
 
     assertEqual(activations, 1);
@@ -520,7 +538,9 @@ async function testRuntimeCapabilityFacadeApiKeepsCommandBridge() {
 
     assertEqual(runtime.capabilities.has("pooder.test.math"), true);
     assertEqual(
-      runtime.capabilities.get<MathCapabilityApi>("pooder.test.math")?.add(2, 3),
+      runtime.capabilities
+        .get<MathCapabilityApi>("pooder.test.math")
+        ?.add(2, 3),
       5,
     );
     assertEqual(
@@ -538,9 +558,7 @@ async function testRuntimeCapabilityFacadeApiKeepsCommandBridge() {
       ["pooder.test.math"],
     );
     assertEqual(await runtime.commands.execute("math.add", 7, 8), 15);
-    assertDeepEqual(changes, [
-      { added: ["pooder.test.math"], removed: [] },
-    ]);
+    assertDeepEqual(changes, [{ added: ["pooder.test.math"], removed: [] }]);
 
     await runtime.extensions.unregister("runtime-capability-api");
 
@@ -660,7 +678,9 @@ async function testUnregisterCleansDefinitionsCapabilitiesAndCommands() {
     assertEqual(runtime.config.getDefinition("cleanup.value"), undefined);
     assertEqual(runtime.config.get("cleanup.value"), 2);
     assertEqual(
-      runtime.services.getOrThrow(COMMAND_SERVICE).getCommand("cleanup.command"),
+      runtime.services
+        .getOrThrow(COMMAND_SERVICE)
+        .getCommand("cleanup.command"),
       undefined,
     );
     assertEqual(
@@ -741,8 +761,11 @@ async function testDuplicateCapabilityIdsFailWithoutLeakingContributions() {
 async function testCapabilityRegistryContractUsesDefensiveCopiesAndEvents() {
   await withRuntime(async (runtime) => {
     const registry = runtime.services.getOrThrow(CAPABILITY_REGISTRY_SERVICE);
-    const events: Array<{ added: string[]; removed: string[]; extensionId?: string }> =
-      [];
+    const events: Array<{
+      added: string[];
+      removed: string[];
+      extensionId?: string;
+    }> = [];
     const facade = { inspect: () => "ready" };
     let registrations = 0;
     let unregistrations = 0;
@@ -881,13 +904,15 @@ async function testSceneLayersAndElements() {
       true,
     );
     assertDeepEqual(
-      scene.selectElements({ layerIds: ["artwork"] }).map((element) => element.id),
+      scene
+        .selectElements({ layerIds: ["artwork"] })
+        .map((element) => element.id),
       ["image-1", "path-1", "text-1"],
     );
     assertDeepEqual(
-      scene.selectElements({ types: ["path"], visible: false }).map(
-        (element) => element.id,
-      ),
+      scene
+        .selectElements({ types: ["path"], visible: false })
+        .map((element) => element.id),
       ["path-1"],
     );
     assertEqual(scene.removeElement("path-1"), true);
@@ -951,7 +976,11 @@ async function testSceneSelectors() {
       "empty layer selector should return the ordered layer set",
     );
     assertDeepEqual(
-      scene.selectLayers({ tags: ["design", "missing"], metadata: { owner: "app" } })
+      scene
+        .selectLayers({
+          tags: ["design", "missing"],
+          metadata: { owner: "app" },
+        })
         .map((layer) => layer.id),
       ["artwork"],
       "layer selector should AND fields and match any requested tag",
@@ -1001,7 +1030,10 @@ async function testSceneServiceContractValidatesAndClonesState() {
     scene.addLayer({ id: "target", order: 2 });
 
     layer.metadata!.owner = "mutated";
-    assertEqual(scene.selectOneLayer({ ids: ["source"] })?.metadata?.owner, "app");
+    assertEqual(
+      scene.selectOneLayer({ ids: ["source"] })?.metadata?.owner,
+      "app",
+    );
 
     const rect = scene.addElement({
       id: "rect",
@@ -1031,10 +1063,15 @@ async function testSceneServiceContractValidatesAndClonesState() {
       metadata: { selected: true },
     });
     assertDeepEqual(
-      scene.selectElements({ layerIds: ["target"] }).map((element) => element.id),
+      scene
+        .selectElements({ layerIds: ["target"] })
+        .map((element) => element.id),
       ["rect"],
     );
-    assertEqual(scene.selectOneElement({ ids: ["rect"] })?.metadata?.selected, true);
+    assertEqual(
+      scene.selectOneElement({ ids: ["rect"] })?.metadata?.selected,
+      true,
+    );
 
     assertThrows(
       () => scene.addLayer({ id: "source" }),
@@ -1177,11 +1214,19 @@ async function testSceneServiceManagesMultipleScenes() {
       "scene metadata should describe renderability",
     );
     assert(
-      Boolean(changes.some((change) => change.scenes?.added.includes("session"))),
+      Boolean(
+        changes.some((change) => change.scenes?.added.includes("session")),
+      ),
       "scene changes should report scene additions",
     );
     assert(
-      Boolean(changes.some((change) => change.sceneChanges?.session?.elements.added.includes("shared-element"))),
+      Boolean(
+        changes.some((change) =>
+          change.sceneChanges?.session?.elements.added.includes(
+            "shared-element",
+          ),
+        ),
+      ),
       "scene changes should report scoped element additions",
     );
     assertEqual(scene.removeScene("session"), true);
@@ -1221,9 +1266,8 @@ async function testSceneTransactionRollsBackMultipleScenes() {
 
 async function testSessionsWithoutTools() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(
-      SESSION_SERVICE,
-    );
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     const changes: SessionChangeEvent[] = [];
     let beginCount = 0;
     let validateCount = 0;
@@ -1287,9 +1331,8 @@ async function testSessionsWithoutTools() {
 
 async function testSessionLifecycleEvents() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(
-      SESSION_SERVICE,
-    );
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     const events: Array<{
       reason: string;
       sessionId: string;
@@ -1313,7 +1356,7 @@ async function testSessionLifecycleEvents() {
     await sessions.commitSession("image:front:slot");
     await sessions.cancelSession("image:front:slot-2");
 
-    assertEqual(sessions.getFocusedSessionId(), "image:front:slot");
+    assertEqual(sessions.getFocusedSessionId(), null);
     assertEqual(sessions.isSessionActive("image:front:slot"), false);
     assertEqual(
       sessions.listSessions({ scope: { channel: "image" } }).length,
@@ -1328,9 +1371,48 @@ async function testSessionLifecycleEvents() {
         { reason: "focus", sessionId: "image:front:slot" },
         { reason: "committing", sessionId: "image:front:slot" },
         { reason: "commit", sessionId: "image:front:slot" },
+        { reason: "focus", sessionId: "image:front:slot" },
         { reason: "cancel", sessionId: "image:front:slot-2" },
       ],
       "sessions should emit unified lifecycle events",
+    );
+  });
+}
+
+async function testExclusiveSessionRequests() {
+  await withRuntime(async (runtime) => {
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    await sessions.requestSession({
+      sessionId: "white-ink:front",
+      scope: { channel: "white-ink", groupId: "editor-interaction" },
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    });
+    sessions.markDirty("white-ink:front", true);
+
+    const blocked = await sessions.requestSession({
+      sessionId: "image:front",
+      scope: { channel: "image-placement", groupId: "editor-interaction" },
+      interactionMode: "exclusive",
+    });
+    assertEqual(blocked.ok, false);
+    assertEqual(blocked.conflictingSessionId, "white-ink:front");
+
+    sessions.markDirty("white-ink:front", false);
+    const activated = await sessions.requestSession({
+      sessionId: "image:front",
+      scope: { channel: "image-placement", groupId: "editor-interaction" },
+      interactionMode: "exclusive",
+    });
+    assertEqual(activated.ok, true);
+    assertEqual(sessions.isSessionActive("white-ink:front"), false);
+    assertEqual(sessions.isSessionActive("image:front"), true);
+    assertEqual(
+      sessions.hasActiveSession({
+        scope: { groupId: "editor-interaction" },
+      }),
+      true,
     );
   });
 }
@@ -1416,7 +1498,11 @@ async function testDragInteractionSnapsAndConstrains() {
     ],
     options: { thresholdPx: 6, includeCenters: false },
   });
-  assertEqual(snapped.frame.left, 100, "drag should snap x to the nearest line");
+  assertEqual(
+    snapped.frame.left,
+    100,
+    "drag should snap x to the nearest line",
+  );
   assertEqual(snapped.frame.top, 10, "drag should snap y to the nearest line");
   assertEqual(
     snapped.matches.length,
@@ -1440,7 +1526,11 @@ async function testDragInteractionSnapsAndConstrains() {
     0,
     "snap candidates that break hard constraints should be rejected",
   );
-  assertEqual(rejected.frame.left, 85, "final projection still enforces bounds");
+  assertEqual(
+    rejected.frame.left,
+    85,
+    "final projection still enforces bounds",
+  );
 
   assertEqual(
     createRectSnapLines({ left: 0, top: 0, width: 10, height: 20 }).length,
@@ -1451,9 +1541,10 @@ async function testDragInteractionSnapsAndConstrains() {
 
 async function testGeometrySourceCapabilityRegistry() {
   await withRuntime(async (runtime) => {
-    const geometry = runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
-      GEOMETRY_SOURCE_SERVICE,
-    );
+    const geometry =
+      runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
+        GEOMETRY_SOURCE_SERVICE,
+      );
     const disposable = geometry.registerSource(
       createStaticGeometrySourceProvider({
         sourceId: "static",
@@ -1520,12 +1611,14 @@ async function testGeometrySourceCapabilityRegistry() {
 
 async function testConstraintResolverCapabilityBuiltins() {
   await withRuntime(async (runtime) => {
-    const geometry = runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
-      GEOMETRY_SOURCE_SERVICE,
-    );
-    const resolver = runtime.services.getOrThrow<DefaultConstraintResolverCapability>(
-      CONSTRAINT_RESOLVER_SERVICE,
-    );
+    const geometry =
+      runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
+        GEOMETRY_SOURCE_SERVICE,
+      );
+    const resolver =
+      runtime.services.getOrThrow<DefaultConstraintResolverCapability>(
+        CONSTRAINT_RESOLVER_SERVICE,
+      );
     geometry.registerSource(
       createStaticGeometrySourceProvider({
         sourceId: "static",
@@ -1593,9 +1686,8 @@ async function testConstraintResolverCapabilityBuiltins() {
 
 async function testSessionDirtyTrackerCanBlockLeave() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(
-      SESSION_SERVICE,
-    );
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     sessions.createSession({
       sessionId: "session.feature",
       scope: { channel: "feature" },
@@ -1605,8 +1697,7 @@ async function testSessionDirtyTrackerCanBlockLeave() {
       () => true,
     );
 
-    const leaveResult =
-      await sessions.handleBeforeLeave("session.feature");
+    const leaveResult = await sessions.handleBeforeLeave("session.feature");
 
     assertDeepEqual(leaveResult, {
       decision: "blocked",
@@ -1616,10 +1707,9 @@ async function testSessionDirtyTrackerCanBlockLeave() {
 
     tracker.dispose();
     sessions.markDirty("session.feature", false);
-    assertDeepEqual(
-      await sessions.handleBeforeLeave("session.feature"),
-      { decision: "allow" },
-    );
+    assertDeepEqual(await sessions.handleBeforeLeave("session.feature"), {
+      decision: "allow",
+    });
   });
 }
 
@@ -1856,7 +1946,10 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         coordinateSpace: "screen",
         placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
         ordering: { layerId: "artwork" },
-        export: { keys: ["image.export"], tags: [" design ", "design", "mockup"] },
+        export: {
+          keys: ["image.export"],
+          tags: [" design ", "design", "mockup"],
+        },
         props: { fill: "red" },
         data: { locked: false },
         interaction: {
@@ -1890,7 +1983,9 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
               {
                 spec: {
                   type: "rect.contain",
-                  params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+                  params: {
+                    rect: { left: 0, top: 0, width: 100, height: 100 },
+                  },
                 },
               },
             ],
@@ -2052,12 +2147,14 @@ async function testRenderIntentObjectLocalEffects() {
       "clip effects should stay local on the render graph node",
     );
     assertEqual(
-      "targetLayerIds" in ((effect ?? {}) as unknown as Record<string, unknown>),
+      "targetLayerIds" in
+        ((effect ?? {}) as unknown as Record<string, unknown>),
       false,
       "clip effects should not expose global layer selectors",
     );
     assertEqual(
-      "targetSubjectIds" in ((effect ?? {}) as unknown as Record<string, unknown>),
+      "targetSubjectIds" in
+        ((effect ?? {}) as unknown as Record<string, unknown>),
       false,
       "clip effects should not expose global subject selectors",
     );
@@ -2211,10 +2308,7 @@ async function testSceneLayoutModelPositionsProductionFrame() {
   assertClose(layout.scale, 800 / 1299);
   assertClose(layout.trimRect.centerX, 650 * layout.scale);
   assertClose(layout.trimRect.left, 265 * layout.scale);
-  assertClose(
-    layout.trimRect.top,
-    300 - 150 * layout.scale,
-  );
+  assertClose(layout.trimRect.top, 300 - 150 * layout.scale);
   assertClose(layout.trimRect.width, 770 * layout.scale);
   assertClose(layout.trimRect.height, 300 * layout.scale);
   assertClose(layout.cutRect.left, layout.trimRect.left);
@@ -2320,16 +2414,14 @@ async function main() {
       "rolls back multi-scene transactions",
       testSceneTransactionRollsBackMultipleScenes,
     ],
-    [
-      "manages sessions without registered tools",
-      testSessionsWithoutTools,
-    ],
-    [
-      "emits generic session lifecycle events",
-      testSessionLifecycleEvents,
-    ],
+    ["manages sessions without registered tools", testSessionsWithoutTools],
+    ["emits generic session lifecycle events", testSessionLifecycleEvents],
+    ["coordinates exclusive session requests", testExclusiveSessionRequests],
     ["computes geometry primitives", testGeometryPrimitives],
-    ["computes drag interaction snaps and constraints", testDragInteractionSnapsAndConstrains],
+    [
+      "computes drag interaction snaps and constraints",
+      testDragInteractionSnapsAndConstrains,
+    ],
     [
       "registers and queries geometry sources",
       testGeometrySourceCapabilityRegistry,
@@ -2378,7 +2470,10 @@ async function main() {
       "resolves scene layout defaults and responsive padding",
       testSceneLayoutModelDefaultsAndPadding,
     ],
-    ["computes scene export frame layouts", testSceneLayoutModelUsesExportFrames],
+    [
+      "computes scene export frame layouts",
+      testSceneLayoutModelUsesExportFrames,
+    ],
     [
       "positions trim and cut rectangles from production frame",
       testSceneLayoutModelPositionsProductionFrame,

@@ -2,6 +2,7 @@ import {
   CANVAS_SERVICE,
   CAPABILITY_REGISTRY_SERVICE,
   CONFIGURATION_SERVICE,
+  EDITOR_INTERACTION_SESSION_GROUP_ID,
   ExtensionContext,
   ExtensionContributions,
   ExtensionDefinition,
@@ -56,6 +57,7 @@ import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import {
   IMAGE_PLACEMENT_CAPABILITY_ID,
+  IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
   createImagePlacementCapabilityDefinition,
   normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,
@@ -624,7 +626,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     name: "ImagePlacementCapability",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, RENDER_INTENT_SERVICE],
+    requiresServices: [CANVAS_SERVICE, RENDER_INTENT_SERVICE, SESSION_SERVICE],
   };
 
   private canvasService?: CanvasService;
@@ -640,7 +642,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private readonly capabilityId: string;
   private readonly imageLayerId: string;
   private readonly overlayLayerId: string;
-  private readonly beginSessionOnCanvasInteraction: boolean;
   private readonly sourceSizeCache = createSourceSizeCache((src) =>
     this.loadImageSize(src),
   );
@@ -671,11 +672,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private canvasObjectMovingHandler?: (event?: any) => void;
   private canvasBeforeRenderHandler?: (event?: any) => void;
   private canvasAfterRenderHandler?: (event?: any) => void;
-  private pendingCanvasSessionPlacementId: string | null = null;
-  private pendingCanvasSessionTarget: any = null;
-  private pendingCanvasSessionTimer: ReturnType<
-    typeof globalThis.setTimeout
-  > | null = null;
   private readonly sessionOverlayProviders = new Map<
     string,
     ImageSessionOverlayProvider
@@ -694,8 +690,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       options.layers?.overlayLayerId,
       DEFAULT_OVERLAY_LAYER_ID,
     );
-    this.beginSessionOnCanvasInteraction =
-      options.beginSessionOnCanvasInteraction !== false;
   }
 
   activate(context: ExtensionContext) {
@@ -713,7 +707,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     );
     this.exportService =
       context.services.get<SceneExportService>(SCENE_EXPORT_SERVICE);
-    this.sessionService = context.services.get<SessionService>(SESSION_SERVICE);
+    this.sessionService =
+      context.services.getOrThrow<SessionService>(SESSION_SERVICE);
 
     this.sceneSubscription?.dispose();
     this.sceneSubscription = this.sceneService?.onDidChange((event) => {
@@ -727,16 +722,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     });
     this.subscriptions.on(
       context.eventBus,
-      "selection:created",
-      this.onSelectionChanged,
-    );
-    this.subscriptions.on(
-      context.eventBus,
-      "selection:updated",
-      this.onSelectionChanged,
-    );
-    this.subscriptions.on(
-      context.eventBus,
       "selection:cleared",
       this.onSelectionCleared,
     );
@@ -745,7 +730,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       "object:modified",
       this.onObjectModified,
     );
-    this.subscriptions.on(context.eventBus, "mouse:down", this.onMouseDown);
     this.attachLayoutSubscriptions();
     this.bindCanvasInteractionHandlers();
     this.updateImages();
@@ -759,7 +743,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       this.renderIntentService,
       IMAGE_RUNTIME_RENDER_SCOPE,
     );
-    this.clearPendingCanvasSession();
     this.workingImages.clear();
     this.workingImageDraftsBySessionId.clear();
     this.retainedWorkingImageBaselines.clear();
@@ -791,8 +774,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         createImagePlacementCapabilityDefinition(
           this.getImagePlacementFacade(),
           {
-            beginSessionOnCanvasInteraction:
-              this.beginSessionOnCanvasInteraction,
             capabilityId: this.capabilityId,
             layers: {
               imageLayerId: this.imageLayerId,
@@ -800,6 +781,14 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             },
           },
         ),
+      ],
+      commands: [
+        {
+          id: IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
+          command: IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
+          title: "Open Image Placement Session",
+          handler: (input: unknown) => this.openSessionFromInteraction(input),
+        },
       ],
       renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
@@ -882,12 +871,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       placement: {
         fit,
         ...(committedTransform ? { transform: committedTransform } : {}),
-      },
-      props: {
-        selectable: false,
-        evented: true,
-        hasControls: false,
-        hasBorders: false,
       },
       data: {
         id: object.id,
@@ -1273,7 +1256,25 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const { placementId, sessionId } = this.normalizeSessionInput(input);
     const placement = this.getPlacementElement(placementId);
     if (!placement) return { ok: false, reason: "placement-not-found" };
-    this.clearPendingCanvasSession(placementId);
+    const placementState = this.getPlacementState(placement);
+    if (!placementState) return { ok: false, reason: "placement-not-found" };
+    const currentSession = this.sessionService?.getSession(sessionId);
+    if (this.sessionService && currentSession?.status !== "active") {
+      const request = await this.sessionService.requestSession({
+        sessionId,
+        scope: {
+          surfaceId: this.resolvePlacementSurfaceId(placementState),
+          subjectId: placementId,
+          channel: IMAGE_SESSION_CHANNEL,
+          groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
+        },
+        interactionMode: "exclusive",
+        leavePolicy: "block",
+      });
+      if (!request.ok) {
+        return { ok: false, reason: request.reason };
+      }
+    }
     const previousSessionId = this.sessionIdsByPlacementId.get(placementId);
     if (
       this.activePlacementId === placementId &&
@@ -1318,6 +1319,42 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return { ok: true };
   }
 
+  private async openSessionFromInteraction(input: unknown) {
+    const event = isRecord(input) ? input : {};
+    const placementId = String(event.subjectId || "").trim();
+    const sessionId = String(event.sessionId || "").trim();
+    const result = await this.beginSession({ placementId, sessionId });
+    if (!result.ok) return result;
+
+    const placement = this.getPlacementStates().find(
+      (item) => item.id === placementId,
+    );
+    if (!placement) return { ok: false, reason: "placement-not-found" };
+    this.context?.eventBus.emit("image:session:open", {
+      sessionId: sessionId || placement.sessionKey,
+      sessionKey: placement.sessionKey,
+      placementId,
+      source: "document-interaction",
+      scope: {
+        surfaceId: this.resolvePlacementSurfaceId(placement),
+        subjectId: placement.id,
+        channel: IMAGE_SESSION_CHANNEL,
+        groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
+      },
+    });
+    return result;
+  }
+
+  private async ensurePlacementSession(placementId: string, sessionId: string) {
+    if (
+      this.workingImages.has(placementId) &&
+      this.sessionIdsByPlacementId.get(placementId) === sessionId
+    ) {
+      return { ok: true };
+    }
+    return await this.beginSession({ placementId, sessionId });
+  }
+
   private async requestUpload(input: ImagePlacementSessionInput | string) {
     const { placementId, sessionId } = this.normalizeSessionInput(input);
     if (this.pendingUploadPlacementIds.has(placementId)) {
@@ -1340,9 +1377,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!src) return { ok: false, reason: "image-source-required" };
     const placement = this.getPlacementElement(placementId);
     if (!placement) return { ok: false, reason: "placement-not-found" };
-    if (!this.workingImages.has(placementId)) {
-      await this.beginSession({ placementId, sessionId });
-    }
+    const session = await this.ensurePlacementSession(placementId, sessionId);
+    if (!session.ok) return session;
     const current =
       this.workingImages.get(placementId) ||
       this.getCommittedImage(placement) ||
@@ -1386,9 +1422,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const { placementId, sessionId } = this.normalizeSessionInput(input);
     const placement = this.getPlacementElement(placementId);
     if (!placement) return { ok: false, reason: "placement-not-found" };
-    if (!this.workingImages.has(placementId)) {
-      await this.beginSession({ placementId, sessionId });
-    }
+    const session = await this.ensurePlacementSession(placementId, sessionId);
+    if (!session.ok) return session;
     const current =
       this.workingImages.get(placementId) ||
       this.getCommittedImage(placement) ||
@@ -1455,6 +1490,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const { placementId, sessionId } = this.normalizeSessionInput(input);
     const placement = this.getPlacementElement(placementId);
     if (!placement) return { ok: false, reason: "placement-not-found" };
+    const session = await this.ensurePlacementSession(placementId, sessionId);
+    if (!session.ok) return session;
     this.setWorkingImageDraft(placementId, sessionId, null);
     this.upsertImageSessionDraft(placementId, null, sessionId);
     this.syncWorkingPlacementConditionContext();
@@ -1465,7 +1502,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private resetSession(input?: ImagePlacementSessionInput | string) {
     const { placementId, sessionId } = this.getActiveSessionInput(input);
-    this.clearPendingCanvasSession(placementId);
     this.resolveSessionTargetIds(placementId).forEach((id) => {
       const targetSessionId =
         id === placementId
@@ -1799,12 +1835,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         export: {
           visibleWhen: this.getCommittedImageVisibleWhen(placementId),
         },
-        props: {
-          selectable: false,
-          evented: true,
-          hasControls: false,
-          hasBorders: false,
-        },
         data: {
           imagePlacement: {
             ...placementData,
@@ -2025,12 +2055,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
             },
           }
         : undefined,
-      props: {
-        selectable: false,
-        evented: true,
-        hasControls: false,
-        hasBorders: false,
-      },
       data: {
         imagePlacement: {
           ...placementData,
@@ -2203,126 +2227,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return policy === "free" || policy === "strict" ? policy : "warn";
   }
 
-  private onSelectionChanged = (event: any) => {
-    const selected = Array.isArray(event?.selected)
-      ? event.selected[0]
-      : event?.target;
-    this.beginSessionFromCanvasTarget(selected);
-  };
-
-  private onMouseDown = (event: any) => {
-    this.beginSessionFromCanvasTarget(event?.target);
-  };
-
-  private getCanvasTargetPlacementId(target: any): string {
-    const data = isRecord(target?.data) ? target.data : {};
-    const imagePlacement = isRecord(data.imagePlacement)
-      ? data.imagePlacement
-      : {};
-    const type = typeof data.type === "string" ? data.type.trim() : "";
-    const placementId =
-      typeof data.placementId === "string"
-        ? data.placementId
-        : typeof imagePlacement.placementId === "string"
-          ? imagePlacement.placementId
-          : type.startsWith("image-placement-") &&
-              typeof data.subjectId === "string"
-            ? data.subjectId
-            : "";
-    return placementId.trim();
-  }
-
-  private beginSessionFromCanvasTarget(target: any) {
-    const selected = target;
-    const placementId = this.getCanvasTargetPlacementId(selected);
-    if (!placementId) {
-      return;
-    }
-    if (
-      this.activePlacementId === placementId &&
-      this.workingImages.has(placementId)
-    ) {
-      this.emitStateChange();
-      return;
-    }
-    this.activePlacementId = placementId;
-    this.activeImageSessionId = null;
-    this.emitStateChange();
-    this.emitCanvasSessionOpen(placementId, selected);
-  }
-
-  private scheduleCanvasSession(placementId: string, target?: any) {
-    this.pendingCanvasSessionPlacementId = placementId;
-    this.pendingCanvasSessionTarget = target ?? null;
-    if (this.pendingCanvasSessionTimer !== null) return;
-
-    this.pendingCanvasSessionTimer = globalThis.setTimeout(() => {
-      const nextPlacementId = this.pendingCanvasSessionPlacementId;
-      const nextTarget = this.pendingCanvasSessionTarget;
-      this.pendingCanvasSessionPlacementId = null;
-      this.pendingCanvasSessionTarget = null;
-      this.pendingCanvasSessionTimer = null;
-
-      if (!nextPlacementId) return;
-      if (
-        this.activePlacementId === nextPlacementId &&
-        this.workingImages.has(nextPlacementId)
-      ) {
-        this.emitStateChange();
-        this.emitCanvasSessionOpen(nextPlacementId, nextTarget);
-        return;
-      }
-
-      void this.beginSession(nextPlacementId).then((result) => {
-        if (result.ok) {
-          this.emitCanvasSessionOpen(nextPlacementId, nextTarget);
-        }
-      });
-    }, 0);
-  }
-
-  private emitCanvasSessionOpen(placementId: string, target?: any) {
-    const placement = this.getPlacementStates().find(
-      (item) => item.id === placementId,
-    );
-    if (!placement) {
-      return;
-    }
-    this.context?.eventBus.emit("image:session:open", {
-      sessionId: placement.sessionKey,
-      sessionKey: placement.sessionKey,
-      placementId,
-      source: "canvas",
-      scope: {
-        surfaceId: this.resolvePlacementSurfaceId(placement),
-        subjectId: placement.id,
-        channel: IMAGE_SESSION_CHANNEL,
-      },
-      targetData: isRecord(target?.data) ? { ...target.data } : {},
-    });
-  }
-
-  private clearPendingCanvasSession(placementId?: string) {
-    if (placementId && this.pendingCanvasSessionPlacementId !== placementId)
-      return;
-    if (this.pendingCanvasSessionTimer !== null) {
-      globalThis.clearTimeout(this.pendingCanvasSessionTimer);
-    }
-    this.pendingCanvasSessionPlacementId = null;
-    this.pendingCanvasSessionTarget = null;
-    this.pendingCanvasSessionTimer = null;
-  }
-
   private onSelectionCleared = () => {
-    const pendingPlacementId = this.pendingCanvasSessionPlacementId;
-    this.clearPendingCanvasSession();
-    if (
-      pendingPlacementId &&
-      this.activePlacementId === pendingPlacementId &&
-      !this.workingImages.has(pendingPlacementId)
-    ) {
-      this.activePlacementId = null;
-    }
     this.endMoveSnapInteraction();
     this.emitStateChange();
   };
@@ -3391,7 +3296,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
               strokeDashArray: style.strokeDashArray ?? [12, 8],
               strokeWidth: style.strokeWidth ?? 2,
               selectable: false,
-              evented: true,
+              evented: false,
               hasBorders: false,
               hasControls: false,
               lockMovementX: true,
@@ -3517,9 +3422,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         surfaceId: this.resolvePlacementSurfaceId(placement),
         subjectId: placement.id,
         channel: IMAGE_SESSION_CHANNEL,
+        groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
       },
       draft,
       leavePolicy: "block",
+      interactionMode: "exclusive",
     });
   }
 

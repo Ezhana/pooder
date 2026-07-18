@@ -216,7 +216,7 @@ function createMutableConfig(initial: Record<string, unknown> = {}) {
   const values = new Map(Object.entries(initial));
   const listenersByKey = new Map<string, Set<(event: any) => void>>();
   return {
-    get: <T,>(key: string, defaultValue?: T) =>
+    get: <T>(key: string, defaultValue?: T) =>
       values.has(key) ? (values.get(key) as T) : defaultValue,
     onDidChange: (key: string, listener: (event: any) => void) => {
       const listeners =
@@ -249,7 +249,7 @@ function createMutableSurfaceFrames(
   return {
     getFrames: (surfaceId?: string) => {
       const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
-      return key ? frameMap.get(key) ?? null : null;
+      return key ? (frameMap.get(key) ?? null) : null;
     },
     listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
     onAnyFramesChange: (listener: (event: any) => void) => {
@@ -814,7 +814,7 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   const surfaceFrames = {
     getFrames: (surfaceId?: string) => {
       const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
-      return key ? frameMap.get(key) ?? null : null;
+      return key ? (frameMap.get(key) ?? null) : null;
     },
     listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
     onAnyFramesChange: (listener: (event: any) => void) => {
@@ -853,7 +853,11 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   const first = layoutService.getLayout("front");
   assert(first, "frame invalidation should produce a layout snapshot");
   assertEqual(first.surfaceId, "front", "snapshot should carry its surface id");
-  assertEqual(first.revision, 1, "first material snapshot should start revision");
+  assertEqual(
+    first.revision,
+    1,
+    "first material snapshot should start revision",
+  );
   assertEqual(changes.length, 1, "frame invalidation should emit once");
 
   const second = layoutService.recomputeLayout("front");
@@ -869,8 +873,16 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   runtime.eventBus.emit("canvas:resized", { width: 1000, height: 600 });
   const resized = layoutService.getLayout("front");
   assert(resized, "canvas resize should recompute the layout");
-  assertEqual(resized.revision, 2, "changed resize layout should increment revision");
-  assertEqual(changes.length, 2, "canvas resize should emit a real layout change");
+  assertEqual(
+    resized.revision,
+    2,
+    "changed resize layout should increment revision",
+  );
+  assertEqual(
+    changes.length,
+    2,
+    "canvas resize should emit a real layout change",
+  );
 
   layoutService.dispose();
   await runtime.dispose();
@@ -896,7 +908,7 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
     },
     getFrames: (surfaceId?: string) => {
       const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
-      return key ? frameMap.get(key) ?? null : null;
+      return key ? (frameMap.get(key) ?? null) : null;
     },
     listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
     onAnyFramesChange: (listener: (event: any) => void) => {
@@ -925,7 +937,10 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
   });
 
   surfaceFrames.setFrames("front", TEST_SURFACE_FRAMES);
-  assert(layoutService.getLayout("front"), "snapshot should exist before clear");
+  assert(
+    layoutService.getLayout("front"),
+    "snapshot should exist before clear",
+  );
 
   surfaceFrames.clear();
   assertEqual(
@@ -1210,8 +1225,9 @@ async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay
   runtime.services.register(canvas as any, CANVAS_SERVICE);
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
 
-  const renderIntentService =
-    runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
   renderIntentService.setDocumentIntents([
     {
       id: "front.dieline.cutline",
@@ -1393,16 +1409,43 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       props: { width: 10, height: 10 },
       interaction: { transform: { enabled: true } },
     },
+    {
+      id: "activation-only",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "activation-only",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", objectOrder: 5 },
+      props: { width: 10, height: 10 },
+      interaction: {
+        activation: {
+          action: { command: "test.open" },
+          trigger: "primary-pointer",
+        },
+      },
+    },
   ]);
 
   await adapter.flush();
   let last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
   assert(last, "adapter should reconcile declarative interaction");
   const interactive = last.items.find((item) => item.key === "interactive");
-  const constraintOnly = last.items.find((item) => item.key === "constraint-only");
+  const constraintOnly = last.items.find(
+    (item) => item.key === "constraint-only",
+  );
   const conditional = last.items.find((item) => item.key === "conditional");
-  const runtimeEvented = last.items.find((item) => item.key === "runtime-evented");
-  const transformOnly = last.items.find((item) => item.key === "transform-only");
+  const runtimeEvented = last.items.find(
+    (item) => item.key === "runtime-evented",
+  );
+  const transformOnly = last.items.find(
+    (item) => item.key === "transform-only",
+  );
+  const activationOnly = last.items.find(
+    (item) => item.key === "activation-only",
+  );
   assertEqual(
     interactive?.spec.props.selectable,
     true,
@@ -1477,6 +1520,39 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     transformOnly?.spec.data?.interactionEnabled,
     true,
     "transform interaction should mark the live object interactive",
+  );
+  assertEqual(
+    activationOnly?.spec.props.selectable,
+    false,
+    "activation-only objects should not become selectable",
+  );
+  assertEqual(
+    activationOnly?.spec.props.evented,
+    true,
+    "activation-only objects should remain pointer targets",
+  );
+  assertEqual(
+    activationOnly?.spec.data?.interactionActivation?.action.command,
+    "test.open",
+    "activation declarations should be attached to the render target",
+  );
+
+  let activationEvent: any;
+  runtime.eventBus.on("interaction:activate", (event) => {
+    activationEvent = event;
+  });
+  canvas.emitCanvasEvent("mouse:down", {
+    target: {
+      data: {
+        ...activationOnly?.spec.data,
+        renderTarget: "render-graph",
+      },
+    },
+  });
+  assertEqual(
+    activationEvent?.subjectId,
+    "activation-only",
+    "primary pointer activation should emit a typed interaction event",
   );
 
   intents.setRuntimeConditionValue("can.interact", true);
@@ -1643,21 +1719,19 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
   clipped.clipPath = new FakeFabricObject("rect");
   canvas.objects.push(stale, clipped);
 
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "kept",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "kept",
-          type: "rect",
-          props: { width: 10, height: 10 },
-          data: { subjectId: "art" },
-        },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "kept",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "kept",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "art" },
       },
-    ],
-  );
+    },
+  ]);
 
   assert(
     !canvas.objects.includes(stale),
@@ -1678,32 +1752,30 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
 async function testCanvasReconcileSortsByRenderOrder() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
 
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "guide",
-        layerId: "guide",
-        order: 900,
-        spec: {
-          id: "guide",
-          type: "path",
-          props: { pathData: "M0 0H10V10H0Z" },
-          data: { subjectId: "guide" },
-        },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "guide",
+      layerId: "guide",
+      order: 900,
+      spec: {
+        id: "guide",
+        type: "path",
+        props: { pathData: "M0 0H10V10H0Z" },
+        data: { subjectId: "guide" },
       },
-      {
-        key: "content",
-        layerId: "content",
-        order: 10,
-        spec: {
-          id: "content",
-          type: "rect",
-          props: { height: 10, width: 10 },
-          data: { subjectId: "content" },
-        },
+    },
+    {
+      key: "content",
+      layerId: "content",
+      order: 10,
+      spec: {
+        id: "content",
+        type: "rect",
+        props: { height: 10, width: 10 },
+        data: { subjectId: "content" },
       },
-    ],
-  );
+    },
+  ]);
 
   assertDeepEqual(
     canvas.objects.map((object) => object.data.renderKey),
@@ -1791,40 +1863,38 @@ function testCanvasServiceScalesImagesToTargetFrame() {
 async function testCanvasReconcileAppliesInteractiveControlDefaults() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
 
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "interactive",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "interactive",
-          type: "rect",
-          props: {
-            width: 10,
-            height: 10,
-            hasControls: true,
-          },
-          data: { subjectId: "interactive-subject" },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "interactive",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "interactive",
+        type: "rect",
+        props: {
+          width: 10,
+          height: 10,
+          hasControls: true,
         },
+        data: { subjectId: "interactive-subject" },
       },
-      {
-        key: "non-interactive",
-        layerId: "controls",
-        order: 1,
-        spec: {
-          id: "non-interactive",
-          type: "rect",
-          props: {
-            width: 10,
-            height: 10,
-            hasControls: false,
-          },
-          data: { subjectId: "non-interactive-subject" },
+    },
+    {
+      key: "non-interactive",
+      layerId: "controls",
+      order: 1,
+      spec: {
+        id: "non-interactive",
+        type: "rect",
+        props: {
+          width: 10,
+          height: 10,
+          hasControls: false,
         },
+        data: { subjectId: "non-interactive-subject" },
       },
-    ],
-  );
+    },
+  ]);
 
   const interactive = canvas.objects.find(
     (object) => object.data?.id === "interactive",
@@ -1911,32 +1981,30 @@ async function testCanvasReconcileAppliesInteractiveControlDefaults() {
 
 async function testCanvasReconcileAppliesClipPath() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "art-node",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "art-node",
-          type: "rect",
-          props: { width: 10, height: 10 },
-          data: { subjectId: "art-subject" },
-          effects: [
-            {
-              type: "clipPath",
-              id: "clip.art",
-              source: {
-                id: "clip-source",
-                type: "rect",
-                props: { width: 5, height: 5 },
-              },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "art-node",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "art-node",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "art-subject" },
+        effects: [
+          {
+            type: "clipPath",
+            id: "clip.art",
+            source: {
+              id: "clip-source",
+              type: "rect",
+              props: { width: 5, height: 5 },
             },
-          ],
-        },
+          },
+        ],
       },
-    ],
-  );
+    },
+  ]);
 
   assert(canvas.objects[0]?.clipPath, "clip path should be attached");
   assertEqual(
@@ -1948,34 +2016,32 @@ async function testCanvasReconcileAppliesClipPath() {
 
 async function testCanvasReconcileAppliesImageClipPath() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "art-node",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "art-node",
-          type: "rect",
-          props: { width: 10, height: 10 },
-          data: { subjectId: "art-subject" },
-          effects: [
-            {
-              type: "clipPath",
-              id: "clip.art",
-              source: {
-                id: "clip-source",
-                type: "image",
-                src: "data:image/png;base64,dieline",
-                space: "screen",
-                props: { left: 1, top: 2, width: 100, height: 80 },
-              },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "art-node",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "art-node",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "art-subject" },
+        effects: [
+          {
+            type: "clipPath",
+            id: "clip.art",
+            source: {
+              id: "clip-source",
+              type: "image",
+              src: "data:image/png;base64,dieline",
+              space: "screen",
+              props: { left: 1, top: 2, width: 100, height: 80 },
             },
-          ],
-        },
+          },
+        ],
       },
-    ],
-  );
+    },
+  ]);
 
   const clipPath = canvas.objects[0]?.clipPath as any;
   assert(clipPath, "image clip path should be attached");

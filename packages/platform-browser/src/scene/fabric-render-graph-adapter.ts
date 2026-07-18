@@ -69,6 +69,8 @@ export class FabricRenderGraphAdapter implements Service {
   private sceneSubscription?: { dispose(): void };
   private canvasObjectMovingHandler?: (event?: any) => void;
   private canvasObjectModifiedHandler?: (event?: any) => void;
+  private canvasMouseDownHandler?: (event?: any) => void;
+  private canvasDoubleClickHandler?: (event?: any) => void;
   private geometrySourceDisposable?: { dispose(): void };
   private layoutDisposables: Array<{ dispose(): void }> = [];
   private syncRequested = false;
@@ -116,10 +118,24 @@ export class FabricRenderGraphAdapter implements Service {
     this.canvasObjectModifiedHandler = (event?: any) => {
       void this.handleRenderGraphObjectModified(event?.target);
     };
-    this.canvasService.onCanvasEvent("object:moving", this.canvasObjectMovingHandler);
+    this.canvasMouseDownHandler = (event?: any) => {
+      this.handleInteractionActivation(event?.target, "primary-pointer");
+    };
+    this.canvasDoubleClickHandler = (event?: any) => {
+      this.handleInteractionActivation(event?.target, "double-click");
+    };
+    this.canvasService.onCanvasEvent(
+      "object:moving",
+      this.canvasObjectMovingHandler,
+    );
     this.canvasService.onCanvasEvent(
       "object:modified",
       this.canvasObjectModifiedHandler,
+    );
+    this.canvasService.onCanvasEvent("mouse:down", this.canvasMouseDownHandler);
+    this.canvasService.onCanvasEvent(
+      "mouse:dblclick",
+      this.canvasDoubleClickHandler,
     );
     this.geometrySourceDisposable = this.geometrySource?.registerSource(
       this.createRenderGraphGeometrySource(),
@@ -144,6 +160,18 @@ export class FabricRenderGraphAdapter implements Service {
         this.canvasObjectModifiedHandler,
       );
     }
+    if (this.canvasMouseDownHandler) {
+      this.canvasService?.offCanvasEvent(
+        "mouse:down",
+        this.canvasMouseDownHandler,
+      );
+    }
+    if (this.canvasDoubleClickHandler) {
+      this.canvasService?.offCanvasEvent(
+        "mouse:dblclick",
+        this.canvasDoubleClickHandler,
+      );
+    }
     this.geometrySourceDisposable?.dispose();
     this.graphSubscription?.dispose();
     this.sceneSubscription?.dispose();
@@ -151,6 +179,8 @@ export class FabricRenderGraphAdapter implements Service {
     this.sceneSubscription = undefined;
     this.canvasObjectMovingHandler = undefined;
     this.canvasObjectModifiedHandler = undefined;
+    this.canvasMouseDownHandler = undefined;
+    this.canvasDoubleClickHandler = undefined;
     this.geometrySourceDisposable = undefined;
     this.renderIntentService = undefined;
     this.sceneService = undefined;
@@ -201,7 +231,10 @@ export class FabricRenderGraphAdapter implements Service {
   }
 
   getSyncState(): FabricRenderGraphSyncState {
-    const pending = Math.max(0, this.syncGeneration - this.completedSyncGeneration);
+    const pending = Math.max(
+      0,
+      this.syncGeneration - this.completedSyncGeneration,
+    );
     return {
       ...(this.syncError === undefined ? {} : { error: this.syncError }),
       generation: this.syncGeneration,
@@ -257,7 +290,9 @@ export class FabricRenderGraphAdapter implements Service {
     };
     surfaceFrameService.listSurfaceIds().forEach(observe);
     this.layoutDisposables.push(
-      surfaceFrameService.onAnyFramesChange((event) => observe(event.surfaceId)),
+      surfaceFrameService.onAnyFramesChange((event) =>
+        observe(event.surfaceId),
+      ),
     );
   }
 
@@ -286,7 +321,8 @@ export class FabricRenderGraphAdapter implements Service {
       );
 
       layer.nodes.forEach((node, nodeIndex) => {
-        if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext)) return;
+        if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext))
+          return;
         const spec = this.toRenderObjectSpec(
           layer,
           node,
@@ -305,7 +341,9 @@ export class FabricRenderGraphAdapter implements Service {
 
     const graphOrderOffset = graph.layers.length * 1_000_000;
     this.getRenderableScenes().forEach((scene, sceneIndex) => {
-      const sceneLayers = this.sceneService!.selectLayers({ sceneId: scene.id });
+      const sceneLayers = this.sceneService!.selectLayers({
+        sceneId: scene.id,
+      });
       sceneLayers.forEach((layer, layerIndex) => {
         if (layer.visible === false) return;
         const elements = this.sceneService!.selectElements({
@@ -355,7 +393,9 @@ export class FabricRenderGraphAdapter implements Service {
       return;
     }
     if (target.data?.interactionEnabled !== true) return;
-    const constraints = normalizeConstraintSpecs(target.data?.interactionConstraints);
+    const constraints = normalizeConstraintSpecs(
+      target.data?.interactionConstraints,
+    );
     if (!constraints.length) return;
 
     const frame = this.getTargetSceneBounds(target);
@@ -399,6 +439,27 @@ export class FabricRenderGraphAdapter implements Service {
     });
   }
 
+  private handleInteractionActivation(
+    target: any,
+    trigger: "primary-pointer" | "double-click",
+  ) {
+    if (target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) return;
+    const activation = target.data?.interactionActivation;
+    if (!isRecord(activation) || activation.trigger !== trigger) return;
+    const action = isRecord(activation.action) ? activation.action : undefined;
+    if (!action || !String(action.command || "").trim()) return;
+
+    this.eventBus?.emit("interaction:activate", {
+      activation: cloneRecord(activation),
+      layerId: target.data?.layerId,
+      renderIntentId: target.data?.renderIntentId ?? target.data?.renderNodeId,
+      subjectId: target.data?.subjectId ?? target.data?.subject?.objectId,
+      surfaceId: target.data?.surfaceId ?? target.data?.subject?.surfaceId,
+      targetData: cloneRecord(target.data ?? {}),
+      trigger,
+    });
+  }
+
   private resolveLiveObjectFrame(objectId: string): GeometryRect | null {
     const canvas = this.canvasService;
     if (!canvas) return null;
@@ -420,8 +481,10 @@ export class FabricRenderGraphAdapter implements Service {
         : {
             left: finiteNumber(target.left, 0),
             top: finiteNumber(target.top, 0),
-            width: finiteNumber(target.width, 0) * finiteNumber(target.scaleX, 1),
-            height: finiteNumber(target.height, 0) * finiteNumber(target.scaleY, 1),
+            width:
+              finiteNumber(target.width, 0) * finiteNumber(target.scaleX, 1),
+            height:
+              finiteNumber(target.height, 0) * finiteNumber(target.scaleY, 1),
           };
     const sceneBounds = canvas.toSceneRect({
       left: finiteNumber(rawBounds.left, 0),
@@ -492,20 +555,23 @@ export class FabricRenderGraphAdapter implements Service {
       });
     });
     this.getRenderableScenes().forEach((scene) => {
-      this.sceneService?.selectLayers({ sceneId: scene.id }).forEach((layer) => {
-        const elements =
-          this.sceneService?.selectElements({
-            sceneId: scene.id,
-            layerIds: [layer.id],
-          }) ??
-          [];
-        const visibleNodes = elements.filter((element) => element.visible !== false);
-        layers.set(layer.id, {
-          exists: true,
-          objectCount: elements.length,
-          visibleObjectCount: visibleNodes.length,
+      this.sceneService
+        ?.selectLayers({ sceneId: scene.id })
+        .forEach((layer) => {
+          const elements =
+            this.sceneService?.selectElements({
+              sceneId: scene.id,
+              layerIds: [layer.id],
+            }) ?? [];
+          const visibleNodes = elements.filter(
+            (element) => element.visible !== false,
+          );
+          layers.set(layer.id, {
+            exists: true,
+            objectCount: elements.length,
+            visibleObjectCount: visibleNodes.length,
+          });
         });
-      });
     });
 
     return this.requireRenderIntentService().createRuntimeConditionContext({
@@ -524,7 +590,9 @@ export class FabricRenderGraphAdapter implements Service {
   private toRenderObjectSpec(
     layer: RenderGraphLayer,
     node: RenderGraphNode,
-    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
+    conditionContext: ReturnType<
+      FabricRenderGraphAdapter["buildRuntimeConditionContext"]
+    >,
     layerEffects: RenderEffectSpec[] = [],
   ): RenderObjectSpec | null {
     const hasDeclarativeInteraction = Boolean(node.interaction);
@@ -537,12 +605,17 @@ export class FabricRenderGraphAdapter implements Service {
     const transformEnabled =
       node.interaction?.transform?.enabled === true &&
       interactionConditionMatched;
+    const activation = node.interaction?.activation;
+    const activationEnabled =
+      activation?.enabled !== false &&
+      Boolean(String(activation?.action?.command || "").trim()) &&
+      interactionConditionMatched;
     const interactionEnabled = dragEnabled || transformEnabled;
     const selectable = hasDeclarativeInteraction
       ? interactionEnabled
       : node.props.selectable === true;
     const evented = hasDeclarativeInteraction
-      ? interactionEnabled
+      ? interactionEnabled || activationEnabled
       : typeof node.props.evented === "boolean"
         ? node.props.evented
         : selectable;
@@ -569,12 +642,19 @@ export class FabricRenderGraphAdapter implements Service {
       renderLayerId: layer.id,
       renderNodeId: node.id,
       subjectId: node.subjectId,
+      surfaceId: node.surfaceId,
       exportKeys: node.exportKeys,
       tags: node.tags,
       interactionEnabled,
-      ...(interactionConstraints.length
-        ? { interactionConstraints }
+      ...(activationEnabled
+        ? {
+            interactionActivation: {
+              ...activation,
+              trigger: activation?.trigger ?? "primary-pointer",
+            },
+          }
         : {}),
+      ...(interactionConstraints.length ? { interactionConstraints } : {}),
     };
     const effects = [
       ...layerEffects,
@@ -639,7 +719,9 @@ export class FabricRenderGraphAdapter implements Service {
     scene: SceneRecord,
     layer: SceneLayer,
     element: SceneElement,
-    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
+    conditionContext: ReturnType<
+      FabricRenderGraphAdapter["buildRuntimeConditionContext"]
+    >,
   ): RenderObjectSpec | null {
     const renderProps = isRecord(element.data?.renderProps)
       ? element.data.renderProps
@@ -648,15 +730,17 @@ export class FabricRenderGraphAdapter implements Service {
       ...element.style,
       ...element.transform,
       ...renderProps,
-      ...(element.type === "rect" ? { width: element.width, height: element.height } : {}),
+      ...(element.type === "rect"
+        ? { width: element.width, height: element.height }
+        : {}),
       ...(element.type === "path" ? { pathData: element.path } : {}),
       ...(element.type === "text" ? { text: element.text } : {}),
-      visible: scene.visible !== false && layer.visible !== false && element.visible !== false,
+      visible:
+        scene.visible !== false &&
+        layer.visible !== false &&
+        element.visible !== false,
     };
-    const exportKeys = [
-      element.id,
-      ...normalizeIds(element.data?.exportKeys),
-    ];
+    const exportKeys = [element.id, ...normalizeIds(element.data?.exportKeys)];
     const data = {
       ...element.data,
       sceneId: scene.id,
@@ -683,7 +767,9 @@ export class FabricRenderGraphAdapter implements Service {
 
   private normalizeActiveEffects(
     effects: readonly RenderEffectSpec[] | undefined,
-    conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
+    conditionContext: ReturnType<
+      FabricRenderGraphAdapter["buildRuntimeConditionContext"]
+    >,
   ): RenderEffectSpec[] {
     if (!Array.isArray(effects)) return [];
     return effects
@@ -693,7 +779,9 @@ export class FabricRenderGraphAdapter implements Service {
       .map((effect) => ({ ...effect }));
   }
 
-  private resolvePlacementProps(node: RenderGraphNode): Record<string, unknown> {
+  private resolvePlacementProps(
+    node: RenderGraphNode,
+  ): Record<string, unknown> {
     const frame = node.frame;
     const transform = node.transform ?? {};
     const hasTransformLeft = Number.isFinite(transform.left);
@@ -750,7 +838,9 @@ export class FabricRenderGraphAdapter implements Service {
 
   private requireCanvasService(): FabricRenderTargetCanvasService {
     if (!this.canvasService) {
-      throw new Error("[FabricRenderGraphAdapter] CanvasService is not initialized.");
+      throw new Error(
+        "[FabricRenderGraphAdapter] CanvasService is not initialized.",
+      );
     }
     return this.canvasService;
   }
@@ -768,14 +858,17 @@ function finiteNumber(value: unknown, fallback: number): number {
 
 function normalizeRenderInteractionConstraints(
   value: unknown,
-  conditionContext: ReturnType<FabricRenderGraphAdapter["buildRuntimeConditionContext"]>,
+  conditionContext: ReturnType<
+    FabricRenderGraphAdapter["buildRuntimeConditionContext"]
+  >,
 ): ConstraintSpec[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((constraint): ConstraintSpec | null => {
       if (!isRecord(constraint)) return null;
       const item = constraint as Partial<RenderIntentInteractionConstraint>;
-      if (!evaluateRuntimeCondition(item.activeWhen, conditionContext)) return null;
+      if (!evaluateRuntimeCondition(item.activeWhen, conditionContext))
+        return null;
       return normalizeConstraintSpec(item.spec);
     })
     .filter((constraint): constraint is ConstraintSpec => Boolean(constraint));
@@ -815,4 +908,8 @@ function normalizeIds(values: unknown): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }

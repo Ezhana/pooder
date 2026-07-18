@@ -708,15 +708,14 @@ function testInjectedEffectCapabilityResolution() {
                     shape: "rect",
                     params: { width: 1, height: 1 },
                   },
-                  effects: [
-                    { type: "constraint" },
-                    {
-                      type: "object-constraint",
-                      targetId: "frame",
-                      strategy: "inside",
+                  effects: [{ type: "constraint" }],
+                  interaction: {
+                    transform: { enabled: true },
+                    drag: {
+                      enabled: true,
+                      constraints: [{ spec: { type: "rect.contain" } }],
                     },
-                    { type: "interactive", enabled: true },
-                  ],
+                  },
                 },
               ],
             },
@@ -729,7 +728,7 @@ function testInjectedEffectCapabilityResolution() {
   assertDeepEqual(diagnostics, [], "injected known effects should validate");
 }
 
-function testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint() {
+function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
@@ -751,15 +750,20 @@ function testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint() {
                   shape: "rect",
                   params: { width: 1, height: 1 },
                 },
-                effects: [
-                  { type: "constraint" },
-                  {
-                    type: "object-constraint",
-                    targetId: "frame",
-                    strategy: "inside",
-                    params: { padding: 2 },
+                effects: [{ type: "constraint" }],
+                interaction: {
+                  drag: {
+                    enabled: true,
+                    constraints: [
+                      {
+                        spec: {
+                          type: "rect.contain",
+                          params: { padding: 2 },
+                        },
+                      },
+                    ],
                   },
-                ],
+                },
               },
             ],
           },
@@ -768,20 +772,28 @@ function testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint() {
     ],
   });
 
-  const effects = doc.surfaces[0].layers[0].objects?.[0]?.effects ?? [];
+  const object = doc.surfaces[0].layers[0].objects?.[0];
+  const effects = object?.effects ?? [];
   assertEqual(
     effects.length,
-    2,
-    "generic and object constraints should both remain",
+    1,
+    "generic effects should remain separate from object interaction",
   );
   assert(
     isGenericEditorEffect(effects[0]),
     "generic constraint should remain a generic editor effect",
   );
-  assertEqual(
-    effects[1].type,
-    "object-constraint",
-    "object-local constraint should use a distinct type",
+  assertDeepEqual(
+    object?.interaction?.drag,
+    {
+      enabled: true,
+      constraints: [
+        {
+          spec: { type: "rect.contain", params: { padding: 2 } },
+        },
+      ],
+    },
+    "object interaction should be the sole object-local interaction declaration",
   );
 }
 
@@ -861,7 +873,7 @@ function main() {
   testCustomValidatorDiagnostics();
   testCustomEffectRequiresCapabilityId();
   testInjectedEffectCapabilityResolution();
-  testObjectConstraintEffectNormalizesSeparatelyFromGenericConstraint();
+  testObjectInteractionNormalizesSeparatelyFromGenericEffects();
   testRequirePolicyDiagnostics();
   console.log("ok");
 }

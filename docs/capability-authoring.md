@@ -1,5 +1,9 @@
 # Capability Authoring Guide
 
+Persistent document-object hit testing and activation are declared through
+`EditorObject.interaction`; see [Document Object Interaction](./document-object-interaction.md).
+Capabilities should use transient scenes for session-owned interaction visuals.
+
 Status: P6.S2 documentation
 Date: 2026-05-11
 
@@ -68,10 +72,9 @@ export class CropPreviewCapabilityExtension implements ExtensionDefinition {
 Applications resolve the facade through the runtime:
 
 ```ts
-const cropPreview =
-  runtime.capabilities.getOrThrow<CropPreviewCapabilityApi>(
-    CROP_PREVIEW_CAPABILITY_ID,
-  );
+const cropPreview = runtime.capabilities.getOrThrow<CropPreviewCapabilityApi>(
+  CROP_PREVIEW_CAPABILITY_ID,
+);
 
 cropPreview.refresh();
 ```

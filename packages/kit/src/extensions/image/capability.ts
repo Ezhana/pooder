@@ -3,6 +3,7 @@ import type {
   RenderObjectSpec,
   SceneLayoutSnapshot,
 } from "@pooder/core";
+import { EDITOR_INTERACTION_SESSION_GROUP_ID } from "@pooder/core";
 import type {
   ImageExportPlacementImageOptions,
   ImageExportPlacementImageResult,
@@ -13,8 +14,11 @@ import type {
 } from "./ImagePlacementCapabilityImplementation";
 import type { ImageOperation } from "./imageOperations";
 
-export const IMAGE_PLACEMENT_CAPABILITY_ID =
-  "pooder.kit.image-placement";
+export const IMAGE_PLACEMENT_CAPABILITY_ID = "pooder.kit.image-placement";
+export const IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID =
+  "pooder.kit.image-placement.open-session";
+export const IMAGE_PLACEMENT_SESSION_GROUP_ID =
+  EDITOR_INTERACTION_SESSION_GROUP_ID;
 
 export interface ImagePlacementLayerOptions {
   imageLayerId?: string;
@@ -36,7 +40,6 @@ export interface ImageSessionProjection {
 
 export interface ImagePlacementCapabilityOptions {
   capabilityId?: string;
-  beginSessionOnCanvasInteraction?: boolean;
   layers?: ImagePlacementLayerOptions;
 }
 
@@ -98,14 +101,22 @@ export interface ImagePlacementCapabilityApi {
     input: string | ImagePlacementSessionInput,
     operation: ImageOperation,
   ): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
-  clearImage(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
-  commitSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
+  clearImage(
+    input: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string }>;
+  commitSession(
+    input?: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
   exportPlacementImage(
     options?: ImageExportPlacementImageOptions,
   ): Promise<ImageExportPlacementImageResult>;
   getViewState(): ImagePlacementViewState;
-  openSession(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
-  rollbackSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
+  openSession(
+    input: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string }>;
+  rollbackSession(
+    input?: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string }>;
   setSource(
     input: string | ImagePlacementSessionInput,
     source: ImagePlacementSource | string,
@@ -114,17 +125,21 @@ export interface ImagePlacementCapabilityApi {
     input: string | ImagePlacementSessionInput,
     transform: ImagePlacementTransformUpdates,
   ): Promise<{ ok: boolean; reason?: string }>;
-  validateSession(input?: string | ImagePlacementSessionInput): Promise<ImagePlacementSessionNotice | { ok: true }>;
+  validateSession(
+    input?: string | ImagePlacementSessionInput,
+  ): Promise<ImagePlacementSessionNotice | { ok: true }>;
 
   /** @deprecated Use validateSession(). */
-  validatePlacement(placementId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
+  validatePlacement(
+    placementId?: string,
+  ): Promise<ImagePlacementSessionNotice | { ok: true }>;
   focusPlacement(
     placementId: string | null,
     options?: { syncCanvasSelection?: boolean; skipRender?: boolean },
   ): { ok: boolean; id?: string | null; reason?: string };
-  registerSessionOverlayProvider(
-    provider: ImageSessionOverlayProvider,
-  ): { dispose(): void };
+  registerSessionOverlayProvider(provider: ImageSessionOverlayProvider): {
+    dispose(): void;
+  };
   refresh(): Promise<void>;
 }
 

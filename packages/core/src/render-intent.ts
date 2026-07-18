@@ -79,6 +79,22 @@ export interface RenderIntentDragInteractionAspect {
 }
 
 export interface RenderIntentInteractionAspect {
+  activation?: {
+    enabled?: boolean;
+    trigger?: "primary-pointer" | "double-click";
+    action: {
+      command: string;
+      payload?: Record<string, unknown>;
+    };
+    session?: {
+      channel: string;
+      groupId: string;
+      sessionId?: string;
+      mode: "exclusive" | "cooperative" | "passive";
+      scope: "subject" | "surface" | "editor";
+      leavePolicy?: "block" | "commit" | "rollback";
+    };
+  };
   transform?: RenderIntentTransformInteractionAspect;
   drag?: RenderIntentDragInteractionAspect;
   enabledWhen?: RuntimeConditionExpr;
@@ -193,7 +209,10 @@ export interface RenderGraph {
   diagnostics: RenderIntentDiagnostic[];
 }
 
-export interface RenderIntentCompilerContext<TEffect = unknown, TDocument = unknown> {
+export interface RenderIntentCompilerContext<
+  TEffect = unknown,
+  TDocument = unknown,
+> {
   document: TDocument;
   effect: TEffect;
   services?: unknown;
@@ -208,11 +227,14 @@ export interface RenderIntentCompilerContribution<
   effectType?: string;
   compile(
     context: RenderIntentCompilerContext<TEffect, TDocument>,
-  ): RenderIntentPatch[] | RenderIntentPatch | void | Promise<RenderIntentPatch[] | RenderIntentPatch | void>;
+  ):
+    | RenderIntentPatch[]
+    | RenderIntentPatch
+    | void
+    | Promise<RenderIntentPatch[] | RenderIntentPatch | void>;
 }
 
-export interface RegisteredRenderIntentCompiler
-  extends RenderIntentCompilerContribution {
+export interface RegisteredRenderIntentCompiler extends RenderIntentCompilerContribution {
   extensionId: string;
 }
 
@@ -318,7 +340,9 @@ export class RenderIntentCompilerRegistryService implements Service {
     const effectType = String(compiler.effectType || "").trim();
     const capabilityId = String(compiler.capabilityId || "").trim();
     if (!effectType && !capabilityId) {
-      throw new Error("Render intent compiler requires effectType or capabilityId.");
+      throw new Error(
+        "Render intent compiler requires effectType or capabilityId.",
+      );
     }
 
     const registered: RegisteredRenderIntentCompiler = {
@@ -335,7 +359,9 @@ export class RenderIntentCompilerRegistryService implements Service {
     });
   }
 
-  getCompilers(query: RenderIntentCompilerQuery): RegisteredRenderIntentCompiler[] {
+  getCompilers(
+    query: RenderIntentCompilerQuery,
+  ): RegisteredRenderIntentCompiler[] {
     const capabilityId = String(query.capabilityId || "").trim();
     const effectType = String(query.effectType || "").trim();
     return this.compilers.filter((compiler) => {
@@ -446,7 +472,8 @@ export class RenderIntentService implements Service {
   clearRuntimePatch(sourceId: string, intentId: string): boolean {
     const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
     const id = normalizeId(intentId, "RenderIntentPatch.id");
-    if (!this.runtimePatches.delete(getRuntimePatchKey(source, id))) return false;
+    if (!this.runtimePatches.delete(getRuntimePatchKey(source, id)))
+      return false;
     this.recompile();
     return true;
   }
@@ -484,7 +511,11 @@ export class RenderIntentService implements Service {
       this.baseIntents,
       Array.from(this.runtimePatches.values()),
     );
-    this.graph = createRenderGraph(merged.drafts, this.revision, merged.diagnostics);
+    this.graph = createRenderGraph(
+      merged.drafts,
+      this.revision,
+      merged.diagnostics,
+    );
     this.emitChange();
     return this.getGraph();
   }
@@ -501,7 +532,8 @@ export class RenderIntentService implements Service {
     const patchId = normalizeId(entry.patch.id, "RenderIntentPatch.id");
     const key = getRuntimePatchKey(sourceId, patchId);
     const existing = this.runtimePatches.get(key);
-    const sequence = entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
+    const sequence =
+      entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
     this.runtimePatches.set(key, normalizePatchEntry(entry, sequence));
   }
 }
@@ -518,7 +550,10 @@ export function reduceRenderIntentDrafts(
   const byId = new Map<string, RenderIntentDraft>();
   drafts.forEach((draft) => {
     const current = byId.get(draft.id);
-    byId.set(draft.id, current ? mergeDraft(current, draft) : cloneDraft(draft));
+    byId.set(
+      draft.id,
+      current ? mergeDraft(current, draft) : cloneDraft(draft),
+    );
   });
   return Array.from(byId.values());
 }
@@ -547,9 +582,9 @@ export function mergeRenderIntentPatchEntries(
   entries: readonly RenderIntentPatchEntry[],
 ): RenderIntentPatchBatchMergeResult {
   const result = reduceRenderIntentDrafts(drafts);
-  const normalizedEntries = entries.map((entry, index) =>
-    normalizePatchEntry(entry, entry.sequence ?? index),
-  ).sort(comparePatchEntries);
+  const normalizedEntries = entries
+    .map((entry, index) => normalizePatchEntry(entry, entry.sequence ?? index))
+    .sort(comparePatchEntries);
   const diagnostics = collectPatchConflictDiagnostics(normalizedEntries);
 
   normalizedEntries.forEach((entry) => {
@@ -638,7 +673,10 @@ function getRuntimePatchKey(sourceId: string, patchId: string): string {
 function collectPatchConflictDiagnostics(
   entries: readonly RequiredRuntimePatchEntry[],
 ): RenderIntentDiagnostic[] {
-  const seen = new Map<string, { sourceId: string; value: unknown; entry: RequiredRuntimePatchEntry }>();
+  const seen = new Map<
+    string,
+    { sourceId: string; value: unknown; entry: RequiredRuntimePatchEntry }
+  >();
   const diagnostics: RenderIntentDiagnostic[] = [];
 
   entries.forEach((entry) => {
@@ -827,7 +865,13 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   const type = draft.visual?.type;
   if (!type) return null;
 
-  const channel = draft.ordering.channel ?? (source.kind === "replacement" ? "replacement" : source.kind === "fallback" ? "fallback" : "normal");
+  const channel =
+    draft.ordering.channel ??
+    (source.kind === "replacement"
+      ? "replacement"
+      : source.kind === "fallback"
+        ? "fallback"
+        : "normal");
   const id = source.kind === "replacement" ? `image:${draft.id}` : draft.id;
   const subjectId =
     draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.surfaceId;
@@ -869,9 +913,10 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   };
 }
 
-function resolveVisualSource(
-  draft: RenderIntentDraft,
-): { kind: "replacement" | "fallback" | "base"; source: RenderIntentSource } {
+function resolveVisualSource(draft: RenderIntentDraft): {
+  kind: "replacement" | "fallback" | "base";
+  source: RenderIntentSource;
+} {
   const replacement = draft.visual?.replacement;
   if (replacement?.src) {
     return { kind: "replacement", source: cloneRecord(replacement) };
@@ -884,7 +929,9 @@ function resolveVisualSource(
     kind: "base",
     source: {
       ...(draft.visual?.src ? { src: draft.visual.src } : {}),
-      ...(draft.visual?.metadata ? { metadata: cloneRecord(draft.visual.metadata) } : {}),
+      ...(draft.visual?.metadata
+        ? { metadata: cloneRecord(draft.visual.metadata) }
+        : {}),
     },
   };
 }
@@ -936,7 +983,10 @@ function mergePatch(
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
       placement: mergeOptionalRecord(clearedBase.placement, patch.placement),
       effects: mergeOptionalEffects(clearedBase.effects, patch.effects),
-      interaction: mergeInteractionAspect(clearedBase.interaction, patch.interaction),
+      interaction: mergeInteractionAspect(
+        clearedBase.interaction,
+        patch.interaction,
+      ),
       export: mergeOptionalRecord(clearedBase.export, patch.export),
       ordering: { ...clearedBase.ordering, ...(patch.ordering ?? {}) },
       props: mergeOptionalRecord(clearedBase.props, patch.props),
@@ -979,7 +1029,10 @@ function validateClearPath(
 ): { ok: true } | { ok: false; message: string } {
   const normalized = String(path || "").trim();
   const segments = normalized.split(".");
-  if (!normalized || segments.some((segment) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(segment))) {
+  if (
+    !normalized ||
+    segments.some((segment) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(segment))
+  ) {
     return {
       ok: false,
       message: `RenderIntentPatch clear path "${String(path)}" is invalid.`,
@@ -1044,6 +1097,18 @@ function mergeInteractionAspect(
           },
         }
       : {}),
+    ...(base?.activation || patch.activation
+      ? {
+          activation: {
+            ...(base?.activation ?? {}),
+            ...(patch.activation ?? {}),
+            action: {
+              ...(base?.activation?.action ?? {}),
+              ...(patch.activation?.action ?? {}),
+            },
+          },
+        }
+      : {}),
     ...(base?.drag || patch.drag
       ? {
           drag: {
@@ -1063,10 +1128,7 @@ function mergeInteractionAspect(
   return Object.keys(merged).length ? merged : undefined;
 }
 
-function mergeOptionalRecord<T>(
-  base: T,
-  patch: T,
-): T {
+function mergeOptionalRecord<T>(base: T, patch: T): T {
   if (patch === undefined) return cloneRecord(base) as T;
   return {
     ...((base ?? {}) as object),

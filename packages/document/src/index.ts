@@ -49,8 +49,26 @@ export interface EditorInteractionConstraint {
   spec: Record<string, unknown>;
 }
 
+export interface EditorInteractionActivation {
+  enabled?: boolean;
+  trigger?: "primary-pointer" | "double-click";
+  action: {
+    command: string;
+    payload?: Record<string, unknown>;
+  };
+  session?: {
+    channel: string;
+    groupId: string;
+    sessionId?: string;
+    mode: "exclusive" | "cooperative" | "passive";
+    scope: "subject" | "surface" | "editor";
+    leavePolicy?: "block" | "commit" | "rollback";
+  };
+}
+
 export interface EditorObjectInteraction {
   enabledWhen?: Record<string, unknown>;
+  activation?: EditorInteractionActivation;
   transform?: {
     enabled?: boolean;
   };
@@ -197,18 +215,6 @@ export type EditorBuiltinObjectEffect =
       targetId: string;
       operation: "add" | "subtract" | "intersect" | "exclude";
       participation?: "preview" | "export" | "both";
-    })
-  | (EditorObjectEffectCommon & {
-      type: "object-constraint";
-      targetId: string;
-      strategy: "path" | "edge" | "inside" | "lowest-tangent";
-      params?: Record<string, unknown>;
-    })
-  | (EditorObjectEffectCommon & {
-      type: "interactive";
-      enabled: boolean;
-      session?: boolean;
-      groupId?: string;
     })
   | (EditorObjectEffectCommon & {
       type: "guide";
@@ -499,7 +505,9 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
   return Object.keys(transform).length ? transform : undefined;
 }
 
-function normalizeRuntimeCondition(value: unknown): Record<string, unknown> | undefined {
+function normalizeRuntimeCondition(
+  value: unknown,
+): Record<string, unknown> | undefined {
   return isRecord(value) ? cloneRecord(value) : undefined;
 }
 
@@ -527,9 +535,7 @@ function normalizeInteractionConstraints(
   if (!Array.isArray(value)) return undefined;
   const constraints = value
     .map((item) => normalizeInteractionConstraint(item))
-    .filter(
-      (item): item is EditorInteractionConstraint => Boolean(item),
-    );
+    .filter((item): item is EditorInteractionConstraint => Boolean(item));
   return constraints.length ? constraints : undefined;
 }
 
@@ -540,6 +546,57 @@ function normalizeObjectInteraction(
   const interaction: EditorObjectInteraction = {};
   const enabledWhen = normalizeRuntimeCondition(value.enabledWhen);
   if (enabledWhen) interaction.enabledWhen = enabledWhen;
+
+  if (isRecord(value.activation) && isRecord(value.activation.action)) {
+    const command = normalizeId(value.activation.action.command);
+    if (command) {
+      const rawSession = isRecord(value.activation.session)
+        ? value.activation.session
+        : undefined;
+      const channel = normalizeId(rawSession?.channel);
+      const groupId = normalizeId(rawSession?.groupId);
+      const sessionId = normalizeId(rawSession?.sessionId);
+      const mode = normalizeId(rawSession?.mode);
+      const scope = normalizeId(rawSession?.scope);
+      const leavePolicy = normalizeId(rawSession?.leavePolicy);
+      interaction.activation = {
+        enabled: value.activation.enabled !== false,
+        trigger:
+          value.activation.trigger === "double-click"
+            ? "double-click"
+            : "primary-pointer",
+        action: {
+          command,
+          ...(isRecord(value.activation.action.payload)
+            ? { payload: cloneRecord(value.activation.action.payload) }
+            : {}),
+        },
+        ...(rawSession &&
+        channel &&
+        groupId &&
+        ["exclusive", "cooperative", "passive"].includes(mode) &&
+        ["subject", "surface", "editor"].includes(scope)
+          ? {
+              session: {
+                channel,
+                groupId,
+                ...(sessionId ? { sessionId } : {}),
+                mode: mode as "exclusive" | "cooperative" | "passive",
+                scope: scope as "subject" | "surface" | "editor",
+                ...(["block", "commit", "rollback"].includes(leavePolicy)
+                  ? {
+                      leavePolicy: leavePolicy as
+                        | "block"
+                        | "commit"
+                        | "rollback",
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+    }
+  }
 
   if (isRecord(value.transform)) {
     interaction.transform = {
@@ -637,35 +694,6 @@ function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
       participation === "export" ||
       participation === "both"
         ? { participation }
-        : {}),
-    };
-  }
-
-  if (type === "object-constraint") {
-    const targetId = normalizeId(value.targetId);
-    const strategy = normalizeId(value.strategy);
-    if (
-      !targetId ||
-      !["path", "edge", "inside", "lowest-tangent"].includes(strategy)
-    ) {
-      return null;
-    }
-
-    return {
-      type,
-      targetId,
-      strategy: strategy as "path" | "edge" | "inside" | "lowest-tangent",
-      ...(isRecord(value.params) ? { params: cloneRecord(value.params) } : {}),
-    };
-  }
-
-  if (type === "interactive") {
-    return {
-      type,
-      enabled: value.enabled === true,
-      ...(typeof value.session === "boolean" ? { session: value.session } : {}),
-      ...(normalizeId(value.groupId)
-        ? { groupId: normalizeId(value.groupId) }
         : {}),
     };
   }
@@ -881,8 +909,6 @@ export function isEditorBuiltinObjectEffect(
   return (
     effect.type === "clip-source" ||
     effect.type === "boolean" ||
-    effect.type === "object-constraint" ||
-    effect.type === "interactive" ||
     effect.type === "guide"
   );
 }

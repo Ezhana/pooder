@@ -1442,17 +1442,17 @@ function testCreateKitCapabilitiesForDocument() {
                 id: "placement",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
                 source: { kind: "url", url: "/placement.png" },
+                interaction: {
+                  drag: {
+                    enabled: true,
+                    constraints: [{ spec: { type: "grid.snap" } }],
+                  },
+                },
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
                   { type: "clip", payload: { source: { type: "dieline" } } },
                   { type: "configurable-visual" },
                   { type: "mirror" },
-                  { type: "interaction", phase: "interaction" },
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    payload: { constraints: [{ type: "grid.snap" }] },
-                  },
                 ],
               },
             ],
@@ -2430,7 +2430,9 @@ async function testApplyKitEditorDocumentObjectInteraction() {
                   transform: { enabled: true },
                   drag: {
                     enabled: true,
-                    constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+                    constraints: [
+                      { spec: { type: "grid.snap", params: { size: 5 } } },
+                    ],
                   },
                 },
                 frame: { x: 25, y: 0, width: 20, height: 20 },
@@ -2512,7 +2514,7 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   await runtime.dispose();
 }
 
-async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
+async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
   const runtime = new Pooder();
   const document = {
     version: 5,
@@ -2534,23 +2536,18 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                effects: [
-                  {
-                    type: "interaction",
-                    phase: "interaction",
-                    payload: {
-                      enabled: true,
-                      enabledWhen: {
-                        op: "truthy",
-                        ref: {
-                          source: "workflowSession",
-                          field: "scopeActive",
-                          scope: { channel: "layout-edit" },
-                        },
-                      },
+                interaction: {
+                  transform: { enabled: true },
+                  drag: { enabled: true },
+                  enabledWhen: {
+                    op: "truthy",
+                    ref: {
+                      source: "workflowSession",
+                      field: "scopeActive",
+                      scope: { channel: "layout-edit" },
                     },
                   },
-                ],
+                },
               },
               {
                 id: "constraint-only",
@@ -2560,22 +2557,20 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                effects: [
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    payload: {
-                      constraints: [
-                        {
+                interaction: {
+                  drag: {
+                    constraints: [
+                      {
+                        spec: {
                           type: "rect.contain",
                           params: {
                             rect: { left: 0, top: 0, width: 90, height: 90 },
                           },
                         },
-                      ],
-                    },
+                      },
+                    ],
                   },
-                ],
+                },
               },
               {
                 id: "interactive-constrained",
@@ -2585,51 +2580,34 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                effects: [
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    order: 2,
-                    payload: {
-                      activeWhen: {
-                        op: "in",
-                        ref: { source: "activeToolId" },
-                        values: ["move"],
-                      },
-                      constraints: [
-                        {
+                interaction: {
+                  transform: { enabled: true },
+                  drag: {
+                    enabled: true,
+                    constraints: [
+                      {
+                        activeWhen: {
+                          op: "in",
+                          ref: { source: "activeToolId" },
+                          values: ["move"],
+                        },
+                        spec: {
                           type: "rect.contain",
                           params: {
                             rect: { left: 0, top: 0, width: 90, height: 90 },
                           },
                         },
-                      ],
-                    },
-                  },
-                  {
-                    type: "interaction",
-                    phase: "interaction",
-                    order: 1,
-                    payload: { enabled: true },
-                  },
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    order: 3,
-                    payload: {
-                      constraints: [
-                        {
-                          type: "grid.snap",
-                          activeWhen: {
-                            op: "truthy",
-                            ref: { source: "context", key: "snap.enabled" },
-                          },
-                          params: { size: 5 },
+                      },
+                      {
+                        activeWhen: {
+                          op: "truthy",
+                          ref: { source: "context", key: "snap.enabled" },
                         },
-                      ],
-                    },
+                        spec: { type: "grid.snap", params: { size: 5 } },
+                      },
+                    ],
                   },
-                ],
+                },
               },
             ],
           },
@@ -2643,7 +2621,7 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
 
   assert(
     result.ok,
-    `declarative interaction effects should apply (${JSON.stringify(result.diagnostics)})`,
+    `declarative object interaction should apply (${JSON.stringify(result.diagnostics)})`,
   );
   const renderGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
@@ -2663,7 +2641,7 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
         },
       },
     },
-    "interaction effect should compile to transform/drag enabledWhen",
+    "object interaction should compile to transform/drag enabledWhen",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "constraint-only")?.interaction,
@@ -2679,7 +2657,7 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
         ],
       },
     },
-    "constraint effect alone should not enable interaction",
+    "object constraints alone should not enable interaction",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "interactive-constrained")?.interaction,
@@ -2709,7 +2687,7 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
         ],
       },
     },
-    "interaction and constraint effects should merge constraints in order",
+    "object interaction should preserve constraints in declaration order",
   );
   assertEqual(
     nodes.find((node) => node.id === "interactive-constrained")?.data
@@ -4294,11 +4272,7 @@ async function testImagePlacementCanvasPressCanOnlyRequestSession() {
     },
   });
 
-  runtime.extensions.register(
-    createImagePlacementCapability({
-      beginSessionOnCanvasInteraction: false,
-    }),
-  );
+  runtime.extensions.register(createImagePlacementCapability({}));
   await runtime.extensions.flushActivation();
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
@@ -4966,9 +4940,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
   runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
   runtime.extensions.register(createConfigurableVisualCapability());
-  const imageExtension = createImagePlacementCapability({
-    beginSessionOnCanvasInteraction: false,
-  });
+  const imageExtension = createImagePlacementCapability({});
   runtime.extensions.register(imageExtension);
   await runtime.extensions.flushActivation();
 
@@ -5604,7 +5576,7 @@ async function main() {
   await testDocumentCompilerAndRuntimePatchUseSameMerge();
   await testKitEditorDocumentControllerMutatesObjectSource();
   await testApplyKitEditorDocumentObjectInteraction();
-  await testApplyKitEditorDocumentDeclarativeInteractionEffects();
+  await testApplyKitEditorDocumentDeclarativeObjectInteraction();
   await testApplyKitEditorDocumentRejectsInteractionComponentEffects();
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();

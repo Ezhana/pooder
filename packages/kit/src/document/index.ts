@@ -43,8 +43,6 @@ export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   feature: "pooder.kit.feature",
   "configurable-visual": "pooder.kit.configurable-visual",
   "image-placement": "pooder.kit.image-placement",
-  interaction: "pooder.kit.interaction",
-  constraint: "pooder.kit.interaction",
   mirror: "pooder.kit.mirror",
 } as const;
 
@@ -98,10 +96,25 @@ export function collectKitEditorDocumentCapabilityRequirements(
     "resolveEffectCapabilityId"
   > = {},
 ) {
-  return collectEditorDocumentCapabilityRequirements(value, {
+  const document = normalizeEditorDocument(value);
+  const result = collectEditorDocumentCapabilityRequirements(document, {
     ...options,
     resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
   });
+  document.surfaces.forEach((surface, surfaceIndex) => {
+    surface.layers.forEach((layer, layerIndex) => {
+      layer.objects?.forEach((object, objectIndex) => {
+        if (!object.interaction) return;
+        result.requirements.push({
+          capabilityId: "pooder.kit.interaction",
+          effectType: "object-interaction",
+          require: "strict",
+          path: `surfaces[${surfaceIndex}].layers[${layerIndex}].objects[${objectIndex}].interaction`,
+        });
+      });
+    });
+  });
+  return result;
 }
 
 export async function applyKitEditorDocument(
@@ -129,18 +142,21 @@ async function refreshKitDocumentRuntimeCapabilities(
 ): Promise<void> {
   const featureState = readObjectFeatureEffectState(document);
   runtime.capabilities
-    .get<{ replaceFeatures(features: Record<string, unknown>[], options?: Record<string, unknown>): void }>(
-      KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS.feature,
-    )
+    .get<{
+      replaceFeatures(
+        features: Record<string, unknown>[],
+        options?: Record<string, unknown>,
+      ): void;
+    }>(KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS.feature)
     ?.replaceFeatures(featureState?.features ?? [], {
       markDirty: false,
       target: "both",
     });
 
   await runtime.capabilities
-    .get<{ refresh(): Promise<void> | void }>(
-      KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS["image-placement"],
-    )
+    .get<{
+      refresh(): Promise<void> | void;
+    }>(KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS["image-placement"])
     ?.refresh();
 }
 
@@ -153,13 +169,18 @@ function readObjectFeatureEffectState(
         for (const effect of object.effects ?? []) {
           if (effect.type !== "feature") continue;
           const payload =
-            "payload" in effect && effect.payload && typeof effect.payload === "object"
+            "payload" in effect &&
+            effect.payload &&
+            typeof effect.payload === "object"
               ? effect.payload
               : {};
           const features = (payload as Record<string, unknown>).features;
           if (Array.isArray(features)) {
             return {
-              features: JSON.parse(JSON.stringify(features)) as Record<string, unknown>[],
+              features: JSON.parse(JSON.stringify(features)) as Record<
+                string,
+                unknown
+              >[],
             };
           }
         }

@@ -125,6 +125,7 @@ type RuntimeConfigApi = {
 };
 
 type RuntimeSessionsApi = {
+  request: SessionService["requestSession"];
   create: SessionService["createSession"];
   update: SessionService["updateSession"];
   get: SessionService["getSession"];
@@ -161,13 +162,15 @@ export class Pooder {
   private readonly capabilityRegistryService = new CapabilityRegistryService();
   private readonly configurationService = new ConfigurationService();
   private readonly renderIntentService = new RenderIntentService();
-  private readonly renderEffectRegistryService = new RenderEffectRegistryService();
+  private readonly renderEffectRegistryService =
+    new RenderEffectRegistryService();
   private readonly renderIntentCompilerRegistryService =
     new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
   private readonly sessionService = new SessionService();
   private readonly surfaceFrameService = new DefaultSurfaceFrameService();
-  private readonly geometrySourceService = new DefaultGeometrySourceCapability();
+  private readonly geometrySourceService =
+    new DefaultGeometrySourceCapability();
   private readonly constraintResolverService =
     new DefaultConstraintResolverCapability(this.geometrySourceService);
   private readonly extensionManager: ExtensionManager;
@@ -202,10 +205,7 @@ export class Pooder {
       CORE_SERVICE_TOKENS.RENDER_INTENT_COMPILER_REGISTRY,
     );
     this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
-    this.registerService(
-      this.sessionService,
-      CORE_SERVICE_TOKENS.SESSION,
-    );
+    this.registerService(this.sessionService, CORE_SERVICE_TOKENS.SESSION);
     this.registerService(
       this.surfaceFrameService,
       CORE_SERVICE_TOKENS.SURFACE_FRAME,
@@ -258,7 +258,8 @@ export class Pooder {
 
     this.extensions = {
       register: (extension) => this.extensionManager.register(extension),
-      registerMany: (extensions) => this.extensionManager.registerMany(extensions),
+      registerMany: (extensions) =>
+        this.extensionManager.registerMany(extensions),
       flushActivation: () => this.extensionManager.flushActivation(),
       getState: (id) => this.extensionManager.getState(id),
       listStates: () => this.extensionManager.listStates(),
@@ -281,7 +282,8 @@ export class Pooder {
     };
 
     this.config = {
-      get: (key, defaultValue) => this.configurationService.get(key, defaultValue),
+      get: (key, defaultValue) =>
+        this.configurationService.get(key, defaultValue),
       update: (key, value) => this.configurationService.update(key, value),
       import: (data) => this.configurationService.import(data),
       export: () => this.configurationService.export(),
@@ -289,12 +291,14 @@ export class Pooder {
       getDefinition: (id) => this.configurationService.getDefinition(id),
       onDidChange: (key, callback) =>
         this.configurationService.onDidChange(key, callback),
-      onAnyChange: (callback) => this.configurationService.onAnyChange(callback),
+      onAnyChange: (callback) =>
+        this.configurationService.onAnyChange(callback),
       onDefinitionsChange: (callback) =>
         this.configurationService.onDefinitionsChange(callback),
     };
 
     this.sessions = {
+      request: (...args) => this.sessionService.requestSession(...args),
       create: (...args) => this.sessionService.createSession(...args),
       update: (...args) => this.sessionService.updateSession(...args),
       get: (...args) => this.sessionService.getSession(...args),
@@ -320,7 +324,10 @@ export class Pooder {
     identifier?: ServiceIdentifier<T>,
     options: RegisterServiceOptions = {},
   ): boolean {
-    const serviceIdentifier = this.resolveServiceIdentifier(service, identifier);
+    const serviceIdentifier = this.resolveServiceIdentifier(
+      service,
+      identifier,
+    );
     const serviceId = this.getServiceLabel(serviceIdentifier);
 
     try {
@@ -345,7 +352,10 @@ export class Pooder {
     identifier?: ServiceIdentifier<T>,
     options: RegisterServiceOptions = {},
   ): Promise<boolean> {
-    const serviceIdentifier = this.resolveServiceIdentifier(service, identifier);
+    const serviceIdentifier = this.resolveServiceIdentifier(
+      service,
+      identifier,
+    );
     const serviceId = this.getServiceLabel(serviceIdentifier);
 
     try {
@@ -378,7 +388,10 @@ export class Pooder {
     }
 
     try {
-      const disposeResult = this.invokeServiceHook(registeredService, "dispose");
+      const disposeResult = this.invokeServiceHook(
+        registeredService,
+        "dispose",
+      );
       if (this.isPromiseLike(disposeResult)) {
         throw new Error(
           `Service "${serviceId}" dispose() is async. Use unregisterServiceAsync() instead.`,
@@ -426,7 +439,9 @@ export class Pooder {
     return true;
   }
 
-  getService<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined {
+  getService<T extends Service>(
+    identifier: ServiceIdentifier<T>,
+  ): T | undefined {
     return this.serviceRegistry.get<T>(identifier);
   }
 
@@ -476,10 +491,7 @@ export class Pooder {
     serviceOrIdentifier: Service | ServiceIdentifier<Service>,
     id?: ServiceIdentifier<Service>,
   ): boolean {
-    return this.unregisterService(
-      serviceOrIdentifier as Service,
-      id,
-    );
+    return this.unregisterService(serviceOrIdentifier as Service, id);
   }
 
   private async unregisterServiceEntryAsync(

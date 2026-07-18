@@ -165,15 +165,17 @@ async function testApplyEditorDocument() {
                     shape: "rect",
                     params: { width: 20, height: 20 },
                   },
-                  effects: [
-                    { type: "custom" },
-                    { type: "interactive", enabled: true },
-                    {
-                      type: "object-constraint",
-                      targetId: "frame",
-                      strategy: "inside",
+                  effects: [{ type: "custom" }],
+                  interaction: {
+                    activation: {
+                      action: { command: "test.open-session" },
                     },
-                  ],
+                    transform: { enabled: true },
+                    drag: {
+                      enabled: true,
+                      constraints: [{ spec: { type: "rect.contain" } }],
+                    },
+                  },
                 },
                 {
                   id: "label",
@@ -209,12 +211,17 @@ async function testApplyEditorDocument() {
   assertEqual(
     node?.interaction?.drag?.enabled,
     true,
-    "interactive object effect should translate",
+    "object interaction should enable drag",
   );
   assertEqual(
     node?.interaction?.drag?.constraints?.[0]?.spec.type,
     "rect.contain",
-    "object-constraint should translate to render intent interaction constraint",
+    "object interaction constraints should translate to render intent",
+  );
+  assertEqual(
+    node?.interaction?.activation?.action.command,
+    "test.open-session",
+    "object activation should translate to render intent",
   );
 }
 
