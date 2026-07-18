@@ -12,6 +12,7 @@ import {
   type RuntimeConditionExpr,
 } from "./render";
 import type { Service, ServiceContext } from "./service";
+import { TypedEventEmitter } from "./typed-event";
 import {
   COMMAND_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
@@ -20,11 +21,12 @@ import {
 import type CommandService from "./services/CommandService";
 import type SessionService from "./services/SessionService";
 import type {
+  SessionHandle,
   SessionInteractionMode,
   SessionLeavePolicy,
-  SessionRequestResult,
   SessionScope,
 } from "./workflow-session";
+import { SessionConflictError } from "./workflow-session";
 
 export type InteractionActivationTrigger = "primary-pointer" | "double-click";
 export type InteractionManipulationKind = "move" | "resize" | "rotate";
@@ -103,7 +105,7 @@ export interface InteractionActivationResult<TResult = unknown> {
   commandId?: string;
   sessionId?: string;
   commandResult?: TResult;
-  sessionResult?: SessionRequestResult;
+  sessionResult?: SessionHandle<Record<string, never>>;
 }
 
 export interface InteractionManipulationInput {
@@ -133,12 +135,15 @@ export type InteractionManipulationCommitListener = (
   event: InteractionManipulationCommitEvent,
 ) => void;
 
+export interface InteractionServiceEventMap {
+  manipulationCommit: InteractionManipulationCommitEvent;
+}
+
 export class InteractionService implements Service {
   private commandService?: CommandService;
   private constraintResolver?: ConstraintResolverService;
   private sessionService?: SessionService;
-  private readonly commitListeners =
-    new Set<InteractionManipulationCommitListener>();
+  private readonly events = new TypedEventEmitter<InteractionServiceEventMap>();
 
   constructor(
     services: {
@@ -223,7 +228,7 @@ export class InteractionService implements Service {
     const commandId = normalizeId(activation.action.commandId);
     const actionPayload = cloneRecord(activation.action.payload);
     let sessionId: string | undefined;
-    let sessionResult: SessionRequestResult | undefined;
+    let sessionResult: SessionHandle<Record<string, never>> | undefined;
     if (activation.session) {
       const channel = normalizeId(activation.session.channel) || commandId;
       sessionId =
@@ -231,23 +236,28 @@ export class InteractionService implements Service {
         normalizeId(actionPayload.sessionId) ||
         resolveTargetSessionKey(input.targetData) ||
         `${channel}:${normalizeId(input.subjectId) || "editor"}`;
-      sessionResult = await this.requireSessionService().requestSession({
-        sessionId,
-        scope: createSessionScope(activation.session, {
-          channel,
-          subjectId: normalizeId(input.subjectId),
-          surfaceId: normalizeId(input.surfaceId),
-        }),
-        interactionMode: activation.session.mode,
-        leavePolicy: activation.session.leavePolicy,
-      });
-      if (!sessionResult.ok) {
+      try {
+        sessionResult = await this.requireSessionService().open({
+          descriptor: {
+            sessionId,
+            ownerId: `interaction:${channel}`,
+            scope: createSessionScope(activation.session, {
+              channel,
+              subjectId: normalizeId(input.subjectId),
+              surfaceId: normalizeId(input.surfaceId),
+            }),
+            interactionMode: activation.session.mode,
+            leavePolicy: activation.session.leavePolicy ?? "block",
+          },
+          initialDraft: {},
+        });
+      } catch (error) {
+        if (!(error instanceof SessionConflictError)) throw error;
         return {
           activated: false,
           reason: "session-conflict",
           commandId,
           sessionId,
-          sessionResult,
         };
       }
     }
@@ -296,7 +306,7 @@ export class InteractionService implements Service {
     };
     if (input.commit && result.enabled) {
       const event = { kind, input, result };
-      this.commitListeners.forEach((listener) => listener(event));
+      this.events.emit("manipulationCommit", event);
     }
     return result;
   }
@@ -304,14 +314,18 @@ export class InteractionService implements Service {
   onDidCommitManipulation(
     listener: InteractionManipulationCommitListener,
   ): Disposable {
-    this.commitListeners.add(listener);
-    return {
-      dispose: () => this.commitListeners.delete(listener),
-    };
+    return this.events.on("manipulationCommit", listener);
+  }
+
+  on<TKey extends keyof InteractionServiceEventMap>(
+    type: TKey,
+    listener: (event: InteractionServiceEventMap[TKey]) => void,
+  ): Disposable {
+    return this.events.on(type, listener);
   }
 
   dispose(): void {
-    this.commitListeners.clear();
+    this.events.clear();
   }
 
   private resolveOperationState(

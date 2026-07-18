@@ -30,6 +30,13 @@ import {
   SessionService,
 } from "./services";
 import { ExtensionContext } from "./context";
+import { TypedEventEmitter } from "./typed-event";
+
+export interface RuntimeServiceChangeEvent {
+  readonly type: "registered" | "unregistered";
+  readonly id: string;
+  readonly service: Service;
+}
 
 export * from "./extension";
 export * from "./context";
@@ -49,7 +56,9 @@ export * from "./geometry-source";
 export * from "./constraint-resolver";
 export * from "./interaction-service";
 export * from "./surface-frames";
+export * from "./typed-event";
 export * from "./services";
+/** @internal Temporary legacy test/extension bridge. */
 export { default as EventBus } from "./event";
 
 type RuntimeServicesApi = {
@@ -77,6 +86,7 @@ type RuntimeServicesApi = {
     errorMessage?: string,
   ): T;
   has(identifier: ServiceIdentifier<Service>): boolean;
+  onDidChange(listener: (event: RuntimeServiceChangeEvent) => void): Disposable;
 };
 
 type RuntimeExtensionsApi = {
@@ -88,6 +98,7 @@ type RuntimeExtensionsApi = {
   getState(id: string): ExtensionStateSnapshot | undefined;
   listStates(): ExtensionStateSnapshot[];
   unregister(id: string): Promise<boolean>;
+  onDidChange: ExtensionManager["onDidChange"];
 };
 
 type RuntimeCommandsApi = {
@@ -127,28 +138,20 @@ type RuntimeConfigApi = {
 };
 
 type RuntimeSessionsApi = {
-  request: SessionService["requestSession"];
-  create: SessionService["createSession"];
-  update: SessionService["updateSession"];
-  get: SessionService["getSession"];
-  list: SessionService["listSessions"];
-  isActive: SessionService["isSessionActive"];
-  hasActive: SessionService["hasActiveSession"];
-  isDirty: SessionService["isDirty"];
-  markDirty: SessionService["markDirty"];
-  focus: SessionService["focusSession"];
-  getFocusedId: SessionService["getFocusedSessionId"];
-  validate: SessionService["validateSession"];
-  commit: SessionService["commitSession"];
-  rollback: SessionService["rollbackSession"];
-  cancel: SessionService["cancelSession"];
-  handleBeforeLeave: SessionService["handleBeforeLeave"];
+  open: SessionService["open"];
+  getHandle: SessionService["getHandle"];
+  listSnapshots: SessionService["listSnapshots"];
   onDidChange: SessionService["onDidChange"];
+  onDidTerminate: SessionService["onDidTerminate"];
 };
 
 export class Pooder {
+  /** @internal Temporary bridge for extensions wrapped by defineLegacyExtension(). */
   readonly eventBus: EventBus = new EventBus();
   private readonly serviceRegistry: ServiceRegistry = new ServiceRegistry();
+  private readonly serviceEvents = new TypedEventEmitter<{
+    change: RuntimeServiceChangeEvent;
+  }>();
   private readonly serviceContext: ServiceContext = {
     eventBus: this.eventBus,
     get: <T extends Service>(identifier: ServiceIdentifier<T>) =>
@@ -211,8 +214,8 @@ export class Pooder {
       this.renderIntentCompilerRegistryService,
       CORE_SERVICE_TOKENS.RENDER_INTENT_COMPILER_REGISTRY,
     );
-    this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
     this.registerService(this.sessionService, CORE_SERVICE_TOKENS.SESSION);
+    this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
     this.registerService(
       this.surfaceFrameService,
       CORE_SERVICE_TOKENS.SURFACE_FRAME,
@@ -244,7 +247,6 @@ export class Pooder {
     };
 
     this.extensionManager = new ExtensionManager(context, {
-      eventBus: this.eventBus,
       capabilityRegistry: this.capabilityRegistryService,
       configurationService: this.configurationService,
       commandService: this.commandService,
@@ -265,6 +267,7 @@ export class Pooder {
       getOrThrow: (identifier, errorMessage) =>
         this.getServiceOrThrow(identifier, errorMessage),
       has: (identifier) => this.hasService(identifier),
+      onDidChange: (listener) => this.serviceEvents.on("change", listener),
     };
 
     this.extensions = {
@@ -275,6 +278,7 @@ export class Pooder {
       getState: (id) => this.extensionManager.getState(id),
       listStates: () => this.extensionManager.listStates(),
       unregister: (id) => this.extensionManager.unregister(id),
+      onDidChange: (listener) => this.extensionManager.onDidChange(listener),
     };
 
     this.commands = {
@@ -309,24 +313,11 @@ export class Pooder {
     };
 
     this.sessions = {
-      request: (...args) => this.sessionService.requestSession(...args),
-      create: (...args) => this.sessionService.createSession(...args),
-      update: (...args) => this.sessionService.updateSession(...args),
-      get: (...args) => this.sessionService.getSession(...args),
-      list: (...args) => this.sessionService.listSessions(...args),
-      isActive: (...args) => this.sessionService.isSessionActive(...args),
-      hasActive: (...args) => this.sessionService.hasActiveSession(...args),
-      isDirty: (...args) => this.sessionService.isDirty(...args),
-      markDirty: (...args) => this.sessionService.markDirty(...args),
-      focus: (...args) => this.sessionService.focusSession(...args),
-      getFocusedId: () => this.sessionService.getFocusedSessionId(),
-      validate: (...args) => this.sessionService.validateSession(...args),
-      commit: (...args) => this.sessionService.commitSession(...args),
-      rollback: (...args) => this.sessionService.rollbackSession(...args),
-      cancel: (...args) => this.sessionService.cancelSession(...args),
-      handleBeforeLeave: (...args) =>
-        this.sessionService.handleBeforeLeave(...args),
+      open: (...args) => this.sessionService.open(...args),
+      getHandle: (...args) => this.sessionService.getHandle(...args),
+      listSnapshots: () => this.sessionService.listSnapshots(),
       onDidChange: (...args) => this.sessionService.onDidChange(...args),
+      onDidTerminate: (...args) => this.sessionService.onDidTerminate(...args),
     };
   }
 
@@ -350,7 +341,11 @@ export class Pooder {
       }
 
       this.serviceRegistry.register(serviceIdentifier, service, options);
-      this.eventBus.emit("service:register", service, { id: serviceId });
+      this.serviceEvents.emit("change", {
+        type: "registered",
+        id: serviceId,
+        service,
+      });
       return true;
     } catch (error) {
       console.error(`Error initializing service ${serviceId}:`, error);
@@ -372,7 +367,11 @@ export class Pooder {
     try {
       await this.invokeServiceHookAsync(service, "init");
       this.serviceRegistry.register(serviceIdentifier, service, options);
-      this.eventBus.emit("service:register", service, { id: serviceId });
+      this.serviceEvents.emit("change", {
+        type: "registered",
+        id: serviceId,
+        service,
+      });
       return true;
     } catch (error) {
       console.error(`Error initializing service ${serviceId}:`, error);
@@ -414,8 +413,10 @@ export class Pooder {
     }
 
     this.serviceRegistry.delete(resolvedIdentifier);
-    this.eventBus.emit("service:unregister", registeredService, {
+    this.serviceEvents.emit("change", {
+      type: "unregistered",
       id: serviceId,
+      service: registeredService,
     });
     return true;
   }
@@ -444,8 +445,10 @@ export class Pooder {
     }
 
     this.serviceRegistry.delete(resolvedIdentifier);
-    this.eventBus.emit("service:unregister", registeredService, {
+    this.serviceEvents.emit("change", {
+      type: "unregistered",
       id: serviceId,
+      service: registeredService,
     });
     return true;
   }
@@ -488,6 +491,7 @@ export class Pooder {
     }
 
     this.serviceRegistry.clear();
+    this.serviceEvents.clear();
     this.eventBus.clear();
   }
 

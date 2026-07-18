@@ -16,6 +16,7 @@ export type ServiceIdentifier<T extends Service = Service> =
   | ServiceToken<T>;
 
 export interface ServiceContext {
+  /** @internal Temporary legacy bridge. Services must use typed service events. */
   readonly eventBus: EventBus;
   get<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined;
   getOrThrow<T extends Service>(

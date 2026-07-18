@@ -1,4 +1,4 @@
-import EventBus from "./event";
+import { TypedEventEmitter } from "./typed-event";
 import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type {
@@ -350,7 +350,9 @@ export class RenderIntentCompilerRegistryService implements Service {
 }
 
 export class RenderIntentService implements Service {
-  private readonly eventBus = new EventBus();
+  private readonly events = new TypedEventEmitter<{
+    change: RenderIntentChangeEvent;
+  }>();
   private baseIntents: RenderIntentDraft[] = [];
   private runtimePatches = new Map<string, RequiredRuntimePatchEntry>();
   private runtimeConditionValues = new Map<string, unknown>();
@@ -464,10 +466,7 @@ export class RenderIntentService implements Service {
   }
 
   onDidChange(callback: (event: RenderIntentChangeEvent) => void): Disposable {
-    this.eventBus.on("render-intent:change", callback);
-    return new RegistryDisposable(() => {
-      this.eventBus.off("render-intent:change", callback);
-    });
+    return this.events.on("change", callback);
   }
 
   private recompile(): RenderGraph {
@@ -486,7 +485,7 @@ export class RenderIntentService implements Service {
   }
 
   private emitChange(): void {
-    this.eventBus.emit("render-intent:change", {
+    this.events.emit("change", {
       graph: cloneGraph(this.graph),
       revision: this.revision,
     });

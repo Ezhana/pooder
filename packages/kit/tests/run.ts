@@ -4277,9 +4277,9 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
     "completed app-owned image session should commit the draft to the placement",
   );
   assertEqual(
-    sessions.getSession(sessionInput.sessionId)?.status,
-    "committed",
-    "completed app-owned image session should commit the matching SessionService record",
+    sessions.getSession(sessionInput.sessionId),
+    undefined,
+    "completed app-owned image session should leave the active SessionService registry",
   );
 
   await runtime.dispose();

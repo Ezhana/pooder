@@ -57,6 +57,10 @@ class FakeLayoutCanvasService implements CanvasService {
     this.height = height;
   }
 
+  on() {
+    return { dispose() {} };
+  }
+
   requestRenderAll() {}
   resize() {}
   getViewportSize() {
@@ -1311,12 +1315,9 @@ async function testSessionsWithoutTools() {
     assertEqual(validateCount, 1);
     assertEqual(commitCount, 1);
     assertEqual(
-      sessions.getSession("session.image-placement.front.slot")?.status,
-      "committed",
-    );
-    assertEqual(
-      sessions.getSession("session.image-placement.front.slot")?.dirty,
-      false,
+      sessions.getSession("session.image-placement.front.slot"),
+      undefined,
+      "terminal sessions should leave the active registry",
     );
     assertEqual(
       sessions.hasActiveSession({
@@ -1326,7 +1327,7 @@ async function testSessionsWithoutTools() {
     );
     assertDeepEqual(
       changes.map((event) => event.reason),
-      ["create", "dirty", "committing", "commit"],
+      ["opened", "phase", "phase", "phase"],
     );
   });
 }
@@ -1341,7 +1342,10 @@ async function testSessionLifecycleEvents() {
     }> = [];
 
     sessions.onDidChange((event) => {
-      events.push({ reason: event.reason, sessionId: event.sessionId });
+      events.push({
+        reason: event.reason,
+        sessionId: event.snapshot.descriptor.sessionId,
+      });
     });
 
     sessions.createSession({
@@ -1360,23 +1364,13 @@ async function testSessionLifecycleEvents() {
 
     assertEqual(sessions.getFocusedSessionId(), null);
     assertEqual(sessions.isSessionActive("image:front:slot"), false);
-    assertEqual(
-      sessions.listSessions({ scope: { channel: "image" } }).length,
-      2,
-    );
-    assertDeepEqual(
-      events,
-      [
-        { reason: "create", sessionId: "image:front:slot" },
-        { reason: "create", sessionId: "image:front:slot-2" },
-        { reason: "update", sessionId: "image:front:slot" },
-        { reason: "focus", sessionId: "image:front:slot" },
-        { reason: "committing", sessionId: "image:front:slot" },
-        { reason: "commit", sessionId: "image:front:slot" },
-        { reason: "focus", sessionId: "image:front:slot" },
-        { reason: "cancel", sessionId: "image:front:slot-2" },
-      ],
-      "sessions should emit unified lifecycle events",
+    assertEqual(sessions.listSessions({ scope: { channel: "image" } }).length, 0);
+    assert(
+      events.some(
+        (event) =>
+          event.reason === "draft" && event.sessionId === "image:front:slot",
+      ),
+      "session draft changes should be typed lifecycle events",
     );
   });
 }
@@ -1416,6 +1410,190 @@ async function testExclusiveSessionRequests() {
       }),
       true,
     );
+  });
+}
+
+async function testSessionV2OwnsLifecycleAndResources() {
+  await withRuntime(async (runtime) => {
+    const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    let releaseBegin!: () => void;
+    const beginGate = new Promise<void>((resolve) => {
+      releaseBegin = resolve;
+    });
+    let beginCount = 0;
+    let opened = false;
+    const opening = sessions
+      .open({
+        descriptor: {
+          sessionId: "v2:lifecycle",
+          ownerId: "test-owner",
+          scope: { groupId: "v2" },
+          interactionMode: "exclusive",
+          leavePolicy: "block",
+        },
+        initialDraft: { value: 1 },
+        lifecycle: {
+          begin: async () => {
+            beginCount += 1;
+            await beginGate;
+          },
+        },
+      })
+      .then((handle) => {
+        opened = true;
+        return handle;
+      });
+    await Promise.resolve();
+    assertEqual(opened, false, "open must await begin");
+    releaseBegin();
+    const handle = await opening;
+    const duplicate = await sessions.open({
+      descriptor: handle.descriptor,
+      initialDraft: { value: 99 },
+    });
+    assertEqual(duplicate, handle, "same owner must receive the same handle");
+    assertEqual(beginCount, 1, "duplicate open must not begin twice");
+
+    let ownerError = false;
+    try {
+      await sessions.open({
+        descriptor: { ...handle.descriptor, ownerId: "other-owner" },
+        initialDraft: { value: 1 },
+      });
+    } catch {
+      ownerError = true;
+    }
+    assertEqual(ownerError, true, "another owner must not reuse a session id");
+
+    const disposalOrder: string[] = [];
+    handle.own({ dispose: () => disposalOrder.push("first") });
+    handle.own({ dispose: () => disposalOrder.push("second") });
+    await handle.cancel();
+    assertDeepEqual(disposalOrder, ["second", "first"]);
+    assertEqual(sessions.getHandle("v2:lifecycle"), undefined);
+  });
+}
+
+async function testSessionV2RecoversCommitAndForcesTerminalCleanup() {
+  const sessions = new (await import("../src/services/SessionService")).default();
+  let validationOk = false;
+  let commitThrows = true;
+  const handle = await sessions.open({
+    descriptor: {
+      sessionId: "v2:commit",
+      ownerId: "test-owner",
+      scope: {},
+      interactionMode: "cooperative",
+      leavePolicy: "block",
+    },
+    initialDraft: { value: 1 },
+    lifecycle: {
+      validate: () => validationOk,
+      commit: () => {
+        if (commitThrows) throw new Error("commit failed");
+        return "done";
+      },
+    },
+  });
+  handle.updateDraft({ value: 2 });
+  assertEqual((await handle.commit()).ok, false);
+  assertEqual(handle.phase, "active");
+  assertDeepEqual(handle.getDraft(), { value: 2 });
+  validationOk = true;
+  let commitError = false;
+  try {
+    await handle.commit();
+  } catch {
+    commitError = true;
+  }
+  assertEqual(commitError, true);
+  assertEqual(handle.phase, "active");
+  assertEqual(handle.focused, true);
+  commitThrows = false;
+  assertDeepEqual(await handle.commit(), { ok: true, result: "done" });
+  assertEqual(sessions.getHandle("v2:commit"), undefined);
+
+  const forced = await sessions.open({
+    descriptor: {
+      sessionId: "v2:forced",
+      ownerId: "test-owner",
+      scope: {},
+      interactionMode: "cooperative",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+    lifecycle: { rollback: () => { throw new Error("rollback failed"); } },
+  });
+  forced.own({ dispose: () => { throw new Error("dispose failed"); } });
+  let aggregate: unknown;
+  try {
+    await forced.rollback();
+  } catch (error) {
+    aggregate = error;
+  }
+  assert(aggregate instanceof AggregateError, "rollback errors must aggregate");
+  assertEqual((aggregate as AggregateError).errors.length, 2);
+  assertEqual(sessions.getHandle("v2:forced"), undefined);
+}
+
+async function testSessionSceneV2TracksFocusedRootAndOwnership() {
+  await withRuntime(async (runtime) => {
+    const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    const session = await sessions.open({
+      descriptor: {
+        sessionId: "scene-session",
+        ownerId: "scene-owner",
+        scope: {},
+        interactionMode: "cooperative",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    const scene = scenes.createScene({
+      id: "session-root",
+      owner: { type: "session", sessionId: session.descriptor.sessionId },
+      composition: {
+        entries: [
+          { source: "local", layerIds: ["underlay"] },
+          { source: "document", interaction: "disabled" },
+          { source: "local", layerIds: ["controls"] },
+        ],
+      },
+    });
+    session.own(scene);
+    scene.addLayer({ id: "underlay" });
+    scene.addLayer({ id: "controls" });
+    scene.addElement({
+      id: "control",
+      layerId: "controls",
+      type: "rect",
+      width: 10,
+      height: 10,
+      interaction: { selection: { enabled: true } },
+    });
+    assertDeepEqual(
+      scenes.getActiveRoot()?.composition.entries.map((entry) => entry.source),
+      ["local", "document", "local"],
+    );
+
+    const other = await sessions.open({
+      descriptor: {
+        sessionId: "other-session",
+        ownerId: "other-owner",
+        scope: {},
+        interactionMode: "cooperative",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    assertEqual(scenes.getActiveRoot(), null);
+    await sessions.open({ descriptor: session.descriptor, initialDraft: {} });
+    assertEqual(scenes.getActiveRoot()?.id, "session-root");
+    await session.cancel();
+    assertEqual(scenes.getSceneHandle("session-root"), undefined);
+    assertEqual(scenes.getActiveRoot(), null);
+    await other.cancel();
   });
 }
 
@@ -1825,7 +2003,7 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       "activate should return command result",
     );
 
-    runtime.sessions.create({
+    runtime.services.getOrThrow<SessionService>(SESSION_SERVICE).createSession({
       sessionId: "existing",
       scope: { groupId: "editor-interaction" },
       interactionMode: "exclusive",
@@ -2598,6 +2776,15 @@ async function main() {
     ["manages sessions without registered tools", testSessionsWithoutTools],
     ["emits generic session lifecycle events", testSessionLifecycleEvents],
     ["coordinates exclusive session requests", testExclusiveSessionRequests],
+    ["owns V2 session lifecycle and resources", testSessionV2OwnsLifecycleAndResources],
+    [
+      "recovers failed V2 commits and forces terminal cleanup",
+      testSessionV2RecoversCommitAndForcesTerminalCleanup,
+    ],
+    [
+      "tracks focused session scene roots and ownership",
+      testSessionSceneV2TracksFocusedRootAndOwnership,
+    ],
     ["computes geometry primitives", testGeometryPrimitives],
     [
       "computes drag interaction snaps and constraints",

@@ -6,6 +6,7 @@ import {
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
+  SESSION_SERVICE,
   SURFACE_FRAME_SERVICE,
   type RenderIntentService,
   type InteractionService,
@@ -80,6 +81,21 @@ class FakeCanvasService {
   reconcileCalls: Array<{
     items: FabricRenderTargetItem[];
   }> = [];
+
+  on(event: string, handler: (...args: any[]) => void) {
+    const key = `typed:${event}`;
+    const handlers = this.handlers.get(key) ?? [];
+    handlers.push(handler);
+    this.handlers.set(key, handlers);
+    return {
+      dispose: () => {
+        this.handlers.set(
+          key,
+          (this.handlers.get(key) ?? []).filter((item) => item !== handler),
+        );
+      },
+    };
+  }
 
   resize(width: number, height: number) {
     this.resizeCalls.push({ width, height });
@@ -157,7 +173,42 @@ class FakeCanvasService {
 
   emitCanvasEvent(event: string, payload: any) {
     (this.handlers.get(event) ?? []).forEach((handler) => handler(payload));
+    const target = payload?.target;
+    const typed =
+      event === "object:moving"
+        ? { event: "transform", payload: { kind: "move", target } }
+        : event === "object:scaling"
+          ? { event: "transform", payload: { kind: "resize", target } }
+          : event === "object:rotating"
+            ? { event: "transform", payload: { kind: "rotate", target } }
+            : event === "object:modified"
+              ? { event: "transform", payload: { kind: "commit", target } }
+              : event === "mouse:down"
+                ? { event: "pointer", payload: { kind: "down", target } }
+                : event === "mouse:dblclick"
+                  ? { event: "pointer", payload: { kind: "double-click", target } }
+                  : null;
+    if (typed) {
+      (this.handlers.get(`typed:${typed.event}`) ?? []).forEach((handler) =>
+        handler(typed.payload),
+      );
+    }
   }
+}
+
+function createLayoutCanvas(getViewportSize: () => { width: number; height: number }) {
+  const resizeListeners = new Set<(event: { width: number; height: number }) => void>();
+  return {
+    getViewportSize,
+    on: (event: string, listener: (payload: any) => void) => {
+      if (event === "resized") resizeListeners.add(listener);
+      return { dispose: () => resizeListeners.delete(listener) };
+    },
+    emitResize: () => {
+      const size = getViewportSize();
+      resizeListeners.forEach((listener) => listener(size));
+    },
+  };
 }
 
 class FakeSceneLayoutService {
@@ -633,6 +684,103 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   await runtime.dispose();
 }
 
+async function testSessionRootCompositionIsExplicitAndReadOnly() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "document-node",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "document",
+        objectId: "document-node",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "document", stack: 0 },
+      props: { width: 20, height: 20 },
+      interaction: { selection: { enabled: true } },
+    },
+  ]);
+  const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
+    descriptor: {
+      sessionId: "session-root",
+      ownerId: "platform-test",
+      scope: {},
+      interactionMode: "cooperative",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+  });
+  const scenes = runtime.services.getOrThrow(SCENE_SERVICE);
+  const scene = scenes.createScene({
+    id: "root",
+    owner: { type: "session", sessionId: session.descriptor.sessionId },
+    composition: {
+      entries: [
+        { source: "local", layerIds: ["underlay"] },
+        { source: "document", interaction: "disabled" },
+        { source: "local", layerIds: ["controls"] },
+      ],
+    },
+  });
+  session.own(scene);
+  scene.addLayer({ id: "underlay" });
+  scene.addLayer({ id: "controls" });
+  scene.addElement({
+    id: "underlay-node",
+    layerId: "underlay",
+    type: "rect",
+    width: 10,
+    height: 10,
+  });
+  scene.addElement({
+    id: "control-node",
+    layerId: "controls",
+    type: "rect",
+    width: 10,
+    height: 10,
+    interaction: { selection: { enabled: true } },
+  });
+  await adapter.flush();
+  const items = canvas.reconcileCalls.at(-1)?.items ?? [];
+  assertDeepEqual(
+    items.map((item) => item.spec.id),
+    ["underlay-node", "document-node", "control-node"],
+    "composition entry order should be the render order",
+  );
+  const projection = items.find((item) => item.spec.id === "document-node")?.spec;
+  assertEqual(projection?.props.selectable, false, "document projections are read-only");
+  assertEqual(projection?.props.evented, false, "document projections do not hit test");
+  assertEqual(
+    projection?.data?.interactionSpec,
+    undefined,
+    "document projections do not activate document interaction",
+  );
+  const control = items.find((item) => item.spec.id === "control-node")?.spec;
+  assertEqual(control?.props.selectable, true, "scene elements use InteractionSpec");
+  assertEqual(control?.props.evented, true, "scene elements use the shared resolver");
+
+  scene.dispose();
+  const localOnly = scenes.createScene({
+    id: "local-only",
+    owner: { type: "session", sessionId: session.descriptor.sessionId },
+    composition: { entries: [] },
+  });
+  session.own(localOnly);
+  await adapter.flush();
+  assertEqual(
+    canvas.reconcileCalls.at(-1)?.items.length,
+    0,
+    "a root without document projection must not render the document",
+  );
+  await session.cancel();
+  await runtime.dispose();
+}
+
 async function testFabricRenderGraphAdapterRendersRenderableScenes() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -808,9 +956,7 @@ async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
 async function testSceneLayoutServiceUsesStableSnapshots() {
   const runtime = new Pooder();
   const viewportSize = { width: 800, height: 600 };
-  const canvas = {
-    getViewportSize: () => ({ ...viewportSize }),
-  };
+  const canvas = createLayoutCanvas(() => ({ ...viewportSize }));
   const layoutService = new SceneLayoutService();
   const frameMap = new Map<string, SurfaceSceneFrames>();
   const frameListeners = new Set<(event: any) => void>();
@@ -873,7 +1019,7 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   assertEqual(changes.length, 1, "cached reads should remain side-effect free");
 
   viewportSize.width = 1000;
-  runtime.eventBus.emit("canvas:resized", { width: 1000, height: 600 });
+  canvas.emitResize();
   const resized = layoutService.getLayout("front");
   assert(resized, "canvas resize should recompute the layout");
   assertEqual(
@@ -893,9 +1039,7 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
 
 async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
   const runtime = new Pooder();
-  const canvas = {
-    getViewportSize: () => ({ width: 800, height: 600 }),
-  };
+  const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const layoutService = new SceneLayoutService();
   const frameMap = new Map<string, SurfaceSceneFrames>();
   const frameListeners = new Set<(event: any) => void>();
@@ -960,9 +1104,7 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
 
 async function testSceneLayoutServiceUsesConfiguredViewPadding() {
   const runtime = new Pooder();
-  const canvas = {
-    getViewportSize: () => ({ width: 800, height: 600 }),
-  };
+  const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "10%" });
   const surfaceFrames = createMutableSurfaceFrames({
     front: TEST_SURFACE_FRAMES,
@@ -995,9 +1137,7 @@ async function testSceneLayoutServiceUsesConfiguredViewPadding() {
 
 async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
   const runtime = new Pooder();
-  const canvas = {
-    getViewportSize: () => ({ width: 800, height: 600 }),
-  };
+  const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "16%" });
   const surfaceFrames = createMutableSurfaceFrames({
     front: TEST_SURFACE_FRAMES,
@@ -2938,6 +3078,10 @@ async function main() {
     [
       "builds graph adapter draw list",
       testFabricRenderGraphAdapterBuildsDrawList,
+    ],
+    [
+      "composes explicit read-only session roots",
+      testSessionRootCompositionIsExplicitAndReadOnly,
     ],
     [
       "renders renderable SceneService scenes",

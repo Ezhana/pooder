@@ -60,10 +60,8 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
     this.canvasService = canvasService;
     this.configService = configService;
     this.surfaceFrameService = surfaceFrameService;
-    this.subscriptions.on(
-      context.eventBus,
-      "canvas:resized",
-      this.onCanvasResized,
+    this.subscriptions.add(
+      canvasService.on("resized", this.onCanvasResized),
     );
     this.subscriptions.add(
       surfaceFrameService.onAnyFramesChange((event) => {

@@ -5,9 +5,21 @@
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./internal/legacy-extension": {
+      "types": "./dist/internal/legacy-extension.d.ts",
+      "import": "./dist/internal/legacy-extension.mjs",
+      "require": "./dist/internal/legacy-extension.js"
+    }
+  },
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts src/internal/legacy-extension.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts src/internal/legacy-extension.ts --format cjs,esm --dts --watch",
     "test": "tsc -p tsconfig.test.json && node .test-dist/tests/run.js"
   },
   "keywords": [],

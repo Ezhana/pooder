@@ -1,6 +1,6 @@
 import { Service } from "../service";
-import EventBus from "../event";
 import { ConfigurationContribution } from "../contribution";
+import { TypedEventEmitter } from "../typed-event";
 
 export interface RegisteredConfigurationDefinition
   extends ConfigurationContribution {
@@ -13,9 +13,24 @@ export interface ConfigurationDefinitionsChangeEvent {
   extensionId: string;
 }
 
+export interface ConfigurationValueChangeEvent {
+  key: string;
+  value: any;
+  oldValue: any;
+}
+
+interface ConfigurationServiceEventMap {
+  change: ConfigurationValueChangeEvent;
+  definitionsChange: ConfigurationDefinitionsChangeEvent;
+}
+
 export default class ConfigurationService implements Service {
   private readonly configValues: Map<string, any> = new Map();
-  private readonly eventBus: EventBus = new EventBus();
+  private readonly events = new TypedEventEmitter<ConfigurationServiceEventMap>();
+  private readonly valueListenersByKey = new Map<
+    string,
+    Set<(event: ConfigurationValueChangeEvent) => void>
+  >();
   private readonly definitionsById = new Map<
     string,
     RegisteredConfigurationDefinition
@@ -33,8 +48,11 @@ export default class ConfigurationService implements Service {
     const oldValue = this.configValues.get(key);
     if (oldValue !== value) {
       this.configValues.set(key, value);
-      this.eventBus.emit(`change:${key}`, { key, value, oldValue });
-      this.eventBus.emit("change", { key, value, oldValue });
+      const event = { key, value, oldValue };
+      [...(this.valueListenersByKey.get(key) ?? [])].forEach((listener) =>
+        listener(event),
+      );
+      this.events.emit("change", event);
     }
   }
 
@@ -42,19 +60,21 @@ export default class ConfigurationService implements Service {
     key: string,
     callback: (event: { key: string; value: any; oldValue: any }) => void,
   ) {
-    this.eventBus.on(`change:${key}`, callback);
+    const listeners = this.valueListenersByKey.get(key) ?? new Set();
+    listeners.add(callback);
+    this.valueListenersByKey.set(key, listeners);
     return {
-      dispose: () => this.eventBus.off(`change:${key}`, callback),
+      dispose: () => {
+        listeners.delete(callback);
+        if (listeners.size === 0) this.valueListenersByKey.delete(key);
+      },
     };
   }
 
   onAnyChange(
     callback: (event: { key: string; value: any; oldValue: any }) => void,
   ) {
-    this.eventBus.on("change", callback);
-    return {
-      dispose: () => this.eventBus.off("change", callback),
-    };
+    return this.events.on("change", callback);
   }
 
   export(): Record<string, any> {
@@ -112,7 +132,7 @@ export default class ConfigurationService implements Service {
     this.definitionIdsByExtension.set(extensionId, extensionDefinitions);
 
     if (added.length > 0) {
-      this.eventBus.emit("definitions:change", {
+      this.events.emit("definitionsChange", {
         added,
         removed: [],
         extensionId,
@@ -138,7 +158,7 @@ export default class ConfigurationService implements Service {
     });
     this.definitionIdsByExtension.delete(extensionId);
 
-    this.eventBus.emit("definitions:change", {
+    this.events.emit("definitionsChange", {
       added: [],
       removed,
       extensionId,
@@ -159,16 +179,14 @@ export default class ConfigurationService implements Service {
   onDefinitionsChange(
     callback: (event: ConfigurationDefinitionsChangeEvent) => void,
   ) {
-    this.eventBus.on("definitions:change", callback);
-    return {
-      dispose: () => this.eventBus.off("definitions:change", callback),
-    };
+    return this.events.on("definitionsChange", callback);
   }
 
   dispose() {
     this.configValues.clear();
     this.definitionsById.clear();
     this.definitionIdsByExtension.clear();
-    this.eventBus.clear();
+    this.valueListenersByKey.clear();
+    this.events.clear();
   }
 }

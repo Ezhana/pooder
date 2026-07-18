@@ -410,6 +410,34 @@ export interface CanvasObjectLike {
   [key: string]: any;
 }
 
+export interface CanvasSelectionEvent {
+  readonly kind: "created" | "updated" | "cleared";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasObjectChangeEvent {
+  readonly kind: "added" | "modified" | "removed";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasPointerEvent {
+  readonly kind: "down" | "double-click";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasTransformEvent {
+  readonly kind: "move" | "resize" | "rotate" | "commit";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasServiceEventMap {
+  resized: CanvasSize;
+  selection: CanvasSelectionEvent;
+  objectChange: CanvasObjectChangeEvent;
+  pointer: CanvasPointerEvent;
+  transform: CanvasTransformEvent;
+}
+
 export interface CanvasObjectSelector {
   ids?: readonly string[];
   layerIds?: readonly string[];
@@ -422,6 +450,10 @@ export interface CanvasObjectSelector {
 }
 
 export interface CanvasService extends Service {
+  on<TKey extends keyof CanvasServiceEventMap>(
+    type: TKey,
+    listener: (event: CanvasServiceEventMap[TKey]) => void,
+  ): { dispose(): void };
   requestRenderAll(): void;
   resize(width: number, height: number): void;
   getViewportSize(): CanvasSize;
@@ -431,7 +463,9 @@ export interface CanvasService extends Service {
   getActiveObject(): CanvasObjectLike | undefined;
   setActiveObject(object: CanvasObjectLike): boolean;
   discardActiveObject(): boolean;
+  /** @internal Legacy backend event adapter. */
   onCanvasEvent(event: string, handler: (...args: any[]) => void): void;
+  /** @internal Legacy backend event adapter. */
   offCanvasEvent(event: string, handler: (...args: any[]) => void): void;
   getTopContext(): CanvasRenderingContext2D | undefined;
   clearTopContext(): void;

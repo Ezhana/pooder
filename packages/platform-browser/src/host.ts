@@ -1,5 +1,4 @@
 import type {
-  EventBus,
   Service,
   ServiceIdentifier,
   SurfaceFrameService,
@@ -29,7 +28,6 @@ interface BrowserHostRuntimeServices {
 }
 
 export interface BrowserHostRuntime {
-  eventBus: EventBus;
   services: BrowserHostRuntimeServices;
 }
 
@@ -77,8 +75,7 @@ export function attachBrowserHost(
 ): BrowserHostAttachment {
   const createCanvasService =
     options.createCanvasService ??
-    ((canvas, currentRuntime) =>
-      new CanvasService(canvas, { eventBus: currentRuntime.eventBus }));
+    ((canvas) => new CanvasService(canvas));
   const createBrowserSceneExportService =
     options.createBrowserSceneExportService ??
     (() => new BrowserSceneExportService());
