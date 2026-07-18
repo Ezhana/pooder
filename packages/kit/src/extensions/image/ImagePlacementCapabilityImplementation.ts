@@ -44,6 +44,7 @@ import type {
   EditorSurface,
 } from "@pooder/document";
 import { isGenericEditorEffect } from "@pooder/document";
+import { IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID } from "../../document/imagePlacementInteraction";
 import {
   createSourceSizeCache,
   getCoverScale as getCoverScaleFromRect,
@@ -57,7 +58,6 @@ import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import {
   IMAGE_PLACEMENT_CAPABILITY_ID,
-  IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
   createImagePlacementCapabilityDefinition,
   normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,

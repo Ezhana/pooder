@@ -18,6 +18,10 @@ import {
   type EditorObjectEffect,
   type ObjectSource,
 } from "@pooder/document";
+export {
+  IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
+  IMAGE_PLACEMENT_SESSION_GROUP_ID,
+} from "./imagePlacementInteraction";
 
 export type KitEditorDocumentRuntime = EditorDocumentRuntime;
 export type ApplyKitEditorDocumentResult = ApplyEditorDocumentResult;

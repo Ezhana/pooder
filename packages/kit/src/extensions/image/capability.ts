@@ -3,7 +3,6 @@ import type {
   RenderObjectSpec,
   SceneLayoutSnapshot,
 } from "@pooder/core";
-import { EDITOR_INTERACTION_SESSION_GROUP_ID } from "@pooder/core";
 import type {
   ImageExportPlacementImageOptions,
   ImageExportPlacementImageResult,
@@ -15,10 +14,6 @@ import type {
 import type { ImageOperation } from "./imageOperations";
 
 export const IMAGE_PLACEMENT_CAPABILITY_ID = "pooder.kit.image-placement";
-export const IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID =
-  "pooder.kit.image-placement.open-session";
-export const IMAGE_PLACEMENT_SESSION_GROUP_ID =
-  EDITOR_INTERACTION_SESSION_GROUP_ID;
 
 export interface ImagePlacementLayerOptions {
   imageLayerId?: string;
