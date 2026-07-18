@@ -8,8 +8,9 @@ import type {
 } from "../render-intent";
 import type SceneService from "./SceneService";
 import type SessionService from "./SessionService";
-import type { DefaultConstraintResolverCapability } from "../constraint-resolver";
-import type { DefaultGeometrySourceCapability } from "../geometry-source";
+import type { ConstraintResolverService } from "../constraint-resolver";
+import type { GeometrySourceService } from "../geometry-source";
+import type { InteractionService } from "../interaction-service";
 import type {
   CanvasService,
   RenderEffectRegistryService,
@@ -20,35 +21,39 @@ import type { DefaultSurfaceFrameService } from "../surface-frames";
 
 export const CAPABILITY_REGISTRY_SERVICE =
   createServiceToken<CapabilityRegistryService>("CapabilityRegistryService");
-export const COMMAND_SERVICE = createServiceToken<CommandService>(
-  "CommandService",
-);
+export const COMMAND_SERVICE =
+  createServiceToken<CommandService>("CommandService");
 export const CONFIGURATION_SERVICE = createServiceToken<ConfigurationService>(
   "ConfigurationService",
 );
-export const RENDER_INTENT_SERVICE =
-  createServiceToken<RenderIntentService>("RenderIntentService");
+export const RENDER_INTENT_SERVICE = createServiceToken<RenderIntentService>(
+  "RenderIntentService",
+);
 export const RENDER_INTENT_COMPILER_REGISTRY_SERVICE =
   createServiceToken<RenderIntentCompilerRegistryService>(
     "RenderIntentCompilerRegistryService",
   );
 export const RENDER_EFFECT_REGISTRY_SERVICE =
-  createServiceToken<RenderEffectRegistryService>("RenderEffectRegistryService");
+  createServiceToken<RenderEffectRegistryService>(
+    "RenderEffectRegistryService",
+  );
 export const SCENE_SERVICE = createServiceToken<SceneService>("SceneService");
-export const CANVAS_SERVICE = createServiceToken<CanvasService>("CanvasService");
+export const CANVAS_SERVICE =
+  createServiceToken<CanvasService>("CanvasService");
 export const SCENE_LAYOUT_SERVICE =
   createServiceToken<SceneLayoutService>("SceneLayoutService");
 export const SURFACE_FRAME_SERVICE =
   createServiceToken<DefaultSurfaceFrameService>("SurfaceFrameService");
 export const SCENE_EXPORT_SERVICE =
   createServiceToken<SceneExportService>("SceneExportService");
-export const SESSION_SERVICE = createServiceToken<SessionService>("SessionService");
+export const SESSION_SERVICE =
+  createServiceToken<SessionService>("SessionService");
 export const GEOMETRY_SOURCE_SERVICE =
-  createServiceToken<DefaultGeometrySourceCapability>("GeometrySourceService");
+  createServiceToken<GeometrySourceService>("GeometrySourceService");
 export const CONSTRAINT_RESOLVER_SERVICE =
-  createServiceToken<DefaultConstraintResolverCapability>(
-    "ConstraintResolverService",
-  );
+  createServiceToken<ConstraintResolverService>("ConstraintResolverService");
+export const INTERACTION_SERVICE =
+  createServiceToken<InteractionService>("InteractionService");
 
 export const CORE_SERVICE_TOKENS = {
   CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
@@ -65,4 +70,5 @@ export const CORE_SERVICE_TOKENS = {
   SESSION: SESSION_SERVICE,
   GEOMETRY_SOURCE: GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER: CONSTRAINT_RESOLVER_SERVICE,
+  INTERACTION: INTERACTION_SERVICE,
 } as const;

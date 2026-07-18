@@ -67,7 +67,6 @@ import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   type ConfigurableVisualCapabilityApi,
 } from "../src/extensions/configurable-visual";
-import { INTERACTION_CAPABILITY_ID } from "../src/extensions/interaction";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
 import { listLegacyCommandBridges } from "../src/extensions/legacyCommandBridge";
@@ -89,7 +88,6 @@ import {
   createConfigurableVisualCapability,
   createImageMaskCapability,
   createImagePlacementCapability,
-  createInteractionCapability,
   createMirrorCapability,
   createSceneExportCapability,
 } from "../src/factories";
@@ -1372,7 +1370,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
   runtime.extensions.register(createConfigurableVisualCapability());
-  runtime.extensions.register(createInteractionCapability());
   runtime.extensions.register(createMirrorCapability());
   runtime.extensions.register(createSceneExportCapability());
   await runtime.extensions.flushActivation();
@@ -1405,10 +1402,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     "configurable visual capability factory should activate",
   );
   assert(
-    runtime.extensions.getState(INTERACTION_CAPABILITY_ID)?.state === "active",
-    "interaction capability factory should activate",
-  );
-  assert(
     runtime.extensions.getState(MIRROR_CAPABILITY_ID)?.state === "active",
     "mirror capability factory should activate",
   );
@@ -1421,7 +1414,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
 
 function testCreateKitCapabilitiesForDocument() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1443,9 +1436,11 @@ function testCreateKitCapabilitiesForDocument() {
                 frame: { x: 0, y: 0, width: 20, height: 20 },
                 source: { kind: "url", url: "/placement.png" },
                 interaction: {
-                  drag: {
-                    enabled: true,
-                    constraints: [{ spec: { type: "grid.snap" } }],
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [{ spec: { type: "grid.snap" } }],
+                    },
                   },
                 },
                 effects: [
@@ -1470,7 +1465,6 @@ function testCreateKitCapabilitiesForDocument() {
       FEATURE_CAPABILITY_ID,
       CONFIGURABLE_VISUAL_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
-      INTERACTION_CAPABILITY_ID,
       MIRROR_CAPABILITY_ID,
     ].sort(),
     "document helper should create supported kit capabilities once and ignore background effects",
@@ -1479,7 +1473,7 @@ function testCreateKitCapabilitiesForDocument() {
 
 function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1539,7 +1533,7 @@ async function testApplyKitEditorDocument() {
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1703,18 +1697,18 @@ async function testApplyKitEditorDocument() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    false,
-    "document apply should keep image placement targets non-selectable",
+    undefined,
+    "document apply should leave renderer selection to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    true,
-    "document apply should keep image placement targets evented",
+    undefined,
+    "document apply should leave renderer hit testing to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.hasControls,
-    false,
-    "document apply should not expose controls for image placement targets",
+    undefined,
+    "document apply should leave renderer controls to InteractionSpec",
   );
   assertDeepEqual(
     {
@@ -1784,7 +1778,7 @@ async function testApplyKitEditorDocument() {
 async function testApplyKitEditorDocumentStacksGuideLayersAboveRuntimeOverlays() {
   const runtime = new Pooder();
   const document = {
-    version: 5 as const,
+    version: 6 as const,
     config: {},
     surfaces: [
       {
@@ -1836,7 +1830,7 @@ async function testApplyKitEditorDocumentRefreshesImagePlacementOverlay() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1897,7 +1891,7 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
   await runtime.extensions.flushActivation();
 
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2092,7 +2086,7 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
 
 async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
   const baseDocument = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2214,7 +2208,7 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
   const runtime = new Pooder();
   const controller = createKitEditorDocumentController(runtime);
   const document = {
-    version: 5,
+    version: 6,
     config: {
       ...TEST_DOCUMENT_CONFIG,
       "dieline.shape": "rect",
@@ -2397,7 +2391,7 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
 async function testApplyKitEditorDocumentObjectInteraction() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2427,25 +2421,28 @@ async function testApplyKitEditorDocumentObjectInteraction() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  transform: { enabled: true },
-                  drag: {
-                    enabled: true,
-                    constraints: [
-                      { spec: { type: "grid.snap", params: { size: 5 } } },
-                    ],
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [
+                        { spec: { type: "grid.snap", params: { size: 5 } } },
+                      ],
+                    },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
                   },
                 },
                 frame: { x: 25, y: 0, width: 20, height: 20 },
               },
               {
-                id: "unsupported-interaction",
+                id: "selection-only",
                 locked: false,
                 source: {
                   kind: "shape",
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                interaction: { selectable: true, evented: true, locked: true },
+                interaction: { selection: { enabled: true } },
                 frame: { x: 50, y: 0, width: 20, height: 20 },
               },
             ],
@@ -2459,14 +2456,6 @@ async function testApplyKitEditorDocumentObjectInteraction() {
     result.ok,
     `document interaction apply should succeed (${JSON.stringify(result.diagnostics)})`,
   );
-  assert(
-    !(
-      "interaction" in
-      (result.document.surfaces[0].layers[0].objects?.[2] ?? {})
-    ),
-    "unsupported renderer interaction should not remain on the normalized document",
-  );
-
   const renderGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
@@ -2475,9 +2464,7 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   const explicitInteractionNode = nodes.find(
     (node) => node.id === "explicit-interaction",
   );
-  const unsupportedInteractionNode = nodes.find(
-    (node) => node.id === "unsupported-interaction",
-  );
+  const selectionOnlyNode = nodes.find((node) => node.id === "selection-only");
 
   assertEqual(
     legacyLockedNode?.props.selectable,
@@ -2497,18 +2484,21 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   assertDeepEqual(
     explicitInteractionNode?.interaction,
     {
-      transform: { enabled: true },
-      drag: {
-        enabled: true,
-        constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+      manipulation: {
+        move: {
+          enabled: true,
+          constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+        },
+        resize: { enabled: true },
+        rotate: { enabled: true },
       },
     },
     "document object interaction should create render intent interaction",
   );
   assertEqual(
-    unsupportedInteractionNode?.data.locked,
+    selectionOnlyNode?.data.locked,
     false,
-    "unsupported interaction.locked should not override object locked",
+    "selection interaction should not override object locked",
   );
 
   await runtime.dispose();
@@ -2517,7 +2507,7 @@ async function testApplyKitEditorDocumentObjectInteraction() {
 async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
   const runtime = new Pooder();
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2537,8 +2527,11 @@ async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  transform: { enabled: true },
-                  drag: { enabled: true },
+                  manipulation: {
+                    move: { enabled: true },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
+                  },
                   enabledWhen: {
                     op: "truthy",
                     ref: {
@@ -2558,17 +2551,20 @@ async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  drag: {
-                    constraints: [
-                      {
-                        spec: {
-                          type: "rect.contain",
-                          params: {
-                            rect: { left: 0, top: 0, width: 90, height: 90 },
+                  manipulation: {
+                    move: {
+                      enabled: false,
+                      constraints: [
+                        {
+                          spec: {
+                            type: "rect.contain",
+                            params: {
+                              rect: { left: 0, top: 0, width: 90, height: 90 },
+                            },
                           },
                         },
-                      },
-                    ],
+                      ],
+                    },
                   },
                 },
               },
@@ -2581,31 +2577,34 @@ async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  transform: { enabled: true },
-                  drag: {
-                    enabled: true,
-                    constraints: [
-                      {
-                        activeWhen: {
-                          op: "in",
-                          ref: { source: "activeToolId" },
-                          values: ["move"],
-                        },
-                        spec: {
-                          type: "rect.contain",
-                          params: {
-                            rect: { left: 0, top: 0, width: 90, height: 90 },
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [
+                        {
+                          activeWhen: {
+                            op: "in",
+                            ref: { source: "activeToolId" },
+                            values: ["move"],
+                          },
+                          spec: {
+                            type: "rect.contain",
+                            params: {
+                              rect: { left: 0, top: 0, width: 90, height: 90 },
+                            },
                           },
                         },
-                      },
-                      {
-                        activeWhen: {
-                          op: "truthy",
-                          ref: { source: "context", key: "snap.enabled" },
+                        {
+                          activeWhen: {
+                            op: "truthy",
+                            ref: { source: "context", key: "snap.enabled" },
+                          },
+                          spec: { type: "grid.snap", params: { size: 5 } },
                         },
-                        spec: { type: "grid.snap", params: { size: 5 } },
-                      },
-                    ],
+                      ],
+                    },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
                   },
                 },
               },
@@ -2630,8 +2629,6 @@ async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
   assertDeepEqual(
     nodes.find((node) => node.id === "interaction-only")?.interaction,
     {
-      transform: { enabled: true },
-      drag: { enabled: true },
       enabledWhen: {
         op: "truthy",
         ref: {
@@ -2640,21 +2637,29 @@ async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
           scope: { channel: "layout-edit" },
         },
       },
+      manipulation: {
+        move: { enabled: true },
+        resize: { enabled: true },
+        rotate: { enabled: true },
+      },
     },
-    "object interaction should compile to transform/drag enabledWhen",
+    "object interaction should preserve operation-level enabledWhen",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "constraint-only")?.interaction,
     {
-      drag: {
-        constraints: [
-          {
-            spec: {
-              type: "rect.contain",
-              params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+      manipulation: {
+        move: {
+          enabled: false,
+          constraints: [
+            {
+              spec: {
+                type: "rect.contain",
+                params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+              },
             },
-          },
-        ],
+          ],
+        },
       },
     },
     "object constraints alone should not enable interaction",
@@ -2662,29 +2667,32 @@ async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
   assertDeepEqual(
     nodes.find((node) => node.id === "interactive-constrained")?.interaction,
     {
-      transform: { enabled: true },
-      drag: {
-        enabled: true,
-        constraints: [
-          {
-            activeWhen: {
-              op: "in",
-              ref: { source: "activeToolId" },
-              values: ["move"],
+      manipulation: {
+        move: {
+          enabled: true,
+          constraints: [
+            {
+              activeWhen: {
+                op: "in",
+                ref: { source: "activeToolId" },
+                values: ["move"],
+              },
+              spec: {
+                type: "rect.contain",
+                params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+              },
             },
-            spec: {
-              type: "rect.contain",
-              params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+            {
+              activeWhen: {
+                op: "truthy",
+                ref: { source: "context", key: "snap.enabled" },
+              },
+              spec: { type: "grid.snap", params: { size: 5 } },
             },
-          },
-          {
-            activeWhen: {
-              op: "truthy",
-              ref: { source: "context", key: "snap.enabled" },
-            },
-            spec: { type: "grid.snap", params: { size: 5 } },
-          },
-        ],
+          ],
+        },
+        resize: { enabled: true },
+        rotate: { enabled: true },
       },
     },
     "object interaction should preserve constraints in declaration order",
@@ -2702,7 +2710,7 @@ async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
 async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2765,7 +2773,7 @@ async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2798,7 +2806,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 
   const optionalRuntime = new Pooder();
   const optionalResult = await applyKitEditorDocument(optionalRuntime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2858,7 +2866,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   const missingCompilerResult = await applyKitEditorDocument(
     missingCompilerRuntime,
     {
-      version: 5,
+      version: 6,
       config: TEST_DOCUMENT_CONFIG,
       surfaces: [
         {
@@ -2912,7 +2920,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   });
   await throwRuntime.extensions.flushActivation();
   const throwResult = await applyKitEditorDocument(throwRuntime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -3555,18 +3563,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    false,
-    "completed placement should keep committed image non-selectable",
+    undefined,
+    "completed placement should leave renderer selection to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    true,
-    "completed placement should keep committed image evented",
+    undefined,
+    "completed placement should leave renderer hit testing to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.hasControls,
-    false,
-    "completed placement should not expose committed image controls",
+    undefined,
+    "completed placement should leave renderer controls to InteractionSpec",
   );
   assertDeepEqual(
     {
@@ -3651,18 +3659,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     resetGraphNode?.props.selectable,
-    false,
-    "resetting a reopened image session should keep committed images non-selectable",
+    undefined,
+    "resetting should leave renderer selection to InteractionSpec",
   );
   assertEqual(
     resetGraphNode?.props.evented,
-    true,
-    "resetting a reopened image session should keep committed images evented",
+    undefined,
+    "resetting should leave renderer hit testing to InteractionSpec",
   );
   assertEqual(
     resetGraphNode?.props.hasControls,
-    false,
-    "resetting a reopened image session should not expose committed image controls",
+    undefined,
+    "resetting should leave renderer controls to InteractionSpec",
   );
   assertDeepEqual(
     {
@@ -4207,6 +4215,27 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
   });
   await driver.setImageTransform(sessionInput, { scale: 1.7 });
 
+  const canvasTarget = {
+    angle: 0,
+    data: {
+      id: "session-image:image-placement:placement",
+      layerId: "image.session.image",
+      placementId: "placement",
+      source: "working",
+      type: "image-placement-image",
+    },
+    getCenterPoint: () => ({ x: 50, y: 50 }),
+    getObjectScaling: () => ({ x: 1.7, y: 1.7 }),
+    height: 100,
+    left: 50,
+    scaleX: 1.7,
+    scaleY: 1.7,
+    top: 50,
+    width: 100,
+  };
+  canvasService.canvas.getObjects = () => [canvasTarget] as any;
+  canvasService.setActiveObject(canvasTarget);
+
   assert(
     Boolean(sessions.getSession(sessionInput.sessionId)),
     "app-owned image session id should be registered in SessionService",
@@ -4233,7 +4262,12 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
     "returning to the original app-owned image session should restore its draft",
   );
 
-  await driver.completeSession(sessionInput);
+  const completeResult = await driver.completeSession(sessionInput);
+  assertEqual(
+    (completeResult as any).ok,
+    true,
+    "canvas sync should complete the app-owned session without replacing its uploaded draft",
+  );
   const committedImage = (
     scene.selectOneElement({ ids: ["placement"] })?.data as any
   )?.imagePlacement?.image;
@@ -4297,18 +4331,8 @@ async function testImagePlacementCanvasPressCanOnlyRequestSession() {
 
   assertEqual(
     events.length,
-    1,
-    "canvas press should still emit one image session request event",
-  );
-  assertEqual(
-    events[0]?.placementId,
-    "placement",
-    "canvas session request event should expose placementId",
-  );
-  assertEqual(
-    "slotId" in (events[0] ?? {}),
-    false,
-    "canvas session request event should not expose slotId",
+    0,
+    "raw canvas presses should not bypass Core InteractionService",
   );
   assertEqual(
     facade.getViewState().hasWorkingChanges,
@@ -4756,7 +4780,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -4868,7 +4892,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   );
   await runtimeWithPersistedConfig.extensions.flushActivation();
   await applyKitEditorDocument(runtimeWithPersistedConfig, {
-    version: 5,
+    version: 6,
     config: {
       ...TEST_DOCUMENT_CONFIG,
       configurableVisual: {
@@ -4945,7 +4969,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -5072,8 +5096,8 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    true,
-    "configurable visual image placement commit should keep the committed image evented",
+    undefined,
+    "configurable visual commits should leave hit testing to InteractionSpec",
   );
   assertEqual(
     evaluateRuntimeCondition(committedGraphNode?.visibleWhen, {
@@ -5166,7 +5190,7 @@ async function testFeatureCapabilityUsesObjectEffectState() {
     radius: 4,
   };
   const document = {
-    version: 5 as const,
+    version: 6 as const,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -5303,7 +5327,7 @@ async function testKitEditorDocumentControllerMutatesObjectEffects() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
   const document = {
-    version: 5 as const,
+    version: 6 as const,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {

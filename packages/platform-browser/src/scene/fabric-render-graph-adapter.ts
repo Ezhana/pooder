@@ -1,6 +1,6 @@
 import {
-  CONSTRAINT_RESOLVER_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
+  INTERACTION_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
@@ -8,16 +8,16 @@ import {
   SURFACE_FRAME_SERVICE,
   evaluateRuntimeCondition,
   type CanvasService,
-  type ConstraintResolverCapability,
-  type ConstraintSpec,
   type GeometryRect,
-  type GeometrySourceCapability,
+  type GeometrySourceService,
   type GeometrySourceProvider,
   type RenderEffectSpec,
   type RenderGraph,
   type RenderGraphLayer,
   type RenderGraphNode,
-  type RenderIntentInteractionConstraint,
+  type InteractionManipulationKind,
+  type InteractionService,
+  type InteractionSpec,
   type RenderObjectSpec,
   type SceneElement,
   type SceneLayer,
@@ -58,8 +58,8 @@ type FabricRenderTargetCanvasService = CanvasService & {
 export class FabricRenderGraphAdapter implements Service {
   private renderIntentService?: RenderIntentService;
   private sceneService?: SceneService;
-  private geometrySource?: GeometrySourceCapability;
-  private constraintResolver?: ConstraintResolverCapability;
+  private geometrySource?: GeometrySourceService;
+  private interactionService?: InteractionService;
   private canvasService?: FabricRenderTargetCanvasService;
   private sceneLayoutService?: SceneLayoutService;
   private surfaceFrameService?: SurfaceFrameService;
@@ -68,6 +68,8 @@ export class FabricRenderGraphAdapter implements Service {
   private graphSubscription?: { dispose(): void };
   private sceneSubscription?: { dispose(): void };
   private canvasObjectMovingHandler?: (event?: any) => void;
+  private canvasObjectScalingHandler?: (event?: any) => void;
+  private canvasObjectRotatingHandler?: (event?: any) => void;
   private canvasObjectModifiedHandler?: (event?: any) => void;
   private canvasMouseDownHandler?: (event?: any) => void;
   private canvasDoubleClickHandler?: (event?: any) => void;
@@ -80,6 +82,10 @@ export class FabricRenderGraphAdapter implements Service {
   private syncError: unknown;
   private readonly syncStateListeners =
     new Set<FabricRenderGraphSyncStateListener>();
+  private readonly activeManipulations = new WeakMap<
+    object,
+    InteractionManipulationKind
+  >();
 
   private readonly onRuntimeConditionChange = () => {
     this.requestSync();
@@ -91,7 +97,7 @@ export class FabricRenderGraphAdapter implements Service {
     this.renderIntentService = context.get(RENDER_INTENT_SERVICE);
     this.sceneService = context.get(SCENE_SERVICE);
     this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
-    this.constraintResolver = context.get(CONSTRAINT_RESOLVER_SERVICE);
+    this.interactionService = context.get(INTERACTION_SERVICE);
     this.canvasService = context.get(CANVAS_SERVICE) as
       | FabricRenderTargetCanvasService
       | undefined;
@@ -113,7 +119,13 @@ export class FabricRenderGraphAdapter implements Service {
       this.requestSync();
     });
     this.canvasObjectMovingHandler = (event?: any) => {
-      this.handleRenderGraphObjectMoving(event?.target);
+      this.handleRenderGraphObjectManipulating("move", event?.target);
+    };
+    this.canvasObjectScalingHandler = (event?: any) => {
+      this.handleRenderGraphObjectManipulating("resize", event?.target);
+    };
+    this.canvasObjectRotatingHandler = (event?: any) => {
+      this.handleRenderGraphObjectManipulating("rotate", event?.target);
     };
     this.canvasObjectModifiedHandler = (event?: any) => {
       void this.handleRenderGraphObjectModified(event?.target);
@@ -127,6 +139,14 @@ export class FabricRenderGraphAdapter implements Service {
     this.canvasService.onCanvasEvent(
       "object:moving",
       this.canvasObjectMovingHandler,
+    );
+    this.canvasService.onCanvasEvent(
+      "object:scaling",
+      this.canvasObjectScalingHandler,
+    );
+    this.canvasService.onCanvasEvent(
+      "object:rotating",
+      this.canvasObjectRotatingHandler,
     );
     this.canvasService.onCanvasEvent(
       "object:modified",
@@ -160,6 +180,18 @@ export class FabricRenderGraphAdapter implements Service {
         this.canvasObjectModifiedHandler,
       );
     }
+    if (this.canvasObjectScalingHandler) {
+      this.canvasService?.offCanvasEvent(
+        "object:scaling",
+        this.canvasObjectScalingHandler,
+      );
+    }
+    if (this.canvasObjectRotatingHandler) {
+      this.canvasService?.offCanvasEvent(
+        "object:rotating",
+        this.canvasObjectRotatingHandler,
+      );
+    }
     if (this.canvasMouseDownHandler) {
       this.canvasService?.offCanvasEvent(
         "mouse:down",
@@ -178,6 +210,8 @@ export class FabricRenderGraphAdapter implements Service {
     this.graphSubscription = undefined;
     this.sceneSubscription = undefined;
     this.canvasObjectMovingHandler = undefined;
+    this.canvasObjectScalingHandler = undefined;
+    this.canvasObjectRotatingHandler = undefined;
     this.canvasObjectModifiedHandler = undefined;
     this.canvasMouseDownHandler = undefined;
     this.canvasDoubleClickHandler = undefined;
@@ -185,7 +219,7 @@ export class FabricRenderGraphAdapter implements Service {
     this.renderIntentService = undefined;
     this.sceneService = undefined;
     this.geometrySource = undefined;
-    this.constraintResolver = undefined;
+    this.interactionService = undefined;
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
     this.surfaceFrameService = undefined;
@@ -387,56 +421,116 @@ export class FabricRenderGraphAdapter implements Service {
       : layerIndex * 1_000_000 + nodeIndex;
   }
 
-  private handleRenderGraphObjectMoving(target: any) {
+  private handleRenderGraphObjectManipulating(
+    kind: InteractionManipulationKind,
+    target: any,
+    commit = false,
+  ) {
     const canvas = this.canvasService;
     if (!canvas || target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) {
       return;
     }
-    if (target.data?.interactionEnabled !== true) return;
-    const constraints = normalizeConstraintSpecs(
-      target.data?.interactionConstraints,
-    );
-    if (!constraints.length) return;
-
+    const spec = target.data?.interactionSpec as InteractionSpec | undefined;
+    if (!spec) return;
     const frame = this.getTargetSceneBounds(target);
     if (!frame) return;
-    const resolved = this.requireConstraintResolver().resolve({
-      transform: { frame },
-      constraints,
+    const result = this.requireInteractionService().resolveManipulation(kind, {
+      spec,
+      runtimeContext: this.buildRuntimeConditionContext(
+        this.requireRenderIntentService().getGraph(),
+      ),
+      locked: target.data?.locked === true,
+      transform: {
+        frame,
+        position: { x: frame.left, y: frame.top },
+        size: { width: frame.width, height: frame.height },
+        rotation: finiteNumber(target.angle, 0),
+        scale: {
+          x: finiteNumber(target.scaleX, 1),
+          y: finiteNumber(target.scaleY, 1),
+        },
+      },
       coordinateSpace: "scene",
+      target,
       metadata: {
+        layerId: target.data?.layerId,
         renderIntentId: target.data?.renderIntentId,
         subjectId: target.data?.subjectId,
+        surfaceId: target.data?.surfaceId,
       },
+      commit,
     });
-    const resultFrame = resolved.result.frame;
-    if (!resultFrame) return;
-    const dx = canvas.toScreenLength(resultFrame.left - frame.left);
-    const dy = canvas.toScreenLength(resultFrame.top - frame.top);
-    if (dx === 0 && dy === 0) return;
-    target.set?.({
-      left: finiteNumber(target.left, 0) + dx,
-      top: finiteNumber(target.top, 0) + dy,
-    });
+    if (!result.enabled) return;
+    if (!commit && target && typeof target === "object") {
+      this.activeManipulations.set(target, kind);
+    }
+    const resultFrame = result.result.frame;
+    const updates: Record<string, number> = {};
+    if (resultFrame) {
+      const dx = canvas.toScreenLength(resultFrame.left - frame.left);
+      const dy = canvas.toScreenLength(resultFrame.top - frame.top);
+      if (dx !== 0) updates.left = finiteNumber(target.left, 0) + dx;
+      if (dy !== 0) updates.top = finiteNumber(target.top, 0) + dy;
+      if (frame.width > 0 && resultFrame.width !== frame.width) {
+        updates.scaleX =
+          finiteNumber(target.scaleX, 1) * (resultFrame.width / frame.width);
+      }
+      if (frame.height > 0 && resultFrame.height !== frame.height) {
+        updates.scaleY =
+          finiteNumber(target.scaleY, 1) * (resultFrame.height / frame.height);
+      }
+    }
+    const resultPosition = result.result.position;
+    if (!resultFrame && resultPosition) {
+      updates.left =
+        finiteNumber(target.left, 0) +
+        canvas.toScreenLength(resultPosition.x - frame.left);
+      updates.top =
+        finiteNumber(target.top, 0) +
+        canvas.toScreenLength(resultPosition.y - frame.top);
+    }
+    const resultSize = result.result.size;
+    if (
+      resultSize &&
+      frame.width > 0 &&
+      frame.height > 0 &&
+      (resultSize.width !== frame.width || resultSize.height !== frame.height)
+    ) {
+      updates.scaleX =
+        finiteNumber(target.scaleX, 1) * (resultSize.width / frame.width);
+      updates.scaleY =
+        finiteNumber(target.scaleY, 1) * (resultSize.height / frame.height);
+    }
+    if (typeof result.result.rotation === "number") {
+      updates.angle = result.result.rotation;
+    }
+    const scale = result.result.scale;
+    if (typeof scale === "number") {
+      updates.scaleX = scale;
+      updates.scaleY = scale;
+    } else if (scale) {
+      updates.scaleX = scale.x;
+      updates.scaleY = scale.y;
+    }
+    if (Object.keys(updates).length) target.set?.(updates);
     target.setCoords?.();
   }
 
   private handleRenderGraphObjectModified(target: any) {
     if (
       target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET ||
-      target.data?.interactionEnabled !== true
+      !target.data?.interactionSpec
     ) {
       return;
     }
-    const frame = this.getTargetSceneBounds(target);
-    if (!frame) return;
-    this.eventBus?.emit("render-graph:object-transform", {
-      renderIntentId: target.data?.renderIntentId ?? target.data?.renderNodeId,
-      subjectId: target.data?.subjectId ?? target.data?.subject?.objectId,
-      layerId: target.data?.layerId,
-      surfaceId: target.data?.subject?.surfaceId,
-      transform: { frame },
-    });
+    const kind =
+      (target && typeof target === "object"
+        ? this.activeManipulations.get(target)
+        : undefined) ?? "move";
+    this.handleRenderGraphObjectManipulating(kind, target, true);
+    if (target && typeof target === "object") {
+      this.activeManipulations.delete(target);
+    }
   }
 
   private handleInteractionActivation(
@@ -444,13 +538,13 @@ export class FabricRenderGraphAdapter implements Service {
     trigger: "primary-pointer" | "double-click",
   ) {
     if (target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) return;
-    const activation = target.data?.interactionActivation;
-    if (!isRecord(activation) || activation.trigger !== trigger) return;
-    const action = isRecord(activation.action) ? activation.action : undefined;
-    if (!action || !String(action.command || "").trim()) return;
-
-    this.eventBus?.emit("interaction:activate", {
-      activation: cloneRecord(activation),
+    const spec = target.data?.interactionSpec as InteractionSpec | undefined;
+    if (!spec) return;
+    void this.requireInteractionService().activate({
+      spec,
+      runtimeContext: this.buildRuntimeConditionContext(
+        this.requireRenderIntentService().getGraph(),
+      ),
       layerId: target.data?.layerId,
       renderIntentId: target.data?.renderIntentId ?? target.data?.renderNodeId,
       subjectId: target.data?.subjectId ?? target.data?.subject?.objectId,
@@ -535,13 +629,13 @@ export class FabricRenderGraphAdapter implements Service {
     };
   }
 
-  private requireConstraintResolver(): ConstraintResolverCapability {
-    if (!this.constraintResolver) {
+  private requireInteractionService(): InteractionService {
+    if (!this.interactionService) {
       throw new Error(
-        "[FabricRenderGraphAdapter] ConstraintResolverCapability is not initialized.",
+        "[FabricRenderGraphAdapter] InteractionService is not initialized.",
       );
     }
-    return this.constraintResolver;
+    return this.interactionService;
   }
 
   private buildRuntimeConditionContext(graph: RenderGraph) {
@@ -596,44 +690,35 @@ export class FabricRenderGraphAdapter implements Service {
     layerEffects: RenderEffectSpec[] = [],
   ): RenderObjectSpec | null {
     const hasDeclarativeInteraction = Boolean(node.interaction);
-    const interactionConditionMatched = evaluateRuntimeCondition(
-      node.interaction?.enabledWhen,
+    const interactionState = this.requireInteractionService().resolveState(
+      node.interaction,
       conditionContext,
+      node.data?.locked === true,
     );
-    const dragEnabled =
-      node.interaction?.drag?.enabled === true && interactionConditionMatched;
-    const transformEnabled =
-      node.interaction?.transform?.enabled === true &&
-      interactionConditionMatched;
-    const activation = node.interaction?.activation;
-    const activationEnabled =
-      activation?.enabled !== false &&
-      Boolean(String(activation?.action?.command || "").trim()) &&
-      interactionConditionMatched;
-    const interactionEnabled = dragEnabled || transformEnabled;
+    const moveEnabled = interactionState.manipulation.move.enabled;
+    const resizeEnabled = interactionState.manipulation.resize.enabled;
+    const rotateEnabled = interactionState.manipulation.rotate.enabled;
+    const controlsEnabled = resizeEnabled || rotateEnabled;
     const selectable = hasDeclarativeInteraction
-      ? interactionEnabled
+      ? interactionState.selectionEnabled
       : node.props.selectable === true;
     const evented = hasDeclarativeInteraction
-      ? interactionEnabled || activationEnabled
+      ? interactionState.hitTestEnabled
       : typeof node.props.evented === "boolean"
         ? node.props.evented
         : selectable;
-    const interactionConstraints = dragEnabled
-      ? normalizeRenderInteractionConstraints(
-          node.interaction?.drag?.constraints,
-          conditionContext,
-        )
-      : [];
     const commonProps = {
       ...node.props,
       ...this.resolvePlacementProps(node),
       selectable,
       evented,
-      hasControls: transformEnabled,
-      hasBorders: transformEnabled,
-      lockMovementX: !dragEnabled,
-      lockMovementY: !dragEnabled,
+      hasControls: controlsEnabled,
+      hasBorders: controlsEnabled,
+      lockMovementX: !moveEnabled,
+      lockMovementY: !moveEnabled,
+      lockScalingX: !resizeEnabled,
+      lockScalingY: !resizeEnabled,
+      lockRotation: !rotateEnabled,
       visible: layer.visible && node.visible,
     };
     const commonData = {
@@ -645,16 +730,7 @@ export class FabricRenderGraphAdapter implements Service {
       surfaceId: node.surfaceId,
       exportKeys: node.exportKeys,
       tags: node.tags,
-      interactionEnabled,
-      ...(activationEnabled
-        ? {
-            interactionActivation: {
-              ...activation,
-              trigger: activation?.trigger ?? "primary-pointer",
-            },
-          }
-        : {}),
-      ...(interactionConstraints.length ? { interactionConstraints } : {}),
+      ...(node.interaction ? { interactionSpec: node.interaction } : {}),
     };
     const effects = [
       ...layerEffects,
@@ -854,45 +930,6 @@ function normalizeFrameImageScale(value: unknown): number {
 function finiteNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function normalizeRenderInteractionConstraints(
-  value: unknown,
-  conditionContext: ReturnType<
-    FabricRenderGraphAdapter["buildRuntimeConditionContext"]
-  >,
-): ConstraintSpec[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((constraint): ConstraintSpec | null => {
-      if (!isRecord(constraint)) return null;
-      const item = constraint as Partial<RenderIntentInteractionConstraint>;
-      if (!evaluateRuntimeCondition(item.activeWhen, conditionContext))
-        return null;
-      return normalizeConstraintSpec(item.spec);
-    })
-    .filter((constraint): constraint is ConstraintSpec => Boolean(constraint));
-}
-
-function normalizeConstraintSpecs(value: unknown): ConstraintSpec[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => normalizeConstraintSpec(item))
-    .filter((item): item is ConstraintSpec => Boolean(item));
-}
-
-function normalizeConstraintSpec(value: unknown): ConstraintSpec | null {
-  if (!isRecord(value)) return null;
-  const type = String(value.type || "").trim();
-  if (!type) return null;
-  return {
-    type,
-    ...(value.source !== undefined
-      ? { source: value.source as ConstraintSpec["source"] }
-      : {}),
-    ...(typeof value.mode === "string" ? { mode: value.mode } : {}),
-    ...(isRecord(value.params) ? { params: { ...value.params } } : {}),
-  };
 }
 
 function normalizeIds(values: unknown): string[] {

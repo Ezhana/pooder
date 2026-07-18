@@ -4,6 +4,7 @@ import {
   CONSTRAINT_RESOLVER_SERVICE,
   EventBus,
   GEOMETRY_SOURCE_SERVICE,
+  INTERACTION_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
@@ -14,8 +15,8 @@ import {
   containsRect,
   containsGeometryPoint,
   createStaticGeometrySourceProvider,
-  DefaultConstraintResolverCapability,
-  DefaultGeometrySourceCapability,
+  ConstraintResolverService,
+  GeometrySourceService,
   createRectSnapLines,
   findNearestGeometryPoint,
   getGeometryBounds,
@@ -28,6 +29,7 @@ import {
   createServiceToken,
   type CanvasService,
   type ExtensionDefinition,
+  type InteractionService,
   type RenderIntentService,
   type SceneChangeEvent,
   type SceneService,
@@ -1539,12 +1541,11 @@ async function testDragInteractionSnapsAndConstrains() {
   );
 }
 
-async function testGeometrySourceCapabilityRegistry() {
+async function testGeometrySourceServiceRegistry() {
   await withRuntime(async (runtime) => {
-    const geometry =
-      runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
-        GEOMETRY_SOURCE_SERVICE,
-      );
+    const geometry = runtime.services.getOrThrow<GeometrySourceService>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
     const disposable = geometry.registerSource(
       createStaticGeometrySourceProvider({
         sourceId: "static",
@@ -1609,16 +1610,14 @@ async function testGeometrySourceCapabilityRegistry() {
   });
 }
 
-async function testConstraintResolverCapabilityBuiltins() {
+async function testConstraintResolverServiceBuiltins() {
   await withRuntime(async (runtime) => {
-    const geometry =
-      runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
-        GEOMETRY_SOURCE_SERVICE,
-      );
-    const resolver =
-      runtime.services.getOrThrow<DefaultConstraintResolverCapability>(
-        CONSTRAINT_RESOLVER_SERVICE,
-      );
+    const geometry = runtime.services.getOrThrow<GeometrySourceService>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    const resolver = runtime.services.getOrThrow<ConstraintResolverService>(
+      CONSTRAINT_RESOLVER_SERVICE,
+    );
     geometry.registerSource(
       createStaticGeometrySourceProvider({
         sourceId: "static",
@@ -1681,6 +1680,176 @@ async function testConstraintResolverCapabilityBuiltins() {
       { x: 20, y: 30 },
       "axis.lock and grid.snap should compose deterministically",
     );
+  });
+}
+
+async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
+  await withRuntime(async (runtime) => {
+    const interaction =
+      runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
+    const resolver = runtime.services.getOrThrow<ConstraintResolverService>(
+      CONSTRAINT_RESOLVER_SERVICE,
+    );
+    resolver.registerConstraint("test.move", (result) => ({
+      ...result,
+      frame: result.frame ? { ...result.frame, left: 10 } : result.frame,
+    }));
+    resolver.registerConstraint("test.resize", (result) => ({
+      ...result,
+      size: { width: 50, height: 60 },
+    }));
+    resolver.registerConstraint("test.rotate", (result) => ({
+      ...result,
+      rotation: 90,
+    }));
+
+    const spec = {
+      enabledWhen: {
+        op: "truthy" as const,
+        ref: { source: "context" as const, key: "editable" },
+      },
+      selection: { enabled: false },
+      activation: {
+        action: { commandId: "interaction.open", payload: { value: 7 } },
+      },
+      manipulation: {
+        move: {
+          enabled: true,
+          constraints: [
+            {
+              activeWhen: { op: "const" as const, value: true },
+              spec: { type: "test.move" },
+            },
+          ],
+        },
+        resize: {
+          enabled: true,
+          constraints: [{ spec: { type: "test.resize" } }],
+        },
+        rotate: {
+          enabled: true,
+          constraints: [{ spec: { type: "test.rotate" } }],
+        },
+      },
+    };
+    const runtimeContext = { contextValues: { editable: true } };
+    const state = interaction.resolveState(spec, runtimeContext, false);
+    assertEqual(
+      state.selectionEnabled,
+      true,
+      "manipulation should imply selection",
+    );
+    assertEqual(
+      state.hitTestEnabled,
+      true,
+      "manipulation should imply hit testing",
+    );
+    assertEqual(
+      state.activationEnabled,
+      true,
+      "activation should default enabled",
+    );
+    assertEqual(state.manipulation.move.constraints.length, 1);
+
+    const lockedState = interaction.resolveState(spec, runtimeContext, true);
+    assertEqual(
+      lockedState.selectionEnabled,
+      false,
+      "lock should disable selection",
+    );
+    assertEqual(lockedState.manipulation.move.enabled, false);
+    assertEqual(
+      lockedState.activationEnabled,
+      true,
+      "lock should not implicitly disable activation",
+    );
+    assertEqual(
+      interaction.resolveState(
+        spec,
+        { contextValues: { editable: false } },
+        false,
+      ).enabled,
+      false,
+      "enabledWhen should control the complete interaction spec",
+    );
+
+    const committedKinds: string[] = [];
+    interaction.onDidCommitManipulation((event) =>
+      committedKinds.push(event.kind),
+    );
+    const transform = {
+      frame: { left: 1, top: 2, width: 20, height: 30 },
+      size: { width: 20, height: 30 },
+      rotation: 12,
+    };
+    assertEqual(
+      interaction.resolveManipulation("move", {
+        spec,
+        runtimeContext,
+        transform,
+      }).result.frame?.left,
+      10,
+    );
+    assertDeepEqual(
+      interaction.resolveManipulation("resize", {
+        spec,
+        runtimeContext,
+        transform,
+      }).result.size,
+      { width: 50, height: 60 },
+    );
+    assertEqual(
+      interaction.resolveManipulation("rotate", {
+        spec,
+        runtimeContext,
+        transform,
+        commit: true,
+      }).result.rotation,
+      90,
+    );
+    assertDeepEqual(committedKinds, ["rotate"]);
+
+    runtime.services
+      .getOrThrow(COMMAND_SERVICE)
+      .registerCommand("interaction.open", (payload) => payload.value * 2);
+    const activation = await interaction.activate<number>({
+      spec,
+      runtimeContext,
+      trigger: "primary-pointer",
+      subjectId: "image",
+    });
+    assertEqual(activation.activated, true);
+    assertEqual(
+      activation.commandResult,
+      14,
+      "activate should return command result",
+    );
+
+    runtime.sessions.create({
+      sessionId: "existing",
+      scope: { groupId: "editor-interaction" },
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+      draft: { dirty: true },
+    });
+    const blocked = await interaction.activate({
+      spec: {
+        activation: {
+          action: { commandId: "interaction.open" },
+          session: {
+            channel: "image-placement",
+            groupId: "editor-interaction",
+            mode: "exclusive",
+            scope: "subject",
+          },
+        },
+      },
+      runtimeContext: {},
+      trigger: "primary-pointer",
+      subjectId: "next",
+    });
+    assertEqual(blocked.activated, false);
+    assertEqual(blocked.reason, "session-conflict");
   });
 }
 
@@ -1953,21 +2122,23 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         props: { fill: "red" },
         data: { locked: false },
         interaction: {
-          transform: { enabled: true },
-          drag: {
-            enabled: true,
-            constraints: [
-              {
-                activeWhen: { op: "const", value: true },
-                spec: { type: "grid.snap", params: { size: 10 } },
-              },
-            ],
+          manipulation: {
+            move: {
+              enabled: true,
+              constraints: [
+                {
+                  activeWhen: { op: "const", value: true },
+                  spec: { type: "grid.snap", params: { size: 10 } },
+                },
+              ],
+            },
+            resize: { enabled: true },
+            rotate: { enabled: true },
           },
           enabledWhen: {
             op: "truthy",
             ref: { source: "context", key: "can-interact" },
           },
-          locked: true,
         },
       },
     ]);
@@ -1978,17 +2149,20 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       patch: {
         id: "image",
         interaction: {
-          drag: {
-            constraints: [
-              {
-                spec: {
-                  type: "rect.contain",
-                  params: {
-                    rect: { left: 0, top: 0, width: 100, height: 100 },
+          manipulation: {
+            move: {
+              enabled: true,
+              constraints: [
+                {
+                  spec: {
+                    type: "rect.contain",
+                    params: {
+                      rect: { left: 0, top: 0, width: 100, height: 100 },
+                    },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
         },
       },
@@ -2000,17 +2174,20 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       patch: {
         id: "image",
         interaction: {
-          drag: {
-            constraints: [
-              {
-                activeWhen: {
-                  op: "in",
-                  ref: { source: "activeToolId" },
-                  values: ["move"],
+          manipulation: {
+            move: {
+              enabled: true,
+              constraints: [
+                {
+                  activeWhen: {
+                    op: "in",
+                    ref: { source: "activeToolId" },
+                    values: ["move"],
+                  },
+                  spec: { type: "axis.lock", mode: "x" },
                 },
-                spec: { type: "axis.lock", mode: "x" },
-              },
-            ],
+              ],
+            },
           },
         },
       },
@@ -2029,41 +2206,45 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
     );
     assertEqual(
       node?.data.locked,
-      true,
-      "interaction locked should override graph data",
+      false,
+      "lock state should remain document data rather than interaction state",
     );
     assertDeepEqual(
       node?.interaction,
       {
-        transform: { enabled: true },
-        drag: {
-          enabled: true,
-          constraints: [
-            {
-              activeWhen: { op: "const", value: true },
-              spec: { type: "grid.snap", params: { size: 10 } },
-            },
-            {
-              spec: {
-                type: "rect.contain",
-                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                activeWhen: { op: "const", value: true },
+                spec: { type: "grid.snap", params: { size: 10 } },
               },
-            },
-            {
-              activeWhen: {
-                op: "in",
-                ref: { source: "activeToolId" },
-                values: ["move"],
+              {
+                spec: {
+                  type: "rect.contain",
+                  params: {
+                    rect: { left: 0, top: 0, width: 100, height: 100 },
+                  },
+                },
               },
-              spec: { type: "axis.lock", mode: "x" },
-            },
-          ],
+              {
+                activeWhen: {
+                  op: "in",
+                  ref: { source: "activeToolId" },
+                  values: ["move"],
+                },
+                spec: { type: "axis.lock", mode: "x" },
+              },
+            ],
+          },
+          resize: { enabled: true },
+          rotate: { enabled: true },
         },
         enabledWhen: {
           op: "truthy",
           ref: { source: "context", key: "can-interact" },
         },
-        locked: true,
       },
       "interaction aspect should carry merged constraints in patch order",
     );
@@ -2424,11 +2605,15 @@ async function main() {
     ],
     [
       "registers and queries geometry sources",
-      testGeometrySourceCapabilityRegistry,
+      testGeometrySourceServiceRegistry,
     ],
     [
       "resolves generic constraints through capability",
-      testConstraintResolverCapabilityBuiltins,
+      testConstraintResolverServiceBuiltins,
+    ],
+    [
+      "owns interaction state, constraints, activation, and commits",
+      testInteractionServiceOwnsStateConstraintsAndDispatch,
     ],
     [
       "session dirty trackers can block leave",

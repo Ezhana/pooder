@@ -8,8 +8,10 @@ import type {
   RuntimeConditionEvalContext,
   RuntimeConditionExpr,
 } from "./render";
-import type { ConstraintSpec } from "./constraint-resolver";
-import type { SessionScope } from "./workflow-session";
+import type {
+  InteractionOperationSpec,
+  InteractionSpec,
+} from "./interaction-service";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
 export type RenderIntentChannel =
@@ -64,43 +66,6 @@ export interface RenderIntentPlacementAspect {
   fit?: "cover" | "contain" | "stretch";
 }
 
-export interface RenderIntentInteractionConstraint {
-  activeWhen?: RuntimeConditionExpr;
-  spec: ConstraintSpec;
-}
-
-export interface RenderIntentTransformInteractionAspect {
-  enabled?: boolean;
-}
-
-export interface RenderIntentDragInteractionAspect {
-  enabled?: boolean;
-  constraints?: readonly RenderIntentInteractionConstraint[];
-}
-
-export interface RenderIntentInteractionAspect {
-  activation?: {
-    enabled?: boolean;
-    trigger?: "primary-pointer" | "double-click";
-    action: {
-      command: string;
-      payload?: Record<string, unknown>;
-    };
-    session?: {
-      channel: string;
-      groupId: string;
-      sessionId?: string;
-      mode: "exclusive" | "cooperative" | "passive";
-      scope: "subject" | "surface" | "editor";
-      leavePolicy?: "block" | "commit" | "rollback";
-    };
-  };
-  transform?: RenderIntentTransformInteractionAspect;
-  drag?: RenderIntentDragInteractionAspect;
-  enabledWhen?: RuntimeConditionExpr;
-  locked?: boolean;
-}
-
 export interface RenderIntentExportAspect {
   keys?: readonly string[];
   tags?: readonly string[];
@@ -123,7 +88,7 @@ export interface RenderIntentDraft {
   visual?: RenderIntentVisualAspect;
   placement?: RenderIntentPlacementAspect;
   effects?: RenderEffectSpec[];
-  interaction?: RenderIntentInteractionAspect;
+  interaction?: InteractionSpec;
   export?: RenderIntentExportAspect;
   coordinateSpace?: RenderCoordinateSpace;
   ordering: RenderIntentOrderingAspect;
@@ -184,7 +149,7 @@ export interface RenderGraphNode {
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
-  interaction?: RenderIntentInteractionAspect;
+  interaction?: InteractionSpec;
   visibleWhen?: RuntimeConditionExpr;
   visible: boolean;
   tags: string[];
@@ -895,9 +860,6 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       renderIntentId: draft.id,
       subject: draft.subject,
       tags: normalizeIdList(draft.export?.tags),
-      ...(typeof draft.interaction?.locked === "boolean"
-        ? { locked: draft.interaction.locked }
-        : {}),
     },
     effects: draft.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
@@ -1078,23 +1040,16 @@ function sameJsonValue(left: unknown, right: unknown): boolean {
 }
 
 function mergeInteractionAspect(
-  base: RenderIntentInteractionAspect | undefined,
-  patch: RenderIntentInteractionAspect | undefined,
-): RenderIntentInteractionAspect | undefined {
+  base: InteractionSpec | undefined,
+  patch: InteractionSpec | undefined,
+): InteractionSpec | undefined {
   if (patch === undefined) return cloneRecord(base);
-  const dragConstraints = [
-    ...(base?.drag?.constraints ?? []),
-    ...(patch.drag?.constraints ?? []),
-  ].map(cloneRecord);
   const merged = {
     ...((base ?? {}) as object),
     ...((patch ?? {}) as object),
-    ...(base?.transform || patch.transform
+    ...(base?.selection || patch.selection
       ? {
-          transform: {
-            ...(base?.transform ?? {}),
-            ...(patch.transform ?? {}),
-          },
+          selection: { ...(base?.selection ?? {}), ...(patch.selection ?? {}) },
         }
       : {}),
     ...(base?.activation || patch.activation
@@ -1109,23 +1064,48 @@ function mergeInteractionAspect(
           },
         }
       : {}),
-    ...(base?.drag || patch.drag
+    ...(base?.manipulation || patch.manipulation
       ? {
-          drag: {
-            ...(base?.drag ?? {}),
-            ...(patch.drag ?? {}),
+          manipulation: {
+            ...mergeInteractionOperation(
+              "move",
+              base?.manipulation?.move,
+              patch.manipulation?.move,
+            ),
+            ...mergeInteractionOperation(
+              "resize",
+              base?.manipulation?.resize,
+              patch.manipulation?.resize,
+            ),
+            ...mergeInteractionOperation(
+              "rotate",
+              base?.manipulation?.rotate,
+              patch.manipulation?.rotate,
+            ),
           },
         }
       : {}),
-  } as RenderIntentInteractionAspect;
-  if (merged.drag) {
-    if (dragConstraints.length) {
-      merged.drag.constraints = dragConstraints;
-    } else {
-      delete merged.drag.constraints;
-    }
-  }
+  } as InteractionSpec;
   return Object.keys(merged).length ? merged : undefined;
+}
+
+function mergeInteractionOperation(
+  kind: "move" | "resize" | "rotate",
+  base: InteractionOperationSpec | undefined,
+  patch: InteractionOperationSpec | undefined,
+): Partial<NonNullable<InteractionSpec["manipulation"]>> {
+  if (!base && !patch) return {};
+  const constraints = [
+    ...(base?.constraints ?? []),
+    ...(patch?.constraints ?? []),
+  ].map(cloneRecord);
+  return {
+    [kind]: {
+      ...(base ?? {}),
+      ...(patch ?? {}),
+      ...(constraints.length ? { constraints } : {}),
+    },
+  } as Partial<NonNullable<InteractionSpec["manipulation"]>>;
 }
 
 function mergeOptionalRecord<T>(base: T, patch: T): T {

@@ -1,11 +1,14 @@
 import type { Service } from "@pooder/core";
 import {
   CONFIGURATION_SERVICE,
+  COMMAND_SERVICE,
+  INTERACTION_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SURFACE_FRAME_SERVICE,
   type RenderIntentService,
+  type InteractionService,
 } from "@pooder/core";
 import type { SurfaceSceneFrames } from "@pooder/core";
 import {
@@ -1326,7 +1329,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       visual: { type: "rect" },
       ordering: { layerId: "art", objectOrder: 0 },
       props: { width: 10, height: 10 },
-      interaction: { drag: { enabled: true } },
+      interaction: { manipulation: { move: { enabled: true } } },
     },
     {
       id: "constraint-only",
@@ -1340,15 +1343,20 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       ordering: { layerId: "art", objectOrder: 1 },
       props: { width: 10, height: 10 },
       interaction: {
-        drag: {
-          constraints: [
-            {
-              spec: {
-                type: "rect.contain",
-                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+        manipulation: {
+          move: {
+            enabled: false,
+            constraints: [
+              {
+                spec: {
+                  type: "rect.contain",
+                  params: {
+                    rect: { left: 0, top: 0, width: 100, height: 100 },
+                  },
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       },
     },
@@ -1368,14 +1376,16 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
           op: "truthy",
           ref: { source: "context", key: "can.interact" },
         },
-        drag: {
-          enabled: true,
-          constraints: [
-            {
-              activeWhen: { op: "const", value: true },
-              spec: { type: "grid.snap", params: { size: 5 } },
-            },
-          ],
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                activeWhen: { op: "const", value: true },
+                spec: { type: "grid.snap", params: { size: 5 } },
+              },
+            ],
+          },
         },
       },
     },
@@ -1407,7 +1417,12 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       visual: { type: "rect" },
       ordering: { layerId: "art", objectOrder: 4 },
       props: { width: 10, height: 10 },
-      interaction: { transform: { enabled: true } },
+      interaction: {
+        manipulation: {
+          resize: { enabled: true },
+          rotate: { enabled: true },
+        },
+      },
     },
     {
       id: "activation-only",
@@ -1422,7 +1437,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       props: { width: 10, height: 10 },
       interaction: {
         activation: {
-          action: { command: "test.open" },
+          action: { commandId: "test.open" },
           trigger: "primary-pointer",
         },
       },
@@ -1472,9 +1487,9 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "constraints alone should not enable Fabric selection",
   );
   assertEqual(
-    constraintOnly?.spec.data?.interactionEnabled,
-    false,
-    "constraints alone should not mark the live object interactive",
+    constraintOnly?.spec.props.lockMovementX,
+    true,
+    "disabled move constraints should keep movement locked",
   );
   assertEqual(
     conditional?.spec.props.visible,
@@ -1497,9 +1512,9 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "runtime props should keep graph objects targetable for canvas clicks",
   );
   assertEqual(
-    runtimeEvented?.spec.data?.interactionEnabled,
-    false,
-    "runtime evented props should not opt into declarative drag handling",
+    runtimeEvented?.spec.data?.interactionSpec,
+    undefined,
+    "runtime evented props should not create declarative interaction state",
   );
   assertEqual(
     transformOnly?.spec.props.selectable,
@@ -1517,9 +1532,9 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "transform-only interaction should keep movement locked",
   );
   assertEqual(
-    transformOnly?.spec.data?.interactionEnabled,
-    true,
-    "transform interaction should mark the live object interactive",
+    transformOnly?.spec.props.lockRotation,
+    false,
+    "rotate interaction should unlock rotation controls",
   );
   assertEqual(
     activationOnly?.spec.props.selectable,
@@ -1532,15 +1547,22 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "activation-only objects should remain pointer targets",
   );
   assertEqual(
-    activationOnly?.spec.data?.interactionActivation?.action.command,
+    activationOnly?.spec.data?.interactionSpec?.activation?.action.commandId,
     "test.open",
     "activation declarations should be attached to the render target",
   );
 
   let activationEvent: any;
+  let activationPayload: any;
   runtime.eventBus.on("interaction:activate", (event) => {
     activationEvent = event;
   });
+  runtime.services
+    .getOrThrow(COMMAND_SERVICE)
+    .registerCommand("test.open", (payload) => {
+      activationPayload = payload;
+      return "opened";
+    });
   canvas.emitCanvasEvent("mouse:down", {
     target: {
       data: {
@@ -1549,10 +1571,16 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
     },
   });
+  await Promise.resolve();
   assertEqual(
-    activationEvent?.subjectId,
+    activationPayload?.subjectId,
     "activation-only",
-    "primary pointer activation should emit a typed interaction event",
+    "primary pointer activation should dispatch the Core command",
+  );
+  assertEqual(
+    activationEvent,
+    undefined,
+    "primary pointer activation should not emit a raw interaction event",
   );
 
   intents.setRuntimeConditionValue("can.interact", true);
@@ -1566,10 +1594,10 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     true,
     "matched interaction.enabledWhen should enable interaction",
   );
-  assertDeepEqual(
-    enabledConditional?.spec.data?.interactionConstraints,
-    [{ type: "grid.snap", params: { size: 5 } }],
-    "matched constraint.activeWhen should expose active constraints to dragging",
+  assertEqual(
+    enabledConditional?.spec.props.lockMovementX,
+    false,
+    "matched constraint.activeWhen should enable movement",
   );
 
   await runtime.dispose();
@@ -1593,13 +1621,23 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
       renderTarget: "render-graph",
       subjectId: "constrained",
       renderIntentId: "constrained",
-      interactionEnabled: true,
-      interactionConstraints: [
-        {
-          type: "rect.contain",
-          params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+      interactionSpec: {
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                spec: {
+                  type: "rect.contain",
+                  params: {
+                    rect: { left: 0, top: 0, width: 100, height: 100 },
+                  },
+                },
+              },
+            ],
+          },
         },
-      ],
+      },
     },
     getBoundingRect() {
       return {
@@ -1622,16 +1660,40 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     "rect interaction constraints should clamp graph objects",
   );
   let modifiedTransform: any;
-  const transformListener = (event: any) => {
+  const rawTransformListener = (event: any) => {
     modifiedTransform = event;
   };
-  runtime.eventBus.on("render-graph:object-transform", transformListener);
+  const committedKinds: string[] = [];
+  runtime.services
+    .getOrThrow<InteractionService>(INTERACTION_SERVICE)
+    .onDidCommitManipulation((event) => committedKinds.push(event.kind));
+  runtime.eventBus.on("render-graph:object-transform", rawTransformListener);
   canvas.emitCanvasEvent("object:modified", { target });
-  runtime.eventBus.off("render-graph:object-transform", transformListener);
+  runtime.eventBus.off("render-graph:object-transform", rawTransformListener);
+  assertEqual(
+    modifiedTransform,
+    undefined,
+    "modified graph objects should not emit raw transform events",
+  );
   assertDeepEqual(
-    modifiedTransform?.transform?.frame,
-    { left: 90, top: 20, width: 10, height: 10 },
-    "modified graph objects should emit the resolved transform result",
+    committedKinds,
+    ["move"],
+    "modified graph objects should commit through InteractionService",
+  );
+  (target.data as any).interactionSpec = {
+    manipulation: {
+      resize: { enabled: true },
+      rotate: { enabled: true },
+    },
+  };
+  canvas.emitCanvasEvent("object:scaling", { target });
+  canvas.emitCanvasEvent("object:modified", { target });
+  canvas.emitCanvasEvent("object:rotating", { target });
+  canvas.emitCanvasEvent("object:modified", { target });
+  assertDeepEqual(
+    committedKinds,
+    ["move", "resize", "rotate"],
+    "moving, scaling, and rotating should map to Core operation kinds",
   );
 
   const constraintOnly = {
@@ -1641,7 +1703,9 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
       ...target.data,
       subjectId: "constraint-only",
       renderIntentId: "constraint-only",
-      interactionEnabled: false,
+      interactionSpec: {
+        manipulation: { move: { enabled: false } },
+      },
     },
   };
   canvas.emitCanvasEvent("object:moving", { target: constraintOnly });
@@ -1680,14 +1744,22 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
       renderTarget: "render-graph",
       subjectId: "object-constrained",
       renderIntentId: "object-constrained",
-      interactionEnabled: true,
-      interactionConstraints: [
-        {
-          type: "object-frame.contain",
-          source: { sourceId: "render-graph", geometryId: "bounds" },
-          params: { target: "center" },
+      interactionSpec: {
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                spec: {
+                  type: "object-frame.contain",
+                  source: { sourceId: "render-graph", geometryId: "bounds" },
+                  params: { target: "center" },
+                },
+              },
+            ],
+          },
         },
-      ],
+      },
     },
   };
   canvas.objects = [reference];

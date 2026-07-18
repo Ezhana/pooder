@@ -19,8 +19,9 @@ import {
   CapabilityRegistryService,
   CommandService,
   ConfigurationService,
-  DefaultConstraintResolverCapability,
-  DefaultGeometrySourceCapability,
+  ConstraintResolverService,
+  GeometrySourceService,
+  InteractionService,
   DefaultSurfaceFrameService,
   RenderEffectRegistryService,
   RenderIntentCompilerRegistryService,
@@ -46,6 +47,7 @@ export * from "./workflow-session";
 export * from "./interaction";
 export * from "./geometry-source";
 export * from "./constraint-resolver";
+export * from "./interaction-service";
 export * from "./surface-frames";
 export * from "./services";
 export { default as EventBus } from "./event";
@@ -169,10 +171,15 @@ export class Pooder {
   private readonly sceneService = new SceneService();
   private readonly sessionService = new SessionService();
   private readonly surfaceFrameService = new DefaultSurfaceFrameService();
-  private readonly geometrySourceService =
-    new DefaultGeometrySourceCapability();
-  private readonly constraintResolverService =
-    new DefaultConstraintResolverCapability(this.geometrySourceService);
+  private readonly geometrySourceService = new GeometrySourceService();
+  private readonly constraintResolverService = new ConstraintResolverService(
+    this.geometrySourceService,
+  );
+  private readonly interactionService = new InteractionService({
+    commandService: this.commandService,
+    constraintResolver: this.constraintResolverService,
+    sessionService: this.sessionService,
+  });
   private readonly extensionManager: ExtensionManager;
 
   readonly services: RuntimeServicesApi;
@@ -217,6 +224,10 @@ export class Pooder {
     this.registerService(
       this.constraintResolverService,
       CORE_SERVICE_TOKENS.CONSTRAINT_RESOLVER,
+    );
+    this.registerService(
+      this.interactionService,
+      CORE_SERVICE_TOKENS.INTERACTION,
     );
     const context: ExtensionContext = {
       eventBus: this.eventBus,

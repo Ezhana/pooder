@@ -146,7 +146,7 @@ async function testApplyEditorDocument() {
   const result = await applyEditorDocument(
     runtime,
     {
-      version: 5,
+      version: 6,
       config: { mode: "test" },
       surfaces: [
         {
@@ -167,13 +167,17 @@ async function testApplyEditorDocument() {
                   },
                   effects: [{ type: "custom" }],
                   interaction: {
+                    selection: { enabled: false },
                     activation: {
-                      action: { command: "test.open-session" },
+                      action: { commandId: "test.open-session" },
                     },
-                    transform: { enabled: true },
-                    drag: {
-                      enabled: true,
-                      constraints: [{ spec: { type: "rect.contain" } }],
+                    manipulation: {
+                      move: {
+                        enabled: true,
+                        constraints: [{ spec: { type: "rect.contain" } }],
+                      },
+                      resize: { enabled: true },
+                      rotate: { enabled: false },
                     },
                   },
                 },
@@ -209,17 +213,17 @@ async function testApplyEditorDocument() {
     "generic effect compiler should patch node",
   );
   assertEqual(
-    node?.interaction?.drag?.enabled,
+    node?.interaction?.manipulation?.move?.enabled,
     true,
     "object interaction should enable drag",
   );
   assertEqual(
-    node?.interaction?.drag?.constraints?.[0]?.spec.type,
+    node?.interaction?.manipulation?.move?.constraints?.[0]?.spec.type,
     "rect.contain",
     "object interaction constraints should translate to render intent",
   );
   assertEqual(
-    node?.interaction?.activation?.action.command,
+    node?.interaction?.activation?.action.commandId,
     "test.open-session",
     "object activation should translate to render intent",
   );

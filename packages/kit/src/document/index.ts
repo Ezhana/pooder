@@ -105,19 +105,6 @@ export function collectKitEditorDocumentCapabilityRequirements(
     ...options,
     resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
   });
-  document.surfaces.forEach((surface, surfaceIndex) => {
-    surface.layers.forEach((layer, layerIndex) => {
-      layer.objects?.forEach((object, objectIndex) => {
-        if (!object.interaction) return;
-        result.requirements.push({
-          capabilityId: "pooder.kit.interaction",
-          effectType: "object-interaction",
-          require: "strict",
-          path: `surfaces[${surfaceIndex}].layers[${layerIndex}].objects[${objectIndex}].interaction`,
-        });
-      });
-    });
-  });
   return result;
 }
 

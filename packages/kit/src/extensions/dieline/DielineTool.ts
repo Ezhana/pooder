@@ -17,7 +17,7 @@ import {
   type RuntimeConditionExpr,
   type GeometryRef,
   type CapabilityRegistryService,
-  type DefaultGeometrySourceCapability,
+  type GeometrySourceService,
   type GeometrySourceProvider,
   type SceneLayoutService,
   type SurfaceFrameService,
@@ -94,7 +94,11 @@ export class DielineTool implements ExtensionDefinition {
     name: "DielineTool",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, CONFIGURATION_SERVICE, RENDER_INTENT_SERVICE],
+    requiresServices: [
+      CANVAS_SERVICE,
+      CONFIGURATION_SERVICE,
+      RENDER_INTENT_SERVICE,
+    ],
     after: [IMAGE_PLACEMENT_CAPABILITY_ID],
   };
 
@@ -104,7 +108,7 @@ export class DielineTool implements ExtensionDefinition {
   private renderIntentService?: RenderIntentService;
   private sceneLayoutService?: SceneLayoutService;
   private surfaceFrameService?: SurfaceFrameService;
-  private geometrySource?: DefaultGeometrySourceCapability;
+  private geometrySource?: GeometrySourceService;
   private geometrySourceDisposable?: { dispose(): void };
   private imageSessionOverlayDisposable?: { dispose(): void };
   private context?: ExtensionContext;
@@ -176,13 +180,12 @@ export class DielineTool implements ExtensionDefinition {
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
-    this.sceneLayoutService = context.services.get<SceneLayoutService>(
-      SCENE_LAYOUT_SERVICE,
-    );
+    this.sceneLayoutService =
+      context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.surfaceFrameService = context.services.get<SurfaceFrameService>(
       SURFACE_FRAME_SERVICE,
     );
-    this.geometrySource = context.services.get<DefaultGeometrySourceCapability>(
+    this.geometrySource = context.services.get<GeometrySourceService>(
       GEOMETRY_SOURCE_SERVICE,
     );
     this.geometrySourceDisposable?.dispose();
@@ -190,13 +193,12 @@ export class DielineTool implements ExtensionDefinition {
       this.createGeometrySourceProvider(),
     );
     this.imageSessionOverlayDisposable?.dispose();
-    this.imageSessionOverlayDisposable =
-      context.services
-        .get<CapabilityRegistryService>(CAPABILITY_REGISTRY_SERVICE)
-        ?.getFacade<ImagePlacementCapabilityApi>(IMAGE_PLACEMENT_CAPABILITY_ID)
-        ?.registerSessionOverlayProvider(
-          this.createImageSessionOverlayProvider(),
-        );
+    this.imageSessionOverlayDisposable = context.services
+      .get<CapabilityRegistryService>(CAPABILITY_REGISTRY_SERVICE)
+      ?.getFacade<ImagePlacementCapabilityApi>(IMAGE_PLACEMENT_CAPABILITY_ID)
+      ?.registerSessionOverlayProvider(
+        this.createImageSessionOverlayProvider(),
+      );
 
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
@@ -213,9 +215,7 @@ export class DielineTool implements ExtensionDefinition {
 
     // Listen for changes
     configService.onAnyChange((e: { key: string; value: any }) => {
-      if (
-        e.key.startsWith(`${this.configNamespace}.`)
-      ) {
+      if (e.key.startsWith(`${this.configNamespace}.`)) {
         Object.assign(
           this.state,
           readDielineState(
@@ -327,7 +327,8 @@ export class DielineTool implements ExtensionDefinition {
             visual: { type: "path" as const },
             props: {
               pathData,
-              stroke: typeof payload.stroke === "string" ? payload.stroke : "#ff00ff",
+              stroke:
+                typeof payload.stroke === "string" ? payload.stroke : "#ff00ff",
               fill: null,
               selectable: false,
               evented: false,
@@ -371,11 +372,15 @@ export class DielineTool implements ExtensionDefinition {
   }
 
   private getSurfaceFrames(surfaceId?: string) {
-    return this.surfaceFrameService?.getFrames(this.getSurfaceId(surfaceId)) ?? null;
+    return (
+      this.surfaceFrameService?.getFrames(this.getSurfaceId(surfaceId)) ?? null
+    );
   }
 
   private getSurfaceLayout(surfaceId?: string) {
-    return this.sceneLayoutService?.getLayout(this.getSurfaceId(surfaceId)) ?? null;
+    return (
+      this.sceneLayoutService?.getLayout(this.getSurfaceId(surfaceId)) ?? null
+    );
   }
 
   private createImageSessionOverlayProvider() {
@@ -418,7 +423,9 @@ export class DielineTool implements ExtensionDefinition {
                 pathData: hatchPathData,
                 originX: "left",
                 originY: "top",
-                fill: this.createHatchPattern(DEFAULT_IMAGE_SESSION_HATCH_COLOR),
+                fill: this.createHatchPattern(
+                  DEFAULT_IMAGE_SESSION_HATCH_COLOR,
+                ),
                 opacity: 1,
                 stroke: null,
                 fillRule: "evenodd",
@@ -459,7 +466,10 @@ export class DielineTool implements ExtensionDefinition {
     const visualRadius = Number.isFinite(geometry.radius)
       ? Math.max(0, geometry.radius)
       : 0;
-    const maxRadius = Math.max(0, Math.min(geometry.width, geometry.height) / 2);
+    const maxRadius = Math.max(
+      0,
+      Math.min(geometry.width, geometry.height) / 2,
+    );
     return Math.max(0, Math.min(maxRadius, visualRadius));
   }
 
@@ -586,7 +596,9 @@ export class DielineTool implements ExtensionDefinition {
     );
   }
 
-  private buildDielineSpecs(sceneLayout: NonNullable<ReturnType<SceneLayoutService["getLayout"]>>): RenderObjectSpec[] {
+  private buildDielineSpecs(
+    sceneLayout: NonNullable<ReturnType<SceneLayoutService["getLayout"]>>,
+  ): RenderObjectSpec[] {
     const hasImages = this.hasImageItems();
     const viewportSize = this.canvasService?.getViewportSize() ?? {
       width: 800,

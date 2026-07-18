@@ -5,7 +5,6 @@ import {
   createDielineGeometryCapability,
   createFeatureCapability,
   createImagePlacementCapability,
-  createInteractionCapability,
   createMirrorCapability,
 } from "../factories";
 import { CLIP_CAPABILITY_ID } from "../extensions/clip";
@@ -13,7 +12,6 @@ import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-vi
 import { DIELINE_GEOMETRY_CAPABILITY_ID } from "../extensions/dieline";
 import { FEATURE_CAPABILITY_ID } from "../extensions/feature";
 import { IMAGE_PLACEMENT_CAPABILITY_ID } from "../extensions/image";
-import { INTERACTION_CAPABILITY_ID } from "../extensions/interaction";
 import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
 import { collectKitEditorDocumentCapabilityRequirements } from "./index";
 
@@ -24,7 +22,6 @@ const KIT_EFFECT_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [DIELINE_GEOMETRY_CAPABILITY_ID]: () => createDielineGeometryCapability(),
   [FEATURE_CAPABILITY_ID]: () => createFeatureCapability(),
   [IMAGE_PLACEMENT_CAPABILITY_ID]: () => createImagePlacementCapability(),
-  [INTERACTION_CAPABILITY_ID]: () => createInteractionCapability(),
   [MIRROR_CAPABILITY_ID]: () => createMirrorCapability(),
 };
 

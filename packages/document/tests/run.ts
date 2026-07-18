@@ -180,15 +180,19 @@ function testObjectInteractionNormalizesSupportedFields() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  transform: { enabled: true },
-                  drag: {
-                    enabled: true,
-                    constraints: [
-                      {
-                        activeWhen: { op: "const", value: true },
-                        spec: { type: "grid.snap", params: { size: 5 } },
-                      },
-                    ],
+                  selection: { enabled: false },
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [
+                        {
+                          activeWhen: { op: "const", value: true },
+                          spec: { type: "grid.snap", params: { size: 5 } },
+                        },
+                      ],
+                    },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
                   },
                   enabledWhen: {
                     op: "truthy",
@@ -235,15 +239,19 @@ function testObjectInteractionNormalizesSupportedFields() {
         op: "truthy",
         ref: { source: "context", key: "can.interact" },
       },
-      transform: { enabled: true },
-      drag: {
-        enabled: true,
-        constraints: [
-          {
-            activeWhen: { op: "const", value: true },
-            spec: { type: "grid.snap", params: { size: 5 } },
-          },
-        ],
+      selection: { enabled: false },
+      manipulation: {
+        move: {
+          enabled: true,
+          constraints: [
+            {
+              activeWhen: { op: "const", value: true },
+              spec: { type: "grid.snap", params: { size: 5 } },
+            },
+          ],
+        },
+        resize: { enabled: true },
+        rotate: { enabled: true },
       },
     },
     "supported interaction fields should normalize",
@@ -507,9 +515,9 @@ function testSourceObjectNormalizesSource() {
   );
 }
 
-function testV2DocumentIsRejected() {
+function testV5DocumentIsRejected() {
   const diagnostics = validateEditorDocument({
-    version: 2,
+    version: 5,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -523,7 +531,51 @@ function testV2DocumentIsRejected() {
 
   assert(
     diagnostics.some((item) => item.code === "document-version-invalid"),
-    "v2 document should be rejected",
+    "v5 document should be rejected",
+  );
+}
+
+function testLegacyInteractionFieldsAreRejected() {
+  const diagnostics = validateEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "layer",
+            objects: [
+              {
+                id: "image",
+                frame: { x: 0, y: 0, width: 1, height: 1 },
+                source: { kind: "shape", shape: "rect", params: {} },
+                interaction: {
+                  drag: { enabled: true },
+                  transform: { enabled: true },
+                  activation: {
+                    action: { command: "legacy.open" },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assert(
+    diagnostics.filter((item) => item.code === "interaction-field-invalid")
+      .length === 2,
+    "legacy drag and transform fields should be rejected",
+  );
+  assert(
+    diagnostics.some(
+      (item) => item.code === "interaction-action-command-legacy",
+    ),
+    "legacy action.command should be rejected",
   );
 }
 
@@ -710,10 +762,13 @@ function testInjectedEffectCapabilityResolution() {
                   },
                   effects: [{ type: "constraint" }],
                   interaction: {
-                    transform: { enabled: true },
-                    drag: {
-                      enabled: true,
-                      constraints: [{ spec: { type: "rect.contain" } }],
+                    manipulation: {
+                      move: {
+                        enabled: true,
+                        constraints: [{ spec: { type: "rect.contain" } }],
+                      },
+                      resize: { enabled: true },
+                      rotate: { enabled: true },
                     },
                   },
                 },
@@ -752,16 +807,18 @@ function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
                 },
                 effects: [{ type: "constraint" }],
                 interaction: {
-                  drag: {
-                    enabled: true,
-                    constraints: [
-                      {
-                        spec: {
-                          type: "rect.contain",
-                          params: { padding: 2 },
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [
+                        {
+                          spec: {
+                            type: "rect.contain",
+                            params: { padding: 2 },
+                          },
                         },
-                      },
-                    ],
+                      ],
+                    },
                   },
                 },
               },
@@ -784,7 +841,7 @@ function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
     "generic constraint should remain a generic editor effect",
   );
   assertDeepEqual(
-    object?.interaction?.drag,
+    object?.interaction?.manipulation?.move,
     {
       enabled: true,
       constraints: [
@@ -866,7 +923,8 @@ function main() {
   testImagePlacementObjectDoesNotRequireLegacySrc();
   testObjectWithoutSourceIsDropped();
   testSourceObjectNormalizesSource();
-  testV2DocumentIsRejected();
+  testV5DocumentIsRejected();
+  testLegacyInteractionFieldsAreRejected();
   testDocumentConfigIsRequired();
   testImageObjectRequiresFrame();
   testValidationStructureAndReferences();

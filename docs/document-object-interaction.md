@@ -1,9 +1,14 @@
 # Document Object Interaction
 
 `EditorObject.interaction` is the only declaration source for persistent
-document-object interaction. Capabilities may interpret the declared command,
-constraints, and session, but they must not make document objects interactive
-by writing renderer flags such as `evented` or `selectable`.
+document-object interaction. `@pooder/core` owns condition evaluation,
+selection, activation/session/command dispatch, and manipulation constraints.
+Capabilities must not make document objects interactive by writing renderer
+flags such as `evented` or `selectable`.
+
+This contract is available only in `EditorDocument` v6. v5 documents and the
+former `interaction.drag`, `interaction.transform`, and `action.command`
+fields fail validation; they are not migrated.
 
 ```ts
 const imagePlacement: EditorObject = {
@@ -24,7 +29,7 @@ const imagePlacement: EditorObject = {
     },
     activation: {
       trigger: "primary-pointer",
-      action: { command: "pooder.kit.image-placement.open-session" },
+      action: { commandId: "pooder.kit.image-placement.open-session" },
       session: {
         channel: "image-placement",
         groupId: "editor-interaction",
@@ -34,14 +39,33 @@ const imagePlacement: EditorObject = {
         leavePolicy: "block",
       },
     },
+    manipulation: {
+      move: {
+        enabled: true,
+        constraints: [
+          {
+            activeWhen: { op: "const", value: true },
+            spec: { type: "grid.snap", params: { size: 5 } },
+          },
+        ],
+      },
+      resize: { enabled: true },
+      rotate: { enabled: false },
+    },
   },
 };
 ```
 
-The browser adapter evaluates `enabledWhen` and derives renderer hit testing,
-selection, controls, and drag behavior from the interaction aspect. An
-activation emits a typed interaction event; the interaction capability obtains
-the declared workflow session and executes the declared command.
+The browser adapter asks Core `InteractionService` for resolved state and
+derives renderer hit testing, selection, movement, resize controls, and rotate
+controls from it. Pointer activation calls the service directly. Fabric
+`moving`, `scaling`, and `rotating` map to Core `move`, `resize`, and `rotate`
+operations; every operation uses the same extensible `ConstraintResolverService`.
+
+`activation` defaults to enabled. `selection` and each manipulation operation
+default to disabled. Any enabled manipulation operation implies selection and
+hit testing. Object or layer locking disables selection and manipulation, but
+does not implicitly disable activation.
 
 Exclusive editor sessions share `EDITOR_INTERACTION_SESSION_GROUP_ID`. While
 one is active, persistent convenience entries should be disabled with a

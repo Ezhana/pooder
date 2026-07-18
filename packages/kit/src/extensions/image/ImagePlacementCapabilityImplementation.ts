@@ -1260,6 +1260,17 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!placementState) return { ok: false, reason: "placement-not-found" };
     const currentSession = this.sessionService?.getSession(sessionId);
     if (this.sessionService && currentSession?.status !== "active") {
+      const previousActiveSessionId = this.activeImageSessionId;
+      if (
+        previousActiveSessionId &&
+        previousActiveSessionId !== sessionId &&
+        this.sessionService.isSessionActive(previousActiveSessionId)
+      ) {
+        await this.sessionService.cancelSession(previousActiveSessionId, {
+          nextSessionId: sessionId,
+          reason: "image-placement-session-switch",
+        });
+      }
       const request = await this.sessionService.requestSession({
         sessionId,
         scope: {
@@ -1530,6 +1541,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     }
     this.syncWorkingPlacementConditionContext();
     this.setSessionNotice(null);
+    this.publishRuntimeRenderIntents();
     this.updateImages();
   }
 
@@ -2638,8 +2650,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const objectScale =
       finiteNumber(objectScaling?.x, finiteNumber(target.scaleX, 1)) /
       Math.max(0.0001, sceneScale);
+    const sessionId =
+      this.sessionIdsByPlacementId.get(placementId) ||
+      this.getFallbackImageSessionId(placementId);
     await this.setImageTransform(
-      placementId,
+      { placementId, sessionId },
       {
         left:
           (center.x - placement.frame.left) /
