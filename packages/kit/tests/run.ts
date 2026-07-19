@@ -126,6 +126,7 @@ import {
   type InteractionService,
   Pooder,
   type RenderIntentService,
+  type SceneChangeEvent,
   type SceneService,
   type SessionService,
 } from "@pooder/core";
@@ -3422,6 +3423,44 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     },
     setCoords() {},
   };
+  const interactionPreviewChanges: SceneChangeEvent[] = [];
+  const interactionPreviewSubscription = scene.onDidChange((event) =>
+    interactionPreviewChanges.push(event),
+  );
+  (imageExtension as any).handleCanvasObjectMoving(snapTarget);
+  interactionPreviewSubscription.dispose();
+  assertEqual(
+    interactionPreviewChanges.length,
+    1,
+    "snap preview should publish one transactional scene change",
+  );
+  assertDeepEqual(
+    interactionPreviewChanges[0]?.causes,
+    [
+      {
+        type: "interaction-preview",
+        sessionId: "image-placement:placement",
+        toolId: IMAGE_PLACEMENT_CAPABILITY_ID,
+      },
+    ],
+    "snap preview should preserve its interaction provenance",
+  );
+  const previewSceneChanges =
+    interactionPreviewChanges[0]?.sceneChanges?.[sessionSceneId];
+  assertEqual(
+    previewSceneChanges?.elements.removed.includes(
+      "session-image:image-placement:placement",
+    ),
+    false,
+    "snap preview should keep the working image element stable",
+  );
+  assertEqual(
+    previewSceneChanges?.elements.added.includes(
+      "session-image:image-placement:placement",
+    ),
+    false,
+    "snap preview should not recreate the working image element",
+  );
   (imageExtension as any).applyMoveSnapToTarget(snapTarget);
   assertEqual(
     snapTarget.left,

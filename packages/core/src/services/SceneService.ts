@@ -20,6 +20,8 @@ import type {
   SceneServiceEventMap,
   SceneSnapshot,
   SceneTransaction,
+  SceneTransactionOptions,
+  SceneChangeCause,
 } from "../scene";
 import { DEFAULT_SCENE_ID } from "../scene";
 import type { RenderEffectSpec } from "../render";
@@ -44,18 +46,54 @@ class SceneHandleImpl implements SceneHandle {
     private readonly snapshot: SceneSnapshot,
   ) {}
 
-  get id() { return this.snapshot.id; }
-  get owner() { return cloneSceneOwner(this.snapshot.owner); }
-  get composition() { return cloneComposition(this.snapshot.composition); }
-  getSnapshot(): SceneSnapshot { return cloneSceneSnapshot(this.snapshot); }
-  addLayer(layer: SceneLayerInput): SceneLayer { this.ensureActive(); return this.service.addLayer(layer, { sceneId: this.id }); }
-  updateLayer(id: LayerId, patch: SceneLayerPatch): SceneLayer { this.ensureActive(); return this.service.updateLayer(id, patch, { sceneId: this.id }); }
-  removeLayer(id: LayerId): boolean { this.ensureActive(); return this.service.removeLayer(id, { sceneId: this.id }); }
-  addElement(element: SceneElementInput): SceneElement { this.ensureActive(); return this.service.addElement(element, { sceneId: this.id }); }
-  updateElement(id: ElementId, patch: SceneElementPatch): SceneElement { this.ensureActive(); return this.service.updateElement(id, patch, { sceneId: this.id }); }
-  removeElement(id: ElementId): boolean { this.ensureActive(); return this.service.removeElement(id, { sceneId: this.id }); }
-  selectLayers(selector: Omit<SceneLayerSelector, "sceneId"> = {}): SceneLayer[] { this.ensureActive(); return this.service.selectLayers({ ...selector, sceneId: this.id }); }
-  selectElements(selector: Omit<SceneElementSelector, "sceneId"> = {}): SceneElement[] { this.ensureActive(); return this.service.selectElements({ ...selector, sceneId: this.id }); }
+  get id() {
+    return this.snapshot.id;
+  }
+  get owner() {
+    return cloneSceneOwner(this.snapshot.owner);
+  }
+  get composition() {
+    return cloneComposition(this.snapshot.composition);
+  }
+  getSnapshot(): SceneSnapshot {
+    return cloneSceneSnapshot(this.snapshot);
+  }
+  addLayer(layer: SceneLayerInput): SceneLayer {
+    this.ensureActive();
+    return this.service.addLayer(layer, { sceneId: this.id });
+  }
+  updateLayer(id: LayerId, patch: SceneLayerPatch): SceneLayer {
+    this.ensureActive();
+    return this.service.updateLayer(id, patch, { sceneId: this.id });
+  }
+  removeLayer(id: LayerId): boolean {
+    this.ensureActive();
+    return this.service.removeLayer(id, { sceneId: this.id });
+  }
+  addElement(element: SceneElementInput): SceneElement {
+    this.ensureActive();
+    return this.service.addElement(element, { sceneId: this.id });
+  }
+  updateElement(id: ElementId, patch: SceneElementPatch): SceneElement {
+    this.ensureActive();
+    return this.service.updateElement(id, patch, { sceneId: this.id });
+  }
+  removeElement(id: ElementId): boolean {
+    this.ensureActive();
+    return this.service.removeElement(id, { sceneId: this.id });
+  }
+  selectLayers(
+    selector: Omit<SceneLayerSelector, "sceneId"> = {},
+  ): SceneLayer[] {
+    this.ensureActive();
+    return this.service.selectLayers({ ...selector, sceneId: this.id });
+  }
+  selectElements(
+    selector: Omit<SceneElementSelector, "sceneId"> = {},
+  ): SceneElement[] {
+    this.ensureActive();
+    return this.service.selectElements({ ...selector, sceneId: this.id });
+  }
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -75,12 +113,29 @@ function createEmptyScopedChangeSet(): Required<
   };
 }
 
-function createEmptyChangeSet(): SceneChangeSet {
+function createEmptyChangeSet(cause: SceneChangeCause): SceneChangeSet {
   return {
+    causes: [cloneSceneChangeCause(cause)],
     scenes: { added: [], updated: [], removed: [] },
     sceneChanges: {},
     ...createEmptyScopedChangeSet(),
   };
+}
+
+function cloneSceneChangeCause(cause: SceneChangeCause): SceneChangeCause {
+  return cause.type === "interaction-preview"
+    ? {
+        type: cause.type,
+        sessionId: cause.sessionId,
+        ...(cause.toolId ? { toolId: cause.toolId } : {}),
+      }
+    : { type: "scene-content" };
+}
+
+function getSceneChangeCauseKey(cause: SceneChangeCause): string {
+  return cause.type === "interaction-preview"
+    ? `${cause.type}:${cause.sessionId}:${cause.toolId ?? ""}`
+    : cause.type;
 }
 
 export default class SceneService implements Service {
@@ -93,6 +148,7 @@ export default class SceneService implements Service {
   private activeRootId: SceneId | null = null;
   private transactionDepth = 0;
   private pendingChange: SceneChangeSet | null = null;
+  private readonly transactionCauses: SceneChangeCause[] = [];
 
   constructor() {
     this.scenesById.set(
@@ -122,7 +178,10 @@ export default class SceneService implements Service {
 
   createScene(input: CreateSceneInput): SceneHandle {
     const id = this.normalizeId(input.id, "Scene.id");
-    const sessionId = this.normalizeId(input.owner.sessionId, "Scene.owner.sessionId");
+    const sessionId = this.normalizeId(
+      input.owner.sessionId,
+      "Scene.owner.sessionId",
+    );
     if (!this.sessionService?.getHandle(sessionId)) {
       throw new Error(`Scene owner session "${sessionId}" is not active.`);
     }
@@ -133,7 +192,9 @@ export default class SceneService implements Service {
       (handle) => handle.owner.sessionId === sessionId,
     );
     if (duplicate) {
-      throw new Error(`Session "${sessionId}" already owns scene "${duplicate.id}".`);
+      throw new Error(
+        `Session "${sessionId}" already owns scene "${duplicate.id}".`,
+      );
     }
     const snapshot: SceneSnapshot = {
       id,
@@ -267,7 +328,10 @@ export default class SceneService implements Service {
       .sort(this.compareOrderedItems);
   }
 
-  addLayer(layer: SceneLayerInput, options: SceneScopeOptions = {}): SceneLayer {
+  addLayer(
+    layer: SceneLayerInput,
+    options: SceneScopeOptions = {},
+  ): SceneLayer {
     const scene = this.getSceneStore(options.sceneId);
     const id = this.normalizeId(layer.id, "SceneLayer.id");
     if (scene.layersById.has(id)) {
@@ -466,7 +530,7 @@ export default class SceneService implements Service {
     return Array.from(scene.elementsById.values())
       .filter((element) => this.matchesElementSelector(element, selector))
       .sort((left, right) => this.compareSceneElements(scene, left, right))
-      .map((element) => this.cloneElement(element) as TElement)
+      .map((element) => this.cloneElement(element) as TElement);
   }
 
   selectOneElement<TElement extends SceneElement = SceneElement>(
@@ -479,7 +543,16 @@ export default class SceneService implements Service {
     return elements[0];
   }
 
-  transaction<T>(run: SceneTransaction<T>): T {
+  transaction<T>(run: SceneTransaction<T>): T;
+  transaction<T>(options: SceneTransactionOptions, run: SceneTransaction<T>): T;
+  transaction<T>(
+    optionsOrRun: SceneTransactionOptions | SceneTransaction<T>,
+    maybeRun?: SceneTransaction<T>,
+  ): T {
+    const options =
+      typeof optionsOrRun === "function" ? undefined : optionsOrRun;
+    const run = typeof optionsOrRun === "function" ? optionsOrRun : maybeRun;
+    if (!run) throw new Error("Scene transaction callback is required.");
     const sceneSnapshot = this.cloneSceneMap();
     const pendingSnapshot = this.pendingChange
       ? this.cloneChangeSet(this.pendingChange)
@@ -487,14 +560,18 @@ export default class SceneService implements Service {
     const depthSnapshot = this.transactionDepth;
 
     this.transactionDepth += 1;
+    if (options)
+      this.transactionCauses.push(cloneSceneChangeCause(options.cause));
     try {
       const result = run();
+      if (options) this.transactionCauses.pop();
       this.transactionDepth -= 1;
       if (this.transactionDepth === 0) {
         this.flushPendingChange();
       }
       return result;
     } catch (error) {
+      if (options) this.transactionCauses.pop();
       this.scenesById = sceneSnapshot;
       this.pendingChange = pendingSnapshot;
       this.transactionDepth = depthSnapshot;
@@ -527,6 +604,7 @@ export default class SceneService implements Service {
     );
     this.pendingChange = null;
     this.transactionDepth = 0;
+    this.transactionCauses.length = 0;
     this.events.clear();
   }
 
@@ -600,7 +678,11 @@ export default class SceneService implements Service {
   ) {
     const change = this.ensurePendingChange();
     this.mergeChange(change.elements, kind, id);
-    this.mergeChange(this.ensureScopedChange(change, sceneId).elements, kind, id);
+    this.mergeChange(
+      this.ensureScopedChange(change, sceneId).elements,
+      kind,
+      id,
+    );
     this.flushChangeIfNeeded();
   }
 
@@ -615,8 +697,20 @@ export default class SceneService implements Service {
   }
 
   private ensurePendingChange(): SceneChangeSet {
+    const cause =
+      this.transactionCauses[this.transactionCauses.length - 1] ??
+      ({ type: "scene-content" } as const);
     if (!this.pendingChange) {
-      this.pendingChange = createEmptyChangeSet();
+      this.pendingChange = createEmptyChangeSet(cause);
+    } else {
+      const key = getSceneChangeCauseKey(cause);
+      if (
+        !this.pendingChange.causes.some(
+          (candidate) => getSceneChangeCauseKey(candidate) === key,
+        )
+      ) {
+        this.pendingChange.causes.push(cloneSceneChangeCause(cause));
+      }
     }
     return this.pendingChange;
   }
@@ -651,9 +745,9 @@ export default class SceneService implements Service {
   private refreshActiveRoot(): void {
     const focusedSessionId = this.sessionService?.getFocusedSessionId();
     const next = focusedSessionId
-      ? [...this.handlesById.values()].find(
+      ? ([...this.handlesById.values()].find(
           (handle) => handle.owner.sessionId === focusedSessionId,
-        )?.id ?? null
+        )?.id ?? null)
       : null;
     if (this.activeRootId === next) return;
     this.activeRootId = next;
@@ -703,10 +797,9 @@ export default class SceneService implements Service {
             ]),
           ),
           elementsById: new Map(
-            Array.from(scene.elementsById.entries()).map(([elementId, element]) => [
-              elementId,
-              this.cloneElement(element),
-            ]),
+            Array.from(scene.elementsById.entries()).map(
+              ([elementId, element]) => [elementId, this.cloneElement(element)],
+            ),
           ),
         },
       ]),
@@ -730,6 +823,7 @@ export default class SceneService implements Service {
       };
     });
     return {
+      causes: change.causes.map(cloneSceneChangeCause),
       scenes: {
         added: change.scenes?.added.slice() ?? [],
         updated: change.scenes?.updated.slice() ?? [],
@@ -784,7 +878,9 @@ export default class SceneService implements Service {
     return tags.length ? tags : undefined;
   }
 
-  private normalizeSelectorValues(value?: readonly string[]): Set<string> | undefined {
+  private normalizeSelectorValues(
+    value?: readonly string[],
+  ): Set<string> | undefined {
     const values = this.normalizeTags(value);
     return values?.length ? new Set(values) : undefined;
   }
@@ -816,11 +912,15 @@ export default class SceneService implements Service {
     if (layerIds && !layerIds.has(element.layerId)) return false;
     const types = this.normalizeSelectorValues(selector.types);
     if (types && !types.has(element.type)) return false;
-    if (selector.visible !== undefined && element.visible !== selector.visible) {
+    if (
+      selector.visible !== undefined &&
+      element.visible !== selector.visible
+    ) {
       return false;
     }
     if (!this.matchesTags(element.tags, selector.tags)) return false;
-    if (!this.matchesMetadata(element.metadata, selector.metadata)) return false;
+    if (!this.matchesMetadata(element.metadata, selector.metadata))
+      return false;
     return true;
   }
 
@@ -899,7 +999,8 @@ function normalizeComposition(
           source: "local" as const,
           layerIds: entry.layerIds.map((id: LayerId) => {
             const normalized = String(id ?? "").trim();
-            if (!normalized) throw new Error("Scene composition layer id is required.");
+            if (!normalized)
+              throw new Error("Scene composition layer id is required.");
             return normalized;
           }),
         };
@@ -921,7 +1022,9 @@ function cloneComposition(
   };
 }
 
-function cloneSceneOwner(owner: SceneSnapshot["owner"]): SceneSnapshot["owner"] {
+function cloneSceneOwner(
+  owner: SceneSnapshot["owner"],
+): SceneSnapshot["owner"] {
   return { ...owner };
 }
 

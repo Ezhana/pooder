@@ -208,8 +208,23 @@ export interface RenderIntentCompilerQuery {
   effectType: string;
 }
 
+export type RenderIntentChangeReason =
+  | { type: "document-replaced" }
+  | {
+      type: "runtime-patch";
+      operation: "upsert" | "remove" | "clear";
+      sourceId?: string;
+      intentIds: string[];
+    }
+  | {
+      type: "runtime-condition";
+      operation: "set" | "delete" | "clear";
+      keys: string[];
+    };
+
 export interface RenderIntentChangeEvent {
   graph: RenderGraph;
+  reason: RenderIntentChangeReason;
   revision: number;
 }
 
@@ -364,7 +379,7 @@ export class RenderIntentService implements Service {
 
   setDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
     this.baseIntents = intents.map(cloneDraft);
-    return this.recompile();
+    return this.recompile({ type: "document-replaced" });
   }
 
   getDocumentIntents(): RenderIntentDraft[] {
@@ -386,7 +401,11 @@ export class RenderIntentService implements Service {
     const previous = this.runtimeConditionValues.get(normalizedKey);
     if (Object.is(previous, value)) return false;
     this.runtimeConditionValues.set(normalizedKey, value);
-    this.emitChange();
+    this.emitChange({
+      type: "runtime-condition",
+      operation: "set",
+      keys: [normalizedKey],
+    });
     return true;
   }
 
@@ -394,14 +413,25 @@ export class RenderIntentService implements Service {
     const normalizedKey = String(key || "").trim();
     if (!normalizedKey) return false;
     const removed = this.runtimeConditionValues.delete(normalizedKey);
-    if (removed) this.emitChange();
+    if (removed) {
+      this.emitChange({
+        type: "runtime-condition",
+        operation: "delete",
+        keys: [normalizedKey],
+      });
+    }
     return removed;
   }
 
   clearRuntimeConditionValues(): boolean {
     if (!this.runtimeConditionValues.size) return false;
+    const keys = Array.from(this.runtimeConditionValues.keys());
     this.runtimeConditionValues.clear();
-    this.emitChange();
+    this.emitChange({
+      type: "runtime-condition",
+      operation: "clear",
+      keys,
+    });
     return true;
   }
 
@@ -428,12 +458,22 @@ export class RenderIntentService implements Service {
       phase: "runtime",
       priority: 0,
     });
-    return this.recompile();
+    return this.recompile({
+      type: "runtime-patch",
+      operation: "upsert",
+      sourceId,
+      intentIds: [patch.id],
+    });
   }
 
   patchIntentEntry(entry: RenderIntentPatchEntry): RenderGraph {
     this.upsertRuntimePatchEntry(entry);
-    return this.recompile();
+    return this.recompile({
+      type: "runtime-patch",
+      operation: "upsert",
+      sourceId: entry.sourceId,
+      intentIds: [entry.patch.id],
+    });
   }
 
   clearRuntimePatch(sourceId: string, intentId: string): boolean {
@@ -441,27 +481,50 @@ export class RenderIntentService implements Service {
     const id = normalizeId(intentId, "RenderIntentPatch.id");
     if (!this.runtimePatches.delete(getRuntimePatchKey(source, id)))
       return false;
-    this.recompile();
+    this.recompile({
+      type: "runtime-patch",
+      operation: "remove",
+      sourceId: source,
+      intentIds: [id],
+    });
     return true;
   }
 
   clearRuntimePatches(sourceId?: string): boolean {
     if (sourceId === undefined) {
       if (this.runtimePatches.size === 0) return false;
+      const intentIds = Array.from(
+        new Set(
+          Array.from(this.runtimePatches.values()).map(
+            (entry) => entry.patch.id,
+          ),
+        ),
+      );
       this.runtimePatches.clear();
-      this.recompile();
+      this.recompile({
+        type: "runtime-patch",
+        operation: "clear",
+        intentIds,
+      });
       return true;
     }
     const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
     let removed = false;
+    const intentIds: string[] = [];
     for (const key of Array.from(this.runtimePatches.keys())) {
       if (this.runtimePatches.get(key)?.sourceId === source) {
+        intentIds.push(this.runtimePatches.get(key)!.patch.id);
         this.runtimePatches.delete(key);
         removed = true;
       }
     }
     if (!removed) return false;
-    this.recompile();
+    this.recompile({
+      type: "runtime-patch",
+      operation: "clear",
+      sourceId: source,
+      intentIds: Array.from(new Set(intentIds)),
+    });
     return true;
   }
 
@@ -469,7 +532,7 @@ export class RenderIntentService implements Service {
     return this.events.on("change", callback);
   }
 
-  private recompile(): RenderGraph {
+  private recompile(reason: RenderIntentChangeReason): RenderGraph {
     this.revision += 1;
     const merged = mergeRenderIntentPatchEntries(
       this.baseIntents,
@@ -480,13 +543,14 @@ export class RenderIntentService implements Service {
       this.revision,
       merged.diagnostics,
     );
-    this.emitChange();
+    this.emitChange(reason);
     return this.getGraph();
   }
 
-  private emitChange(): void {
+  private emitChange(reason: RenderIntentChangeReason): void {
     this.events.emit("change", {
       graph: cloneGraph(this.graph),
+      reason,
       revision: this.revision,
     });
   }

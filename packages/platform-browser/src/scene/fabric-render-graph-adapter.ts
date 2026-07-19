@@ -15,6 +15,7 @@ import {
   type RenderGraph,
   type RenderGraphLayer,
   type RenderGraphNode,
+  type RenderIntentChangeReason,
   type InteractionManipulationKind,
   type InteractionService,
   type InteractionSpec,
@@ -23,6 +24,7 @@ import {
   type SceneLayer,
   type SceneRecord,
   type SceneSnapshot,
+  type SceneChangeCause,
   type SceneService,
   type Service,
   type ServiceContext,
@@ -52,11 +54,41 @@ const FABRIC_INTERACTION_PROP_KEYS = new Set([
   "lockUniScaling",
 ]);
 
+export type FabricRenderGraphSyncCause =
+  | { type: "initial" }
+  | { type: "document-apply" }
+  | {
+      type: "runtime-patch";
+      operation: "upsert" | "remove" | "clear";
+      sourceId?: string;
+      intentIds: string[];
+    }
+  | {
+      type: "runtime-condition";
+      operation: "set" | "delete" | "clear";
+      keys: string[];
+    }
+  | { type: "scene-content" }
+  | {
+      type: "interaction-preview";
+      sessionId: string;
+      toolId?: string;
+    }
+  | {
+      type: "session-state";
+      sessionId: string;
+      reason: "opened" | "focus" | "phase";
+    }
+  | { type: "canvas-resize" }
+  | { type: "layout-change"; surfaceId: string }
+  | { type: "explicit-refresh" };
+
 export interface FabricRenderGraphSyncState {
+  causes: FabricRenderGraphSyncCause[];
   error?: unknown;
   generation: number;
-  loading: boolean;
   pending: number;
+  syncing: boolean;
 }
 
 export type FabricRenderGraphSyncStateListener = (
@@ -88,18 +120,15 @@ export class FabricRenderGraphAdapter implements Service {
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
   private syncGeneration = 0;
-  private completedSyncGeneration = 0;
   private syncError: unknown;
+  private pendingSyncCauses = new Map<string, FabricRenderGraphSyncCause>();
+  private activeSyncCauses = new Map<string, FabricRenderGraphSyncCause>();
   private readonly syncStateListeners =
     new Set<FabricRenderGraphSyncStateListener>();
   private readonly activeManipulations = new WeakMap<
     object,
     InteractionManipulationKind
   >();
-
-  private readonly onRuntimeConditionChange = () => {
-    this.requestSync();
-  };
 
   init(context: ServiceContext) {
     this.graphSubscription?.dispose();
@@ -121,11 +150,13 @@ export class FabricRenderGraphAdapter implements Service {
       );
     }
 
-    this.graphSubscription = this.renderIntentService.onDidChange(() => {
-      this.requestSync();
+    this.graphSubscription = this.renderIntentService.onDidChange((event) => {
+      this.requestSync(this.toRenderIntentSyncCause(event.reason));
     });
-    this.sceneSubscription = this.sceneService?.onDidChange(() => {
-      this.requestSync();
+    this.sceneSubscription = this.sceneService?.onDidChange((event) => {
+      this.requestSync(
+        event.causes.map((cause) => this.toSceneSyncCause(cause)),
+      );
     });
     this.canvasEventDisposables.forEach((disposable) => disposable.dispose());
     this.canvasEventDisposables = [
@@ -148,7 +179,7 @@ export class FabricRenderGraphAdapter implements Service {
     );
     this.attachRuntimeConditionEvents();
     this.attachLayoutChangeEvents();
-    this.requestSync();
+    this.requestSync({ type: "initial" });
   }
 
   dispose() {
@@ -172,16 +203,26 @@ export class FabricRenderGraphAdapter implements Service {
     this.sessionService = undefined;
     this.syncRequested = false;
     this.syncPromise = null;
-    this.completedSyncGeneration = this.syncGeneration;
+    this.pendingSyncCauses.clear();
+    this.activeSyncCauses.clear();
     this.emitSyncState();
     this.syncStateListeners.clear();
   }
 
-  requestSync() {
+  requestSync(
+    causes: FabricRenderGraphSyncCause | readonly FabricRenderGraphSyncCause[],
+  ) {
+    const nextCauses = Array.isArray(causes) ? causes : [causes];
+    nextCauses.forEach((cause) =>
+      this.pendingSyncCauses.set(this.getSyncCauseKey(cause), cause),
+    );
     this.syncRequested = true;
-    this.syncGeneration += 1;
     this.syncError = undefined;
     this.emitSyncState();
+    return this.startSyncLoop();
+  }
+
+  private startSyncLoop(): Promise<void> {
     if (this.syncPromise) return this.syncPromise;
 
     let syncError: unknown;
@@ -194,31 +235,35 @@ export class FabricRenderGraphAdapter implements Service {
       })
       .finally(() => {
         this.syncPromise = null;
-        if (this.syncRequested) {
-          void this.requestSync();
-          return;
-        }
-        this.completedSyncGeneration = this.syncGeneration;
+        this.activeSyncCauses.clear();
         this.syncError = syncError;
         this.emitSyncState();
+        if (this.syncRequested) void this.startSyncLoop();
       });
     return this.syncPromise;
   }
 
   async flush(): Promise<void> {
-    await this.requestSync();
+    while (this.syncPromise) {
+      await this.syncPromise;
+    }
+  }
+
+  async refresh(): Promise<void> {
+    this.requestSync({ type: "explicit-refresh" });
+    await this.flush();
   }
 
   getSyncState(): FabricRenderGraphSyncState {
-    const pending = Math.max(
-      0,
-      this.syncGeneration - this.completedSyncGeneration,
-    );
+    const causes = this.listSyncCauses();
+    const syncing =
+      this.syncRequested || Boolean(this.syncPromise) || causes.length > 0;
     return {
+      causes,
       ...(this.syncError === undefined ? {} : { error: this.syncError }),
       generation: this.syncGeneration,
-      loading: pending > 0 || Boolean(this.syncPromise) || this.syncRequested,
-      pending,
+      pending: causes.length,
+      syncing,
     };
   }
 
@@ -241,14 +286,65 @@ export class FabricRenderGraphAdapter implements Service {
     this.syncStateListeners.forEach((listener) => listener(state));
   }
 
+  private listSyncCauses(): FabricRenderGraphSyncCause[] {
+    const causes = new Map(this.activeSyncCauses);
+    this.pendingSyncCauses.forEach((cause, key) => causes.set(key, cause));
+    return Array.from(causes.values());
+  }
+
+  private getSyncCauseKey(cause: FabricRenderGraphSyncCause): string {
+    return JSON.stringify(cause);
+  }
+
+  private toRenderIntentSyncCause(
+    reason: RenderIntentChangeReason,
+  ): FabricRenderGraphSyncCause {
+    if (reason.type === "document-replaced") return { type: "document-apply" };
+    if (reason.type === "runtime-condition") {
+      return {
+        type: "runtime-condition",
+        operation: reason.operation,
+        keys: reason.keys.slice(),
+      };
+    }
+    return {
+      type: "runtime-patch",
+      operation: reason.operation,
+      ...(reason.sourceId ? { sourceId: reason.sourceId } : {}),
+      intentIds: reason.intentIds.slice(),
+    };
+  }
+
+  private toSceneSyncCause(
+    cause: SceneChangeCause,
+  ): FabricRenderGraphSyncCause {
+    return cause.type === "interaction-preview"
+      ? {
+          type: "interaction-preview",
+          sessionId: cause.sessionId,
+          ...(cause.toolId ? { toolId: cause.toolId } : {}),
+        }
+      : { type: "scene-content" };
+  }
+
   private attachRuntimeConditionEvents() {
     this.detachRuntimeConditionEvents();
-    const sessionDisposable = this.sessionService?.onDidChange(
-      this.onRuntimeConditionChange,
-    );
-    const canvasDisposable = this.canvasService?.on(
-      "resized",
-      this.onRuntimeConditionChange,
+    const sessionDisposable = this.sessionService?.onDidChange((event) => {
+      if (
+        event.reason !== "opened" &&
+        event.reason !== "focus" &&
+        event.reason !== "phase"
+      ) {
+        return;
+      }
+      this.requestSync({
+        type: "session-state",
+        sessionId: event.snapshot.descriptor.sessionId,
+        reason: event.reason,
+      });
+    });
+    const canvasDisposable = this.canvasService?.on("resized", () =>
+      this.requestSync({ type: "canvas-resize" }),
     );
     this.runtimeConditionDisposables = [
       ...(sessionDisposable ? [sessionDisposable] : []),
@@ -272,7 +368,9 @@ export class FabricRenderGraphAdapter implements Service {
       if (!surfaceId || observed.has(surfaceId)) return;
       observed.add(surfaceId);
       this.layoutDisposables.push(
-        layoutService.onLayoutChange(surfaceId, this.onRuntimeConditionChange),
+        layoutService.onLayoutChange(surfaceId, () =>
+          this.requestSync({ type: "layout-change", surfaceId }),
+        ),
       );
     };
     surfaceFrameService.listSurfaceIds().forEach(observe);
@@ -291,7 +389,13 @@ export class FabricRenderGraphAdapter implements Service {
   private async runSyncLoop() {
     while (this.syncRequested) {
       this.syncRequested = false;
+      this.activeSyncCauses = this.pendingSyncCauses;
+      this.pendingSyncCauses = new Map();
+      this.syncGeneration += 1;
+      this.emitSyncState();
       await this.syncGraph();
+      this.activeSyncCauses.clear();
+      this.emitSyncState();
     }
   }
 

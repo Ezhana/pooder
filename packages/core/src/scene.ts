@@ -189,23 +189,27 @@ export interface SceneElementSelector {
 }
 
 export interface SceneChangeSet {
+  causes: SceneChangeCause[];
   scenes?: {
     added: SceneId[];
     updated: SceneId[];
     removed: SceneId[];
   };
-  sceneChanges?: Record<SceneId, {
-    layers: {
-      added: LayerId[];
-      updated: LayerId[];
-      removed: LayerId[];
-    };
-    elements: {
-      added: ElementId[];
-      updated: ElementId[];
-      removed: ElementId[];
-    };
-  }>;
+  sceneChanges?: Record<
+    SceneId,
+    {
+      layers: {
+        added: LayerId[];
+        updated: LayerId[];
+        removed: LayerId[];
+      };
+      elements: {
+        added: ElementId[];
+        updated: ElementId[];
+        removed: ElementId[];
+      };
+    }
+  >;
   layers: {
     added: LayerId[];
     updated: LayerId[];
@@ -216,6 +220,18 @@ export interface SceneChangeSet {
     updated: ElementId[];
     removed: ElementId[];
   };
+}
+
+export type SceneChangeCause =
+  | { type: "scene-content" }
+  | {
+      type: "interaction-preview";
+      sessionId: string;
+      toolId?: string;
+    };
+
+export interface SceneTransactionOptions {
+  cause: SceneChangeCause;
 }
 
 export type SceneTransaction<T = void> = () => T;
@@ -279,7 +295,9 @@ export interface SceneHandle extends Disposable {
   updateElement(id: ElementId, patch: SceneElementPatch): SceneElement;
   removeElement(id: ElementId): boolean;
   selectLayers(selector?: Omit<SceneLayerSelector, "sceneId">): SceneLayer[];
-  selectElements(selector?: Omit<SceneElementSelector, "sceneId">): SceneElement[];
+  selectElements(
+    selector?: Omit<SceneElementSelector, "sceneId">,
+  ): SceneElement[];
 }
 
 export interface SceneRootChangeEvent {

@@ -32,6 +32,7 @@ import {
   type CanvasService,
   type ExtensionDefinition,
   type InteractionService,
+  type RenderIntentChangeEvent,
   type RenderIntentService,
   type SceneChangeEvent,
   type SceneService,
@@ -1131,6 +1132,7 @@ async function testSceneTransactionsBatchAndRollback() {
     });
 
     assertEqual(changes.length, 1);
+    assertDeepEqual(changes[0].causes, [{ type: "scene-content" }]);
     assertDeepEqual(changes[0].layers.added, ["content"]);
     assertDeepEqual(changes[0].elements.added, ["rect-1"]);
     assertDeepEqual(changes[0].elements.updated, ["rect-1"]);
@@ -1154,6 +1156,25 @@ async function testSceneTransactionsBatchAndRollback() {
     assertEqual(scene.selectOneLayer({ ids: ["rollback"] }), undefined);
     assertEqual(scene.selectOneElement({ ids: ["text-1"] }), undefined);
     assertEqual(changes.length, 1);
+
+    scene.transaction(
+      {
+        cause: {
+          type: "interaction-preview",
+          sessionId: "image:front",
+          toolId: "image-placement",
+        },
+      },
+      () => scene.updateElement("rect-1", { width: 14 }),
+    );
+    assertEqual(changes.length, 2);
+    assertDeepEqual(changes[1].causes, [
+      {
+        type: "interaction-preview",
+        sessionId: "image:front",
+        toolId: "image-placement",
+      },
+    ]);
   });
 }
 
@@ -2130,6 +2151,8 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
+    const changes: RenderIntentChangeEvent[] = [];
+    intents.onDidChange((event) => changes.push(event));
     intents.setDocumentIntents([
       {
         id: "image",
@@ -2200,6 +2223,43 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
       node?.visual?.src,
       "/base.png",
       "clearing the remaining source patch should restore the base source",
+    );
+    intents.setRuntimeConditionValue("session.image.active", true);
+    assertDeepEqual(
+      changes.map((event) => event.reason),
+      [
+        { type: "document-replaced" },
+        {
+          type: "runtime-patch",
+          operation: "upsert",
+          sourceId: "source-a",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-patch",
+          operation: "upsert",
+          sourceId: "source-b",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-patch",
+          operation: "clear",
+          sourceId: "source-b",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-patch",
+          operation: "remove",
+          sourceId: "source-a",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-condition",
+          operation: "set",
+          keys: ["session.image.active"],
+        },
+      ],
+      "render intent changes should preserve their semantic origin",
     );
   });
 }

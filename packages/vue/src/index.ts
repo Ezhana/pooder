@@ -9,6 +9,6 @@ export {
 } from "./runtime";
 export type {
   PooderCanvasHostReadyPayload,
-  PooderCanvasHostRenderLoadingPayload,
+  PooderCanvasHostRenderSyncPayload,
 } from "./canvas-host";
 export type { PooderRuntimeLike } from "./runtime";

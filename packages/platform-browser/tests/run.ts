@@ -10,6 +10,8 @@ import {
   SURFACE_FRAME_SERVICE,
   type RenderIntentService,
   type InteractionService,
+  type SceneService,
+  type SessionService,
 } from "@pooder/core";
 import type { SurfaceSceneFrames } from "@pooder/core";
 import {
@@ -95,6 +97,10 @@ class FakeCanvasService {
         );
       },
     };
+  }
+
+  emit(event: string, payload?: unknown) {
+    this.handlers.get(`typed:${event}`)?.forEach((handler) => handler(payload));
   }
 
   resize(width: number, height: number) {
@@ -1022,7 +1028,7 @@ async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
 
   await adapter.flush();
   const before = canvas.reconcileCalls.length;
-  runtime.eventBus.emit("canvas:resized", {});
+  canvas.emit("resized", {});
   await adapter.flush();
 
   assert(
@@ -1285,15 +1291,19 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
   ]);
 
   assert(
-    states.some((state) => state.loading),
-    "adapter should report loading while graph sync is pending",
+    states.some(
+      (state) =>
+        state.syncing &&
+        state.causes.some((cause) => cause.type === "document-apply"),
+    ),
+    "adapter should report the document cause while graph sync is pending",
   );
 
   await adapter.flush();
   const finalState = states[states.length - 1];
   assert(finalState, "adapter should report a final sync state");
   assertEqual(
-    finalState.loading,
+    finalState.syncing,
     false,
     "adapter should report idle after flush",
   );
@@ -1302,6 +1312,76 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
     finalState.generation > 0,
     "adapter should expose a monotonic sync generation",
   );
+  const flushedGeneration = finalState.generation;
+  await adapter.flush();
+  assertEqual(
+    adapter.getSyncState().generation,
+    flushedGeneration,
+    "flush should wait for consistency without creating a new sync generation",
+  );
+
+  const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+  const session = await sessions.open({
+    descriptor: {
+      sessionId: "image:front",
+      ownerId: "image-placement",
+      scope: { channel: "image-placement", subjectId: "front.image" },
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    },
+    initialDraft: { left: 0.5 },
+  });
+  const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  const sessionScene = scenes.createScene({
+    id: "image:front:scene",
+    owner: { type: "session", sessionId: "image:front" },
+    composition: {
+      entries: [{ source: "local", layerIds: ["controls"] }],
+    },
+  });
+  session.own(sessionScene);
+  sessionScene.addLayer({ id: "controls" });
+  await adapter.flush();
+  states.length = 0;
+  scenes.transaction(
+    {
+      cause: {
+        type: "interaction-preview",
+        sessionId: "image:front",
+        toolId: "image-placement",
+      },
+    },
+    () =>
+      sessionScene.addElement({
+        id: "snap-line",
+        layerId: "controls",
+        type: "rect",
+        width: 1,
+        height: 20,
+      }),
+  );
+  assert(
+    states.some((state) =>
+      state.causes.some(
+        (cause) =>
+          cause.type === "interaction-preview" &&
+          cause.sessionId === "image:front",
+      ),
+    ),
+    "adapter should preserve interaction preview scene provenance",
+  );
+  await adapter.flush();
+  const sessionStateGeneration = adapter.getSyncState().generation;
+  session.updateDraft({ left: 0.6 });
+  session.setDirty(true);
+  await adapter.flush();
+  assertEqual(
+    adapter.getSyncState().generation,
+    sessionStateGeneration,
+    "session draft and dirty changes should not invalidate render conditions",
+  );
+  await session.cancel();
+  await adapter.flush();
 
   stop();
   await runtime.dispose();

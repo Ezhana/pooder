@@ -79,6 +79,7 @@ export type {
   RenderGraphLayer,
   RenderGraphNode,
   RenderIntentChangeEvent,
+  RenderIntentChangeReason,
   RenderIntentCompilerContext,
   RenderIntentCompilerContribution,
   RenderIntentCompilerQuery,

@@ -13,7 +13,7 @@ import {
 import { usePooderRuntime, type PooderRuntimeLike } from "./runtime";
 import type {
   PooderCanvasHostReadyPayload,
-  PooderCanvasHostRenderLoadingPayload,
+  PooderCanvasHostRenderSyncPayload,
 } from "./canvas-host";
 
 const props = defineProps<{
@@ -22,7 +22,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "ready", payload: PooderCanvasHostReadyPayload): void;
-  (e: "render-loading-change", payload: PooderCanvasHostRenderLoadingPayload): void;
+  (e: "render-sync-change", payload: PooderCanvasHostRenderSyncPayload): void;
 }>();
 
 const injectedRuntime = props.runtime ? null : usePooderRuntime();
@@ -30,7 +30,7 @@ const container = ref<HTMLDivElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 
 let browserHost: BrowserHostAttachment | null = null;
-let renderLoadingFrame = 0;
+let renderSyncFrame = 0;
 let stopRenderSyncStateChange: null | (() => void) = null;
 
 function getRuntime(): PooderRuntimeLike {
@@ -43,20 +43,20 @@ function waitForNextAnimationFrame(): Promise<void> {
   });
 }
 
-function emitRenderLoadingChange(payload: PooderCanvasHostRenderLoadingPayload) {
-  if (renderLoadingFrame) {
-    window.cancelAnimationFrame(renderLoadingFrame);
-    renderLoadingFrame = 0;
+function emitRenderSyncChange(payload: PooderCanvasHostRenderSyncPayload) {
+  if (renderSyncFrame) {
+    window.cancelAnimationFrame(renderSyncFrame);
+    renderSyncFrame = 0;
   }
 
-  if (payload.loading) {
-    emit("render-loading-change", payload);
+  if (payload.syncing) {
+    emit("render-sync-change", payload);
     return;
   }
 
-  renderLoadingFrame = window.requestAnimationFrame(() => {
-    renderLoadingFrame = 0;
-    emit("render-loading-change", payload);
+  renderSyncFrame = window.requestAnimationFrame(() => {
+    renderSyncFrame = 0;
+    emit("render-sync-change", payload);
   });
 }
 
@@ -74,11 +74,12 @@ onMounted(() => {
   const host = browserHost;
   stopRenderSyncStateChange = host.fabricRenderGraphAdapter.onSyncStateChange(
     (state) => {
-      emitRenderLoadingChange({
+      emitRenderSyncChange({
+        causes: state.causes,
         ...(state.error === undefined ? {} : { error: state.error }),
         generation: state.generation,
-        loading: state.loading,
         pending: state.pending,
+        syncing: state.syncing,
       });
     },
     { immediate: true },
@@ -95,9 +96,9 @@ onMounted(() => {
 onUnmounted(() => {
   stopRenderSyncStateChange?.();
   stopRenderSyncStateChange = null;
-  if (renderLoadingFrame) {
-    window.cancelAnimationFrame(renderLoadingFrame);
-    renderLoadingFrame = 0;
+  if (renderSyncFrame) {
+    window.cancelAnimationFrame(renderSyncFrame);
+    renderSyncFrame = 0;
   }
   browserHost?.dispose();
   browserHost = null;

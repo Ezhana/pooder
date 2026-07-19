@@ -31,6 +31,7 @@ import {
   type SceneElement,
   type SceneElementInput,
   type SceneHandle,
+  type SceneChangeCause,
   type SceneExportService,
   type SceneLayoutService,
   type SurfaceFrameService,
@@ -2597,7 +2598,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.activeSnapX = nextX;
     this.activeSnapY = nextY;
     if (changed) {
-      this.publishImageSessionScenes();
+      this.publishImageSessionScenes(this.getInteractionPreviewSceneCause());
       this.canvasService?.requestRenderAll();
     }
   }
@@ -2607,7 +2608,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.activeSnapX = null;
     this.activeSnapY = null;
     if (shouldClear) {
-      this.publishImageSessionScenes();
+      this.publishImageSessionScenes(this.getInteractionPreviewSceneCause());
       this.canvasService?.requestRenderAll();
     }
   }
@@ -2977,39 +2978,67 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return scene;
   }
 
-  private publishImageSessionScenes() {
+  private getInteractionPreviewSceneCause(): SceneChangeCause {
+    return {
+      type: "interaction-preview",
+      sessionId: this.activeImageSessionId ?? "image-placement",
+      toolId: this.id,
+    };
+  }
+
+  private publishImageSessionScenes(
+    cause: SceneChangeCause = { type: "scene-content" },
+  ) {
     const activeSessionId = this.activeImageSessionId;
+    const sceneService = this.sceneService;
     const scene = activeSessionId
       ? this.sessionScenesBySessionId.get(activeSessionId)
       : undefined;
     if (
+      !sceneService ||
       !scene ||
       !activeSessionId ||
-      this.sceneService?.getSceneHandle(scene.id) !== scene
+      sceneService.getSceneHandle(scene.id) !== scene
     ) {
       return;
     }
+    const desiredElements = new Map<string, SceneElementInput>();
+    let elementOrder = 0;
+    this.getPlacementStates()
+      .filter((placement) => this.shouldRenderWorkingPlacement(placement.id))
+      .forEach((placement) => {
+        this.buildImageSessionSceneSpecs(placement, activeSessionId).forEach(
+          ({ layerId, spec }) => {
+            const element = this.renderSpecToSceneElement(
+              spec,
+              layerId,
+              elementOrder++,
+            );
+            if (element) desiredElements.set(element.id, element);
+          },
+        );
+      });
+    const existingElements = new Map(
+      scene.selectElements().map((element) => [element.id, element]),
+    );
     const wasPublishing = this.isPublishingImageSessionScenes;
     this.isPublishingImageSessionScenes = true;
     try {
-      scene
-        .selectElements()
-        .forEach((element) => scene.removeElement(element.id));
-      let elementOrder = 0;
-      this.getPlacementStates()
-        .filter((placement) => this.shouldRenderWorkingPlacement(placement.id))
-        .forEach((placement) => {
-          this.buildImageSessionSceneSpecs(placement, activeSessionId).forEach(
-            ({ layerId, spec }) => {
-              const element = this.renderSpecToSceneElement(
-                spec,
-                layerId,
-                elementOrder++,
-              );
-              if (element) scene.addElement(element);
-            },
-          );
+      sceneService.transaction({ cause }, () => {
+        existingElements.forEach((element) => {
+          if (!desiredElements.has(element.id)) scene.removeElement(element.id);
         });
+        desiredElements.forEach((element) => {
+          const existing = existingElements.get(element.id);
+          if (!existing) {
+            scene.addElement(element);
+            return;
+          }
+          if (JSON.stringify(existing) === JSON.stringify(element)) return;
+          scene.removeElement(existing.id);
+          scene.addElement(element);
+        });
+      });
     } finally {
       this.isPublishingImageSessionScenes = wasPublishing;
     }
