@@ -56,6 +56,32 @@ export interface RenderObjectSpec {
   visibleWhen?: RuntimeConditionExpr;
 }
 
+/** Identifies the declarative render sources whose backend projection is stale. */
+export type RenderInvalidation =
+  /** Reproject every target; this is an authoritative interaction barrier. */
+  | { type: "full" }
+  | { type: "render-intents"; intentIds: readonly string[] }
+  | { type: "scene"; sceneId: string }
+  | {
+      type: "scene-elements";
+      sceneId: string;
+      elementIds: readonly string[];
+    };
+
+/** Stable provenance used to match a backend target to an invalidation. */
+export type RenderObjectOrigin =
+  | { type: "render-intent"; intentId: string }
+  | { type: "scene-element"; sceneId: string; elementId: string };
+
+/** Determines whether declarative state or a live interaction owns a transform. */
+export type RenderObjectOwnership =
+  | { type: "declarative" }
+  | {
+      type: "interaction";
+      interactionId: string;
+      phase: "active" | "committing";
+    };
+
 export interface RenderLayerSpec {
   id: string;
   order: number;

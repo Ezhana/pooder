@@ -20,8 +20,11 @@ import {
   type CanvasViewportLayout,
   type RenderCoordinateSpace,
   type RenderEffectSpec,
+  type RenderInvalidation,
   type RenderLayoutInsets,
   type RenderLayoutLength,
+  type RenderObjectOrigin,
+  type RenderObjectOwnership,
   type RenderObjectLayoutSpec,
   type RenderObjectSpec,
   type RenderPatternSpec,
@@ -39,7 +42,13 @@ export interface FabricRenderTargetItem {
   key: string;
   layerId: string;
   order: number;
+  origin?: RenderObjectOrigin;
   spec: RenderObjectSpec;
+}
+
+export interface FabricRenderGraphReconcileOptions {
+  invalidations?: readonly RenderInvalidation[];
+  render?: boolean;
 }
 
 export interface FabricObjectEffectRendererContext {
@@ -395,7 +404,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   async reconcileRenderGraphDrawList(
     items: FabricRenderTargetItem[],
-    options: { render?: boolean } = {},
+    options: FabricRenderGraphReconcileOptions = {},
   ): Promise<void> {
     const normalizedItems = items
       .map((item, index) => ({
@@ -407,6 +416,12 @@ export default class CanvasService implements Service, CanvasServiceContract {
       .filter((item) => item.key && item.layerId)
       .sort((left, right) => left.order - right.order);
     const desiredKeys = new Set(normalizedItems.map((item) => item.key));
+    const invalidations = options.invalidations?.length
+      ? options.invalidations
+      : [{ type: "full" } satisfies RenderInvalidation];
+    const hasFullInvalidation = invalidations.some(
+      (invalidation) => invalidation.type === "full",
+    );
 
     this.canvas.getObjects().forEach((object: any) => {
       if (object?.data?.renderTarget !== GRAPH_RENDER_TARGET) return;
@@ -425,8 +440,18 @@ export default class CanvasService implements Service, CanvasServiceContract {
     for (const item of normalizedItems) {
       const spec = item.spec;
       let current = byKey.get(item.key);
+      const shouldPatch =
+        !current ||
+        hasFullInvalidation ||
+        this.isRenderTargetInvalidated(item, invalidations);
+      const ownership = this.readRenderObjectOwnership(current);
+      const interactionOwnsTransform =
+        !hasFullInvalidation &&
+        ownership?.type === "interaction" &&
+        ownership.phase === "active";
+      const shouldApplySpec = shouldPatch && !interactionOwnsTransform;
 
-      if (spec.type === "path") {
+      if (shouldApplySpec && spec.type === "path") {
         const nextPathData = this.readPathDataFromSpec(spec);
         if (!nextPathData?.trim()) {
           if (current) this.canvas.remove(current);
@@ -434,7 +459,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
         }
       }
 
-      if (current && this.shouldRecreateObject(current, spec)) {
+      if (
+        current &&
+        shouldApplySpec &&
+        this.shouldRecreateObject(current, spec)
+      ) {
         this.canvas.remove(current);
         current = undefined;
       }
@@ -446,13 +475,22 @@ export default class CanvasService implements Service, CanvasServiceContract {
         this.canvas.add(current);
       }
 
-      this.patchFabricObject(current, spec, {
+      const renderMetadata = {
         renderTarget: GRAPH_RENDER_TARGET,
         renderKey: item.key,
         layerId: item.layerId,
+        renderOrigin: item.origin,
         renderOrder: item.order,
-      });
-      await this.applyObjectEffects(current as FabricObject, spec);
+      };
+      if (shouldApplySpec) {
+        this.patchFabricObject(current, spec, {
+          ...renderMetadata,
+          renderOwnership: { type: "declarative" },
+        });
+        await this.applyObjectEffects(current as FabricObject, spec);
+      } else {
+        this.patchFabricRenderMetadata(current, renderMetadata);
+      }
     }
 
     this.syncRenderGraphStacking(normalizedItems.map((item) => item.key));
@@ -805,6 +843,24 @@ export default class CanvasService implements Service, CanvasServiceContract {
     spec: RenderObjectSpec,
     extraData?: Record<string, any>,
   ) {
+    const nextData = this.resolveFabricObjectData(obj, spec, extraData);
+    const props = this.resolveObjectFabricProps(obj, spec);
+    obj.set({ ...props, data: nextData });
+    obj.setCoords();
+  }
+
+  private patchFabricRenderMetadata(
+    obj: any,
+    metadata: Record<string, any>,
+  ) {
+    obj.set({ data: { ...(obj.data || {}), ...metadata } });
+  }
+
+  private resolveFabricObjectData(
+    obj: any,
+    spec: RenderObjectSpec,
+    extraData?: Record<string, any>,
+  ): Record<string, any> {
     const nextData = {
       ...(obj.data || {}),
       ...(spec.data || {}),
@@ -812,9 +868,47 @@ export default class CanvasService implements Service, CanvasServiceContract {
       id: spec.id,
     };
     nextData.renderSourceKey = this.getSpecRenderSourceKey(spec);
-    const props = this.resolveObjectFabricProps(obj, spec);
-    obj.set({ ...props, data: nextData });
-    obj.setCoords();
+    return nextData;
+  }
+
+  private readRenderObjectOwnership(
+    obj: any,
+  ): RenderObjectOwnership | undefined {
+    const ownership = obj?.data?.renderOwnership;
+    if (ownership?.type === "declarative") return ownership;
+    if (
+      ownership?.type === "interaction" &&
+      typeof ownership.interactionId === "string" &&
+      (ownership.phase === "active" || ownership.phase === "committing")
+    ) {
+      return ownership;
+    }
+    return undefined;
+  }
+
+  private isRenderTargetInvalidated(
+    item: FabricRenderTargetItem,
+    invalidations: readonly RenderInvalidation[],
+  ): boolean {
+    const origin = item.origin;
+    if (!origin) return true;
+    return invalidations.some((invalidation) => {
+      if (invalidation.type === "full") return true;
+      if (origin.type === "render-intent") {
+        return (
+          invalidation.type === "render-intents" &&
+          invalidation.intentIds.includes(origin.intentId)
+        );
+      }
+      if (invalidation.type === "scene") {
+        return invalidation.sceneId === origin.sceneId;
+      }
+      return (
+        invalidation.type === "scene-elements" &&
+        invalidation.sceneId === origin.sceneId &&
+        invalidation.elementIds.includes(origin.elementId)
+      );
+    });
   }
 
   private resolveObjectFabricProps(

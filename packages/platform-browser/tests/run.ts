@@ -28,7 +28,10 @@ import {
   applyTransparentColorToAlpha,
   createBoundaryOutputMaskAlpha,
 } from "../src";
-import type { FabricRenderTargetItem } from "../src/canvas-service";
+import type {
+  FabricRenderGraphReconcileOptions,
+  FabricRenderTargetItem,
+} from "../src/canvas-service";
 import { ViewportSystem } from "../src/viewport-system";
 
 declare const process: {
@@ -82,6 +85,7 @@ class FakeCanvasService {
   renderCalls = 0;
   reconcileCalls: Array<{
     items: FabricRenderTargetItem[];
+    options?: FabricRenderGraphReconcileOptions;
   }> = [];
 
   on(event: string, handler: (...args: any[]) => void) {
@@ -121,9 +125,13 @@ class FakeCanvasService {
     this.viewportLayoutCalls.push(layout);
   }
 
-  async reconcileRenderGraphDrawList(items: FabricRenderTargetItem[]) {
+  async reconcileRenderGraphDrawList(
+    items: FabricRenderTargetItem[],
+    options?: FabricRenderGraphReconcileOptions,
+  ) {
     this.reconcileCalls.push({
       items: items.map((item) => ({ ...item, spec: { ...item.spec } })),
+      options,
     });
   }
 
@@ -1294,9 +1302,12 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
     states.some(
       (state) =>
         state.syncing &&
-        state.causes.some((cause) => cause.type === "document-apply"),
+        state.causes.some((cause) => cause.type === "document-apply") &&
+        state.invalidations.some(
+          (invalidation) => invalidation.type === "full",
+        ),
     ),
-    "adapter should report the document cause while graph sync is pending",
+    "adapter should report the document cause and full invalidation while graph sync is pending",
   );
 
   await adapter.flush();
@@ -1366,11 +1377,28 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
         (cause) =>
           cause.type === "interaction-preview" &&
           cause.sessionId === "image:front",
+      ) &&
+      state.invalidations.some(
+        (invalidation) =>
+          invalidation.type === "scene-elements" &&
+          invalidation.sceneId === "image:front:scene" &&
+          invalidation.elementIds.includes("snap-line"),
       ),
     ),
-    "adapter should preserve interaction preview scene provenance",
+    "adapter should preserve interaction preview provenance and element invalidation",
   );
   await adapter.flush();
+  assertDeepEqual(
+    canvas.reconcileCalls.at(-1)?.options?.invalidations,
+    [
+      {
+        type: "scene-elements",
+        sceneId: "image:front:scene",
+        elementIds: ["snap-line"],
+      },
+    ],
+    "adapter should pass precise scene invalidations to the backend",
+  );
   const sessionStateGeneration = adapter.getSyncState().generation;
   session.updateDraft({ left: 0.6 });
   session.setDirty(true);
@@ -1918,6 +1946,7 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     scaleX: 1,
     scaleY: 1,
     data: {
+      renderKey: "constrained",
       renderTarget: "render-graph",
       subjectId: "constrained",
       renderIntentId: "constrained",
@@ -1959,6 +1988,11 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     90,
     "rect interaction constraints should clamp graph objects",
   );
+  assertEqual(
+    (target.data as any).renderOwnership.phase,
+    "active",
+    "moving a graph object should claim active interaction ownership",
+  );
   let modifiedTransform: any;
   const rawTransformListener = (event: any) => {
     modifiedTransform = event;
@@ -1979,6 +2013,11 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     committedKinds,
     ["move"],
     "modified graph objects should commit through InteractionService",
+  );
+  assertEqual(
+    (target.data as any).renderOwnership.phase,
+    "committing",
+    "commit should retain ownership until declarative state catches up",
   );
   (target.data as any).interactionSpec = {
     manipulation: {
@@ -2153,6 +2192,141 @@ async function testCanvasReconcileSortsByRenderOrder() {
     canvas.objects.map((object) => object.data.renderKey),
     ["content", "guide"],
     "render graph objects should stack by resolved render order",
+  );
+}
+
+async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+  const workingImage: FabricRenderTargetItem = {
+    key: "working-image",
+    layerId: "image.session.image",
+    origin: {
+      type: "scene-element",
+      sceneId: "image-session",
+      elementId: "working-image",
+    },
+    order: 0,
+    spec: {
+      id: "working-image",
+      type: "image",
+      src: "/working-image.png",
+      props: { left: 100, top: 100, width: 50, height: 50 },
+      data: { source: "working" },
+    },
+  };
+
+  await service.reconcileRenderGraphDrawList([workingImage], {
+    invalidations: [{ type: "full" }],
+  });
+  const image = canvas.objects[0] as any;
+  image.left = 137;
+  image.top = 142;
+
+  await service.reconcileRenderGraphDrawList([
+    workingImage,
+    {
+      key: "snap-guide",
+      layerId: "image.session.controls",
+      origin: {
+        type: "scene-element",
+        sceneId: "image-session",
+        elementId: "snap-guide",
+      },
+      order: 1,
+      spec: {
+        id: "snap-guide",
+        type: "path",
+        props: { pathData: "M100 0L100 200" },
+      },
+    },
+  ], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["snap-guide"],
+      },
+    ],
+  });
+
+  assertEqual(
+    image.left,
+    137,
+    "adding a snap guide should not reset the live image x position",
+  );
+  assertEqual(
+    image.top,
+    142,
+    "adding a snap guide should not reset the live image y position",
+  );
+
+  const movedWorkingImage: FabricRenderTargetItem = {
+    ...workingImage,
+    spec: {
+      ...workingImage.spec,
+      props: { ...workingImage.spec.props, left: 120 },
+    },
+  };
+  await service.reconcileRenderGraphDrawList([movedWorkingImage], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["working-image"],
+      },
+    ],
+  });
+
+  assertEqual(
+    image.left,
+    120,
+    "a changed image spec should still replace the live transform",
+  );
+
+  image.left = 145;
+  image.data.renderOwnership = {
+    type: "interaction",
+    interactionId: "working-image:1",
+    phase: "active",
+  };
+  await service.reconcileRenderGraphDrawList([workingImage], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["working-image"],
+      },
+    ],
+  });
+  assertEqual(
+    image.left,
+    145,
+    "an active interaction should retain transform ownership",
+  );
+
+  image.data.renderOwnership = {
+    type: "interaction",
+    interactionId: "working-image:1",
+    phase: "committing",
+  };
+  await service.reconcileRenderGraphDrawList([workingImage], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["working-image"],
+      },
+    ],
+  });
+  assertEqual(
+    image.left,
+    100,
+    "a committing interaction should yield to the next declarative update",
+  );
+  assertEqual(
+    image.data.renderOwnership.type,
+    "declarative",
+    "a declarative update should release interaction ownership",
   );
 }
 
@@ -3340,6 +3514,10 @@ async function main() {
     [
       "sorts reconciled render graph objects by render order",
       testCanvasReconcileSortsByRenderOrder,
+    ],
+    [
+      "reconciles by invalidation and interaction ownership",
+      testCanvasReconcileUsesInvalidationAndInteractionOwnership,
     ],
     [
       "omits path source props from Fabric props",

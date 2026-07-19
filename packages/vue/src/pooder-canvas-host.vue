@@ -78,6 +78,7 @@ onMounted(() => {
         causes: state.causes,
         ...(state.error === undefined ? {} : { error: state.error }),
         generation: state.generation,
+        invalidations: state.invalidations,
         pending: state.pending,
         syncing: state.syncing,
       });

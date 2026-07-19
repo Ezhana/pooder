@@ -15,6 +15,7 @@ import {
   type RenderGraph,
   type RenderGraphLayer,
   type RenderGraphNode,
+  type RenderInvalidation,
   type RenderIntentChangeReason,
   type InteractionManipulationKind,
   type InteractionService,
@@ -25,6 +26,7 @@ import {
   type SceneRecord,
   type SceneSnapshot,
   type SceneChangeCause,
+  type SceneChangeSet,
   type SceneService,
   type Service,
   type ServiceContext,
@@ -34,7 +36,10 @@ import {
   type SceneLayoutService,
   type SurfaceFrameService,
 } from "@pooder/core";
-import type { FabricRenderTargetItem } from "../canvas-service";
+import type {
+  FabricRenderGraphReconcileOptions,
+  FabricRenderTargetItem,
+} from "../canvas-service";
 import { CANVAS_SERVICE } from "../tokens";
 
 export const RENDER_GRAPH_RENDER_SCOPE = "core-render-graph";
@@ -87,6 +92,7 @@ export interface FabricRenderGraphSyncState {
   causes: FabricRenderGraphSyncCause[];
   error?: unknown;
   generation: number;
+  invalidations: RenderInvalidation[];
   pending: number;
   syncing: boolean;
 }
@@ -98,7 +104,7 @@ export type FabricRenderGraphSyncStateListener = (
 type FabricRenderTargetCanvasService = CanvasService & {
   reconcileRenderGraphDrawList(
     items: FabricRenderTargetItem[],
-    options?: { render?: boolean },
+    options?: FabricRenderGraphReconcileOptions,
   ): Promise<void>;
 };
 
@@ -123,6 +129,9 @@ export class FabricRenderGraphAdapter implements Service {
   private syncError: unknown;
   private pendingSyncCauses = new Map<string, FabricRenderGraphSyncCause>();
   private activeSyncCauses = new Map<string, FabricRenderGraphSyncCause>();
+  private pendingInvalidations = new Map<string, RenderInvalidation>();
+  private activeInvalidations = new Map<string, RenderInvalidation>();
+  private interactionSequence = 0;
   private readonly syncStateListeners =
     new Set<FabricRenderGraphSyncStateListener>();
   private readonly activeManipulations = new WeakMap<
@@ -151,20 +160,26 @@ export class FabricRenderGraphAdapter implements Service {
     }
 
     this.graphSubscription = this.renderIntentService.onDidChange((event) => {
-      this.requestSync(this.toRenderIntentSyncCause(event.reason));
+      this.requestSync(
+        this.toRenderIntentSyncCause(event.reason),
+        this.toRenderIntentInvalidations(event.reason),
+      );
     });
     this.sceneSubscription = this.sceneService?.onDidChange((event) => {
       this.requestSync(
         event.causes.map((cause) => this.toSceneSyncCause(cause)),
+        this.toSceneInvalidations(event),
       );
     });
     this.canvasEventDisposables.forEach((disposable) => disposable.dispose());
     this.canvasEventDisposables = [
       this.canvasService.on("transform", (event) => {
         if (event.kind === "commit") {
+          this.markInteractionOwnership(event.target, "committing");
           void this.handleRenderGraphObjectModified(event.target);
           return;
         }
+        this.markInteractionOwnership(event.target, "active");
         this.handleRenderGraphObjectManipulating(event.kind, event.target);
       }),
       this.canvasService.on("pointer", (event) => {
@@ -179,7 +194,7 @@ export class FabricRenderGraphAdapter implements Service {
     );
     this.attachRuntimeConditionEvents();
     this.attachLayoutChangeEvents();
-    this.requestSync({ type: "initial" });
+    this.requestSync({ type: "initial" }, { type: "full" });
   }
 
   dispose() {
@@ -205,16 +220,27 @@ export class FabricRenderGraphAdapter implements Service {
     this.syncPromise = null;
     this.pendingSyncCauses.clear();
     this.activeSyncCauses.clear();
+    this.pendingInvalidations.clear();
+    this.activeInvalidations.clear();
     this.emitSyncState();
     this.syncStateListeners.clear();
   }
 
   requestSync(
     causes: FabricRenderGraphSyncCause | readonly FabricRenderGraphSyncCause[],
+    invalidations:
+      | RenderInvalidation
+      | readonly RenderInvalidation[] = { type: "full" },
   ) {
     const nextCauses = Array.isArray(causes) ? causes : [causes];
     nextCauses.forEach((cause) =>
       this.pendingSyncCauses.set(this.getSyncCauseKey(cause), cause),
+    );
+    const nextInvalidations = Array.isArray(invalidations)
+      ? invalidations
+      : [invalidations];
+    nextInvalidations.forEach((invalidation) =>
+      this.enqueueInvalidation(invalidation),
     );
     this.syncRequested = true;
     this.syncError = undefined;
@@ -236,6 +262,7 @@ export class FabricRenderGraphAdapter implements Service {
       .finally(() => {
         this.syncPromise = null;
         this.activeSyncCauses.clear();
+        this.activeInvalidations.clear();
         this.syncError = syncError;
         this.emitSyncState();
         if (this.syncRequested) void this.startSyncLoop();
@@ -250,7 +277,7 @@ export class FabricRenderGraphAdapter implements Service {
   }
 
   async refresh(): Promise<void> {
-    this.requestSync({ type: "explicit-refresh" });
+    this.requestSync({ type: "explicit-refresh" }, { type: "full" });
     await this.flush();
   }
 
@@ -262,6 +289,7 @@ export class FabricRenderGraphAdapter implements Service {
       causes,
       ...(this.syncError === undefined ? {} : { error: this.syncError }),
       generation: this.syncGeneration,
+      invalidations: this.listInvalidations(),
       pending: causes.length,
       syncing,
     };
@@ -292,6 +320,43 @@ export class FabricRenderGraphAdapter implements Service {
     return Array.from(causes.values());
   }
 
+  private listInvalidations(): RenderInvalidation[] {
+    const invalidations = new Map(this.activeInvalidations);
+    this.pendingInvalidations.forEach((invalidation, key) =>
+      invalidations.set(key, invalidation),
+    );
+    return Array.from(invalidations.values()).map((invalidation) =>
+      this.cloneInvalidation(invalidation),
+    );
+  }
+
+  private enqueueInvalidation(invalidation: RenderInvalidation): void {
+    if (invalidation.type === "full") {
+      this.pendingInvalidations.clear();
+      this.pendingInvalidations.set("full", { type: "full" });
+      return;
+    }
+    if (this.pendingInvalidations.has("full")) return;
+    this.pendingInvalidations.set(
+      JSON.stringify(invalidation),
+      this.cloneInvalidation(invalidation),
+    );
+  }
+
+  private cloneInvalidation(invalidation: RenderInvalidation): RenderInvalidation {
+    if (invalidation.type === "render-intents") {
+      return { type: invalidation.type, intentIds: [...invalidation.intentIds] };
+    }
+    if (invalidation.type === "scene-elements") {
+      return {
+        type: invalidation.type,
+        sceneId: invalidation.sceneId,
+        elementIds: [...invalidation.elementIds],
+      };
+    }
+    return { ...invalidation };
+  }
+
   private getSyncCauseKey(cause: FabricRenderGraphSyncCause): string {
     return JSON.stringify(cause);
   }
@@ -315,6 +380,15 @@ export class FabricRenderGraphAdapter implements Service {
     };
   }
 
+  private toRenderIntentInvalidations(
+    reason: RenderIntentChangeReason,
+  ): RenderInvalidation[] {
+    if (reason.type !== "runtime-patch" || !reason.intentIds.length) {
+      return [{ type: "full" }];
+    }
+    return [{ type: "render-intents", intentIds: reason.intentIds.slice() }];
+  }
+
   private toSceneSyncCause(
     cause: SceneChangeCause,
   ): FabricRenderGraphSyncCause {
@@ -325,6 +399,40 @@ export class FabricRenderGraphAdapter implements Service {
           ...(cause.toolId ? { toolId: cause.toolId } : {}),
         }
       : { type: "scene-content" };
+  }
+
+  private toSceneInvalidations(event: SceneChangeSet): RenderInvalidation[] {
+    const sceneStructureChanged = Boolean(
+      event.scenes &&
+      (event.scenes.added.length ||
+        event.scenes.updated.length ||
+        event.scenes.removed.length),
+    );
+    if (sceneStructureChanged) return [{ type: "full" }];
+
+    const invalidations: RenderInvalidation[] = [];
+    Object.entries(event.sceneChanges ?? {}).forEach(([sceneId, change]) => {
+      const layersChanged = Boolean(
+        change.layers.added.length ||
+          change.layers.updated.length ||
+          change.layers.removed.length,
+      );
+      if (layersChanged) {
+        invalidations.push({ type: "scene", sceneId });
+        return;
+      }
+      const elementIds = Array.from(
+        new Set([
+          ...change.elements.added,
+          ...change.elements.updated,
+          ...change.elements.removed,
+        ]),
+      );
+      if (elementIds.length) {
+        invalidations.push({ type: "scene-elements", sceneId, elementIds });
+      }
+    });
+    return invalidations.length ? invalidations : [{ type: "full" }];
   }
 
   private attachRuntimeConditionEvents() {
@@ -391,15 +499,18 @@ export class FabricRenderGraphAdapter implements Service {
       this.syncRequested = false;
       this.activeSyncCauses = this.pendingSyncCauses;
       this.pendingSyncCauses = new Map();
+      this.activeInvalidations = this.pendingInvalidations;
+      this.pendingInvalidations = new Map();
       this.syncGeneration += 1;
       this.emitSyncState();
-      await this.syncGraph();
+      await this.syncGraph(Array.from(this.activeInvalidations.values()));
       this.activeSyncCauses.clear();
+      this.activeInvalidations.clear();
       this.emitSyncState();
     }
   }
 
-  private async syncGraph() {
+  private async syncGraph(invalidations: readonly RenderInvalidation[]) {
     const graph = this.requireRenderIntentService().getGraph();
     const canvas = this.requireCanvasService();
     const conditionContext = this.buildRuntimeConditionContext(graph);
@@ -440,6 +551,11 @@ export class FabricRenderGraphAdapter implements Service {
           items.push({
             key: `scene:${scene.id}:${element.id}`,
             layerId: layer.id,
+            origin: {
+              type: "scene-element",
+              sceneId: scene.id,
+              elementId: element.id,
+            },
             order:
               graphOrderOffset +
               sceneIndex * 1_000_000 +
@@ -451,7 +567,10 @@ export class FabricRenderGraphAdapter implements Service {
       });
     });
 
-    await canvas.reconcileRenderGraphDrawList(items, { render: false });
+    await canvas.reconcileRenderGraphDrawList(items, {
+      invalidations: invalidations.length ? invalidations : [{ type: "full" }],
+      render: false,
+    });
     canvas.requestRenderAll();
   }
 
@@ -505,6 +624,11 @@ export class FabricRenderGraphAdapter implements Service {
           items.push({
             key: `root:${root.id}:${entryIndex}:${groupLayerIndex}:${element.id}`,
             layerId: layer.id,
+            origin: {
+              type: "scene-element",
+              sceneId: root.id,
+              elementId: element.id,
+            },
             order: orderBase + groupLayerIndex * 1_000_000 + elementIndex,
             spec,
           });
@@ -547,6 +671,7 @@ export class FabricRenderGraphAdapter implements Service {
         items.push({
           key: keyPrefix ? `${keyPrefix}:${node.id}` : node.id,
           layerId: layer.id,
+          origin: { type: "render-intent", intentId: node.id },
           order:
             orderBase +
             this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex, node),
@@ -564,6 +689,33 @@ export class FabricRenderGraphAdapter implements Service {
     return node.data?.documentLayerRole === "guide"
       ? 900_000_000 + layerIndex * 1_000_000 + nodeIndex
       : layerIndex * 1_000_000 + nodeIndex;
+  }
+
+  private markInteractionOwnership(
+    target: any,
+    phase: "active" | "committing",
+  ): void {
+    if (target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) return;
+    const renderKey = String(target.data?.renderKey || "").trim();
+    if (!renderKey) return;
+    const currentOwnership = target.data?.renderOwnership;
+    let interactionId =
+      currentOwnership?.type === "interaction"
+        ? String(currentOwnership.interactionId || "")
+        : "";
+    if (!interactionId || (phase === "active" && currentOwnership?.phase !== "active")) {
+      interactionId = `${renderKey}:${++this.interactionSequence}`;
+    }
+    target.set?.({
+      data: {
+        ...(target.data || {}),
+        renderOwnership: {
+          type: "interaction",
+          interactionId,
+          phase,
+        },
+      },
+    });
   }
 
   private handleRenderGraphObjectManipulating(
