@@ -12,7 +12,10 @@ import {
   SCENE_LAYOUT_SERVICE,
   SURFACE_FRAME_SERVICE,
   SESSION_SERVICE,
+  IMAGE_GEOMETRY_DATA_KEY,
   computeDragInteraction,
+  resolveImageFitScale,
+  resolveImageGeometry,
   type CanvasService,
   type CanvasObjectLike,
   type CapabilityRegistryService,
@@ -36,6 +39,7 @@ import {
   type SessionService,
   type InteractionSpec,
   type InteractionActivationCommandInput,
+  type ImageGeometryDescriptor,
   type RuntimeConditionExpr,
   SessionConflictError,
   TypedEventEmitter,
@@ -52,7 +56,6 @@ import { isGenericEditorEffect } from "@pooder/document";
 import { IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID } from "../../document/imagePlacementInteraction";
 import {
   createSourceSizeCache,
-  getCoverScale as getCoverScaleFromRect,
   type SourceSize,
 } from "../../shared/imaging/sourceSizeCache";
 import {
@@ -379,6 +382,63 @@ function createEditableWorkingImage(
     ),
     src: sourceSrc,
     metadata: metadata ?? {},
+  };
+}
+
+function readImageSourceSize(
+  metadata: Record<string, unknown> | undefined,
+): SourceSize | undefined {
+  const source = isRecord(metadata?.source) ? metadata.source : undefined;
+  const sourceMetadata = isRecord(source?.metadata)
+    ? source.metadata
+    : undefined;
+  const width = finitePositiveNumber(
+    source?.width ??
+      source?.naturalWidth ??
+      sourceMetadata?.width ??
+      sourceMetadata?.naturalWidth ??
+      metadata?.originalWidth ??
+      metadata?.naturalWidth ??
+      metadata?.width,
+  );
+  const height = finitePositiveNumber(
+    source?.height ??
+      source?.naturalHeight ??
+      sourceMetadata?.height ??
+      sourceMetadata?.naturalHeight ??
+      metadata?.originalHeight ??
+      metadata?.naturalHeight ??
+      metadata?.height,
+  );
+  return width && height ? { width, height } : undefined;
+}
+
+function createImageGeometryDescriptor(
+  frame: FrameRect | null | undefined,
+  fit: ImageGeometryDescriptor["fit"],
+  image: ImagePlacementImageState | null | undefined,
+): ImageGeometryDescriptor | undefined {
+  if (!frame || !image) return undefined;
+  const editable = createEditableWorkingImage(image);
+  if (!editable) return undefined;
+  const src = editable.src?.trim() || "";
+  if (!src) return undefined;
+  const sourceSize = readImageSourceSize(editable.metadata);
+  return {
+    source: {
+      src,
+      ...(sourceSize ? { size: sourceSize } : {}),
+    },
+    frame: { ...frame },
+    fit,
+    transform: {
+      anchorX: editable.left ?? 0.5,
+      anchorY: editable.top ?? 0.5,
+      zoom: editable.scale ?? 1,
+      rotation: editable.angle ?? 0,
+      opacity: editable.opacity ?? 1,
+    },
+    clip: { ...frame },
   };
 }
 
@@ -722,7 +782,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
     this.sceneSubscription?.dispose();
     this.sceneSubscription = this.sceneService?.onDidChange((event) => {
-      if (this.isPublishingImageSessionScenes || this.isSessionSceneChange(event)) {
+      if (
+        this.isPublishingImageSessionScenes ||
+        this.isSessionSceneChange(event)
+      ) {
         return;
       }
       this.updateImages();
@@ -869,6 +932,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const committedTransform = committed
       ? createCommittedImagePlacementTransform(frame, committed.metadata)
       : undefined;
+    const imageGeometry = createImageGeometryDescriptor(frame, fit, committed);
     const imagePlacementData = {
       enabled: true,
       placementId: object.id,
@@ -905,6 +969,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         commitTarget,
         source: committed ? "committed" : "target",
         type: committed ? "image-placement-image" : "image-placement-target",
+        ...(imageGeometry ? { [IMAGE_GEOMETRY_DATA_KEY]: imageGeometry } : {}),
       },
     };
   }
@@ -1366,6 +1431,13 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       placementId,
       cloneImageState(handle.getDraft().image),
     );
+    const workingImage = this.workingImages.get(placementId);
+    if (workingImage?.src) {
+      this.rememberSourceSizeFromMetadata(
+        workingImage.src,
+        workingImage.metadata,
+      );
+    }
     this.syncWorkingPlacementConditionContext();
     this.setSessionNotice(null);
     this.publishImageSessionScenes();
@@ -1540,6 +1612,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const updates = computeImageOperationUpdates({
       frame: placement.frame,
       source,
+      fit: placement.fit,
       operation,
       area,
     });
@@ -1630,6 +1703,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       const result = validateImagePlacement({
         frame: placement.frame,
         source,
+        fit: placement.fit,
         placement: {
           left: image.left ?? 0.5,
           top: image.top ?? 0.5,
@@ -1832,6 +1906,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       }
       const sourceSrc = readMetadataSourceSrc(image.metadata) || image.src;
       const sourceTransform = resolveImageTransformSnapshot(image);
+      const sourceSize = this.sourceSizeCache.getSourceSize(sourceSrc);
       const rawSourceMetadata = isRecord(image.metadata?.source)
         ? image.metadata.source
         : {};
@@ -1853,6 +1928,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           source: {
             ...sourceMetadata,
             ...(sourceSrc ? { src: sourceSrc } : {}),
+            ...(sourceSize ? { ...sourceSize } : {}),
           },
           transform: sourceTransform,
           derived: {
@@ -1926,6 +2002,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       const committedTransform = image
         ? createCommittedImagePlacementTransform(frame, image.metadata)
         : undefined;
+      const imageGeometry = createImageGeometryDescriptor(
+        frame,
+        placementState?.fit ?? "cover",
+        image,
+      );
       this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
         id:
           commitTarget.type === "document-object"
@@ -1979,6 +2060,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
                 placementId,
                 source: "committed",
                 type: "image-placement-image",
+                ...(imageGeometry
+                  ? { [IMAGE_GEOMETRY_DATA_KEY]: imageGeometry }
+                  : {}),
               }
             : {}),
         },
@@ -2143,10 +2227,16 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ? data.imagePlacement
       : {};
     const image = this.getCommittedImage(placement);
+    const placementState = this.getPlacementState(placement);
     const frame = getPlacementFrame(placement);
     const committedTransform = image
       ? createCommittedImagePlacementTransform(frame, image.metadata)
       : undefined;
+    const imageGeometry = createImageGeometryDescriptor(
+      frame,
+      placementState?.fit ?? "cover",
+      image,
+    );
     this.renderIntentService.patchIntent(IMAGE_RENDER_SCOPE, {
       id: placementId,
       subject: {
@@ -2194,6 +2284,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
               placementId,
               source: "committed",
               type: "image-placement-image",
+              ...(imageGeometry
+                ? { [IMAGE_GEOMETRY_DATA_KEY]: imageGeometry }
+                : {}),
             }
           : {}),
       },
@@ -2600,19 +2693,22 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       x: finiteNumber(rawCenter?.x, finiteNumber(target.left, 0)),
       y: finiteNumber(rawCenter?.y, finiteNumber(target.top, 0)),
     });
-    const source: SourceSize = {
+    const image = this.workingImages.get(placementId) || placement.image;
+    const source = (image?.src
+      ? this.sourceSizeCache.getSourceSize(image.src)
+      : null) ?? {
       width: finiteNumber(target.width, 1),
       height: finiteNumber(target.height, 1),
     };
-    const image = this.workingImages.get(placementId) || placement.image;
-    if (image?.src) {
-      this.sourceSizeCache.rememberSourceSize(image.src, source);
-    }
     const objectScaling =
       typeof target.getObjectScaling === "function"
         ? target.getObjectScaling()
         : null;
-    const coverScale = getCoverScaleFromRect(placement.frame, source);
+    const fitScale = resolveImageFitScale(
+      placement.frame,
+      source,
+      placement.fit,
+    ).x;
     const sceneScale = this.canvasService.getSceneScale();
     const objectScale =
       finiteNumber(objectScaling?.x, finiteNumber(target.scaleX, 1)) /
@@ -2629,7 +2725,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         top:
           (center.y - placement.frame.top) /
           Math.max(1, placement.frame.height),
-        scale: objectScale / Math.max(0.0001, coverScale),
+        scale: objectScale / Math.max(0.0001, fitScale),
         angle: finiteNumber(target.angle, 0),
       },
       { skipRender: true },
@@ -2649,24 +2745,21 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       width: placement.frame.width,
       height: placement.frame.height,
     };
-    const scale =
-      getCoverScaleFromRect(placement.frame, source) *
-      Math.max(0.05, image.scale ?? 1);
-    const stretchScale = Math.max(0.05, image.scale ?? 1);
+    const geometry = resolveImageGeometry({
+      source: { src: image.src, size: source },
+      frame: placement.frame,
+      fit: placement.fit,
+      transform: {
+        anchorX: image.left,
+        anchorY: image.top,
+        zoom: image.scale,
+        rotation: image.angle,
+        opacity: image.opacity,
+      },
+      clip: placement.frame,
+    });
     const id = this.getWorkingImageNodeId(placement.id);
     const clipEffect = this.buildPlacementClipEffect(placement, id);
-    const stretchProps =
-      placement.fit === "stretch"
-        ? {
-            width: placement.frame.width,
-            height: placement.frame.height,
-            scaleX: stretchScale,
-            scaleY: stretchScale,
-          }
-        : {
-            scaleX: scale,
-            scaleY: scale,
-          };
     return {
       id,
       subjectId: placement.id,
@@ -2685,14 +2778,16 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         }),
       },
       props: {
-        left:
-          placement.frame.left + (image.left ?? 0.5) * placement.frame.width,
-        top: placement.frame.top + (image.top ?? 0.5) * placement.frame.height,
-        originX: "center",
-        originY: "center",
-        ...stretchProps,
-        angle: image.angle ?? 0,
-        opacity: image.opacity ?? 1,
+        left: geometry.left,
+        top: geometry.top,
+        width: geometry.width,
+        height: geometry.height,
+        originX: geometry.originX,
+        originY: geometry.originY,
+        scaleX: geometry.scaleX,
+        scaleY: geometry.scaleY,
+        angle: geometry.angle,
+        opacity: geometry.opacity,
       },
       ...(clipEffect ? { effects: [clipEffect] } : {}),
     };
@@ -3385,16 +3480,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     src: string,
     metadata: Record<string, unknown> | undefined,
   ) {
-    if (!metadata) return;
-    const width =
-      finiteNumber(metadata.originalWidth, 0) ||
-      finiteNumber(metadata.naturalWidth, 0) ||
-      finiteNumber(metadata.width, 0);
-    const height =
-      finiteNumber(metadata.originalHeight, 0) ||
-      finiteNumber(metadata.naturalHeight, 0) ||
-      finiteNumber(metadata.height, 0);
-    this.sourceSizeCache.rememberSourceSize(src, { width, height });
+    const size = readImageSourceSize(metadata);
+    if (size) this.sourceSizeCache.rememberSourceSize(src, size);
   }
 
   private onSceneFrameChanged = () => {

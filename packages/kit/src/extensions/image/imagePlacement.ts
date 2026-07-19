@@ -1,8 +1,6 @@
+import { resolveImageGeometry, type ImageFitMode } from "@pooder/core";
 import type { FrameRect } from "../../shared/scene/frame";
-import {
-  getCoverScale as getCoverScaleFromRect,
-  type SourceSize,
-} from "../../shared/imaging/sourceSizeCache";
+import type { SourceSize } from "../../shared/imaging/sourceSizeCache";
 
 export interface ImagePlacementState {
   left: number;
@@ -14,6 +12,7 @@ export interface ImagePlacementState {
 export interface ImagePlacementValidationArgs {
   frame: FrameRect;
   source: SourceSize;
+  fit: ImageFitMode;
   placement: ImagePlacementState;
 }
 
@@ -28,7 +27,7 @@ function toRadians(angle: number): number {
 export function validateImagePlacement(
   args: ImagePlacementValidationArgs,
 ): ImagePlacementValidationResult {
-  const { frame, source, placement } = args;
+  const { frame, source, fit, placement } = args;
   if (
     frame.width <= 0 ||
     frame.height <= 0 ||
@@ -38,21 +37,29 @@ export function validateImagePlacement(
     return { ok: true };
   }
 
-  const coverScale = getCoverScaleFromRect(frame, source);
-  const imageWidth =
-    source.width * coverScale * Math.max(0.05, Number(placement.scale || 1));
-  const imageHeight =
-    source.height * coverScale * Math.max(0.05, Number(placement.scale || 1));
+  const geometry = resolveImageGeometry({
+    source: { src: "", size: source },
+    frame,
+    fit,
+    transform: {
+      anchorX: placement.left,
+      anchorY: placement.top,
+      zoom: placement.scale,
+      rotation: placement.angle,
+    },
+  });
+  const imageWidth = source.width * Math.abs(geometry.scaleX);
+  const imageHeight = source.height * Math.abs(geometry.scaleY);
 
   if (imageWidth <= 0 || imageHeight <= 0) {
     return { ok: true };
   }
 
-  const centerX = frame.left + placement.left * frame.width;
-  const centerY = frame.top + placement.top * frame.height;
+  const centerX = geometry.left;
+  const centerY = geometry.top;
   const halfWidth = imageWidth / 2;
   const halfHeight = imageHeight / 2;
-  const radians = toRadians(placement.angle || 0);
+  const radians = toRadians(geometry.angle);
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
 

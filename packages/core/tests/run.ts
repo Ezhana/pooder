@@ -25,6 +25,8 @@ import {
   normalizeRect,
   projectRectIntoRect,
   readSizeState,
+  resolveImageGeometry,
+  resolveImageFitScale,
   resolveViewPaddingPx,
   createServiceToken,
   type CanvasService,
@@ -2781,6 +2783,51 @@ async function testSceneLayoutModelUsesExplicitExportFrame() {
   assertClose(layout.cutRect.width, 80 * layout.scale);
 }
 
+async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
+  const frame = { left: 10, top: 20, width: 200, height: 100 };
+  const source = { width: 400, height: 400 };
+
+  assertDeepEqual(resolveImageFitScale(frame, source, "cover"), {
+    x: 0.5,
+    y: 0.5,
+  });
+  assertDeepEqual(resolveImageFitScale(frame, source, "contain"), {
+    x: 0.25,
+    y: 0.25,
+  });
+  assertDeepEqual(resolveImageFitScale(frame, source, "stretch"), {
+    x: 0.5,
+    y: 0.25,
+  });
+
+  const resolved = resolveImageGeometry({
+    source: { src: "/image.png", size: source },
+    frame,
+    fit: "cover",
+    transform: {
+      anchorX: 0.25,
+      anchorY: 0.75,
+      zoom: 1.2,
+      rotation: 15,
+      opacity: 0.8,
+    },
+    clip: frame,
+  });
+  assertDeepEqual(resolved, {
+    width: 400,
+    height: 400,
+    left: 60,
+    top: 95,
+    scaleX: 0.6,
+    scaleY: 0.6,
+    angle: 15,
+    opacity: 0.8,
+    originX: "center",
+    originY: "center",
+    clip: frame,
+  });
+}
+
 async function main() {
   const tests: Array<[string, () => Promise<void>]> = [
     ["activates extensions in derived order", testOutOfOrderActivation],
@@ -2852,6 +2899,10 @@ async function main() {
       testSessionSceneV2TracksFocusedRootAndOwnership,
     ],
     ["computes geometry primitives", testGeometryPrimitives],
+    [
+      "keeps intrinsic image size while resolving fit geometry",
+      testImageGeometryKeepsIntrinsicSizeAndResolvesFit,
+    ],
     [
       "computes drag interaction snaps and constraints",
       testDragInteractionSnapsAndConstrains,

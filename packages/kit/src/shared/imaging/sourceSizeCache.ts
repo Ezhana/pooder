@@ -3,11 +3,6 @@ export interface SourceSize {
   height: number;
 }
 
-export interface RectLike {
-  width: number;
-  height: number;
-}
-
 export interface SourceSizeCache {
   ensureImageSize: (src: string) => Promise<SourceSize | null>;
   rememberSourceSize: (src: string, size: Partial<SourceSize>) => SourceSize | null;
@@ -22,14 +17,6 @@ export function normalizeSourceSize(size: Partial<SourceSize>): SourceSize | nul
   if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
   if (width <= 0 || height <= 0) return null;
   return { width, height };
-}
-
-export function getCoverScale(frame: RectLike, source: RectLike): number {
-  const frameWidth = Math.max(1, Number(frame.width || 0));
-  const frameHeight = Math.max(1, Number(frame.height || 0));
-  const sourceWidth = Math.max(1, Number(source.width || 0));
-  const sourceHeight = Math.max(1, Number(source.height || 0));
-  return Math.max(frameWidth / sourceWidth, frameHeight / sourceHeight);
 }
 
 export function createSourceSizeCache(

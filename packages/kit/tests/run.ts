@@ -100,6 +100,7 @@ import { createKitCapabilitiesForDocument } from "../src/document/capabilities";
 import {
   SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
+  IMAGE_GEOMETRY_DATA_KEY,
   INTERACTION_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
@@ -3332,6 +3333,26 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   assert(sessionImage, "image session should render a separate working object");
   const sessionImageNode = sessionImage!;
   assertEqual(
+    (sessionImageNode as any).width,
+    100,
+    "image sessions should preserve the source image intrinsic width",
+  );
+  assertEqual(
+    (sessionImageNode as any).height,
+    80,
+    "image sessions should preserve the source image intrinsic height",
+  );
+  assertEqual(
+    sessionImageNode.transform?.scaleX,
+    2,
+    "cover fit should resolve through scale without replacing intrinsic width",
+  );
+  assertEqual(
+    sessionImageNode.transform?.scaleY,
+    2,
+    "cover fit should resolve through scale without replacing intrinsic height",
+  );
+  assertEqual(
     sessionImageNode.interaction?.selection?.enabled,
     true,
     "session image should expose typed selection interaction",
@@ -3596,6 +3617,26 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     },
     "completed placement should expose generic committed image interaction data",
   );
+  assertDeepEqual(
+    committedGraphNode?.data[IMAGE_GEOMETRY_DATA_KEY],
+    {
+      source: {
+        src: "/photo.png",
+        size: { width: 100, height: 80 },
+      },
+      frame: { left: 100, top: 120, width: 200, height: 160 },
+      fit: "cover",
+      transform: {
+        anchorX: 0.6,
+        anchorY: 0.4,
+        zoom: 1.3,
+        rotation: 22,
+        opacity: 1,
+      },
+      clip: { left: 100, top: 120, width: 200, height: 160 },
+    },
+    "completed placement should expose source-space geometry for dependent tools",
+  );
   assert(
     committedGraphNode?.exportKeys.includes("image:placement"),
     "completed placement should expose the committed image id as an export key",
@@ -3766,23 +3807,23 @@ async function testImagePlacementStretchSessionUsesFrameSize() {
 
   assertEqual(
     sessionImage?.type === "image" ? sessionImage.width : undefined,
-    200,
-    "stretch image session should use the placement frame width",
+    100,
+    "stretch image session should preserve the source intrinsic width",
   );
   assertEqual(
     sessionImage?.type === "image" ? sessionImage.height : undefined,
-    160,
-    "stretch image session should use the placement frame height",
+    50,
+    "stretch image session should preserve the source intrinsic height",
   );
   assertEqual(
     sessionImage?.transform?.scaleX,
-    1,
-    "stretch image session should not derive x scale from source dimensions",
+    2,
+    "stretch image session should resolve the frame width through x scale",
   );
   assertEqual(
     sessionImage?.transform?.scaleY,
-    1,
-    "stretch image session should not derive y scale from source dimensions",
+    3.2,
+    "stretch image session should resolve the frame height through y scale",
   );
 
   await runtime.dispose();
