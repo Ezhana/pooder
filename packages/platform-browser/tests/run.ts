@@ -186,7 +186,10 @@ class FakeCanvasService {
               : event === "mouse:down"
                 ? { event: "pointer", payload: { kind: "down", target } }
                 : event === "mouse:dblclick"
-                  ? { event: "pointer", payload: { kind: "double-click", target } }
+                  ? {
+                      event: "pointer",
+                      payload: { kind: "double-click", target },
+                    }
                   : null;
     if (typed) {
       (this.handlers.get(`typed:${typed.event}`) ?? []).forEach((handler) =>
@@ -196,8 +199,12 @@ class FakeCanvasService {
   }
 }
 
-function createLayoutCanvas(getViewportSize: () => { width: number; height: number }) {
-  const resizeListeners = new Set<(event: { width: number; height: number }) => void>();
+function createLayoutCanvas(
+  getViewportSize: () => { width: number; height: number },
+) {
+  const resizeListeners = new Set<
+    (event: { width: number; height: number }) => void
+  >();
   return {
     getViewportSize,
     on: (event: string, listener: (payload: any) => void) => {
@@ -738,31 +745,104 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     height: 10,
   });
   scene.addElement({
+    id: "session-image",
+    layerId: "underlay",
+    type: "image",
+    src: "/working-image.png",
+    transform: {
+      left: 10,
+      top: 10,
+      scaleX: 0.5,
+      scaleY: 0.5,
+    },
+    interaction: {
+      selection: { enabled: true },
+      manipulation: {
+        move: { enabled: true },
+        resize: { enabled: true },
+        rotate: { enabled: true },
+      },
+    },
+  });
+  scene.addElement({
     id: "control-node",
     layerId: "controls",
     type: "rect",
     width: 10,
     height: 10,
+    style: { selectable: false, lockScalingFlip: true },
+    data: { renderProps: { evented: false, lockUniScaling: true } },
     interaction: { selection: { enabled: true } },
   });
   await adapter.flush();
   const items = canvas.reconcileCalls.at(-1)?.items ?? [];
   assertDeepEqual(
     items.map((item) => item.spec.id),
-    ["underlay-node", "document-node", "control-node"],
+    ["underlay-node", "session-image", "document-node", "control-node"],
     "composition entry order should be the render order",
   );
-  const projection = items.find((item) => item.spec.id === "document-node")?.spec;
-  assertEqual(projection?.props.selectable, false, "document projections are read-only");
-  assertEqual(projection?.props.evented, false, "document projections do not hit test");
+  const sessionImage = items.find(
+    (item) => item.spec.id === "session-image",
+  )?.spec;
+  assertEqual(
+    Object.hasOwn(sessionImage?.props ?? {}, "width"),
+    false,
+    "scene images without an explicit width should preserve their source width",
+  );
+  assertEqual(
+    Object.hasOwn(sessionImage?.props ?? {}, "height"),
+    false,
+    "scene images without an explicit height should preserve their source height",
+  );
+  assertEqual(
+    sessionImage?.props.selectable,
+    true,
+    "dimensionless scene images should remain selectable",
+  );
+  assertEqual(
+    sessionImage?.props.evented,
+    true,
+    "dimensionless scene images should remain hit-testable",
+  );
+  const projection = items.find(
+    (item) => item.spec.id === "document-node",
+  )?.spec;
+  assertEqual(
+    projection?.props.selectable,
+    false,
+    "document projections are read-only",
+  );
+  assertEqual(
+    projection?.props.evented,
+    false,
+    "document projections do not hit test",
+  );
   assertEqual(
     projection?.data?.interactionSpec,
     undefined,
     "document projections do not activate document interaction",
   );
   const control = items.find((item) => item.spec.id === "control-node")?.spec;
-  assertEqual(control?.props.selectable, true, "scene elements use InteractionSpec");
-  assertEqual(control?.props.evented, true, "scene elements use the shared resolver");
+  assertEqual(
+    control?.props.selectable,
+    true,
+    "scene elements use InteractionSpec",
+  );
+  assertEqual(
+    control?.props.evented,
+    true,
+    "scene elements use the shared resolver",
+  );
+  assertEqual(
+    control?.props.lockScalingFlip,
+    undefined,
+    "scene style cannot inject Fabric interaction flags",
+  );
+  assertEqual(
+    control?.props.lockUniScaling,
+    undefined,
+    "scene renderProps cannot inject Fabric interaction flags",
+  );
 
   scene.dispose();
   const localOnly = scenes.createScene({
@@ -2072,6 +2152,40 @@ function testCanvasServiceScalesImagesToTargetFrame() {
   );
 }
 
+function testCanvasServicePreservesIntrinsicImageSize() {
+  const { service } = createCanvasServiceForReconcileTests();
+  const image: any = new FakeFabricObject("image", {
+    height: 480,
+    width: 640,
+  });
+
+  (service as any).patchFabricObject(image, {
+    id: "working-image",
+    type: "image",
+    src: "/working-image.png",
+    space: "scene",
+    props: {
+      height: undefined,
+      left: 10,
+      scaleX: 0.5,
+      scaleY: 0.5,
+      top: 10,
+      width: undefined,
+    },
+  });
+
+  assertEqual(
+    image.width,
+    640,
+    "undefined target width should not overwrite the intrinsic image width",
+  );
+  assertEqual(
+    image.height,
+    480,
+    "undefined target height should not overwrite the intrinsic image height",
+  );
+}
+
 async function testCanvasReconcileAppliesInteractiveControlDefaults() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
 
@@ -3154,6 +3268,10 @@ async function main() {
     [
       "scales image target frames from source dimensions",
       testCanvasServiceScalesImagesToTargetFrame,
+    ],
+    [
+      "preserves intrinsic image dimensions when target size is omitted",
+      testCanvasServicePreservesIntrinsicImageSize,
     ],
     [
       "applies interactive control defaults",

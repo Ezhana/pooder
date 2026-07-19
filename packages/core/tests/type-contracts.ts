@@ -1,5 +1,6 @@
 import {
   SceneService,
+  type SessionCommitResult,
   SessionService,
   TypedEventEmitter,
 } from "../src";
@@ -22,6 +23,17 @@ function compileTypedEventContracts(
   events.emit("changed:raw", { value: 1 });
   // @ts-expect-error Event payloads are checked at compile time.
   events.emit("changed", { value: "1" });
+
+  const commitResult = undefined as unknown as SessionCommitResult<string>;
+  if (commitResult.ok) {
+    commitResult.result.toUpperCase();
+    // @ts-expect-error Successful commits do not expose validation failures.
+    commitResult.validation;
+  } else {
+    commitResult.validation.detail;
+    // @ts-expect-error Validation failures never masquerade as TResult.
+    commitResult.result;
+  }
 }
 
 void compileTypedEventContracts;

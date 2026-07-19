@@ -13,8 +13,8 @@ import {
   SURFACE_FRAME_SERVICE,
   SESSION_SERVICE,
   computeDragInteraction,
-  evaluateRuntimeCondition,
   type CanvasService,
+  type CanvasObjectLike,
   type CapabilityRegistryService,
   type ConfigurationService,
   type RenderEffectSpec,
@@ -27,13 +27,18 @@ import {
   type RenderIntentService,
   type SceneElement,
   type SceneElementInput,
+  type SceneHandle,
   type SceneExportService,
   type SceneLayoutService,
   type SurfaceFrameService,
   type SceneService,
-  type SessionArtifact,
+  type SessionHandle,
   type SessionService,
+  type InteractionSpec,
+  type InteractionActivationCommandInput,
   type RuntimeConditionExpr,
+  SessionConflictError,
+  TypedEventEmitter,
 } from "@pooder/core";
 import type {
   EditorDocument,
@@ -61,6 +66,7 @@ import {
   createImagePlacementCapabilityDefinition,
   normalizeImagePlacementLayerId,
   type ImagePlacementCapabilityApi,
+  type ImagePlacementCapabilityChangeEvent,
   type ImagePlacementCapabilityOptions,
   type ImagePlacementCommitTarget,
   type ImagePlacementSessionInput,
@@ -211,6 +217,15 @@ interface ImagePlacementSessionDraft {
   image: ImagePlacementImageState | null;
 }
 
+interface ImagePlacementSessionResult extends ImagePlacementSessionDraft {}
+
+class ImagePlacementCommitError extends Error {
+  constructor(readonly outcome: { ok: false; reason: string }) {
+    super(outcome.reason);
+    this.name = "ImagePlacementCommitError";
+  }
+}
+
 const DEFAULT_IMAGE_LAYER_ID = KIT_LEGACY_LAYER_PRESET.imageObject;
 const DEFAULT_OVERLAY_LAYER_ID = KIT_LEGACY_LAYER_PRESET.imageOverlay;
 const IMAGE_OBJECT_STACK = 660;
@@ -225,6 +240,7 @@ const IMAGE_SESSION_CONTROLS_LAYER_ID = "image.session.controls";
 const IMAGE_ACTIVE_PLACEMENT_CONTEXT_PREFIX =
   "image-placement.active-placement";
 const IMAGE_SESSION_CHANNEL = "image-placement";
+const IMAGE_UNSCOPED_SURFACE_ID = "image-placement.unscoped";
 const IMAGE_MOVE_SNAP_THRESHOLD_PX = 6;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -259,11 +275,6 @@ function finiteNumber(value: unknown, fallback: number): number {
 function finitePositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function normalizeFrameImageScale(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed < 0 ? -1 : 1;
 }
 
 function clampNormalized(value: number): number {
@@ -517,21 +528,11 @@ function normalizeSessionProjections(value: unknown): ImageSessionProjection[] {
       const sourceTags = normalizeStringList(item.sourceTags);
       if (!sourceTags.length) return null;
       const id = String(item.id || `projection-${index + 1}`).trim();
-      const opacity = finiteNumber(item.opacity, Number.NaN);
       return {
         id: id || `projection-${index + 1}`,
         placement: normalizeSessionProjectionPlacement(item.placement),
         sourceTags,
         surfaceScope: normalizeSessionProjectionSurfaceScope(item.surfaceScope),
-        ...(Number.isFinite(opacity)
-          ? { opacity: Math.max(0, Math.min(1, opacity)) }
-          : {}),
-        ...(typeof item.interactive === "boolean"
-          ? { interactive: item.interactive }
-          : {}),
-        ...(typeof item.hideSource === "boolean"
-          ? { hideSource: item.hideSource }
-          : {}),
       };
     })
     .filter((item): item is ImageSessionProjection => Boolean(item));
@@ -626,7 +627,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     name: "ImagePlacementCapability",
   };
   activation = {
-    requiresServices: [CANVAS_SERVICE, RENDER_INTENT_SERVICE, SESSION_SERVICE],
+    requiresServices: [
+      CANVAS_SERVICE,
+      RENDER_INTENT_SERVICE,
+      SCENE_SERVICE,
+      SESSION_SERVICE,
+    ],
   };
 
   private canvasService?: CanvasService;
@@ -646,10 +652,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.loadImageSize(src),
   );
   private workingImages = new Map<string, ImagePlacementImageState | null>();
-  private workingImageDraftsBySessionId = new Map<
-    string,
-    ImagePlacementImageState | null
-  >();
   private retainedWorkingImageBaselines = new Map<
     string,
     ImagePlacementImageState | null
@@ -657,7 +659,15 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private activeWorkingPlacementConditionKeys = new Set<string>();
   private pendingUploadPlacementIds = new Set<string>();
   private sessionIdsByPlacementId = new Map<string, string>();
-  private sessionSceneIdsBySessionId = new Map<string, string>();
+  private suspendedDraftsBySessionId = new Map<
+    string,
+    ImagePlacementSessionDraft
+  >();
+  private sessionHandlesBySessionId = new Map<
+    string,
+    SessionHandle<ImagePlacementSessionDraft, ImagePlacementSessionResult>
+  >();
+  private sessionScenesBySessionId = new Map<string, SceneHandle>();
   private generatedCommittedExportObjectUrls = new Set<string>();
   private activePlacementId: string | null = null;
   private activeImageSessionId: string | null = null;
@@ -667,11 +677,10 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private activeSnapX: SnapMatch | null = null;
   private activeSnapY: SnapMatch | null = null;
   private movingPlacementId: string | null = null;
-  private hasRenderedSnapGuides = false;
-  private canvasMouseUpHandler?: (event?: any) => void;
-  private canvasObjectMovingHandler?: (event?: any) => void;
-  private canvasBeforeRenderHandler?: (event?: any) => void;
-  private canvasAfterRenderHandler?: (event?: any) => void;
+  private pendingCanvasTransformSync: Promise<void> = Promise.resolve();
+  private readonly events = new TypedEventEmitter<{
+    change: ImagePlacementCapabilityChangeEvent;
+  }>();
   private readonly sessionOverlayProviders = new Map<
     string,
     ImageSessionOverlayProvider
@@ -699,7 +708,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
-    this.sceneService = context.services.get<SceneService>(SCENE_SERVICE);
+    this.sceneService =
+      context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.sceneLayoutService =
       context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.surfaceFrameService = context.services.get<SurfaceFrameService>(
@@ -712,30 +722,41 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
     this.sceneSubscription?.dispose();
     this.sceneSubscription = this.sceneService?.onDidChange((event) => {
-      if (
-        this.isPublishingImageSessionScenes ||
-        this.isImageSessionSceneChange(event)
-      ) {
+      if (this.isPublishingImageSessionScenes || this.isSessionSceneChange(event)) {
         return;
       }
       this.updateImages();
     });
-    this.subscriptions.on(
-      context.eventBus,
-      "selection:cleared",
-      this.onSelectionCleared,
+    this.subscriptions.add(
+      this.canvasService.on("selection", (event) => {
+        if (event.kind === "cleared") this.onSelectionCleared();
+      }),
     );
-    this.subscriptions.on(
-      context.eventBus,
-      "object:modified",
-      this.onObjectModified,
+    this.subscriptions.add(
+      this.canvasService.on("transform", (event) =>
+        this.onCanvasTransform(event.kind, event.target),
+      ),
+    );
+    this.subscriptions.add(
+      this.sessionService.onDidTerminate((event) => {
+        if (event.descriptor.ownerId !== this.id) return;
+        this.finalizeTerminatedSession(
+          event.descriptor.sessionId,
+          event.reason,
+        );
+      }),
     );
     this.attachLayoutSubscriptions();
-    this.bindCanvasInteractionHandlers();
     this.updateImages();
   }
 
-  deactivate() {
+  async deactivate() {
+    let sessionCleanupError: unknown;
+    try {
+      await this.cancelAllImageSessions();
+    } catch (error) {
+      sessionCleanupError = error;
+    }
     this.subscriptions.disposeAll();
     this.sceneSubscription?.dispose();
     this.sceneSubscription = undefined;
@@ -744,19 +765,19 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       IMAGE_RUNTIME_RENDER_SCOPE,
     );
     this.workingImages.clear();
-    this.workingImageDraftsBySessionId.clear();
     this.retainedWorkingImageBaselines.clear();
     this.sessionOverlayProviders.clear();
-    this.clearAllSessionScenes();
     this.sessionIdsByPlacementId.clear();
-    this.sessionSceneIdsBySessionId.clear();
+    this.suspendedDraftsBySessionId.clear();
+    this.sessionHandlesBySessionId.clear();
+    this.sessionScenesBySessionId.clear();
     this.activePlacementId = null;
     this.activeImageSessionId = null;
     this.clearWorkingPlacementConditionContext();
     this.sourceSizeCache.clear();
     this.revokeAllGeneratedCommittedExportObjectUrls();
     this.endMoveSnapInteraction();
-    this.unbindCanvasInteractionHandlers();
+    this.pendingCanvasTransformSync = Promise.resolve();
     this.canvasService?.requestRenderAll();
     this.canvasService = undefined;
     this.renderIntentService = undefined;
@@ -766,6 +787,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.exportService = undefined;
     this.sessionService = undefined;
     this.context = undefined;
+    this.events.clear();
+    if (sessionCleanupError) throw sessionCleanupError;
   }
 
   contribute(): ExtensionContributions {
@@ -787,7 +810,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           id: IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
           command: IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
           title: "Open Image Placement Session",
-          handler: (input: unknown) => this.openSessionFromInteraction(input),
+          handler: (input: InteractionActivationCommandInput) =>
+            this.openSessionFromInteraction(input),
         },
       ],
       renderIntentCompilers: [this.createRenderIntentCompiler()],
@@ -971,6 +995,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getImagePlacementFacade(): ImagePlacementCapabilityApi {
     return {
+      onDidChange: (listener) => this.events.on("change", listener),
       applyOperation: (input, operation) =>
         this.applyImageOperation(input, operation),
       clearImage: (input) => this.clearImage(input),
@@ -979,9 +1004,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       focusPlacement: (placementId, options) =>
         this.focusPlacement(placementId, options),
       getViewState: () => this.getViewState(),
-      openSession: (input) => this.beginSession(input),
+      openSession: (input) => this.beginSession(input, "api"),
       rollbackSession: async (input) => {
-        this.resetSession(input);
+        await this.resetSession(input);
         return { ok: true };
       },
       setSource: (input, source) =>
@@ -992,7 +1017,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       setTransform: (input, transform) =>
         this.setImageTransform(input, transform),
       validateSession: (input) => this.validateSession(input),
-      validatePlacement: (placementId) => this.validateSession(placementId),
       registerSessionOverlayProvider: (provider) =>
         this.registerSessionOverlayProvider(provider),
       refresh: () => this.updateImagesAsync(),
@@ -1199,13 +1223,13 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   }
 
   private emitStateChange() {
-    this.context?.eventBus.emit("image:state:change", this.getViewState());
+    this.events.emit("change", { type: "state", state: this.getViewState() });
   }
 
   private setSessionNotice(notice: ImagePlacementSessionNotice | null) {
     if (this.sessionNotice === notice) return;
     this.sessionNotice = notice;
-    this.context?.eventBus.emit("image:session:notice", notice);
+    this.events.emit("change", { type: "session-notice", notice });
     this.emitStateChange();
   }
 
@@ -1249,111 +1273,134 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     image: ImagePlacementImageState | null,
   ) {
     this.workingImages.set(placementId, image);
-    this.workingImageDraftsBySessionId.set(sessionId, cloneImageState(image));
+    void sessionId;
   }
 
-  private async beginSession(input: ImagePlacementSessionInput | string) {
+  private async beginSession(
+    input: ImagePlacementSessionInput | string,
+    source: "api" | "document-interaction" = "api",
+  ) {
     const { placementId, sessionId } = this.normalizeSessionInput(input);
     const placement = this.getPlacementElement(placementId);
     if (!placement) return { ok: false, reason: "placement-not-found" };
     const placementState = this.getPlacementState(placement);
     if (!placementState) return { ok: false, reason: "placement-not-found" };
-    const currentSession = this.sessionService?.getSession(sessionId);
-    if (this.sessionService && currentSession?.status !== "active") {
-      const previousActiveSessionId = this.activeImageSessionId;
-      if (
-        previousActiveSessionId &&
-        previousActiveSessionId !== sessionId &&
-        this.sessionService.isSessionActive(previousActiveSessionId)
-      ) {
-        await this.sessionService.cancelSession(previousActiveSessionId, {
-          nextSessionId: sessionId,
-          reason: "image-placement-session-switch",
-        });
-      }
-      const request = await this.sessionService.requestSession({
-        sessionId,
-        scope: {
-          surfaceId: this.resolvePlacementSurfaceId(placementState),
-          subjectId: placementId,
-          channel: IMAGE_SESSION_CHANNEL,
-          groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
-        },
-        interactionMode: "exclusive",
-        leavePolicy: "block",
-      });
-      if (!request.ok) {
-        return { ok: false, reason: request.reason };
-      }
+    if (!this.sessionService || !this.sceneService) {
+      return { ok: false, reason: "session-services-unavailable" };
     }
+
+    const isNewSession = !this.sessionHandlesBySessionId.has(sessionId);
+    const previousActiveSessionId = this.activeImageSessionId;
+    if (previousActiveSessionId && previousActiveSessionId !== sessionId) {
+      await this.sessionHandlesBySessionId
+        .get(previousActiveSessionId)
+        ?.cancel();
+    }
+
     const previousSessionId = this.sessionIdsByPlacementId.get(placementId);
-    if (
-      this.activePlacementId === placementId &&
-      previousSessionId === sessionId &&
-      this.workingImages.has(placementId)
-    ) {
-      this.sessionIdsByPlacementId.set(placementId, sessionId);
-      this.activeImageSessionId = sessionId;
-      this.ensureImageSessionScene(placementId, sessionId);
-      this.emitStateChange();
-      return { ok: true };
+    const suspendedDraft = this.suspendedDraftsBySessionId.get(sessionId);
+    const initialImage = suspendedDraft
+      ? cloneImageState(suspendedDraft.image)
+      : previousSessionId === sessionId && this.workingImages.has(placementId)
+        ? cloneImageState(this.workingImages.get(placementId))
+        : createEditableWorkingImage(this.getCommittedImage(placement));
+    const initialDraft: ImagePlacementSessionDraft = {
+      placementId,
+      image: initialImage,
+    };
+    let handle: SessionHandle<
+      ImagePlacementSessionDraft,
+      ImagePlacementSessionResult
+    >;
+    try {
+      handle = await this.sessionService.open({
+        descriptor: {
+          sessionId,
+          ownerId: this.id,
+          scope: {
+            surfaceId: this.resolvePlacementSurfaceId(placementState),
+            subjectId: placementId,
+            channel: IMAGE_SESSION_CHANNEL,
+            groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
+          },
+          interactionMode: "exclusive",
+          leavePolicy: "block",
+        },
+        initialDraft,
+        lifecycle: {
+          validate: async () => {
+            if (
+              this.workingImages.has(placementId) &&
+              !this.workingImages.get(placementId)?.src
+            ) {
+              return { ok: true };
+            }
+            const validation = await this.validateSession({
+              placementId,
+              sessionId,
+            });
+            return validation.ok
+              ? { ok: true }
+              : { ok: false, detail: validation };
+          },
+          commit: () => this.commitImageSession(placementId, sessionId),
+          rollback: () =>
+            this.rollbackImageSession(placementId, sessionId, false),
+          cancel: () => this.rollbackImageSession(placementId, sessionId, true),
+        },
+      });
+    } catch (error) {
+      if (error instanceof SessionConflictError) {
+        return { ok: false, reason: "session-conflict" };
+      }
+      throw error;
     }
+
+    this.sessionHandlesBySessionId.set(sessionId, handle);
     this.activePlacementId = placementId;
     this.activeImageSessionId = sessionId;
     this.sessionIdsByPlacementId.set(placementId, sessionId);
-    this.ensureImageSessionScene(placementId, sessionId);
+    this.ensureImageSessionScene(placementState, sessionId, handle);
     this.patchCommittedImageConditionsForPlacements();
-    if (this.workingImageDraftsBySessionId.has(sessionId)) {
-      this.workingImages.set(
-        placementId,
-        cloneImageState(this.workingImageDraftsBySessionId.get(sessionId)),
-      );
-    } else if (
-      !this.workingImages.has(placementId) ||
-      previousSessionId !== sessionId
-    ) {
-      this.setWorkingImageDraft(
-        placementId,
-        sessionId,
-        createEditableWorkingImage(this.getCommittedImage(placement)),
-      );
-    }
-    this.upsertImageSessionDraft(
+    this.workingImages.set(
       placementId,
-      this.workingImages.get(placementId) ?? null,
-      sessionId,
+      cloneImageState(handle.getDraft().image),
     );
-    this.sessionService?.focusSession(sessionId);
     this.syncWorkingPlacementConditionContext();
     this.setSessionNotice(null);
+    this.publishImageSessionScenes();
     await this.updateImagesAsync();
+    if (isNewSession) {
+      this.events.emit("change", {
+        type: "session-opened",
+        event: {
+          sessionId,
+          sessionKey: placementState.sessionKey,
+          placementId,
+          source,
+          scope: {
+            surfaceId: this.resolvePlacementSurfaceId(placementState),
+            subjectId: placementId,
+            channel: IMAGE_SESSION_CHANNEL,
+            groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
+          },
+        },
+      });
+    }
     return { ok: true };
   }
 
-  private async openSessionFromInteraction(input: unknown) {
-    const event = isRecord(input) ? input : {};
-    const placementId = String(event.subjectId || "").trim();
-    const sessionId = String(event.sessionId || "").trim();
-    const result = await this.beginSession({ placementId, sessionId });
-    if (!result.ok) return result;
-
-    const placement = this.getPlacementStates().find(
-      (item) => item.id === placementId,
+  private async openSessionFromInteraction(
+    input: InteractionActivationCommandInput | undefined,
+  ) {
+    const placementId = String(input?.subjectId || "").trim();
+    const sessionId = String(
+      input?.session?.sessionId || input?.sessionId || "",
+    ).trim();
+    return await this.beginSession(
+      { placementId, sessionId },
+      "document-interaction",
     );
-    if (!placement) return { ok: false, reason: "placement-not-found" };
-    this.context?.eventBus.emit("image:session:open", {
-      sessionId: sessionId || placement.sessionKey,
-      sessionKey: placement.sessionKey,
-      placementId,
-      source: "document-interaction",
-      scope: {
-        surfaceId: this.resolvePlacementSurfaceId(placement),
-        subjectId: placement.id,
-        channel: IMAGE_SESSION_CHANNEL,
-        groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
-      },
-    });
-    return result;
   }
 
   private async ensurePlacementSession(placementId: string, sessionId: string) {
@@ -1421,6 +1468,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     if (!this.retainedWorkingImageBaselines.has(placementId)) {
       this.retainWorkingImageBaseline(placementId);
     }
+    this.publishImageSessionScenes();
+    this.emitStateChange();
     await this.updateImagesAsync();
     return { ok: true };
   }
@@ -1511,23 +1560,22 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return { ok: true };
   }
 
-  private resetSession(input?: ImagePlacementSessionInput | string) {
+  private async resetSession(input?: ImagePlacementSessionInput | string) {
     const { placementId, sessionId } = this.getActiveSessionInput(input);
-    this.resolveSessionTargetIds(placementId).forEach((id) => {
+    for (const id of this.resolveSessionTargetIds(placementId)) {
       const targetSessionId =
         id === placementId
           ? sessionId
           : this.sessionIdsByPlacementId.get(id) ||
             this.getFallbackImageSessionId(id);
-      void this.sessionService?.cancelSession(targetSessionId, {
-        placementId: id,
-      });
-      this.removeImageSessionScene(targetSessionId);
-      this.sessionIdsByPlacementId.delete(id);
-      this.workingImageDraftsBySessionId.delete(targetSessionId);
-    });
+      const handle = this.sessionHandlesBySessionId.get(targetSessionId);
+      if (handle) {
+        await handle.rollback();
+      } else {
+        this.restoreOrDeleteWorkingImage(id);
+      }
+    }
     if (placementId) {
-      this.restoreOrDeleteWorkingImage(placementId);
       if (this.activePlacementId === placementId) {
         this.activePlacementId = null;
         this.activeImageSessionId = null;
@@ -1549,7 +1597,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     const { placementId } = this.getActiveSessionInput(input);
     const policy = this.getPlacementPolicy();
     const targetIds = this.resolveSessionTargetIds(placementId);
-    await this.syncWorkingImageTransformsFromCanvas(targetIds);
+    await this.pendingCanvasTransformSync;
     const targetIdSet = new Set(targetIds);
     const placements = this.getPlacementStates().filter((placement) =>
       targetIdSet.has(placement.id),
@@ -1609,55 +1657,129 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
   private async completeSession(input?: ImagePlacementSessionInput | string) {
     const { placementId, sessionId } = this.getActiveSessionInput(input);
     const targetIds = this.resolveSessionTargetIds(placementId);
-    if (
-      targetIds.length > 0 &&
-      targetIds.every(
-        (id) => this.workingImages.has(id) && !this.workingImages.get(id)?.src,
-      )
-    ) {
-      const commitResult = await this.commitWorkingImagesAsCropped(targetIds);
-      if (!commitResult.ok) return commitResult;
-      await this.finishCommittedSessions(placementId, sessionId, targetIds);
-      await this.updateImagesAsync();
-      this.emitStateChange();
-      return { ok: true };
+    for (const id of targetIds) {
+      const targetSessionId =
+        id === placementId
+          ? sessionId
+          : this.sessionIdsByPlacementId.get(id) ||
+            this.getFallbackImageSessionId(id);
+      const ensured = await this.ensurePlacementSession(id, targetSessionId);
+      if (!ensured.ok) return ensured;
+      const handle = this.sessionHandlesBySessionId.get(targetSessionId);
+      if (!handle) return { ok: false, reason: "session-not-found" };
+      try {
+        const outcome = await handle.commit();
+        if (!outcome.ok) {
+          const detail = outcome.validation.detail;
+          return isRecord(detail) && detail.ok === false
+            ? (detail as unknown as ImagePlacementSessionNotice)
+            : { ok: false, reason: "validation-failed" };
+        }
+      } catch (error) {
+        if (error instanceof ImagePlacementCommitError) return error.outcome;
+        throw error;
+      }
     }
-    const validation = await this.validateSession({ placementId, sessionId });
-    if ("ok" in validation && validation.ok === true) {
-      const commitResult = await this.commitWorkingImagesAsCropped(targetIds);
-      if (!commitResult.ok) return commitResult;
-      await this.finishCommittedSessions(placementId, sessionId, targetIds);
-      await this.updateImagesAsync();
-      this.emitStateChange();
-      return { ok: true };
-    }
-    return validation;
+    await this.updateImagesAsync();
+    this.emitStateChange();
+    return { ok: true };
   }
 
-  private async finishCommittedSessions(
+  private async commitImageSession(
+    placementId: string,
+    _sessionId: string,
+  ): Promise<ImagePlacementSessionResult> {
+    const image = cloneImageState(this.workingImages.get(placementId));
+    const outcome = await this.commitWorkingImagesAsCropped([placementId]);
+    if (!outcome.ok) {
+      throw new ImagePlacementCommitError({
+        ok: false,
+        reason: outcome.reason ?? "image-commit-failed",
+      });
+    }
+    return { placementId, image };
+  }
+
+  private rollbackImageSession(
     placementId: string,
     sessionId: string,
-    targetIds: readonly string[],
-  ): Promise<void> {
-    if (!placementId || this.activePlacementId === placementId) {
-      this.activePlacementId = null;
-      this.activeImageSessionId = null;
+    preserveDraft: boolean,
+  ): void {
+    if (preserveDraft) {
+      const draft = this.sessionHandlesBySessionId.get(sessionId)?.getDraft();
+      if (draft) {
+        this.suspendedDraftsBySessionId.set(sessionId, {
+          placementId: draft.placementId,
+          image: cloneImageState(draft.image),
+        });
+      }
+    } else {
+      this.suspendedDraftsBySessionId.delete(sessionId);
     }
-    await Promise.all(
-      targetIds.map(async (id) => {
-        const targetSessionId =
-          id === placementId
-            ? sessionId
-            : this.sessionIdsByPlacementId.get(id) ||
-              this.getFallbackImageSessionId(id);
-        await this.sessionService?.commitSession(targetSessionId);
-        this.removeImageSessionScene(targetSessionId);
-        this.sessionIdsByPlacementId.delete(id);
-        this.workingImageDraftsBySessionId.delete(targetSessionId);
-      }),
-    );
-    this.sessionService?.focusSession(null);
+    this.restoreOrDeleteWorkingImage(placementId);
+    this.retainedWorkingImageBaselines.delete(placementId);
+    if (this.sessionIdsByPlacementId.get(placementId) === sessionId) {
+      this.sessionIdsByPlacementId.delete(placementId);
+    }
+    if (this.activeImageSessionId === sessionId) {
+      this.activeImageSessionId = null;
+      this.activePlacementId = null;
+    }
     this.syncWorkingPlacementConditionContext();
+    this.setSessionNotice(null);
+    this.publishRuntimeRenderIntents();
+  }
+
+  private finalizeTerminatedSession(
+    sessionId: string,
+    reason: "committed" | "rolled-back" | "cancelled",
+  ): void {
+    const handle = this.sessionHandlesBySessionId.get(sessionId);
+    const placementId = handle?.getDraft().placementId;
+    this.sessionHandlesBySessionId.delete(sessionId);
+    this.sessionScenesBySessionId.delete(sessionId);
+    if (
+      placementId &&
+      this.sessionIdsByPlacementId.get(placementId) === sessionId
+    ) {
+      this.sessionIdsByPlacementId.delete(placementId);
+    }
+    if (this.activeImageSessionId === sessionId) {
+      this.activeImageSessionId = null;
+      this.activePlacementId = null;
+    }
+    if (reason !== "cancelled") {
+      this.suspendedDraftsBySessionId.delete(sessionId);
+    }
+    if (reason === "committed" && placementId) {
+      this.retainedWorkingImageBaselines.delete(placementId);
+    }
+    this.syncWorkingPlacementConditionContext();
+    this.publishRuntimeRenderIntents();
+    this.events.emit("change", {
+      type: "session-closed",
+      event: { sessionId, placementId: placementId ?? null, reason },
+    });
+    this.emitStateChange();
+  }
+
+  private async cancelAllImageSessions(): Promise<void> {
+    const errors: unknown[] = [];
+    for (const handle of [
+      ...this.sessionHandlesBySessionId.values(),
+    ].reverse()) {
+      try {
+        await handle.cancel();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length) {
+      throw new AggregateError(
+        errors,
+        "Image placement session cleanup failed.",
+      );
+    }
   }
 
   private resolveSessionTargetIds(placementId?: string): string[] {
@@ -1814,7 +1936,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           surfaceId:
             typeof placement.metadata?.documentSurfaceId === "string"
               ? placement.metadata.documentSurfaceId
-              : "legacy",
+              : IMAGE_UNSCOPED_SURFACE_ID,
           layerId: placement.layerId,
           objectId:
             commitTarget.type === "document-object"
@@ -1888,12 +2010,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     ) {
       this.revokeGeneratedCommittedExportObjectUrl(previousCommittedImage.src);
     }
-    this.recordImageSessionCommitArtifacts(placementId, image);
     this.workingImages.delete(placementId);
-    this.workingImageDraftsBySessionId.delete(
-      this.sessionIdsByPlacementId.get(placementId) ||
-        this.getFallbackImageSessionId(placementId),
-    );
     this.retainedWorkingImageBaselines.delete(placementId);
     this.syncWorkingPlacementConditionContext();
   }
@@ -2037,7 +2154,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         surfaceId:
           typeof placement.metadata?.documentSurfaceId === "string"
             ? placement.metadata.documentSurfaceId
-            : "legacy",
+            : IMAGE_UNSCOPED_SURFACE_ID,
         layerId: placement.layerId,
         objectId: placementId,
         objectType: "image",
@@ -2244,73 +2361,30 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.emitStateChange();
   };
 
-  private bindCanvasInteractionHandlers() {
-    if (!this.canvasService || this.canvasObjectMovingHandler) return;
-    this.canvasMouseUpHandler = (event: any) => {
-      const target = this.getActiveImageTarget(event?.target);
-      if (
-        target &&
-        typeof target?.data?.placementId === "string" &&
-        target.data.placementId === this.movingPlacementId
-      ) {
-        this.applyMoveSnapToTarget(target);
-      }
-      this.endMoveSnapInteraction();
-    };
-    this.canvasObjectMovingHandler = (event: any) => {
-      this.handleCanvasObjectMoving(event);
-    };
-    this.canvasBeforeRenderHandler = () => {
-      this.handleCanvasBeforeRender();
-    };
-    this.canvasAfterRenderHandler = () => {
-      this.handleCanvasAfterRender();
-    };
-    this.canvasService.onCanvasEvent("mouse:up", this.canvasMouseUpHandler);
-    this.canvasService.onCanvasEvent(
-      "object:moving",
-      this.canvasObjectMovingHandler,
-    );
-    this.canvasService.onCanvasEvent(
-      "before:render",
-      this.canvasBeforeRenderHandler,
-    );
-    this.canvasService.onCanvasEvent(
-      "after:render",
-      this.canvasAfterRenderHandler,
-    );
+  private onCanvasTransform(
+    kind: "move" | "resize" | "rotate" | "commit",
+    target: CanvasObjectLike | undefined,
+  ): void {
+    const imageTarget = this.getActiveImageTarget(target);
+    if (!imageTarget) return;
+    if (kind === "move") {
+      this.handleCanvasObjectMoving(imageTarget);
+      return;
+    }
+    if (kind !== "commit") return;
+    const placementId = this.getWorkingImageTargetPlacementId(imageTarget);
+    if (placementId && this.movingPlacementId === placementId) {
+      this.applyMoveSnapToTarget(imageTarget);
+    }
+    this.endMoveSnapInteraction();
+    this.pendingCanvasTransformSync = this.pendingCanvasTransformSync
+      .catch(() => undefined)
+      .then(() => this.syncWorkingImageTransformFromTarget(imageTarget));
   }
 
-  private unbindCanvasInteractionHandlers() {
-    if (!this.canvasService) return;
-    if (this.canvasMouseUpHandler) {
-      this.canvasService.offCanvasEvent("mouse:up", this.canvasMouseUpHandler);
-    }
-    if (this.canvasObjectMovingHandler) {
-      this.canvasService.offCanvasEvent(
-        "object:moving",
-        this.canvasObjectMovingHandler,
-      );
-    }
-    if (this.canvasBeforeRenderHandler) {
-      this.canvasService.offCanvasEvent(
-        "before:render",
-        this.canvasBeforeRenderHandler,
-      );
-    }
-    if (this.canvasAfterRenderHandler) {
-      this.canvasService.offCanvasEvent(
-        "after:render",
-        this.canvasAfterRenderHandler,
-      );
-    }
-    this.canvasMouseUpHandler = undefined;
-    this.canvasObjectMovingHandler = undefined;
-    this.canvasBeforeRenderHandler = undefined;
-    this.canvasAfterRenderHandler = undefined;
-  }
-
-  private getActiveImageTarget(target: any): any | null {
+  private getActiveImageTarget(
+    target: CanvasObjectLike | undefined,
+  ): CanvasObjectLike | null {
     if (!target) return null;
     if (target?.data?.type !== "image-placement-image") return null;
     if (target?.data?.source !== "working") return null;
@@ -2318,7 +2392,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return target;
   }
 
-  private getTargetBoundsScene(target: any): FrameRect | null {
+  private getTargetBoundsScene(target: CanvasObjectLike): FrameRect | null {
     if (!this.canvasService || !target) return null;
     const rawBounds =
       typeof target.getBoundingRect === "function"
@@ -2430,20 +2504,17 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.activeSnapX = nextX;
     this.activeSnapY = nextY;
     if (changed) {
+      this.publishImageSessionScenes();
       this.canvasService?.requestRenderAll();
     }
   }
 
   private clearSnapPreview() {
-    const shouldClear =
-      this.hasRenderedSnapGuides ||
-      Boolean(this.activeSnapX) ||
-      Boolean(this.activeSnapY);
+    const shouldClear = Boolean(this.activeSnapX) || Boolean(this.activeSnapY);
     this.activeSnapX = null;
     this.activeSnapY = null;
-    this.hasRenderedSnapGuides = false;
     if (shouldClear) {
-      this.canvasService?.clearTopContext();
+      this.publishImageSessionScenes();
       this.canvasService?.requestRenderAll();
     }
   }
@@ -2453,7 +2524,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.clearSnapPreview();
   }
 
-  private applyMoveSnapToTarget(target: any): {
+  private applyMoveSnapToTarget(target: CanvasObjectLike): {
     x: SnapMatch | null;
     y: SnapMatch | null;
   } {
@@ -2483,9 +2554,8 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return matches;
   }
 
-  private handleCanvasObjectMoving(event: any) {
-    const target = this.getActiveImageTarget(event?.target);
-    if (!target || !this.canvasService) return;
+  private handleCanvasObjectMoving(target: CanvasObjectLike) {
+    if (!this.canvasService) return;
     const placementId = target.data.placementId;
     const placement = this.getPlacementStates().find(
       (item) => item.id === placementId,
@@ -2502,112 +2572,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     this.updateSnapMatchState(matches.x, matches.y);
   }
 
-  private handleCanvasBeforeRender() {
-    if (!this.canvasService) return;
-    if (!this.hasRenderedSnapGuides && !this.activeSnapX && !this.activeSnapY) {
-      return;
-    }
-    this.canvasService.clearTopContext();
-    this.hasRenderedSnapGuides = false;
-  }
-
-  private drawSnapGuideLine(
-    from: { x: number; y: number },
-    to: { x: number; y: number },
-  ) {
-    const context = this.canvasService?.getTopContext();
-    if (!context) return;
-    context.save();
-    context.strokeStyle = "#1677ff";
-    context.lineWidth = 1;
-    context.beginPath();
-    context.moveTo(from.x, from.y);
-    context.lineTo(to.x, to.y);
-    context.stroke();
-    context.restore();
-  }
-
-  private handleCanvasAfterRender() {
-    if (!this.canvasService || (!this.activeSnapX && !this.activeSnapY)) {
-      return;
-    }
-    const guidePlacementId = this.movingPlacementId || this.activePlacementId;
-    const placement = guidePlacementId
-      ? this.getPlacementStates().find((item) => item.id === guidePlacementId)
-      : null;
-    if (!placement) return;
-    const frame = placement.frame;
-    const frameScreen = this.canvasService.toScreenRect(frame);
-    let drew = false;
-
-    if (this.activeSnapX) {
-      const x = this.canvasService.toScreenPoint({
-        x: this.activeSnapX.lineScene,
-        y: frame.top,
-      }).x;
-      this.drawSnapGuideLine(
-        { x, y: frameScreen.top },
-        { x, y: frameScreen.top + frameScreen.height },
-      );
-      drew = true;
-    }
-
-    if (this.activeSnapY) {
-      const y = this.canvasService.toScreenPoint({
-        x: frame.left,
-        y: this.activeSnapY.lineScene,
-      }).y;
-      this.drawSnapGuideLine(
-        { x: frameScreen.left, y },
-        { x: frameScreen.left + frameScreen.width, y },
-      );
-      drew = true;
-    }
-    this.hasRenderedSnapGuides = drew;
-  }
-
-  private onObjectModified = (event: any) => {
-    const target = event?.target;
-    const placementId = this.getWorkingImageTargetPlacementId(target);
-    if (!placementId) return;
-    if (this.movingPlacementId === placementId) {
-      this.applyMoveSnapToTarget(target);
-    }
-    this.endMoveSnapInteraction();
-    void this.syncWorkingImageTransformFromTarget(target);
-  };
-
-  private async syncWorkingImageTransformsFromCanvas(
-    placementIds: readonly string[],
-  ) {
-    for (const placementId of placementIds) {
-      const target = this.getWorkingImageCanvasTarget(placementId);
-      if (target) {
-        await this.syncWorkingImageTransformFromTarget(target);
-      }
-    }
-  }
-
-  private getWorkingImageCanvasTarget(placementId: string): any | null {
-    const normalizedPlacementId = String(placementId || "").trim();
-    if (
-      !normalizedPlacementId ||
-      !this.workingImages.has(normalizedPlacementId)
-    )
-      return null;
-    const layerId = `image.session.image`;
-    const target =
-      this.canvasService?.selectOneObject({
-        ids: [this.getWorkingImageNodeId(normalizedPlacementId)],
-        layerIds: [layerId],
-      }) || this.canvasService?.getActiveObject();
-    return this.getWorkingImageTargetPlacementId(target) ===
-      normalizedPlacementId
-      ? target
-      : null;
-  }
-
-  private getWorkingImageTargetPlacementId(target: any): string | null {
+  private getWorkingImageTargetPlacementId(
+    target: CanvasObjectLike | null | undefined,
+  ): string | null {
     const placementId = target?.data?.placementId;
     if (
       typeof placementId !== "string" ||
@@ -2619,7 +2586,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return placementId;
   }
 
-  private async syncWorkingImageTransformFromTarget(target: any) {
+  private async syncWorkingImageTransformFromTarget(target: CanvasObjectLike) {
     const placementId = this.getWorkingImageTargetPlacementId(target);
     const placement = placementId
       ? this.getPlacementStates().find((item) => item.id === placementId)
@@ -2669,28 +2636,12 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     );
   }
 
-  private buildWorkingImageSpecs(): RenderObjectSpec[] {
-    return this.getPlacementStates()
-      .filter(
-        (placement) =>
-          this.shouldRenderWorkingImagePlacement(placement.id) &&
-          placement.image?.src,
-      )
-      .map((placement) => this.buildImageSpec(placement, { committed: false }))
-      .filter((spec): spec is RenderObjectSpec => Boolean(spec));
-  }
-
   private shouldRenderWorkingPlacement(placementId: string): boolean {
-    return this.workingImages.has(placementId);
-  }
-
-  private shouldRenderWorkingImagePlacement(placementId: string): boolean {
     return this.workingImages.has(placementId);
   }
 
   private buildImageSpec(
     placement: ImagePlacementState,
-    options: { committed: boolean },
   ): RenderObjectSpec | null {
     const image = placement.image;
     if (!image?.src) return null;
@@ -2702,9 +2653,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       getCoverScaleFromRect(placement.frame, source) *
       Math.max(0.05, image.scale ?? 1);
     const stretchScale = Math.max(0.05, image.scale ?? 1);
-    const id = options.committed
-      ? `image:${placement.id}`
-      : this.getWorkingImageNodeId(placement.id);
+    const id = this.getWorkingImageNodeId(placement.id);
     const clipEffect = this.buildPlacementClipEffect(placement, id);
     const stretchProps =
       placement.fit === "stretch"
@@ -2730,11 +2679,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         layerId: placement.layerId || this.imageLayerId,
         type: "image-placement-image",
         placementId: placement.id,
-        source: options.committed ? "committed" : "working",
+        source: "working",
         session: this.createImagePlacementSessionData(placement, {
-          source: options.committed
-            ? "image-placement-committed"
-            : "image-placement-working",
+          source: "image-placement-working",
         }),
       },
       props: {
@@ -2746,18 +2693,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
         ...stretchProps,
         angle: image.angle ?? 0,
         opacity: image.opacity ?? 1,
-        selectable: !options.committed,
-        evented: true,
-        hasControls: !options.committed,
-        hasBorders: !options.committed,
-        centeredRotation: true,
-        lockMovementX: options.committed,
-        lockMovementY: options.committed,
-        lockRotation: options.committed,
-        lockScalingFlip: true,
-        lockScalingX: options.committed,
-        lockScalingY: options.committed,
-        lockUniScaling: !options.committed,
       },
       ...(clipEffect ? { effects: [clipEffect] } : {}),
     };
@@ -2792,8 +2727,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
           stroke: null,
           originX: "left",
           originY: "top",
-          selectable: false,
-          evented: false,
           excludeFromExport: true,
           objectCaching: false,
         },
@@ -2894,7 +2827,7 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     return String(sceneId || "").startsWith(`${IMAGE_SESSION_SCENE_PREFIX}:`);
   }
 
-  private isImageSessionSceneChange(event: {
+  private isSessionSceneChange(event: {
     scenes?: { added: string[]; updated: string[]; removed: string[] };
     sceneChanges?: Record<string, unknown>;
   }): boolean {
@@ -2906,128 +2839,119 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     ];
     return (
       sceneIds.length > 0 &&
-      sceneIds.every((id) => this.isImageSessionSceneId(id))
+      sceneIds.every(
+        (id) =>
+          this.isImageSessionSceneId(id) ||
+          this.sceneService?.getSceneHandle(id)?.owner.type === "session",
+      )
     );
   }
 
   private ensureImageSessionScene(
-    placementId: string,
+    placement: ImagePlacementState,
     sessionId: string,
-  ): string | null {
+    session: SessionHandle<
+      ImagePlacementSessionDraft,
+      ImagePlacementSessionResult
+    >,
+  ): SceneHandle | null {
     if (!this.sceneService) return null;
-    const sceneId = this.getImageSessionSceneId(sessionId);
-    if (!this.sceneService.getScene(sceneId)) {
-      const wasPublishing = this.isPublishingImageSessionScenes;
-      this.isPublishingImageSessionScenes = true;
-      try {
-        this.sceneService.ensureScene({
-          id: sceneId,
-          order: IMAGE_OVERLAY_STACK,
-          renderable: true,
-          transient: true,
-          visible: true,
-          metadata: {
-            channel: IMAGE_SESSION_CHANNEL,
-            placementId,
-            sessionId,
-            source: this.id,
-          },
-        });
-      } finally {
-        this.isPublishingImageSessionScenes = wasPublishing;
-      }
+    const existing = this.sessionScenesBySessionId.get(sessionId);
+    if (
+      existing &&
+      this.sceneService.getSceneHandle(existing.id) === existing
+    ) {
+      return existing;
     }
-    this.sessionSceneIdsBySessionId.set(sessionId, sceneId);
-    return sceneId;
-  }
-
-  private removeImageSessionScene(sessionId: string) {
-    const sceneId = this.sessionSceneIdsBySessionId.get(sessionId);
-    if (!sceneId) return;
-    if (this.sceneService?.getScene(sceneId)) {
-      const wasPublishing = this.isPublishingImageSessionScenes;
-      this.isPublishingImageSessionScenes = true;
-      try {
-        this.sceneService.removeScene(sceneId);
-      } finally {
-        this.isPublishingImageSessionScenes = wasPublishing;
-      }
-    }
-    this.sessionSceneIdsBySessionId.delete(sessionId);
-  }
-
-  private clearAllSessionScenes() {
-    Array.from(this.sessionSceneIdsBySessionId.values()).forEach((sceneId) => {
-      if (this.sceneService?.getScene(sceneId)) {
-        this.sceneService.removeScene(sceneId);
-      }
+    this.sessionScenesBySessionId.delete(sessionId);
+    const scene = this.sceneService.createScene({
+      id: this.getImageSessionSceneId(sessionId),
+      owner: { type: "session", sessionId },
+      composition: this.createImageSessionComposition(placement),
     });
-  }
-
-  private publishImageSessionScenes() {
-    if (!this.sceneService) return;
-    const wasPublishing = this.isPublishingImageSessionScenes;
-    this.isPublishingImageSessionScenes = true;
-    try {
-      this.sceneService.transaction(() => {
-        const renderedSceneIds = new Set<string>();
-        this.getPlacementStates()
-          .filter((placement) =>
-            this.shouldRenderWorkingPlacement(placement.id),
-          )
-          .forEach((placement) => {
-            const sessionId =
-              this.sessionIdsByPlacementId.get(placement.id) ||
-              this.getFallbackImageSessionId(placement.id);
-            const sceneId = this.ensureImageSessionScene(
-              placement.id,
-              sessionId,
-            );
-            if (!sceneId) return;
-            renderedSceneIds.add(sceneId);
-            this.sceneService!.clearScene(sceneId);
-            this.addImageSessionSceneLayers(sceneId);
-            this.buildImageSessionSceneSpecs(placement, sessionId).forEach(
-              ({ layerId, spec }, index) => {
-                const element = this.renderSpecToSceneElement(
-                  spec,
-                  layerId,
-                  index,
-                );
-                if (element)
-                  this.sceneService!.addElement(element, { sceneId });
-              },
-            );
-          });
-
-        Array.from(this.sessionSceneIdsBySessionId.entries()).forEach(
-          ([sessionId, sceneId]) => {
-            if (!renderedSceneIds.has(sceneId)) {
-              if (this.sceneService?.getScene(sceneId)) {
-                this.sceneService.removeScene(sceneId);
-              }
-              this.sessionSceneIdsBySessionId.delete(sessionId);
-            }
-          },
-        );
-      });
-    } finally {
-      this.isPublishingImageSessionScenes = wasPublishing;
-    }
-  }
-
-  private addImageSessionSceneLayers(sceneId: string) {
+    session.own(scene);
     [
       [IMAGE_SESSION_UNDERLAY_LAYER_ID, 0],
       [IMAGE_SESSION_IMAGE_LAYER_ID, 1],
       [IMAGE_SESSION_OVERLAY_LAYER_ID, 2],
       [IMAGE_SESSION_CONTROLS_LAYER_ID, 3],
-    ].forEach(([id, order]) => {
-      this.sceneService!.addLayer(
-        { id: String(id), order: Number(order) },
-        { sceneId },
-      );
-    });
+    ].forEach(([id, order]) =>
+      scene.addLayer({ id: String(id), order: Number(order) }),
+    );
+    this.sessionScenesBySessionId.set(sessionId, scene);
+    return scene;
+  }
+
+  private publishImageSessionScenes() {
+    const activeSessionId = this.activeImageSessionId;
+    const scene = activeSessionId
+      ? this.sessionScenesBySessionId.get(activeSessionId)
+      : undefined;
+    if (
+      !scene ||
+      !activeSessionId ||
+      this.sceneService?.getSceneHandle(scene.id) !== scene
+    ) {
+      return;
+    }
+    const wasPublishing = this.isPublishingImageSessionScenes;
+    this.isPublishingImageSessionScenes = true;
+    try {
+      scene
+        .selectElements()
+        .forEach((element) => scene.removeElement(element.id));
+      let elementOrder = 0;
+      this.getPlacementStates()
+        .filter((placement) => this.shouldRenderWorkingPlacement(placement.id))
+        .forEach((placement) => {
+          this.buildImageSessionSceneSpecs(placement, activeSessionId).forEach(
+            ({ layerId, spec }) => {
+              const element = this.renderSpecToSceneElement(
+                spec,
+                layerId,
+                elementOrder++,
+              );
+              if (element) scene.addElement(element);
+            },
+          );
+        });
+    } finally {
+      this.isPublishingImageSessionScenes = wasPublishing;
+    }
+  }
+
+  private createImageSessionComposition(placement: ImagePlacementState) {
+    const projectionEntries = (
+      projectionPlacement: ImageSessionProjectionPlacement,
+    ) =>
+      (placement.sessionProjections ?? [])
+        .filter((projection) => projection.placement === projectionPlacement)
+        .map((projection) => ({
+          source: "document" as const,
+          interaction: "disabled" as const,
+          filter: ({ node }: { node: RenderGraphNode }) =>
+            this.matchesSessionProjectionSource(placement, node, projection),
+        }));
+    return {
+      entries: [
+        ...projectionEntries("below"),
+        {
+          source: "local" as const,
+          layerIds: [IMAGE_SESSION_UNDERLAY_LAYER_ID],
+        },
+        { source: "local" as const, layerIds: [IMAGE_SESSION_IMAGE_LAYER_ID] },
+        ...projectionEntries("above"),
+        {
+          source: "local" as const,
+          layerIds: [IMAGE_SESSION_OVERLAY_LAYER_ID],
+        },
+        ...projectionEntries("controls"),
+        {
+          source: "local" as const,
+          layerIds: [IMAGE_SESSION_CONTROLS_LAYER_ID],
+        },
+      ],
+    };
   }
 
   private buildImageSessionSceneSpecs(
@@ -3035,71 +2959,62 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     sessionId: string,
   ): Array<{ layerId: string; spec: RenderObjectSpec }> {
     const specs: Array<{ layerId: string; spec: RenderObjectSpec }> = [];
-    specs.push(
-      ...this.buildSessionProjectionSceneSpecs(
-        placement,
-        "below",
-        IMAGE_SESSION_UNDERLAY_LAYER_ID,
-      ),
-    );
-    const imageSpec = this.buildImageSpec(placement, { committed: false });
+    const imageSpec = this.buildImageSpec(placement);
     if (imageSpec) {
       specs.push({ layerId: IMAGE_SESSION_IMAGE_LAYER_ID, spec: imageSpec });
     }
-    specs.push(
-      ...this.buildSessionProjectionSceneSpecs(
-        placement,
-        "above",
-        IMAGE_SESSION_OVERLAY_LAYER_ID,
-      ),
-    );
     if (placement.id === this.activePlacementId) {
-      specs.push(
-        ...this.buildSessionProjectionSceneSpecs(
-          placement,
-          "controls",
-          IMAGE_SESSION_CONTROLS_LAYER_ID,
-        ),
-      );
       specs.push(...this.buildSessionOverlayEntries(placement, sessionId));
+      specs.push(...this.buildMoveSnapGuideSpecs(placement));
     }
     return specs;
   }
 
-  private buildSessionProjectionSceneSpecs(
+  private buildMoveSnapGuideSpecs(
     placement: ImagePlacementState,
-    projectionPlacement: ImageSessionProjectionPlacement,
-    layerId: string,
   ): Array<{ layerId: string; spec: RenderObjectSpec }> {
-    const projections = (placement.sessionProjections ?? []).filter(
-      (projection) => projection.placement === projectionPlacement,
-    );
-    if (!projections.length) return [];
-    const sourceNodes = this.getProjectionSourceNodes();
-    return projections.flatMap((projection) =>
-      sourceNodes
-        .filter((node) =>
-          this.matchesSessionProjectionSource(placement, node, projection),
-        )
-        .map((node, index) => {
-          const spec = this.graphNodeToSessionProjectionSpec(
-            placement,
-            projection,
-            node,
-            index,
-          );
-          return spec ? { layerId, spec } : null;
-        })
-        .filter((item): item is { layerId: string; spec: RenderObjectSpec } =>
-          Boolean(item),
-        ),
-    );
-  }
-
-  private getProjectionSourceNodes(): RenderGraphNode[] {
-    const graph = this.renderIntentService?.getGraph();
-    if (!graph) return [];
-    return graph.layers.flatMap((layer) => layer.nodes);
+    if (!this.canvasService || (!this.activeSnapX && !this.activeSnapY)) {
+      return [];
+    }
+    const frame = this.canvasService.toScreenRect(placement.frame);
+    const specs: Array<{ layerId: string; spec: RenderObjectSpec }> = [];
+    const addGuide = (id: string, pathData: string) => {
+      specs.push({
+        layerId: IMAGE_SESSION_CONTROLS_LAYER_ID,
+        spec: {
+          id: `image-snap-guide:${placement.id}:${id}`,
+          type: "path",
+          space: "screen",
+          data: {
+            placementId: placement.id,
+            source: "image-placement-snap-guide",
+          },
+          props: {
+            pathData,
+            originX: "left",
+            originY: "top",
+            fill: null,
+            stroke: "#1677ff",
+            strokeWidth: 1,
+          },
+        },
+      });
+    };
+    if (this.activeSnapX) {
+      const x = this.canvasService.toScreenPoint({
+        x: this.activeSnapX.lineScene,
+        y: placement.frame.top,
+      }).x;
+      addGuide("x", `M ${x} ${frame.top} L ${x} ${frame.top + frame.height}`);
+    }
+    if (this.activeSnapY) {
+      const y = this.canvasService.toScreenPoint({
+        x: placement.frame.left,
+        y: this.activeSnapY.lineScene,
+      }).y;
+      addGuide("y", `M ${frame.left} ${y} L ${frame.left + frame.width} ${y}`);
+    }
+    return specs;
   }
 
   private matchesSessionProjectionSource(
@@ -3120,103 +3035,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
 
   private getPlacementSurfaceId(placement: ImagePlacementState): string {
     return (
-      String(placement.metadata?.documentSurfaceId || "").trim() || "legacy"
+      String(placement.metadata?.documentSurfaceId || "").trim() ||
+      IMAGE_UNSCOPED_SURFACE_ID
     );
-  }
-
-  private graphNodeToSessionProjectionSpec(
-    placement: ImagePlacementState,
-    projection: ImageSessionProjection,
-    node: RenderGraphNode,
-    index: number,
-  ): RenderObjectSpec | null {
-    if (node.type === "image" && !node.visual?.src) return null;
-    const opacity = Number(projection.opacity);
-    const sourceOpacity = Number(node.props.opacity);
-    const resolvedOpacity = Number.isFinite(opacity)
-      ? Math.max(0, Math.min(1, opacity)) *
-        (Number.isFinite(sourceOpacity) ? sourceOpacity : 1)
-      : node.props.opacity;
-    return {
-      id: `projection:${placement.id}:${projection.id}:${node.id}:${index}`,
-      subjectId: node.subjectId,
-      type: node.type,
-      ...(node.visual?.src ? { src: node.visual.src } : {}),
-      space: node.coordinateSpace,
-      data: {
-        ...node.data,
-        placementId: placement.id,
-        projectionId: projection.id,
-        projectionSourceNodeId: node.id,
-        projectionSourceSubjectId: node.subjectId,
-        source: "projection",
-        type: "session-projection",
-      },
-      props: {
-        ...node.props,
-        ...this.resolveGraphNodePlacementProps(node),
-        ...(resolvedOpacity !== undefined ? { opacity: resolvedOpacity } : {}),
-        visible: this.isSessionProjectionSourceVisible(node),
-        selectable: projection.interactive === true,
-        evented: projection.interactive === true,
-        hasControls: projection.interactive === true,
-        hasBorders: projection.interactive === true,
-      },
-      effects: node.effects,
-    };
-  }
-
-  private isSessionProjectionSourceVisible(node: RenderGraphNode): boolean {
-    if (node.visible === false) return false;
-    const conditionContext =
-      this.renderIntentService?.createRuntimeConditionContext({
-        isSessionActive: (sessionId: string) =>
-          this.sessionService?.isSessionActive(sessionId) ?? false,
-        isSessionScopeActive: (scope) =>
-          this.sessionService?.hasActiveSession({ scope }) ?? false,
-        isSessionFocused: (sessionId: string) =>
-          this.sessionService?.getFocusedSessionId() === sessionId,
-        hasAnyActiveSession: (scope) =>
-          this.sessionService?.hasActiveSession({ scope }) ?? false,
-      });
-    return evaluateRuntimeCondition(node.visibleWhen, conditionContext ?? {});
-  }
-
-  private resolveGraphNodePlacementProps(
-    node: RenderGraphNode,
-  ): Record<string, unknown> {
-    const frame = node.frame;
-    const transform = node.transform ?? {};
-    const hasTransformLeft = Number.isFinite(transform.left);
-    const hasTransformTop = Number.isFinite(transform.top);
-
-    if (node.type === "image" && frame) {
-      return {
-        ...transform,
-        left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
-        top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
-        originX: hasTransformLeft ? transform.originX : "center",
-        originY: hasTransformTop ? transform.originY : "center",
-        width: frame.width,
-        height: frame.height,
-        scaleX: normalizeFrameImageScale(transform.scaleX),
-        scaleY: normalizeFrameImageScale(transform.scaleY),
-      };
-    }
-
-    return {
-      ...transform,
-      ...(frame
-        ? {
-            left: hasTransformLeft ? transform.left : frame.x,
-            top: hasTransformTop ? transform.top : frame.y,
-            width: frame.width,
-            height: frame.height,
-            originX: hasTransformLeft ? transform.originX : "left",
-            originY: hasTransformTop ? transform.originY : "top",
-          }
-        : {}),
-    };
   }
 
   private renderSpecToSceneElement(
@@ -3225,6 +3046,43 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
     order: number,
   ): SceneElementInput | null {
     const props = { ...(spec.props || {}) };
+    const style = { ...props };
+    [
+      "visible",
+      "left",
+      "top",
+      "scaleX",
+      "scaleY",
+      "angle",
+      "originX",
+      "originY",
+      "width",
+      "height",
+      "pathData",
+      "path",
+      "text",
+    ].forEach((key) => delete style[key]);
+    const transform = {
+      ...(Number.isFinite(props.left) ? { left: Number(props.left) } : {}),
+      ...(Number.isFinite(props.top) ? { top: Number(props.top) } : {}),
+      ...(Number.isFinite(props.scaleX)
+        ? { scaleX: Number(props.scaleX) }
+        : {}),
+      ...(Number.isFinite(props.scaleY)
+        ? { scaleY: Number(props.scaleY) }
+        : {}),
+      ...(Number.isFinite(props.angle) ? { angle: Number(props.angle) } : {}),
+      ...(props.originX === "left" ||
+      props.originX === "center" ||
+      props.originX === "right"
+        ? { originX: props.originX }
+        : {}),
+      ...(props.originY === "top" ||
+      props.originY === "center" ||
+      props.originY === "bottom"
+        ? { originY: props.originY }
+        : {}),
+    };
     const data = {
       ...(spec.data || {}),
       layerId,
@@ -3243,7 +3101,9 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       order,
       visible: props.visible !== false,
       data,
-      style: props,
+      style,
+      transform,
+      interaction: this.resolveSceneElementInteraction(data),
       effects: spec.effects,
     };
     if (spec.type === "image") {
@@ -3275,6 +3135,22 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       ...common,
       type: "text",
       text: String((props as any).text ?? ""),
+    };
+  }
+
+  private resolveSceneElementInteraction(
+    data: Record<string, unknown>,
+  ): InteractionSpec | undefined {
+    if (data.type !== "image-placement-image" || data.source !== "working") {
+      return undefined;
+    }
+    return {
+      selection: { enabled: true },
+      manipulation: {
+        move: { enabled: true },
+        resize: { enabled: true },
+        rotate: { enabled: true },
+      },
     };
   }
 
@@ -3310,16 +3186,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
               stroke: style.stroke ?? "#1677ff",
               strokeDashArray: style.strokeDashArray ?? [12, 8],
               strokeWidth: style.strokeWidth ?? 2,
-              selectable: false,
-              evented: false,
-              hasBorders: false,
-              hasControls: false,
-              lockMovementX: true,
-              lockMovementY: true,
-              lockRotation: true,
-              lockScalingFlip: true,
-              lockScalingX: true,
-              lockScalingY: true,
             },
           },
         ];
@@ -3353,8 +3219,6 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
               ...(style.labelFontFamily
                 ? { fontFamily: style.labelFontFamily }
                 : {}),
-              selectable: false,
-              evented: false,
             },
           });
         }
@@ -3426,59 +3290,11 @@ export class ImagePlacementCapabilityImplementation implements ExtensionDefiniti
       placementId,
       image: cloneImageState(image),
     };
-    const existing = this.sessionService.getSession(sessionId);
-    if (existing?.status === "active") {
-      this.sessionService.updateSession(sessionId, { draft, dirty: true });
-      return;
-    }
-    this.sessionService.createSession({
-      sessionId,
-      scope: {
-        surfaceId: this.resolvePlacementSurfaceId(placement),
-        subjectId: placement.id,
-        channel: IMAGE_SESSION_CHANNEL,
-        groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
-      },
-      draft,
-      leavePolicy: "block",
-      interactionMode: "exclusive",
+    this.suspendedDraftsBySessionId.set(sessionId, {
+      placementId,
+      image: cloneImageState(image),
     });
-  }
-
-  private recordImageSessionCommitArtifacts(
-    placementId: string,
-    image: ImagePlacementImageState | null,
-  ) {
-    if (!this.sessionService) return;
-    const sessionId =
-      this.sessionIdsByPlacementId.get(placementId) ||
-      this.getFallbackImageSessionId(placementId);
-    if (!this.sessionService.getSession(sessionId)) return;
-    const artifacts: SessionArtifact[] = [
-      {
-        artifactId: `${sessionId}:image`,
-        role: "committed-image",
-        data: cloneImageState(image),
-      },
-    ];
-    if (image?.metadata?.transform) {
-      artifacts.push({
-        artifactId: `${sessionId}:source-transform`,
-        role: "source-transform",
-        data: image.metadata.transform,
-      });
-    }
-    if (image?.metadata?.derived) {
-      artifacts.push({
-        artifactId: `${sessionId}:derived`,
-        role: "derived-image",
-        data: image.metadata.derived,
-      });
-    }
-    this.sessionService.updateSession(sessionId, {
-      artifacts,
-      dirty: false,
-    });
+    this.sessionHandlesBySessionId.get(sessionId)?.updateDraft(draft);
   }
 
   private createImagePlacementSessionData(

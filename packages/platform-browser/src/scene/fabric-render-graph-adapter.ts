@@ -37,6 +37,20 @@ import { CANVAS_SERVICE } from "../tokens";
 
 export const RENDER_GRAPH_RENDER_SCOPE = "core-render-graph";
 const FABRIC_RENDER_GRAPH_TARGET = "render-graph";
+const FABRIC_INTERACTION_PROP_KEYS = new Set([
+  "selectable",
+  "evented",
+  "hasControls",
+  "hasBorders",
+  "centeredRotation",
+  "lockMovementX",
+  "lockMovementY",
+  "lockRotation",
+  "lockScalingFlip",
+  "lockScalingX",
+  "lockScalingY",
+  "lockUniScaling",
+]);
 
 export interface FabricRenderGraphSyncState {
   error?: unknown;
@@ -243,7 +257,9 @@ export class FabricRenderGraphAdapter implements Service {
   }
 
   private detachRuntimeConditionEvents() {
-    this.runtimeConditionDisposables.forEach((disposable) => disposable.dispose());
+    this.runtimeConditionDisposables.forEach((disposable) =>
+      disposable.dispose(),
+    );
     this.runtimeConditionDisposables = [];
   }
 
@@ -370,7 +386,13 @@ export class FabricRenderGraphAdapter implements Service {
         elements.forEach((element, elementIndex) => {
           if (element.visible === false) return;
           const spec = this.toSceneRenderObjectSpec(
-            { id: root.id, order: 0, visible: true, renderable: false, transient: false },
+            {
+              id: root.id,
+              order: 0,
+              visible: true,
+              renderable: false,
+              transient: false,
+            },
             layer,
             element,
             conditionContext,
@@ -408,7 +430,8 @@ export class FabricRenderGraphAdapter implements Service {
       );
       layer.nodes.forEach((node, nodeIndex) => {
         if (filter && !filter({ layer, node })) return;
-        if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext)) return;
+        if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext))
+          return;
         const spec = this.toRenderObjectSpec(
           layer,
           node,
@@ -421,7 +444,8 @@ export class FabricRenderGraphAdapter implements Service {
           key: keyPrefix ? `${keyPrefix}:${node.id}` : node.id,
           layerId: layer.id,
           order:
-            orderBase + this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex, node),
+            orderBase +
+            this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex, node),
           spec,
         });
       });
@@ -720,15 +744,15 @@ export class FabricRenderGraphAdapter implements Service {
     const selectable = readOnlyProjection
       ? false
       : hasDeclarativeInteraction
-      ? interactionState.selectionEnabled
-      : node.props.selectable === true;
+        ? interactionState.selectionEnabled
+        : node.props.selectable === true;
     const evented = readOnlyProjection
       ? false
       : hasDeclarativeInteraction
-      ? interactionState.hitTestEnabled
-      : typeof node.props.evented === "boolean"
-        ? node.props.evented
-        : selectable;
+        ? interactionState.hitTestEnabled
+        : typeof node.props.evented === "boolean"
+          ? node.props.evented
+          : selectable;
     const commonProps = {
       ...node.props,
       ...this.resolvePlacementProps(node),
@@ -755,7 +779,9 @@ export class FabricRenderGraphAdapter implements Service {
       ...(!readOnlyProjection && node.interaction
         ? { interactionSpec: node.interaction }
         : {}),
-      ...(readOnlyProjection ? { documentProjection: true, readOnly: true } : {}),
+      ...(readOnlyProjection
+        ? { documentProjection: true, readOnly: true }
+        : {}),
     };
     const effects = [
       ...layerEffects,
@@ -825,7 +851,7 @@ export class FabricRenderGraphAdapter implements Service {
     >,
   ): RenderObjectSpec | null {
     const renderProps = isRecord(element.data?.renderProps)
-      ? element.data.renderProps
+      ? withoutFabricInteractionProps(element.data.renderProps)
       : {};
     const interactionState = this.requireInteractionService().resolveState(
       element.interaction,
@@ -837,11 +863,17 @@ export class FabricRenderGraphAdapter implements Service {
     const rotateEnabled = interactionState.manipulation.rotate.enabled;
     const controlsEnabled = resizeEnabled || rotateEnabled;
     const props = {
-      ...element.style,
+      ...withoutFabricInteractionProps(element.style),
       ...element.transform,
       ...renderProps,
       ...(element.type === "rect"
         ? { width: element.width, height: element.height }
+        : {}),
+      ...(element.type === "image"
+        ? {
+            ...(element.width === undefined ? {} : { width: element.width }),
+            ...(element.height === undefined ? {} : { height: element.height }),
+          }
         : {}),
       ...(element.type === "path" ? { pathData: element.path } : {}),
       ...(element.type === "text" ? { text: element.text } : {}),
@@ -993,4 +1025,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function withoutFabricInteractionProps(
+  value: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!value) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key]) => !FABRIC_INTERACTION_PROP_KEYS.has(key),
+    ),
+  );
 }

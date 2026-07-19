@@ -81,6 +81,7 @@ import {
   type FeatureCapabilityApi,
 } from "../src/extensions/feature/capability";
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
+import { IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID } from "../src/document/imagePlacementInteraction";
 import {
   createDielineGeometryCapability,
   createClipCapability,
@@ -99,6 +100,7 @@ import { createKitCapabilitiesForDocument } from "../src/document/capabilities";
 import {
   SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
+  INTERACTION_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SURFACE_FRAME_SERVICE,
@@ -120,6 +122,7 @@ import {
   type CommandContribution,
   type CommandService,
   type ExtensionDefinition,
+  type InteractionService,
   Pooder,
   type RenderIntentService,
   type SceneService,
@@ -232,7 +235,7 @@ type ImagePlacementTestDriver = {
     multiplier?: number;
     format?: "png" | "jpeg";
   }): Promise<unknown>;
-  resetSession(input?: ImagePlacementSessionInput): void;
+  resetSession(input?: ImagePlacementSessionInput): Promise<void>;
 };
 
 function getImagePlacementTestDriver(
@@ -335,6 +338,18 @@ class FakeCanvasService {
     this.activeObject = null;
   }
 
+  on(eventName: string, handler: (event?: any) => void) {
+    let handlers = this.eventHandlers.get(eventName);
+    if (!handlers) {
+      handlers = new Set();
+      this.eventHandlers.set(eventName, handlers);
+    }
+    handlers.add(handler);
+    return {
+      dispose: () => handlers?.delete(handler),
+    };
+  }
+
   onCanvasEvent(eventName: string, handler: (event?: any) => void) {
     let handlers = this.eventHandlers.get(eventName);
     if (!handlers) {
@@ -342,6 +357,10 @@ class FakeCanvasService {
       this.eventHandlers.set(eventName, handlers);
     }
     handlers.add(handler);
+  }
+
+  emit(eventName: string, event?: unknown) {
+    this.eventHandlers.get(eventName)?.forEach((handler) => handler(event));
   }
 
   offCanvasEvent(eventName: string, handler: (event?: any) => void) {
@@ -2957,6 +2976,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 async function testImagePlacementCapabilityExtension() {
   const runtime = new Pooder();
   const facade: ImagePlacementCapabilityApi = {
+    onDidChange: () => ({ dispose() {} }),
     applyOperation: async () => ({ ok: true }),
     clearImage: async () => ({ ok: true }),
     commitSession: async () => ({ ok: true }),
@@ -2983,7 +3003,6 @@ async function testImagePlacementCapabilityExtension() {
     setSource: async () => ({ ok: true }),
     setTransform: async () => ({ ok: true }),
     validateSession: async () => ({ ok: true }),
-    validatePlacement: async () => ({ ok: true }),
     registerSessionOverlayProvider: () => ({ dispose() {} }),
     refresh: async () => {},
   };
@@ -3104,38 +3123,32 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
             id: "business-helper",
             sourceTags: ["business-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "hidden-helper",
             sourceTags: ["hidden-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "conditional-hidden-helper",
             sourceTags: ["conditional-hidden-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "conditional-visible-helper",
             sourceTags: ["conditional-visible-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "global-helper",
             sourceTags: ["global-helper"],
             surfaceScope: "all",
             placement: "above",
-            interactive: false,
           },
           {
             id: "ignored-helper",
             sourceLayerIds: ["front.ignored-helper"],
             placement: "above",
-            interactive: false,
           },
         ],
       },
@@ -3151,7 +3164,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-business-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.business-helper",
         objectId: "front-business-helper",
       },
@@ -3185,7 +3198,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-hidden-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.hidden-helper",
         objectId: "front-hidden-helper",
       },
@@ -3202,7 +3215,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-conditional-hidden-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.conditional-hidden-helper",
         objectId: "front-conditional-hidden-helper",
       },
@@ -3225,7 +3238,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-conditional-visible-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.conditional-visible-helper",
         objectId: "front-conditional-visible-helper",
       },
@@ -3265,7 +3278,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-ignored-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.ignored-helper",
         objectId: "front-ignored-helper",
       },
@@ -3298,7 +3311,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const imageLayer = renderGraph.layers.find((layer) => layer.id === "artwork");
   const sessionSceneId =
     "pooder.kit.image-placement.session:image-placement:placement";
-  const sessionScene = scene.getScene(sessionSceneId);
+  const sessionRoot = scene.getActiveRoot();
   const committedImageNode = imageLayer?.nodes.find(
     (node: any) => node.id === "image:placement",
   );
@@ -3308,9 +3321,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "committed image object should carry graph visibleWhen while its working session is active",
   );
   assertEqual(
-    sessionScene?.renderable,
-    true,
-    "image session should create a renderable transient scene",
+    sessionRoot?.id,
+    sessionSceneId,
+    "image session should install a session-owned active root",
   );
   const sessionImage = scene.selectOneElement({
     ids: ["session-image:image-placement:placement"],
@@ -3319,19 +3332,19 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   assert(sessionImage, "image session should render a separate working object");
   const sessionImageNode = sessionImage!;
   assertEqual(
-    sessionImageNode.style?.selectable,
+    sessionImageNode.interaction?.selection?.enabled,
     true,
-    "session image should be selectable",
+    "session image should expose typed selection interaction",
   );
   assertEqual(
-    sessionImageNode.style?.lockUniScaling,
+    sessionImageNode.interaction?.manipulation?.resize?.enabled,
     true,
-    "session image should keep aspect ratio while scaling",
+    "session image should expose typed resize interaction",
   );
   assertEqual(
-    sessionImageNode.style?.lockRotation,
-    false,
-    "session image should support rotation",
+    sessionImageNode.interaction?.manipulation?.rotate?.enabled,
+    true,
+    "session image should expose typed rotation interaction",
   );
   assert(
     Boolean(
@@ -3342,67 +3355,32 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     ),
     "image session should render dieline hatch overlay",
   );
-  const overlayElements = scene.selectElements({
-    layerIds: ["image.session.overlay"],
-    sceneId: sessionSceneId,
-  });
-  const visibleProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:business-helper"),
-  );
-  const hiddenProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:hidden-helper"),
-  );
-  const conditionalHiddenProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:conditional-hidden-helper"),
-  );
-  const conditionalVisibleProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:conditional-visible-helper"),
-  );
-  const crossSurfaceBusinessProjection = overlayElements.find((element) =>
-    element.id.includes("back-business-helper"),
-  );
-  const globalProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:global-helper"),
-  );
-  const ignoredProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:ignored-helper"),
-  );
+  const projectedNodeIds =
+    sessionRoot?.composition.entries.flatMap((entry) =>
+      entry.source === "document"
+        ? renderGraph.layers.flatMap((layer) =>
+            layer.nodes
+              .filter((node) => entry.filter?.({ layer, node }) ?? true)
+              .map((node) => node.id),
+          )
+        : [],
+    ) ?? [];
   assert(
-    Boolean(visibleProjection),
-    "image session should project declared business helpers above the working image",
+    projectedNodeIds.includes("front-business-helper"),
+    "image session should explicitly project declared document helpers",
   );
   assertEqual(
-    visibleProjection?.visible,
-    true,
-    "image session should keep visible projection sources visible",
-  );
-  assertEqual(
-    hiddenProjection?.visible,
+    projectedNodeIds.includes("back-business-helper"),
     false,
-    "image session should keep statically hidden projection sources hidden",
-  );
-  assertEqual(
-    conditionalHiddenProjection?.visible,
-    false,
-    "image session should snapshot false visibleWhen expressions onto projection elements",
-  );
-  assertEqual(
-    conditionalVisibleProjection?.visible,
-    true,
-    "image session should snapshot true visibleWhen expressions onto projection elements",
-  );
-  assertEqual(
-    crossSurfaceBusinessProjection,
-    undefined,
     "image session tag projections should default to the placement surface",
   );
   assert(
-    Boolean(globalProjection),
+    projectedNodeIds.includes("back-global-helper"),
     "image session tag projections should allow cross-surface sources when requested",
   );
   assertEqual(
-    ignoredProjection,
-    undefined,
+    projectedNodeIds.includes("front-ignored-helper"),
+    false,
     "image session should ignore legacy projection configs without source tags",
   );
   const snapTarget = {
@@ -3454,14 +3432,14 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     sceneId: sessionSceneId,
   });
   assertEqual(
-    movedSessionImage?.style?.left,
+    movedSessionImage?.transform?.left,
     220,
-    "dragged image session object should update the transient scene before session sync",
+    "dragged image session object should update the active root scene before session sync",
   );
   assertEqual(
-    movedSessionImage?.style?.top,
+    movedSessionImage?.transform?.top,
     216,
-    "dragged image session object should keep its moved y position in the transient scene",
+    "dragged image session object should keep its moved y position in the active root scene",
   );
 
   await driver.setImageTransform("placement", {
@@ -3510,6 +3488,35 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     },
     "completed session should keep the editable source transform in metadata",
   );
+  await driver.beginSession("placement");
+  const reopenedPlacement = facade
+    .getViewState()
+    .placements.find((placement) => placement.id === "placement");
+  assertEqual(
+    reopenedPlacement?.image?.src,
+    "/photo.png",
+    "reopened sessions should restore the editable source instead of the cropped bitmap",
+  );
+  assertEqual(
+    reopenedPlacement?.image?.scale,
+    1.3,
+    "reopened sessions should restore the committed source scale",
+  );
+  assertEqual(
+    reopenedPlacement?.image?.angle,
+    22,
+    "reopened sessions should restore the committed source rotation",
+  );
+  const reopenedSessionImage = scene.selectOneElement({
+    ids: ["session-image:image-placement:placement"],
+    sceneId: sessionSceneId,
+  });
+  assertEqual(
+    reopenedSessionImage?.transform?.angle,
+    22,
+    "the reopened session scene should publish the restored rotation",
+  );
+  await facade.rollbackSession("placement");
   assertDeepEqual(
     exportService.calls[0]?.crop,
     {
@@ -3633,7 +3640,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     1.3,
     "reopened image session should restore the source transform",
   );
-  driver.resetSession("placement");
+  await driver.resetSession("placement");
   const resetGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
@@ -3758,22 +3765,22 @@ async function testImagePlacementStretchSessionUsesFrameSize() {
   });
 
   assertEqual(
-    sessionImage?.style?.width,
+    sessionImage?.type === "image" ? sessionImage.width : undefined,
     200,
     "stretch image session should use the placement frame width",
   );
   assertEqual(
-    sessionImage?.style?.height,
+    sessionImage?.type === "image" ? sessionImage.height : undefined,
     160,
     "stretch image session should use the placement frame height",
   );
   assertEqual(
-    sessionImage?.style?.scaleX,
+    sessionImage?.transform?.scaleX,
     1,
     "stretch image session should not derive x scale from source dimensions",
   );
   assertEqual(
-    sessionImage?.style?.scaleY,
+    sessionImage?.transform?.scaleY,
     1,
     "stretch image session should not derive y scale from source dimensions",
   );
@@ -3857,12 +3864,13 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   };
   canvasService.canvas.getObjects = () => [canvasTarget] as any;
   canvasService.setActiveObject(canvasTarget);
+  canvasService.emit("transform", { kind: "commit", target: canvasTarget });
   exportService.exportImage = async (options: Record<string, any>) => {
     const sessionNode = scene.selectOneElement({
       ids: ["session-image:image-placement:placement"],
       sceneId: "pooder.kit.image-placement.session:image-placement:placement",
     });
-    renderedSessionScale = Number(sessionNode?.style?.scaleX || 0);
+    renderedSessionScale = Number(sessionNode?.transform?.scaleX || 0);
     return FakeSceneExportService.prototype.exportImage.call(
       exportService,
       options,
@@ -3882,7 +3890,7 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
       angle: 12,
       opacity: 1,
     },
-    "complete session should sync the latest canvas object transform before cropping",
+    "complete session should await the typed canvas transform commit before cropping",
   );
   assertEqual(
     renderedSessionScale,
@@ -4075,7 +4083,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     metadata: { width: 100, height: 100 },
   });
   await driver.setImageTransform("placement-a", { scale: 1.8 });
-  driver.resetSession("placement-a");
+  await driver.resetSession("placement-a");
   const resetUploadedPlacement = facade
     .getViewState()
     .placements.find((placement) => placement.id === "placement-a");
@@ -4090,15 +4098,16 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     "resetting after upload should restore the upload baseline transform",
   );
   await driver.beginSession("placement-b");
+  const placementBSceneId =
+    "pooder.kit.image-placement.session:image-placement:placement-b";
   assert(
     Boolean(
       scene.selectOneElement({
         ids: ["session-image:image-placement:placement-a"],
-        sceneId:
-          "pooder.kit.image-placement.session:image-placement:placement-a",
+        sceneId: placementBSceneId,
       }),
     ),
-    "uploaded working image should remain visible after focusing another placement",
+    "the focused root should retain uploaded working images from other placements",
   );
 
   await driver.setImageSource("placement-b", {
@@ -4109,15 +4118,13 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     Boolean(
       scene.selectOneElement({
         ids: ["session-image:image-placement:placement-a"],
-        sceneId:
-          "pooder.kit.image-placement.session:image-placement:placement-a",
+        sceneId: placementBSceneId,
       }),
     ) &&
       Boolean(
         scene.selectOneElement({
           ids: ["session-image:image-placement:placement-b"],
-          sceneId:
-            "pooder.kit.image-placement.session:image-placement:placement-b",
+          sceneId: placementBSceneId,
         }),
       ),
     "multiple uploaded working images should render together before commit",
@@ -4134,7 +4141,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     scale: 1.5,
     left: 0.2,
   });
-  driver.resetSession("committed-placement");
+  await driver.resetSession("committed-placement");
   const restoredPlacement = facade
     .getViewState()
     .placements.find((placement) => placement.id === "committed-placement");
@@ -4237,7 +4244,7 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
   canvasService.setActiveObject(canvasTarget);
 
   assert(
-    Boolean(sessions.getSession(sessionInput.sessionId)),
+    Boolean(sessions.getHandle(sessionInput.sessionId)),
     "app-owned image session id should be registered in SessionService",
   );
   await driver.beginSession(sessionInput);
@@ -4277,7 +4284,7 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
     "completed app-owned image session should commit the draft to the placement",
   );
   assertEqual(
-    sessions.getSession(sessionInput.sessionId),
+    sessions.getHandle(sessionInput.sessionId),
     undefined,
     "completed app-owned image session should leave the active SessionService registry",
   );
@@ -4285,14 +4292,12 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
   await runtime.dispose();
 }
 
-async function testImagePlacementCanvasPressCanOnlyRequestSession() {
+async function testImagePlacementInteractionCommandOwnsSessionLifecycle() {
   const runtime = new Pooder();
-  const canvasService = new FakeCanvasService();
-  runtime.services.register(canvasService as any, CANVAS_SERVICE);
-
-  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
-  scene.addLayer({ id: "artwork" });
-  scene.addElement({
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scenes.addLayer({ id: "artwork" });
+  scenes.addElement({
     id: "placement",
     layerId: "artwork",
     type: "rect",
@@ -4311,40 +4316,90 @@ async function testImagePlacementCanvasPressCanOnlyRequestSession() {
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
+  const interaction =
+    runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
   const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
-  const events: any[] = [];
-  const handler = (event: unknown) => {
-    events.push(event);
-  };
-  runtime.eventBus.on("image:session:open", handler);
+  const sessionId = "front.image.user.1";
+  const changes: string[] = [];
+  const subscription = facade.onDidChange((event) => changes.push(event.type));
 
-  runtime.eventBus.emit("mouse:down", {
-    target: {
-      data: {
-        placementId: "placement",
-        type: "image-placement-image",
+  const activation = await interaction.activate({
+    spec: {
+      activation: {
+        action: { commandId: IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID },
+        session: {
+          channel: "image-placement",
+          groupId: "editor-interaction",
+          sessionId,
+          mode: "exclusive",
+          scope: "subject",
+          leavePolicy: "block",
+        },
       },
     },
+    runtimeContext: {},
+    trigger: "primary-pointer",
+    subjectId: "placement",
+    surfaceId: "legacy",
+    targetData: { imagePlacement: { sessionKey: sessionId } },
   });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  runtime.eventBus.off("image:session:open", handler);
 
+  const handle = sessions.getHandle(sessionId);
+  assertEqual(activation.activated, true, "typed interaction should activate");
   assertEqual(
-    events.length,
-    0,
-    "raw canvas presses should not bypass Core InteractionService",
+    handle?.descriptor.ownerId,
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+    "ImagePlacement capability should be the sole session lifecycle owner",
   );
   assertEqual(
-    facade.getViewState().hasWorkingChanges,
-    false,
-    "canvas session request should not create a working draft when auto begin is disabled",
+    activation.sessionResult,
+    handle,
+    "InteractionService should return the command-owned session handle",
+  );
+  assert(
+    changes.includes("session-opened"),
+    "typed capability events should report interaction session activation",
   );
   assertEqual(
-    sessions.getSession("image-placement:placement"),
-    undefined,
-    "canvas session request should not create an internal image placement session",
+    scenes.getActiveRoot()?.owner.sessionId,
+    sessionId,
+    "interaction activation should install the session-owned root scene",
   );
 
+  await facade.rollbackSession({ placementId: "placement", sessionId });
+  const stateChangeCount = changes.filter((type) => type === "state").length;
+  const foreignSession = await sessions.open({
+    descriptor: {
+      sessionId: "white-ink:front",
+      ownerId: "popecho.white-ink",
+      scope: {},
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+  });
+  const foreignScene = scenes.createScene({
+    id: "popecho.white-ink.session:front",
+    owner: { type: "session", sessionId: foreignSession.descriptor.sessionId },
+    composition: { entries: [{ source: "local", layerIds: ["white-ink"] }] },
+  });
+  foreignSession.own(foreignScene);
+  foreignScene.addLayer({ id: "white-ink" });
+  foreignScene.addElement({
+    id: "white-ink-preview",
+    layerId: "white-ink",
+    type: "rect",
+    width: 10,
+    height: 10,
+  });
+  await Promise.resolve();
+  assertEqual(
+    changes.filter((type) => type === "state").length,
+    stateChangeCount,
+    "foreign session scene updates must not feed back into image placement state",
+  );
+  await foreignSession.cancel();
+  subscription.dispose();
   await runtime.dispose();
 }
 
@@ -5124,7 +5179,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     "blob:front-image-original",
     "reopened configurable visual image session should edit from the retained original source",
   );
-  driver.resetSession(sessionInput);
+  await driver.resetSession(sessionInput);
 
   try {
     await runtime.dispose();
@@ -5610,7 +5665,7 @@ async function main() {
   await testImagePlacementCommittedExportUsesObjectUrl();
   await testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches();
   await testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft();
-  await testImagePlacementCanvasPressCanOnlyRequestSession();
+  await testImagePlacementInteractionCommandOwnsSessionLifecycle();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayConditionFollowsEditingSessions();
   testImageSessionOverlayBuildsBaseCropControls();

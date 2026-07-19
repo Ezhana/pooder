@@ -38,7 +38,7 @@ export const createFeatureCapability = (
 
 export const createImagePlacementCapability = (
   options?: ConstructorParameters<typeof ImagePlacementCapabilityExtension>[0],
-) => defineLegacyExtension(new ImagePlacementCapabilityExtension(options));
+) => new ImagePlacementCapabilityExtension(options);
 
 export const createImageMaskCapability = (
   options?: ConstructorParameters<typeof ImageMaskCapabilityExtension>[0],

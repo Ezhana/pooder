@@ -61,8 +61,6 @@ export function buildImageSessionOverlaySpecs(args: {
       fill: visual.outerBackground,
       stroke: null,
       fillRule: "evenodd",
-      selectable: false,
-      evented: false,
       excludeFromExport: true,
       objectCaching: false,
     },
@@ -88,8 +86,6 @@ export function buildImageSessionOverlaySpecs(args: {
         visual.strokeStyle === "dashed"
           ? [visual.dashLength, visual.dashLength]
           : undefined,
-      selectable: false,
-      evented: false,
       excludeFromExport: true,
     },
   });

@@ -40,6 +40,29 @@ export interface InteractionSessionIntent {
   leavePolicy?: SessionLeavePolicy;
 }
 
+/**
+ * Resolved session intent forwarded to the activation command. The command's
+ * domain service remains responsible for opening and owning the session so it
+ * can install the real draft, lifecycle, and owned resources atomically.
+ */
+export interface InteractionActivationSessionContext {
+  readonly sessionId: string;
+  readonly scope: SessionScope;
+  readonly interactionMode: SessionInteractionMode;
+  readonly leavePolicy: SessionLeavePolicy;
+}
+
+export interface InteractionActivationCommandInput {
+  readonly layerId?: string;
+  readonly renderIntentId?: string;
+  readonly session?: InteractionActivationSessionContext;
+  readonly sessionId?: string;
+  readonly subjectId?: string;
+  readonly surfaceId?: string;
+  readonly targetData?: Record<string, unknown>;
+  readonly trigger: InteractionActivationTrigger;
+}
+
 export interface InteractionConstraintSpec {
   activeWhen?: RuntimeConditionExpr;
   spec: ConstraintSpec;
@@ -105,7 +128,7 @@ export interface InteractionActivationResult<TResult = unknown> {
   commandId?: string;
   sessionId?: string;
   commandResult?: TResult;
-  sessionResult?: SessionHandle<Record<string, never>>;
+  sessionResult?: SessionHandle;
 }
 
 export interface InteractionManipulationInput {
@@ -228,7 +251,7 @@ export class InteractionService implements Service {
     const commandId = normalizeId(activation.action.commandId);
     const actionPayload = cloneRecord(activation.action.payload);
     let sessionId: string | undefined;
-    let sessionResult: SessionHandle<Record<string, never>> | undefined;
+    let sessionContext: InteractionActivationSessionContext | undefined;
     if (activation.session) {
       const channel = normalizeId(activation.session.channel) || commandId;
       sessionId =
@@ -236,43 +259,53 @@ export class InteractionService implements Service {
         normalizeId(actionPayload.sessionId) ||
         resolveTargetSessionKey(input.targetData) ||
         `${channel}:${normalizeId(input.subjectId) || "editor"}`;
-      try {
-        sessionResult = await this.requireSessionService().open({
-          descriptor: {
-            sessionId,
-            ownerId: `interaction:${channel}`,
-            scope: createSessionScope(activation.session, {
-              channel,
-              subjectId: normalizeId(input.subjectId),
-              surfaceId: normalizeId(input.surfaceId),
-            }),
-            interactionMode: activation.session.mode,
-            leavePolicy: activation.session.leavePolicy ?? "block",
-          },
-          initialDraft: {},
-        });
-      } catch (error) {
-        if (!(error instanceof SessionConflictError)) throw error;
-        return {
-          activated: false,
-          reason: "session-conflict",
-          commandId,
-          sessionId,
-        };
-      }
+      sessionContext = {
+        sessionId,
+        scope: createSessionScope(activation.session, {
+          channel,
+          subjectId: normalizeId(input.subjectId),
+          surfaceId: normalizeId(input.surfaceId),
+        }),
+        interactionMode: activation.session.mode,
+        leavePolicy: activation.session.leavePolicy ?? "block",
+      };
     }
 
-    const commandResult =
-      await this.requireCommandService().executeCommand<TResult>(commandId, {
-        ...actionPayload,
-        layerId: normalizeId(input.layerId) || undefined,
-        renderIntentId: normalizeId(input.renderIntentId) || undefined,
+    let commandResult: TResult;
+    try {
+      commandResult =
+        await this.requireCommandService().executeCommand<TResult>(commandId, {
+          ...actionPayload,
+          layerId: normalizeId(input.layerId) || undefined,
+          renderIntentId: normalizeId(input.renderIntentId) || undefined,
+          session: sessionContext,
+          sessionId,
+          subjectId: normalizeId(input.subjectId) || undefined,
+          surfaceId: normalizeId(input.surfaceId) || undefined,
+          targetData: cloneRecord(input.targetData),
+          trigger: input.trigger,
+        });
+    } catch (error) {
+      if (!(error instanceof SessionConflictError)) throw error;
+      return {
+        activated: false,
+        reason: "session-conflict",
+        commandId,
         sessionId,
-        subjectId: normalizeId(input.subjectId) || undefined,
-        surfaceId: normalizeId(input.surfaceId) || undefined,
-        targetData: cloneRecord(input.targetData),
-        trigger: input.trigger,
-      });
+      };
+    }
+    if (isSessionConflictCommandResult(commandResult)) {
+      return {
+        activated: false,
+        reason: "session-conflict",
+        commandId,
+        sessionId,
+        commandResult,
+      };
+    }
+    const sessionResult = sessionId
+      ? this.requireSessionService().getHandle(sessionId)
+      : undefined;
     return {
       activated: true,
       commandId,
@@ -407,4 +440,12 @@ function cloneRecord(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSessionConflictCommandResult(
+  value: unknown,
+): value is { ok: false; reason: "session-conflict" } {
+  return (
+    isRecord(value) && value.ok === false && value.reason === "session-conflict"
+  );
 }

@@ -28,9 +28,6 @@ export interface ImageSessionProjection {
   sourceTags: string[];
   placement: ImageSessionProjectionPlacement;
   surfaceScope?: ImageSessionProjectionSurfaceScope;
-  opacity?: number;
-  interactive?: boolean;
-  hideSource?: boolean;
 }
 
 export interface ImagePlacementCapabilityOptions {
@@ -63,6 +60,43 @@ export interface ImagePlacementViewState {
   sessionNotice: ImagePlacementSessionNotice | null;
 }
 
+export interface ImagePlacementSessionOpenEvent {
+  placementId: string;
+  sessionId: string;
+  sessionKey: string;
+  source: "api" | "document-interaction";
+  scope: {
+    surfaceId: string | null;
+    subjectId: string;
+    channel: string;
+    groupId: string;
+  };
+}
+
+export interface ImagePlacementSessionCloseEvent {
+  placementId: string | null;
+  reason: "committed" | "rolled-back" | "cancelled";
+  sessionId: string;
+}
+
+export type ImagePlacementCapabilityChangeEvent =
+  | {
+      type: "state";
+      state: ImagePlacementViewState;
+    }
+  | {
+      type: "session-notice";
+      notice: ImagePlacementSessionNotice | null;
+    }
+  | {
+      type: "session-opened";
+      event: ImagePlacementSessionOpenEvent;
+    }
+  | {
+      type: "session-closed";
+      event: ImagePlacementSessionCloseEvent;
+    };
+
 export type ImageSessionOverlayLayer = "underlay" | "overlay" | "controls";
 
 export interface ImageSessionOverlayContext {
@@ -92,6 +126,9 @@ export interface ImageSessionOverlayProvider {
 }
 
 export interface ImagePlacementCapabilityApi {
+  onDidChange(listener: (event: ImagePlacementCapabilityChangeEvent) => void): {
+    dispose(): void;
+  };
   applyOperation(
     input: string | ImagePlacementSessionInput,
     operation: ImageOperation,
@@ -124,10 +161,6 @@ export interface ImagePlacementCapabilityApi {
     input?: string | ImagePlacementSessionInput,
   ): Promise<ImagePlacementSessionNotice | { ok: true }>;
 
-  /** @deprecated Use validateSession(). */
-  validatePlacement(
-    placementId?: string,
-  ): Promise<ImagePlacementSessionNotice | { ok: true }>;
   focusPlacement(
     placementId: string | null,
     options?: { syncCanvasSelection?: boolean; skipRender?: boolean },

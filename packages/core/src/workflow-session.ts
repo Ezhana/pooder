@@ -28,10 +28,28 @@ export interface SessionDescriptor {
   leavePolicy: SessionLeavePolicy;
 }
 
-export interface SessionValidationResult<T = unknown> {
-  ok: boolean;
-  result?: T;
+export interface SessionValidationSuccess {
+  readonly ok: true;
 }
+
+export interface SessionValidationFailure<TDetail = unknown> {
+  readonly ok: false;
+  readonly detail?: TDetail;
+}
+
+export type SessionValidationResult<TDetail = unknown> =
+  | SessionValidationSuccess
+  | SessionValidationFailure<TDetail>;
+
+export type SessionCommitResult<TResult, TValidationDetail = unknown> =
+  | {
+      readonly ok: true;
+      readonly result: TResult;
+    }
+  | {
+      readonly ok: false;
+      readonly validation: SessionValidationFailure<TValidationDetail>;
+    };
 
 export interface SessionLifecycleContext<TDraft> {
   readonly descriptor: SessionDescriptor;
@@ -59,13 +77,12 @@ export interface OpenSessionInput<TDraft, TResult = unknown> {
   lifecycle?: SessionLifecycle<TDraft, TResult>;
 }
 
-export interface SessionSnapshot<TDraft = unknown, TResult = unknown> {
+export interface SessionSnapshot<TDraft = unknown> {
   readonly descriptor: SessionDescriptor;
   readonly phase: SessionPhase;
   readonly focused: boolean;
   readonly dirty: boolean;
   readonly draft: TDraft;
-  readonly result?: TResult;
 }
 
 export type SessionOwnedResource =
@@ -79,13 +96,13 @@ export interface SessionHandle<TDraft = unknown, TResult = unknown> {
   readonly phase: SessionPhase;
   readonly focused: boolean;
   readonly dirty: boolean;
-  getSnapshot(): SessionSnapshot<TDraft, TResult>;
+  getSnapshot(): SessionSnapshot<TDraft>;
   getDraft(): TDraft;
   updateDraft(update: TDraft | ((draft: TDraft) => TDraft)): TDraft;
   setDirty(dirty?: boolean): void;
   own<T extends SessionOwnedResource>(resource: T): T;
   validate(): Promise<SessionValidationResult>;
-  commit(): Promise<SessionValidationResult<TResult>>;
+  commit(): Promise<SessionCommitResult<TResult>>;
   rollback(): Promise<void>;
   cancel(): Promise<void>;
 }
@@ -98,18 +115,23 @@ export type SessionChangeReason =
   | "phase"
   | "validation-failed";
 
-export interface SessionChangeEvent<TDraft = unknown, TResult = unknown> {
+export interface SessionChangeEvent<TDraft = unknown> {
   readonly reason: SessionChangeReason;
-  readonly snapshot: SessionSnapshot<TDraft, TResult>;
+  readonly snapshot: SessionSnapshot<TDraft>;
 }
 
 export type SessionTerminalReason = "committed" | "rolled-back" | "cancelled";
 
-export interface SessionTerminalEvent<TResult = unknown> {
-  readonly descriptor: SessionDescriptor;
-  readonly reason: SessionTerminalReason;
-  readonly result?: TResult;
-}
+export type SessionTerminalEvent<TResult = unknown> =
+  | {
+      readonly descriptor: SessionDescriptor;
+      readonly reason: "committed";
+      readonly result: TResult;
+    }
+  | {
+      readonly descriptor: SessionDescriptor;
+      readonly reason: "rolled-back" | "cancelled";
+    };
 
 export interface SessionServiceEventMap {
   change: SessionChangeEvent;
@@ -145,7 +167,7 @@ export interface SessionArtifact<T = unknown> {
 }
 
 /** @internal Legacy registry state. */
-export interface SessionState<TDraft = unknown, TResult = unknown> {
+export interface SessionState<TDraft = unknown> {
   sessionId: SessionId;
   scope: SessionScope;
   interactionMode: SessionInteractionMode;
@@ -153,7 +175,6 @@ export interface SessionState<TDraft = unknown, TResult = unknown> {
   dirty: boolean;
   draft?: TDraft;
   artifacts: SessionArtifact[];
-  result?: TResult;
   startedAt: number;
   updatedAt: number;
 }
@@ -168,7 +189,10 @@ export interface CreateSessionInput<TDraft = unknown> {
   interactionMode?: SessionInteractionMode;
   lifecycle?: {
     begin?(): void | Promise<void>;
-    validate?(): boolean | SessionValidationResult | Promise<boolean | SessionValidationResult>;
+    validate?():
+      | boolean
+      | SessionValidationResult
+      | Promise<boolean | SessionValidationResult>;
     commit?(): unknown | Promise<unknown>;
     rollback?(): void | Promise<void>;
     cancel?(): void | Promise<void>;

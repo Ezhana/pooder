@@ -36,6 +36,7 @@ import {
   type Service,
   type SessionChangeEvent,
   type SessionService,
+  SessionConflictError,
 } from "../src";
 
 declare const process: {
@@ -1364,7 +1365,10 @@ async function testSessionLifecycleEvents() {
 
     assertEqual(sessions.getFocusedSessionId(), null);
     assertEqual(sessions.isSessionActive("image:front:slot"), false);
-    assertEqual(sessions.listSessions({ scope: { channel: "image" } }).length, 0);
+    assertEqual(
+      sessions.listSessions({ scope: { channel: "image" } }).length,
+      0,
+    );
     assert(
       events.some(
         (event) =>
@@ -1415,7 +1419,8 @@ async function testExclusiveSessionRequests() {
 
 async function testSessionV2OwnsLifecycleAndResources() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     let releaseBegin!: () => void;
     const beginGate = new Promise<void>((resolve) => {
       releaseBegin = resolve;
@@ -1475,7 +1480,9 @@ async function testSessionV2OwnsLifecycleAndResources() {
 }
 
 async function testSessionV2RecoversCommitAndForcesTerminalCleanup() {
-  const sessions = new (await import("../src/services/SessionService")).default();
+  const sessions = new (
+    await import("../src/services/SessionService")
+  ).default();
   let validationOk = false;
   let commitThrows = true;
   const handle = await sessions.open({
@@ -1496,7 +1503,10 @@ async function testSessionV2RecoversCommitAndForcesTerminalCleanup() {
     },
   });
   handle.updateDraft({ value: 2 });
-  assertEqual((await handle.commit()).ok, false);
+  assertDeepEqual(await handle.commit(), {
+    ok: false,
+    validation: { ok: false },
+  });
   assertEqual(handle.phase, "active");
   assertDeepEqual(handle.getDraft(), { value: 2 });
   validationOk = true;
@@ -1522,9 +1532,17 @@ async function testSessionV2RecoversCommitAndForcesTerminalCleanup() {
       leavePolicy: "block",
     },
     initialDraft: {},
-    lifecycle: { rollback: () => { throw new Error("rollback failed"); } },
+    lifecycle: {
+      rollback: () => {
+        throw new Error("rollback failed");
+      },
+    },
   });
-  forced.own({ dispose: () => { throw new Error("dispose failed"); } });
+  forced.own({
+    dispose: () => {
+      throw new Error("dispose failed");
+    },
+  });
   let aggregate: unknown;
   try {
     await forced.rollback();
@@ -1538,7 +1556,8 @@ async function testSessionV2RecoversCommitAndForcesTerminalCleanup() {
 
 async function testSessionSceneV2TracksFocusedRootAndOwnership() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
     const session = await sessions.open({
       descriptor: {
@@ -2003,31 +2022,75 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       "activate should return command result",
     );
 
-    runtime.services.getOrThrow<SessionService>(SESSION_SERVICE).createSession({
-      sessionId: "existing",
-      scope: { groupId: "editor-interaction" },
-      interactionMode: "exclusive",
-      leavePolicy: "block",
-      draft: { dirty: true },
-    });
-    const blocked = await interaction.activate({
-      spec: {
-        activation: {
-          action: { commandId: "interaction.open" },
-          session: {
-            channel: "image-placement",
-            groupId: "editor-interaction",
-            mode: "exclusive",
-            scope: "subject",
-          },
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    runtime.services
+      .getOrThrow(COMMAND_SERVICE)
+      .registerCommand("interaction.open-session", async (payload) => {
+        try {
+          const handle = await sessions.open({
+            descriptor: {
+              sessionId: payload.session.sessionId,
+              ownerId: "interaction-test-owner",
+              scope: payload.session.scope,
+              interactionMode: payload.session.interactionMode,
+              leavePolicy: payload.session.leavePolicy,
+            },
+            initialDraft: {},
+          });
+          return { ok: true as const, ownerId: handle.descriptor.ownerId };
+        } catch (error) {
+          if (error instanceof SessionConflictError) {
+            return { ok: false as const, reason: "session-conflict" as const };
+          }
+          throw error;
+        }
+      });
+    const sessionActivationSpec = {
+      activation: {
+        action: { commandId: "interaction.open-session" },
+        session: {
+          channel: "image-placement",
+          groupId: "editor-interaction",
+          mode: "exclusive" as const,
+          scope: "subject" as const,
         },
       },
+    };
+    const opened = await interaction.activate({
+      spec: sessionActivationSpec,
+      runtimeContext: {},
+      trigger: "primary-pointer",
+      subjectId: "current",
+    });
+    assertEqual(opened.activated, true);
+    assertEqual(
+      opened.sessionResult?.descriptor.ownerId,
+      "interaction-test-owner",
+      "activation commands should own sessions and attach their lifecycle",
+    );
+    await opened.sessionResult?.cancel();
+
+    const existing = await sessions.open({
+      descriptor: {
+        sessionId: "existing",
+        ownerId: "existing-owner",
+        scope: { groupId: "editor-interaction" },
+        interactionMode: "exclusive",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    existing.setDirty();
+    const blocked = await interaction.activate({
+      spec: sessionActivationSpec,
       runtimeContext: {},
       trigger: "primary-pointer",
       subjectId: "next",
     });
     assertEqual(blocked.activated, false);
     assertEqual(blocked.reason, "session-conflict");
+    await existing.cancel();
   });
 }
 
@@ -2776,7 +2839,10 @@ async function main() {
     ["manages sessions without registered tools", testSessionsWithoutTools],
     ["emits generic session lifecycle events", testSessionLifecycleEvents],
     ["coordinates exclusive session requests", testExclusiveSessionRequests],
-    ["owns V2 session lifecycle and resources", testSessionV2OwnsLifecycleAndResources],
+    [
+      "owns V2 session lifecycle and resources",
+      testSessionV2OwnsLifecycleAndResources,
+    ],
     [
       "recovers failed V2 commits and forces terminal cleanup",
       testSessionV2RecoversCommitAndForcesTerminalCleanup,

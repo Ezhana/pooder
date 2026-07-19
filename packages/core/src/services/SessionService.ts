@@ -6,6 +6,7 @@ import type {
   ListSessionsQuery,
   OpenSessionInput,
   SessionChangeEvent,
+  SessionCommitResult,
   SessionDescriptor,
   SessionHandle,
   SessionId,
@@ -33,7 +34,6 @@ interface SessionRecord<TDraft = unknown, TResult = unknown> {
   focused: boolean;
   dirty: boolean;
   draft: TDraft;
-  result?: TResult;
   lifecycle?: SessionLifecycle<TDraft, TResult>;
   resources: SessionOwnedResource[];
   handle: SessionHandleImpl<TDraft, TResult>;
@@ -75,7 +75,7 @@ class SessionHandleImpl<TDraft, TResult>
     return this.record.dirty;
   }
 
-  getSnapshot(): SessionSnapshot<TDraft, TResult> {
+  getSnapshot(): SessionSnapshot<TDraft> {
     return this.service.snapshot(this.record);
   }
 
@@ -100,7 +100,7 @@ class SessionHandleImpl<TDraft, TResult>
     return this.service.validateHandle(this.record);
   }
 
-  commit(): Promise<SessionValidationResult<TResult>> {
+  commit(): Promise<SessionCommitResult<TResult>> {
     return this.service.commitHandle(this.record);
   }
 
@@ -153,7 +153,8 @@ export default class SessionService implements Service {
   hasActive(scope: Partial<SessionScope> = {}): boolean {
     return [...this.sessions.values()].some(
       (record) =>
-        isLivePhase(record.phase) && scopeMatches(record.descriptor.scope, scope),
+        isLivePhase(record.phase) &&
+        scopeMatches(record.descriptor.scope, scope),
     );
   }
 
@@ -191,19 +192,19 @@ export default class SessionService implements Service {
       }
     }
     this.events.clear();
-    if (errors.length) throw new AggregateError(errors, "Session disposal failed.");
+    if (errors.length)
+      throw new AggregateError(errors, "Session disposal failed.");
   }
 
   snapshot<TDraft, TResult>(
     record: SessionRecord<TDraft, TResult>,
-  ): SessionSnapshot<TDraft, TResult> {
+  ): SessionSnapshot<TDraft> {
     return {
       descriptor: cloneDescriptor(record.descriptor),
       phase: record.phase,
       focused: record.focused,
       dirty: record.dirty,
       draft: clone(record.draft),
-      ...(record.result === undefined ? {} : { result: clone(record.result) }),
     };
   }
 
@@ -242,10 +243,14 @@ export default class SessionService implements Service {
     record.resources.push(resource);
   }
 
-  async validateHandle(record: AnySessionRecord): Promise<SessionValidationResult> {
+  async validateHandle(
+    record: AnySessionRecord,
+  ): Promise<SessionValidationResult> {
     this.ensureOwnedRecord(record);
     if (record.phase !== "active") {
-      throw new Error(`Session "${record.descriptor.sessionId}" is ${record.phase}.`);
+      throw new Error(
+        `Session "${record.descriptor.sessionId}" is ${record.phase}.`,
+      );
     }
     this.setPhase(record, "validating");
     try {
@@ -262,24 +267,28 @@ export default class SessionService implements Service {
 
   async commitHandle<TDraft, TResult>(
     record: SessionRecord<TDraft, TResult>,
-  ): Promise<SessionValidationResult<TResult>> {
+  ): Promise<SessionCommitResult<TResult>> {
     this.ensureOwnedRecord(record);
     const validation = await this.validateHandle(record);
-    if (!validation.ok) return validation as SessionValidationResult<TResult>;
+    if (!validation.ok) return { ok: false, validation };
     this.setPhase(record, "committing");
-    let result: TResult | undefined;
+    let result: TResult;
     try {
-      result = await record.lifecycle?.commit?.(record.handle);
+      result = record.lifecycle?.commit
+        ? await record.lifecycle.commit(record.handle)
+        : (undefined as TResult);
     } catch (error) {
       this.setPhase(record, "active");
       throw error;
     }
-    record.result = result;
     record.dirty = false;
     const cleanupErrors = await this.disposeResources(record);
-    this.terminate(record, "committed", result);
+    this.terminate(record, { reason: "committed", result });
     if (cleanupErrors.length) {
-      throw new AggregateError(cleanupErrors, "Committed session cleanup failed.");
+      throw new AggregateError(
+        cleanupErrors,
+        "Committed session cleanup failed.",
+      );
     }
     return { ok: true, result };
   }
@@ -297,12 +306,19 @@ export default class SessionService implements Service {
   }
 
   /** @internal */
-  createSession<TDraft = unknown>(input: CreateSessionInput<TDraft> = {}): SessionState<TDraft> {
-    const sessionId = normalizeSessionId(input.sessionId || this.createSessionId(input.scope));
+  createSession<TDraft = unknown>(
+    input: CreateSessionInput<TDraft> = {},
+  ): SessionState<TDraft> {
+    const sessionId = normalizeSessionId(
+      input.sessionId || this.createSessionId(input.scope),
+    );
     const existing = this.sessions.get(sessionId);
     if (existing) {
-      if (input.draft !== undefined) this.updateHandleDraft(existing, input.draft);
-      existing.artifacts = cloneArtifacts(input.artifacts ?? existing.artifacts);
+      if (input.draft !== undefined)
+        this.updateHandleDraft(existing, input.draft);
+      existing.artifacts = cloneArtifacts(
+        input.artifacts ?? existing.artifacts,
+      );
       return this.toLegacyState(existing) as SessionState<TDraft>;
     }
     const descriptor = normalizeDescriptor({
@@ -312,16 +328,22 @@ export default class SessionService implements Service {
       interactionMode: input.interactionMode ?? "cooperative",
       leavePolicy: input.leavePolicy ?? "block",
     });
-    const lifecycle = (input.lifecycle
-      ? {
-          begin: () => input.lifecycle?.begin?.(),
-          validate: () => input.lifecycle?.validate?.(),
-          commit: () => input.lifecycle?.commit?.(),
-          rollback: () => input.lifecycle?.rollback?.(),
-          cancel: () => input.lifecycle?.cancel?.(),
-        }
-      : undefined) as SessionLifecycle<TDraft, unknown> | undefined;
-    const record = this.createRecord(descriptor, input.draft as TDraft, lifecycle);
+    const lifecycle = (
+      input.lifecycle
+        ? {
+            begin: () => input.lifecycle?.begin?.(),
+            validate: () => input.lifecycle?.validate?.(),
+            commit: () => input.lifecycle?.commit?.(),
+            rollback: () => input.lifecycle?.rollback?.(),
+            cancel: () => input.lifecycle?.cancel?.(),
+          }
+        : undefined
+    ) as SessionLifecycle<TDraft, unknown> | undefined;
+    const record = this.createRecord(
+      descriptor,
+      input.draft as TDraft,
+      lifecycle,
+    );
     record.dirty = input.draft !== undefined;
     record.artifacts = cloneArtifacts(input.artifacts ?? []);
     this.sessions.set(sessionId, record);
@@ -335,7 +357,9 @@ export default class SessionService implements Service {
   async requestSession<TDraft = unknown>(
     input: CreateSessionInput<TDraft> = {},
   ): Promise<SessionRequestResult<TDraft>> {
-    const sessionId = normalizeSessionId(input.sessionId || this.createSessionId(input.scope));
+    const sessionId = normalizeSessionId(
+      input.sessionId || this.createSessionId(input.scope),
+    );
     try {
       const handle = await this.open({
         descriptor: {
@@ -358,7 +382,10 @@ export default class SessionService implements Service {
       });
       const record = (handle as SessionHandleImpl<TDraft, unknown>).record;
       record.artifacts = cloneArtifacts(input.artifacts ?? record.artifacts);
-      return { ok: true, state: this.toLegacyState(record) as SessionState<TDraft> };
+      return {
+        ok: true,
+        state: this.toLegacyState(record) as SessionState<TDraft>,
+      };
     } catch (error) {
       if (error instanceof SessionConflictError) {
         return {
@@ -373,16 +400,24 @@ export default class SessionService implements Service {
   }
 
   /** @internal */
-  updateSession<TDraft = unknown>(sessionId: SessionId, update: UpdateSessionInput<TDraft>): SessionState<TDraft> {
+  updateSession<TDraft = unknown>(
+    sessionId: SessionId,
+    update: UpdateSessionInput<TDraft>,
+  ): SessionState<TDraft> {
     const record = this.requireRecord(sessionId);
-    if (update.draft !== undefined) this.updateHandleDraft(record, update.draft);
-    if (update.artifacts !== undefined) record.artifacts = cloneArtifacts(update.artifacts);
+    if (update.draft !== undefined)
+      this.updateHandleDraft(record, update.draft);
+    if (update.artifacts !== undefined)
+      record.artifacts = cloneArtifacts(update.artifacts);
     if (update.dirty !== undefined) this.setHandleDirty(record, update.dirty);
     return this.toLegacyState(record) as SessionState<TDraft>;
   }
 
   /** @internal */
-  registerDirtyTracker(sessionId: SessionId, callback: () => boolean): Disposable {
+  registerDirtyTracker(
+    sessionId: SessionId,
+    callback: () => boolean,
+  ): Disposable {
     const record = this.requireRecord(sessionId);
     const sync = () => this.setHandleDirty(record, Boolean(callback()));
     sync();
@@ -390,38 +425,64 @@ export default class SessionService implements Service {
   }
 
   /** @internal */
-  getSession<TDraft = unknown, TResult = unknown>(sessionId: SessionId): SessionState<TDraft, TResult> | undefined {
+  getSession<TDraft = unknown>(
+    sessionId: SessionId,
+  ): SessionState<TDraft> | undefined {
     const record = this.sessions.get(normalizeSessionId(sessionId));
-    return record ? (this.toLegacyState(record) as SessionState<TDraft, TResult>) : undefined;
+    return record
+      ? (this.toLegacyState(record) as SessionState<TDraft>)
+      : undefined;
   }
 
   /** @internal */
   listSessions(query: ListSessionsQuery = {}): SessionState[] {
-    const statuses = query.status ? new Set(Array.isArray(query.status) ? query.status : [query.status]) : null;
+    const statuses = query.status
+      ? new Set(Array.isArray(query.status) ? query.status : [query.status])
+      : null;
     return [...this.sessions.values()]
       .map((record) => this.toLegacyState(record))
-      .filter((state) => (!statuses || statuses.has(state.status)) && (!query.scope || scopeMatches(state.scope, query.scope)));
+      .filter(
+        (state) =>
+          (!statuses || statuses.has(state.status)) &&
+          (!query.scope || scopeMatches(state.scope, query.scope)),
+      );
   }
 
   /** @internal */
-  isSessionActive(sessionId: SessionId): boolean { return this.isActive(sessionId); }
+  isSessionActive(sessionId: SessionId): boolean {
+    return this.isActive(sessionId);
+  }
   /** @internal */
-  hasActiveSession(query: { scope?: Partial<SessionScope> } = {}): boolean { return this.hasActive(query.scope); }
+  hasActiveSession(query: { scope?: Partial<SessionScope> } = {}): boolean {
+    return this.hasActive(query.scope);
+  }
   /** @internal */
-  isDirty(sessionId: SessionId): boolean { return this.requireRecord(sessionId).dirty; }
+  isDirty(sessionId: SessionId): boolean {
+    return this.requireRecord(sessionId).dirty;
+  }
   /** @internal */
-  markDirty(sessionId: SessionId, dirty = true): void { this.setHandleDirty(this.requireRecord(sessionId), dirty); }
+  markDirty(sessionId: SessionId, dirty = true): void {
+    this.setHandleDirty(this.requireRecord(sessionId), dirty);
+  }
   /** @internal */
   focusSession(sessionId: SessionId | null): void {
     if (sessionId === null) return this.focusRecord(null);
     this.focusRecord(this.requireRecord(sessionId));
   }
   /** @internal */
-  async validateSession(sessionId: SessionId): Promise<SessionValidationResult> { return this.requireRecord(sessionId).handle.validate(); }
+  async validateSession(
+    sessionId: SessionId,
+  ): Promise<SessionValidationResult> {
+    return this.requireRecord(sessionId).handle.validate();
+  }
   /** @internal */
-  async commitSession(sessionId: SessionId): Promise<SessionValidationResult> { return this.requireRecord(sessionId).handle.commit(); }
+  async commitSession(sessionId: SessionId): Promise<SessionValidationResult> {
+    return this.requireRecord(sessionId).handle.commit();
+  }
   /** @internal */
-  async rollbackSession(sessionId: SessionId): Promise<void> { await this.requireRecord(sessionId).handle.rollback(); }
+  async rollbackSession(sessionId: SessionId): Promise<void> {
+    await this.requireRecord(sessionId).handle.rollback();
+  }
   /** @internal */
   async cancelSession(sessionId: SessionId, _detail?: unknown): Promise<void> {
     const record = this.requireRecord(sessionId);
@@ -431,7 +492,10 @@ export default class SessionService implements Service {
     }
   }
   /** @internal */
-  async handleBeforeLeave(sessionId: SessionId, leavePolicy?: SessionLeavePolicy): Promise<SessionLeaveResult> {
+  async handleBeforeLeave(
+    sessionId: SessionId,
+    leavePolicy?: SessionLeavePolicy,
+  ): Promise<SessionLeaveResult> {
     const record = this.requireRecord(sessionId);
     try {
       await this.leaveConflict(record, leavePolicy);
@@ -468,7 +532,11 @@ export default class SessionService implements Service {
     );
     for (const conflict of conflicts) await this.leaveConflict(conflict);
 
-    const record = this.createRecord(descriptor, input.initialDraft, input.lifecycle);
+    const record = this.createRecord(
+      descriptor,
+      input.initialDraft,
+      input.lifecycle,
+    );
     this.sessions.set(descriptor.sessionId, record);
     try {
       await record.lifecycle?.begin?.(record.handle);
@@ -476,7 +544,10 @@ export default class SessionService implements Service {
       const cleanupErrors = await this.disposeResources(record);
       this.sessions.delete(descriptor.sessionId);
       if (cleanupErrors.length) {
-        throw new AggregateError([error, ...cleanupErrors], "Session begin and cleanup failed.");
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          "Session begin and cleanup failed.",
+        );
       }
       throw error;
     }
@@ -509,7 +580,10 @@ export default class SessionService implements Service {
     return record;
   }
 
-  private async leaveConflict(record: AnySessionRecord, override?: SessionLeavePolicy): Promise<void> {
+  private async leaveConflict(
+    record: AnySessionRecord,
+    override?: SessionLeavePolicy,
+  ): Promise<void> {
     if (!record.dirty) {
       await record.handle.cancel();
       return;
@@ -517,14 +591,22 @@ export default class SessionService implements Service {
     const policy = override ?? record.descriptor.leavePolicy;
     if (policy === "commit") {
       const result = await record.handle.commit();
-      if (!result.ok) throw new SessionConflictError(record.descriptor.sessionId, result.result);
+      if (!result.ok) {
+        throw new SessionConflictError(
+          record.descriptor.sessionId,
+          result.validation.detail,
+        );
+      }
       return;
     }
     if (policy === "rollback") {
       await record.handle.rollback();
       return;
     }
-    throw new SessionConflictError(record.descriptor.sessionId, "session-dirty");
+    throw new SessionConflictError(
+      record.descriptor.sessionId,
+      "session-dirty",
+    );
   }
 
   private async forceTerminate(
@@ -536,21 +618,36 @@ export default class SessionService implements Service {
     this.ensureOwnedRecord(record);
     this.setPhase(record, phase);
     const errors: unknown[] = [];
-    try { await lifecycle(); } catch (error) { collectErrors(errors, error); }
+    try {
+      await lifecycle();
+    } catch (error) {
+      collectErrors(errors, error);
+    }
     errors.push(...(await this.disposeResources(record)));
     record.dirty = false;
-    this.terminate(record, reason);
-    if (errors.length) throw new AggregateError(errors, `Session ${reason} failed.`);
+    this.terminate(record, { reason });
+    if (errors.length)
+      throw new AggregateError(errors, `Session ${reason} failed.`);
   }
 
-  private terminate(record: AnySessionRecord, reason: SessionTerminalReason, result?: unknown): void {
+  private terminate(
+    record: AnySessionRecord,
+    outcome:
+      | { reason: "committed"; result: unknown }
+      | { reason: Exclude<SessionTerminalReason, "committed"> },
+  ): void {
     record.phase = "closed";
     record.focused = false;
-    this.events.emit("terminal", {
-      descriptor: cloneDescriptor(record.descriptor),
-      reason,
-      ...(result === undefined ? {} : { result: clone(result) }),
-    });
+    const descriptor = cloneDescriptor(record.descriptor);
+    if (outcome.reason === "committed") {
+      this.events.emit("terminal", {
+        descriptor,
+        reason: outcome.reason,
+        result: clone(outcome.result),
+      });
+    } else {
+      this.events.emit("terminal", { descriptor, reason: outcome.reason });
+    }
     this.sessions.delete(record.descriptor.sessionId);
   }
 
@@ -558,7 +655,11 @@ export default class SessionService implements Service {
     const errors: unknown[] = [];
     while (record.resources.length) {
       const resource = record.resources.pop()!;
-      try { await disposeResource(resource); } catch (error) { collectErrors(errors, error); }
+      try {
+        await disposeResource(resource);
+      } catch (error) {
+        collectErrors(errors, error);
+      }
     }
     return errors;
   }
@@ -579,7 +680,10 @@ export default class SessionService implements Service {
     this.emitChange(record, "phase");
   }
 
-  private emitChange(record: AnySessionRecord, reason: SessionChangeEvent["reason"]): void {
+  private emitChange(
+    record: AnySessionRecord,
+    reason: SessionChangeEvent["reason"],
+  ): void {
     this.events.emit("change", { reason, snapshot: this.snapshot(record) });
   }
 
@@ -590,8 +694,14 @@ export default class SessionService implements Service {
   }
 
   private ensureMutable(record: AnySessionRecord): void {
-    if (record.phase !== "active" && record.phase !== "opening") {
-      throw new Error(`Session "${record.descriptor.sessionId}" is ${record.phase}.`);
+    if (
+      record.phase !== "active" &&
+      record.phase !== "opening" &&
+      record.phase !== "validating"
+    ) {
+      throw new Error(
+        `Session "${record.descriptor.sessionId}" is ${record.phase}.`,
+      );
     }
   }
 
@@ -604,9 +714,11 @@ export default class SessionService implements Service {
 
   private createSessionId(scope?: SessionScope): SessionId {
     const normalized = normalizeScope(scope);
-    const parts = [normalized.surfaceId, normalized.subjectId, normalized.channel].filter(
-      (part): part is string => Boolean(part),
-    );
+    const parts = [
+      normalized.surfaceId,
+      normalized.subjectId,
+      normalized.channel,
+    ].filter((part): part is string => Boolean(part));
     if (parts.length) return `session:${parts.join(":")}`;
     this.sequence += 1;
     return `session:${Date.now()}:${this.sequence}`;
@@ -621,7 +733,6 @@ export default class SessionService implements Service {
       dirty: record.dirty,
       draft: clone(record.draft),
       artifacts: cloneArtifacts(record.artifacts),
-      ...(record.result === undefined ? {} : { result: clone(record.result) }),
       startedAt: record.startedAt,
       updatedAt: record.updatedAt,
     };
@@ -661,11 +772,20 @@ function normalizeScope(scope: SessionScope = {}): SessionScope {
   };
 }
 
-export function scopeMatches(scope: SessionScope, query: Partial<SessionScope>): boolean {
-  return (["surfaceId", "subjectId", "channel", "groupId"] as const).every((key) => {
-    const expected = query[key];
-    return expected === undefined || expected === null || scope[key] === normalizeNullableText(expected);
-  });
+export function scopeMatches(
+  scope: SessionScope,
+  query: Partial<SessionScope>,
+): boolean {
+  return (["surfaceId", "subjectId", "channel", "groupId"] as const).every(
+    (key) => {
+      const expected = query[key];
+      return (
+        expected === undefined ||
+        expected === null ||
+        scope[key] === normalizeNullableText(expected)
+      );
+    },
+  );
 }
 
 function normalizeNullableText(value: unknown): string | null {
@@ -674,32 +794,45 @@ function normalizeNullableText(value: unknown): string | null {
   return normalized || null;
 }
 
-function sessionsConflict(left: SessionDescriptor, right: SessionDescriptor): boolean {
+function sessionsConflict(
+  left: SessionDescriptor,
+  right: SessionDescriptor,
+): boolean {
   return Boolean(
     left.scope.groupId &&
-      left.scope.groupId === right.scope.groupId &&
-      (left.interactionMode === "exclusive" || right.interactionMode === "exclusive"),
+    left.scope.groupId === right.scope.groupId &&
+    (left.interactionMode === "exclusive" ||
+      right.interactionMode === "exclusive"),
   );
 }
 
 function normalizeValidation(value: unknown): SessionValidationResult {
-  if (value === undefined || value === true) return { ok: true, result: value };
-  if (value === false) return { ok: false, result: value };
+  if (value === undefined || value === true) return { ok: true };
+  if (value === false) return { ok: false };
   if (typeof value === "object" && value !== null && "ok" in value) {
     const result = value as SessionValidationResult;
-    return { ok: Boolean(result.ok), result: clone(result.result) };
+    if (result.ok) return { ok: true };
+    return result.detail === undefined
+      ? { ok: false }
+      : { ok: false, detail: clone(result.detail) };
   }
-  return { ok: true, result: clone(value) };
+  return { ok: true };
 }
 
-function isLivePhase(phase: SessionPhase): boolean { return phase !== "closed"; }
+function isLivePhase(phase: SessionPhase): boolean {
+  return phase !== "closed";
+}
 
 function toLegacyStatus(phase: SessionPhase): SessionStatus {
   return phase === "committing" ? "committing" : "active";
 }
 
 function isOwnedResource(value: unknown): value is SessionOwnedResource {
-  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+  if (
+    (typeof value !== "object" && typeof value !== "function") ||
+    value === null
+  )
+    return false;
   const resource = value as Record<PropertyKey, unknown>;
   return (
     typeof resource.dispose === "function" ||
@@ -711,7 +844,9 @@ function isOwnedResource(value: unknown): value is SessionOwnedResource {
 async function disposeResource(resource: SessionOwnedResource): Promise<void> {
   const value = resource as Record<PropertyKey, unknown>;
   if (typeof value[Symbol.asyncDispose] === "function") {
-    await (value[Symbol.asyncDispose] as () => void | Promise<void>).call(resource);
+    await (value[Symbol.asyncDispose] as () => void | Promise<void>).call(
+      resource,
+    );
     return;
   }
   if (typeof value[Symbol.dispose] === "function") {
@@ -726,7 +861,9 @@ function collectErrors(target: unknown[], error: unknown): void {
   else target.push(error);
 }
 
-function cloneArtifacts<T extends LegacySessionArtifact>(artifacts: readonly T[]): T[] {
+function cloneArtifacts<T extends LegacySessionArtifact>(
+  artifacts: readonly T[],
+): T[] {
   return artifacts.map((artifact) => ({
     ...artifact,
     data: clone(artifact.data),
@@ -736,6 +873,7 @@ function cloneArtifacts<T extends LegacySessionArtifact>(artifacts: readonly T[]
 
 function clone<T>(value: T): T {
   if (value === undefined || value === null) return value;
-  if (typeof globalThis.structuredClone === "function") return globalThis.structuredClone(value);
+  if (typeof globalThis.structuredClone === "function")
+    return globalThis.structuredClone(value);
   return JSON.parse(JSON.stringify(value)) as T;
 }

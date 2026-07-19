@@ -888,7 +888,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
       evented: false,
       ...this.resolveRenderPatternProps(this.resolveLayoutProps(spec, props)),
     };
-    if (space === "screen") return this.resolveInteractiveControlProps(next);
+    if (space === "screen") {
+      return this.removeUndefinedFabricProps(
+        this.resolveInteractiveControlProps(next),
+      );
+    }
 
     const hasLeft = Number.isFinite(next.left);
     const hasTop = Number.isFinite(next.top);
@@ -906,7 +910,17 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const sceneScale = this.getSceneScale();
     next.scaleX = rawScaleX * sceneScale;
     next.scaleY = rawScaleY * sceneScale;
-    return this.resolveInteractiveControlProps(next);
+    return this.removeUndefinedFabricProps(
+      this.resolveInteractiveControlProps(next),
+    );
+  }
+
+  private removeUndefinedFabricProps(
+    props: Record<string, any>,
+  ): Record<string, any> {
+    return Object.fromEntries(
+      Object.entries(props).filter(([, value]) => value !== undefined),
+    );
   }
 
   private resolveImageTargetSizeProps(

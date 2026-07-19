@@ -25,6 +25,10 @@ export interface SceneTransform {
   scaleX?: number;
   scaleY?: number;
   angle?: number;
+  flipX?: boolean;
+  flipY?: boolean;
+  skewX?: number;
+  skewY?: number;
   originX?: "left" | "center" | "right";
   originY?: "top" | "center" | "bottom";
 }
