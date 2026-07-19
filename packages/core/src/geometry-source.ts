@@ -1,9 +1,6 @@
 import type Disposable from "./disposable";
-import type { CapabilityDefinition } from "./capability";
 import type { Service } from "./service";
 import type { GeometryPoint, GeometryRect } from "./interaction";
-
-export const GEOMETRY_SOURCE_CAPABILITY_ID = "pooder.geometry-source";
 
 export type CoordinateSpace = "document" | "scene" | "screen";
 
@@ -42,10 +39,7 @@ export interface GeometryPathUtilities {
     point: GeometryPoint,
     context: GeometryPathUtilityContext,
   ): GeometryPoint | null;
-  contains?(
-    point: GeometryPoint,
-    context: GeometryPathUtilityContext,
-  ): boolean;
+  contains?(point: GeometryPoint, context: GeometryPathUtilityContext): boolean;
   sample?(
     ratio: number,
     context: GeometryPathUtilityContext,
@@ -103,39 +97,16 @@ export interface GeometrySourceProvider {
   ): GeometrySnapshot | null;
 }
 
-export interface GeometrySourceCapability {
-  registerSource(source: GeometrySourceProvider): Disposable;
-  getGeometry(ref: GeometryRef): GeometrySnapshot | null;
-  listGeometries(sourceId?: string): GeometryDescriptor[];
-  projectGeometry(
-    ref: GeometryRef,
-    space: CoordinateSpace,
-  ): GeometrySnapshot | null;
-}
-
-export function createGeometrySourceCapabilityDefinition(
-  facade: GeometrySourceCapability,
-): CapabilityDefinition<GeometrySourceCapability> {
-  return {
-    id: GEOMETRY_SOURCE_CAPABILITY_ID,
-    metadata: {
-      name: "Geometry Source",
-      description: "Register, query, and project generic geometry sources.",
-      tags: ["core", "geometry"],
-    },
-    facade,
-  };
-}
-
-export class DefaultGeometrySourceCapability
-  implements Service, GeometrySourceCapability
-{
+export class GeometrySourceService implements Service {
   private readonly providers = new Map<string, GeometrySourceProvider>();
 
   init(): void {}
 
   registerSource(source: GeometrySourceProvider): Disposable {
-    const sourceId = normalizeId(source.sourceId, "GeometrySourceProvider.sourceId");
+    const sourceId = normalizeId(
+      source.sourceId,
+      "GeometrySourceProvider.sourceId",
+    );
     if (this.providers.has(sourceId)) {
       throw new Error(`Geometry source "${sourceId}" is already registered.`);
     }
@@ -184,7 +155,10 @@ export function createStaticGeometrySourceProvider(options: {
   sourceId: string;
   geometries: readonly GeometrySnapshot[];
 }): GeometrySourceProvider {
-  const sourceId = normalizeId(options.sourceId, "GeometrySourceProvider.sourceId");
+  const sourceId = normalizeId(
+    options.sourceId,
+    "GeometrySourceProvider.sourceId",
+  );
   const snapshots = new Map<string, GeometrySnapshot>();
   options.geometries.forEach((snapshot, index) => {
     const geometryId =
@@ -239,7 +213,9 @@ export function containsGeometryPoint(
     case "rect":
       return rectContainsPoint(snapshot.rect, normalizedPoint);
     case "path":
-      return Boolean(snapshot.utilities?.contains?.(normalizedPoint, { snapshot }));
+      return Boolean(
+        snapshot.utilities?.contains?.(normalizedPoint, { snapshot }),
+      );
     case "polygon":
       return polygonContainsPoint(snapshot.points, normalizedPoint);
     case "pointSet":
@@ -301,7 +277,10 @@ export function sampleGeometryPoint(
       if (!snapshot.points.length) return null;
       return normalizeGeometryPoint(
         snapshot.points[
-          Math.min(snapshot.points.length - 1, Math.floor(normalizedRatio * snapshot.points.length))
+          Math.min(
+            snapshot.points.length - 1,
+            Math.floor(normalizedRatio * snapshot.points.length),
+          )
         ],
       );
     case "compound":
@@ -429,7 +408,9 @@ function normalizeOptionalRect(
   return rect ? normalizeGeometryRect(rect) : null;
 }
 
-function boundsForPoints(points: readonly GeometryPoint[]): GeometryRect | null {
+function boundsForPoints(
+  points: readonly GeometryPoint[],
+): GeometryRect | null {
   if (!points.length) return null;
   const normalized = points.map(normalizeGeometryPoint);
   const xs = normalized.map((point) => point.x);
@@ -500,8 +481,12 @@ function nearestPointOnPolyline(
   if (!points.length) return null;
   if (points.length === 1) return normalizeGeometryPoint(points[0]);
   const segments = closed
-    ? points.map((start, index) => [start, points[(index + 1) % points.length]] as const)
-    : points.slice(0, -1).map((start, index) => [start, points[index + 1]] as const);
+    ? points.map(
+        (start, index) => [start, points[(index + 1) % points.length]] as const,
+      )
+    : points
+        .slice(0, -1)
+        .map((start, index) => [start, points[index + 1]] as const);
   return nearestFromCandidates(
     segments.map(([start, end]) =>
       nearestPointOnSegment(
@@ -579,9 +564,16 @@ function samplePolyline(
   if (points.length === 1) return normalizeGeometryPoint(points[0]);
   const normalized = points.map(normalizeGeometryPoint);
   const segments = closed
-    ? normalized.map((start, index) => [start, normalized[(index + 1) % normalized.length]] as const)
-    : normalized.slice(0, -1).map((start, index) => [start, normalized[index + 1]] as const);
-  const lengths = segments.map(([start, end]) => Math.sqrt(squaredDistance(start, end)));
+    ? normalized.map(
+        (start, index) =>
+          [start, normalized[(index + 1) % normalized.length]] as const,
+      )
+    : normalized
+        .slice(0, -1)
+        .map((start, index) => [start, normalized[index + 1]] as const);
+  const lengths = segments.map(([start, end]) =>
+    Math.sqrt(squaredDistance(start, end)),
+  );
   const total = lengths.reduce((sum, length) => sum + length, 0);
   if (total <= 0) return normalized[0];
   let distance = ratio * total;

@@ -3,8 +3,8 @@ import {
   type RegisteredCapabilityDefinition,
 } from "../capability";
 import Disposable from "../disposable";
-import EventBus from "../event";
 import type { Service } from "../service";
+import { TypedEventEmitter } from "../typed-event";
 
 export interface CapabilityRegistryChangeEvent {
   added: string[];
@@ -12,8 +12,12 @@ export interface CapabilityRegistryChangeEvent {
   extensionId?: string;
 }
 
+interface CapabilityRegistryEventMap {
+  change: CapabilityRegistryChangeEvent;
+}
+
 export default class CapabilityRegistryService implements Service {
-  private readonly eventBus = new EventBus();
+  private readonly events = new TypedEventEmitter<CapabilityRegistryEventMap>();
   private readonly capabilitiesById = new Map<
     string,
     RegisteredCapabilityDefinition
@@ -136,10 +140,7 @@ export default class CapabilityRegistryService implements Service {
   }
 
   onDidChange(callback: (event: CapabilityRegistryChangeEvent) => void) {
-    this.eventBus.on("change", callback);
-    return {
-      dispose: () => this.eventBus.off("change", callback),
-    };
+    return this.events.on("change", callback);
   }
 
   dispose() {
@@ -148,11 +149,11 @@ export default class CapabilityRegistryService implements Service {
     );
     this.capabilitiesById.clear();
     this.capabilityIdsByExtension.clear();
-    this.eventBus.clear();
+    this.events.clear();
   }
 
   private emitChange(event: CapabilityRegistryChangeEvent) {
-    this.eventBus.emit("change", event);
+    this.events.emit("change", event);
   }
 
   private cloneCapability<TFacade>(

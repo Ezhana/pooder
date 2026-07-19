@@ -1,4 +1,7 @@
 import type { RenderEffectSpec } from "./render";
+import type { InteractionSpec } from "./interaction-service";
+import type { RenderGraphLayer, RenderGraphNode } from "./render-intent";
+import type Disposable from "./disposable";
 
 export type LayerId = string;
 export type ElementId = string;
@@ -22,6 +25,10 @@ export interface SceneTransform {
   scaleX?: number;
   scaleY?: number;
   angle?: number;
+  flipX?: boolean;
+  flipY?: boolean;
+  skewX?: number;
+  skewY?: number;
   originX?: "left" | "center" | "right";
   originY?: "top" | "center" | "bottom";
 }
@@ -56,7 +63,9 @@ export interface SceneRecord {
   id: SceneId;
   order: number;
   visible: boolean;
+  /** @internal Legacy overlay flag. */
   renderable: boolean;
+  /** @internal Legacy overlay flag. */
   transient: boolean;
   metadata?: SceneMetadata;
 }
@@ -65,7 +74,9 @@ export interface SceneInput {
   id: SceneId;
   order?: number;
   visible?: boolean;
+  /** @internal Legacy overlay flag. */
   renderable?: boolean;
+  /** @internal Legacy overlay flag. */
   transient?: boolean;
   metadata?: SceneMetadata;
 }
@@ -73,7 +84,9 @@ export interface SceneInput {
 export interface ScenePatch {
   order?: number;
   visible?: boolean;
+  /** @internal Legacy overlay flag. */
   renderable?: boolean;
+  /** @internal Legacy overlay flag. */
   transient?: boolean;
   metadata?: SceneMetadata;
 }
@@ -92,8 +105,10 @@ export interface SceneElementBase {
   tags?: string[];
   metadata?: SceneMetadata;
   data?: SceneElementData;
+  /** @internal Renderer-specific props belong to the legacy overlay adapter. */
   style?: SceneElementStyle;
   transform?: SceneTransform;
+  interaction?: InteractionSpec;
 }
 
 export interface SceneImageElement extends SceneElementBase {
@@ -174,23 +189,27 @@ export interface SceneElementSelector {
 }
 
 export interface SceneChangeSet {
+  causes: SceneChangeCause[];
   scenes?: {
     added: SceneId[];
     updated: SceneId[];
     removed: SceneId[];
   };
-  sceneChanges?: Record<SceneId, {
-    layers: {
-      added: LayerId[];
-      updated: LayerId[];
-      removed: LayerId[];
-    };
-    elements: {
-      added: ElementId[];
-      updated: ElementId[];
-      removed: ElementId[];
-    };
-  }>;
+  sceneChanges?: Record<
+    SceneId,
+    {
+      layers: {
+        added: LayerId[];
+        updated: LayerId[];
+        removed: LayerId[];
+      };
+      elements: {
+        added: ElementId[];
+        updated: ElementId[];
+        removed: ElementId[];
+      };
+    }
+  >;
   layers: {
     added: LayerId[];
     updated: LayerId[];
@@ -203,4 +222,89 @@ export interface SceneChangeSet {
   };
 }
 
+export type SceneChangeCause =
+  | { type: "scene-content" }
+  | {
+      type: "interaction-preview";
+      sessionId: string;
+      toolId?: string;
+    };
+
+export interface SceneTransactionOptions {
+  cause: SceneChangeCause;
+}
+
 export type SceneTransaction<T = void> = () => T;
+
+export interface SessionSceneOwner {
+  readonly type: "session";
+  readonly sessionId: string;
+}
+
+export type SceneOwner = SessionSceneOwner;
+
+export interface DocumentProjectionFilterContext {
+  readonly layer: RenderGraphLayer;
+  readonly node: RenderGraphNode;
+}
+
+export type DocumentProjectionFilter = (
+  context: DocumentProjectionFilterContext,
+) => boolean;
+
+export interface DocumentSceneCompositionEntry {
+  readonly source: "document";
+  readonly interaction: "disabled";
+  readonly filter?: DocumentProjectionFilter;
+}
+
+export interface LocalSceneCompositionEntry {
+  readonly source: "local";
+  readonly layerIds: readonly LayerId[];
+}
+
+export type SceneCompositionEntry =
+  | DocumentSceneCompositionEntry
+  | LocalSceneCompositionEntry;
+
+export interface SceneComposition {
+  readonly entries: readonly SceneCompositionEntry[];
+}
+
+export interface CreateSceneInput {
+  readonly id: SceneId;
+  readonly owner: SceneOwner;
+  readonly composition: SceneComposition;
+}
+
+export interface SceneSnapshot {
+  readonly id: SceneId;
+  readonly owner: SceneOwner;
+  readonly composition: SceneComposition;
+}
+
+export interface SceneHandle extends Disposable {
+  readonly id: SceneId;
+  readonly owner: SceneOwner;
+  readonly composition: SceneComposition;
+  getSnapshot(): SceneSnapshot;
+  addLayer(layer: SceneLayerInput): SceneLayer;
+  updateLayer(id: LayerId, patch: SceneLayerPatch): SceneLayer;
+  removeLayer(id: LayerId): boolean;
+  addElement(element: SceneElementInput): SceneElement;
+  updateElement(id: ElementId, patch: SceneElementPatch): SceneElement;
+  removeElement(id: ElementId): boolean;
+  selectLayers(selector?: Omit<SceneLayerSelector, "sceneId">): SceneLayer[];
+  selectElements(
+    selector?: Omit<SceneElementSelector, "sceneId">,
+  ): SceneElement[];
+}
+
+export interface SceneRootChangeEvent {
+  readonly activeRoot: SceneSnapshot | null;
+}
+
+export interface SceneServiceEventMap {
+  change: SceneChangeSet;
+  rootChange: SceneRootChangeEvent;
+}

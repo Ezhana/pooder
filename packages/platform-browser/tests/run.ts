@@ -1,11 +1,17 @@
 import type { Service } from "@pooder/core";
 import {
   CONFIGURATION_SERVICE,
+  COMMAND_SERVICE,
+  INTERACTION_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
+  SESSION_SERVICE,
   SURFACE_FRAME_SERVICE,
   type RenderIntentService,
+  type InteractionService,
+  type SceneService,
+  type SessionService,
 } from "@pooder/core";
 import type { SurfaceSceneFrames } from "@pooder/core";
 import {
@@ -22,7 +28,10 @@ import {
   applyTransparentColorToAlpha,
   createBoundaryOutputMaskAlpha,
 } from "../src";
-import type { FabricRenderTargetItem } from "../src/canvas-service";
+import type {
+  FabricRenderGraphReconcileOptions,
+  FabricRenderTargetItem,
+} from "../src/canvas-service";
 import { ViewportSystem } from "../src/viewport-system";
 
 declare const process: {
@@ -76,7 +85,27 @@ class FakeCanvasService {
   renderCalls = 0;
   reconcileCalls: Array<{
     items: FabricRenderTargetItem[];
+    options?: FabricRenderGraphReconcileOptions;
   }> = [];
+
+  on(event: string, handler: (...args: any[]) => void) {
+    const key = `typed:${event}`;
+    const handlers = this.handlers.get(key) ?? [];
+    handlers.push(handler);
+    this.handlers.set(key, handlers);
+    return {
+      dispose: () => {
+        this.handlers.set(
+          key,
+          (this.handlers.get(key) ?? []).filter((item) => item !== handler),
+        );
+      },
+    };
+  }
+
+  emit(event: string, payload?: unknown) {
+    this.handlers.get(`typed:${event}`)?.forEach((handler) => handler(payload));
+  }
 
   resize(width: number, height: number) {
     this.resizeCalls.push({ width, height });
@@ -96,9 +125,13 @@ class FakeCanvasService {
     this.viewportLayoutCalls.push(layout);
   }
 
-  async reconcileRenderGraphDrawList(items: FabricRenderTargetItem[]) {
+  async reconcileRenderGraphDrawList(
+    items: FabricRenderTargetItem[],
+    options?: FabricRenderGraphReconcileOptions,
+  ) {
     this.reconcileCalls.push({
       items: items.map((item) => ({ ...item, spec: { ...item.spec } })),
+      options,
     });
   }
 
@@ -154,7 +187,49 @@ class FakeCanvasService {
 
   emitCanvasEvent(event: string, payload: any) {
     (this.handlers.get(event) ?? []).forEach((handler) => handler(payload));
+    const target = payload?.target;
+    const typed =
+      event === "object:moving"
+        ? { event: "transform", payload: { kind: "move", target } }
+        : event === "object:scaling"
+          ? { event: "transform", payload: { kind: "resize", target } }
+          : event === "object:rotating"
+            ? { event: "transform", payload: { kind: "rotate", target } }
+            : event === "object:modified"
+              ? { event: "transform", payload: { kind: "commit", target } }
+              : event === "mouse:down"
+                ? { event: "pointer", payload: { kind: "down", target } }
+                : event === "mouse:dblclick"
+                  ? {
+                      event: "pointer",
+                      payload: { kind: "double-click", target },
+                    }
+                  : null;
+    if (typed) {
+      (this.handlers.get(`typed:${typed.event}`) ?? []).forEach((handler) =>
+        handler(typed.payload),
+      );
+    }
   }
+}
+
+function createLayoutCanvas(
+  getViewportSize: () => { width: number; height: number },
+) {
+  const resizeListeners = new Set<
+    (event: { width: number; height: number }) => void
+  >();
+  return {
+    getViewportSize,
+    on: (event: string, listener: (payload: any) => void) => {
+      if (event === "resized") resizeListeners.add(listener);
+      return { dispose: () => resizeListeners.delete(listener) };
+    },
+    emitResize: () => {
+      const size = getViewportSize();
+      resizeListeners.forEach((listener) => listener(size));
+    },
+  };
 }
 
 class FakeSceneLayoutService {
@@ -216,7 +291,7 @@ function createMutableConfig(initial: Record<string, unknown> = {}) {
   const values = new Map(Object.entries(initial));
   const listenersByKey = new Map<string, Set<(event: any) => void>>();
   return {
-    get: <T,>(key: string, defaultValue?: T) =>
+    get: <T>(key: string, defaultValue?: T) =>
       values.has(key) ? (values.get(key) as T) : defaultValue,
     onDidChange: (key: string, listener: (event: any) => void) => {
       const listeners =
@@ -249,7 +324,7 @@ function createMutableSurfaceFrames(
   return {
     getFrames: (surfaceId?: string) => {
       const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
-      return key ? frameMap.get(key) ?? null : null;
+      return key ? (frameMap.get(key) ?? null) : null;
     },
     listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
     onAnyFramesChange: (listener: (event: any) => void) => {
@@ -630,6 +705,176 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   await runtime.dispose();
 }
 
+async function testSessionRootCompositionIsExplicitAndReadOnly() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "document-node",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "document",
+        objectId: "document-node",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "document", stack: 0 },
+      props: { width: 20, height: 20 },
+      interaction: { selection: { enabled: true } },
+    },
+  ]);
+  const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
+    descriptor: {
+      sessionId: "session-root",
+      ownerId: "platform-test",
+      scope: {},
+      interactionMode: "cooperative",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+  });
+  const scenes = runtime.services.getOrThrow(SCENE_SERVICE);
+  const scene = scenes.createScene({
+    id: "root",
+    owner: { type: "session", sessionId: session.descriptor.sessionId },
+    composition: {
+      entries: [
+        { source: "local", layerIds: ["underlay"] },
+        { source: "document", interaction: "disabled" },
+        { source: "local", layerIds: ["controls"] },
+      ],
+    },
+  });
+  session.own(scene);
+  scene.addLayer({ id: "underlay" });
+  scene.addLayer({ id: "controls" });
+  scene.addElement({
+    id: "underlay-node",
+    layerId: "underlay",
+    type: "rect",
+    width: 10,
+    height: 10,
+  });
+  scene.addElement({
+    id: "session-image",
+    layerId: "underlay",
+    type: "image",
+    src: "/working-image.png",
+    transform: {
+      left: 10,
+      top: 10,
+      scaleX: 0.5,
+      scaleY: 0.5,
+    },
+    interaction: {
+      selection: { enabled: true },
+      manipulation: {
+        move: { enabled: true },
+        resize: { enabled: true },
+        rotate: { enabled: true },
+      },
+    },
+  });
+  scene.addElement({
+    id: "control-node",
+    layerId: "controls",
+    type: "rect",
+    width: 10,
+    height: 10,
+    style: { selectable: false, lockScalingFlip: true },
+    data: { renderProps: { evented: false, lockUniScaling: true } },
+    interaction: { selection: { enabled: true } },
+  });
+  await adapter.flush();
+  const items = canvas.reconcileCalls.at(-1)?.items ?? [];
+  assertDeepEqual(
+    items.map((item) => item.spec.id),
+    ["underlay-node", "session-image", "document-node", "control-node"],
+    "composition entry order should be the render order",
+  );
+  const sessionImage = items.find(
+    (item) => item.spec.id === "session-image",
+  )?.spec;
+  assertEqual(
+    Object.hasOwn(sessionImage?.props ?? {}, "width"),
+    false,
+    "scene images without an explicit width should preserve their source width",
+  );
+  assertEqual(
+    Object.hasOwn(sessionImage?.props ?? {}, "height"),
+    false,
+    "scene images without an explicit height should preserve their source height",
+  );
+  assertEqual(
+    sessionImage?.props.selectable,
+    true,
+    "dimensionless scene images should remain selectable",
+  );
+  assertEqual(
+    sessionImage?.props.evented,
+    true,
+    "dimensionless scene images should remain hit-testable",
+  );
+  const projection = items.find(
+    (item) => item.spec.id === "document-node",
+  )?.spec;
+  assertEqual(
+    projection?.props.selectable,
+    false,
+    "document projections are read-only",
+  );
+  assertEqual(
+    projection?.props.evented,
+    false,
+    "document projections do not hit test",
+  );
+  assertEqual(
+    projection?.data?.interactionSpec,
+    undefined,
+    "document projections do not activate document interaction",
+  );
+  const control = items.find((item) => item.spec.id === "control-node")?.spec;
+  assertEqual(
+    control?.props.selectable,
+    true,
+    "scene elements use InteractionSpec",
+  );
+  assertEqual(
+    control?.props.evented,
+    true,
+    "scene elements use the shared resolver",
+  );
+  assertEqual(
+    control?.props.lockScalingFlip,
+    undefined,
+    "scene style cannot inject Fabric interaction flags",
+  );
+  assertEqual(
+    control?.props.lockUniScaling,
+    undefined,
+    "scene renderProps cannot inject Fabric interaction flags",
+  );
+
+  scene.dispose();
+  const localOnly = scenes.createScene({
+    id: "local-only",
+    owner: { type: "session", sessionId: session.descriptor.sessionId },
+    composition: { entries: [] },
+  });
+  session.own(localOnly);
+  await adapter.flush();
+  assertEqual(
+    canvas.reconcileCalls.at(-1)?.items.length,
+    0,
+    "a root without document projection must not render the document",
+  );
+  await session.cancel();
+  await runtime.dispose();
+}
+
 async function testFabricRenderGraphAdapterRendersRenderableScenes() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
@@ -791,7 +1036,7 @@ async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
 
   await adapter.flush();
   const before = canvas.reconcileCalls.length;
-  runtime.eventBus.emit("canvas:resized", {});
+  canvas.emit("resized", {});
   await adapter.flush();
 
   assert(
@@ -805,16 +1050,14 @@ async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
 async function testSceneLayoutServiceUsesStableSnapshots() {
   const runtime = new Pooder();
   const viewportSize = { width: 800, height: 600 };
-  const canvas = {
-    getViewportSize: () => ({ ...viewportSize }),
-  };
+  const canvas = createLayoutCanvas(() => ({ ...viewportSize }));
   const layoutService = new SceneLayoutService();
   const frameMap = new Map<string, SurfaceSceneFrames>();
   const frameListeners = new Set<(event: any) => void>();
   const surfaceFrames = {
     getFrames: (surfaceId?: string) => {
       const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
-      return key ? frameMap.get(key) ?? null : null;
+      return key ? (frameMap.get(key) ?? null) : null;
     },
     listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
     onAnyFramesChange: (listener: (event: any) => void) => {
@@ -853,7 +1096,11 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   const first = layoutService.getLayout("front");
   assert(first, "frame invalidation should produce a layout snapshot");
   assertEqual(first.surfaceId, "front", "snapshot should carry its surface id");
-  assertEqual(first.revision, 1, "first material snapshot should start revision");
+  assertEqual(
+    first.revision,
+    1,
+    "first material snapshot should start revision",
+  );
   assertEqual(changes.length, 1, "frame invalidation should emit once");
 
   const second = layoutService.recomputeLayout("front");
@@ -866,11 +1113,19 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   assertEqual(changes.length, 1, "cached reads should remain side-effect free");
 
   viewportSize.width = 1000;
-  runtime.eventBus.emit("canvas:resized", { width: 1000, height: 600 });
+  canvas.emitResize();
   const resized = layoutService.getLayout("front");
   assert(resized, "canvas resize should recompute the layout");
-  assertEqual(resized.revision, 2, "changed resize layout should increment revision");
-  assertEqual(changes.length, 2, "canvas resize should emit a real layout change");
+  assertEqual(
+    resized.revision,
+    2,
+    "changed resize layout should increment revision",
+  );
+  assertEqual(
+    changes.length,
+    2,
+    "canvas resize should emit a real layout change",
+  );
 
   layoutService.dispose();
   await runtime.dispose();
@@ -878,9 +1133,7 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
 
 async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
   const runtime = new Pooder();
-  const canvas = {
-    getViewportSize: () => ({ width: 800, height: 600 }),
-  };
+  const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const layoutService = new SceneLayoutService();
   const frameMap = new Map<string, SurfaceSceneFrames>();
   const frameListeners = new Set<(event: any) => void>();
@@ -896,7 +1149,7 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
     },
     getFrames: (surfaceId?: string) => {
       const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
-      return key ? frameMap.get(key) ?? null : null;
+      return key ? (frameMap.get(key) ?? null) : null;
     },
     listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
     onAnyFramesChange: (listener: (event: any) => void) => {
@@ -925,7 +1178,10 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
   });
 
   surfaceFrames.setFrames("front", TEST_SURFACE_FRAMES);
-  assert(layoutService.getLayout("front"), "snapshot should exist before clear");
+  assert(
+    layoutService.getLayout("front"),
+    "snapshot should exist before clear",
+  );
 
   surfaceFrames.clear();
   assertEqual(
@@ -942,9 +1198,7 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
 
 async function testSceneLayoutServiceUsesConfiguredViewPadding() {
   const runtime = new Pooder();
-  const canvas = {
-    getViewportSize: () => ({ width: 800, height: 600 }),
-  };
+  const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "10%" });
   const surfaceFrames = createMutableSurfaceFrames({
     front: TEST_SURFACE_FRAMES,
@@ -977,9 +1231,7 @@ async function testSceneLayoutServiceUsesConfiguredViewPadding() {
 
 async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
   const runtime = new Pooder();
-  const canvas = {
-    getViewportSize: () => ({ width: 800, height: 600 }),
-  };
+  const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "16%" });
   const surfaceFrames = createMutableSurfaceFrames({
     front: TEST_SURFACE_FRAMES,
@@ -1047,15 +1299,22 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
   ]);
 
   assert(
-    states.some((state) => state.loading),
-    "adapter should report loading while graph sync is pending",
+    states.some(
+      (state) =>
+        state.syncing &&
+        state.causes.some((cause) => cause.type === "document-apply") &&
+        state.invalidations.some(
+          (invalidation) => invalidation.type === "full",
+        ),
+    ),
+    "adapter should report the document cause and full invalidation while graph sync is pending",
   );
 
   await adapter.flush();
   const finalState = states[states.length - 1];
   assert(finalState, "adapter should report a final sync state");
   assertEqual(
-    finalState.loading,
+    finalState.syncing,
     false,
     "adapter should report idle after flush",
   );
@@ -1064,6 +1323,93 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
     finalState.generation > 0,
     "adapter should expose a monotonic sync generation",
   );
+  const flushedGeneration = finalState.generation;
+  await adapter.flush();
+  assertEqual(
+    adapter.getSyncState().generation,
+    flushedGeneration,
+    "flush should wait for consistency without creating a new sync generation",
+  );
+
+  const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+  const session = await sessions.open({
+    descriptor: {
+      sessionId: "image:front",
+      ownerId: "image-placement",
+      scope: { channel: "image-placement", subjectId: "front.image" },
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    },
+    initialDraft: { left: 0.5 },
+  });
+  const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  const sessionScene = scenes.createScene({
+    id: "image:front:scene",
+    owner: { type: "session", sessionId: "image:front" },
+    composition: {
+      entries: [{ source: "local", layerIds: ["controls"] }],
+    },
+  });
+  session.own(sessionScene);
+  sessionScene.addLayer({ id: "controls" });
+  await adapter.flush();
+  states.length = 0;
+  scenes.transaction(
+    {
+      cause: {
+        type: "interaction-preview",
+        sessionId: "image:front",
+        toolId: "image-placement",
+      },
+    },
+    () =>
+      sessionScene.addElement({
+        id: "snap-line",
+        layerId: "controls",
+        type: "rect",
+        width: 1,
+        height: 20,
+      }),
+  );
+  assert(
+    states.some((state) =>
+      state.causes.some(
+        (cause) =>
+          cause.type === "interaction-preview" &&
+          cause.sessionId === "image:front",
+      ) &&
+      state.invalidations.some(
+        (invalidation) =>
+          invalidation.type === "scene-elements" &&
+          invalidation.sceneId === "image:front:scene" &&
+          invalidation.elementIds.includes("snap-line"),
+      ),
+    ),
+    "adapter should preserve interaction preview provenance and element invalidation",
+  );
+  await adapter.flush();
+  assertDeepEqual(
+    canvas.reconcileCalls.at(-1)?.options?.invalidations,
+    [
+      {
+        type: "scene-elements",
+        sceneId: "image:front:scene",
+        elementIds: ["snap-line"],
+      },
+    ],
+    "adapter should pass precise scene invalidations to the backend",
+  );
+  const sessionStateGeneration = adapter.getSyncState().generation;
+  session.updateDraft({ left: 0.6 });
+  session.setDirty(true);
+  await adapter.flush();
+  assertEqual(
+    adapter.getSyncState().generation,
+    sessionStateGeneration,
+    "session draft and dirty changes should not invalidate render conditions",
+  );
+  await session.cancel();
+  await adapter.flush();
 
   stop();
   await runtime.dispose();
@@ -1210,8 +1556,9 @@ async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay
   runtime.services.register(canvas as any, CANVAS_SERVICE);
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
 
-  const renderIntentService =
-    runtime.services.getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE);
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
   renderIntentService.setDocumentIntents([
     {
       id: "front.dieline.cutline",
@@ -1310,7 +1657,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       visual: { type: "rect" },
       ordering: { layerId: "art", objectOrder: 0 },
       props: { width: 10, height: 10 },
-      interaction: { drag: { enabled: true } },
+      interaction: { manipulation: { move: { enabled: true } } },
     },
     {
       id: "constraint-only",
@@ -1324,15 +1671,20 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       ordering: { layerId: "art", objectOrder: 1 },
       props: { width: 10, height: 10 },
       interaction: {
-        drag: {
-          constraints: [
-            {
-              spec: {
-                type: "rect.contain",
-                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+        manipulation: {
+          move: {
+            enabled: false,
+            constraints: [
+              {
+                spec: {
+                  type: "rect.contain",
+                  params: {
+                    rect: { left: 0, top: 0, width: 100, height: 100 },
+                  },
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       },
     },
@@ -1352,14 +1704,16 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
           op: "truthy",
           ref: { source: "context", key: "can.interact" },
         },
-        drag: {
-          enabled: true,
-          constraints: [
-            {
-              activeWhen: { op: "const", value: true },
-              spec: { type: "grid.snap", params: { size: 5 } },
-            },
-          ],
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                activeWhen: { op: "const", value: true },
+                spec: { type: "grid.snap", params: { size: 5 } },
+              },
+            ],
+          },
         },
       },
     },
@@ -1391,7 +1745,30 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       visual: { type: "rect" },
       ordering: { layerId: "art", objectOrder: 4 },
       props: { width: 10, height: 10 },
-      interaction: { transform: { enabled: true } },
+      interaction: {
+        manipulation: {
+          resize: { enabled: true },
+          rotate: { enabled: true },
+        },
+      },
+    },
+    {
+      id: "activation-only",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "activation-only",
+      },
+      visual: { type: "rect" },
+      ordering: { layerId: "art", objectOrder: 5 },
+      props: { width: 10, height: 10 },
+      interaction: {
+        activation: {
+          action: { commandId: "test.open" },
+          trigger: "primary-pointer",
+        },
+      },
     },
   ]);
 
@@ -1399,10 +1776,19 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   let last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
   assert(last, "adapter should reconcile declarative interaction");
   const interactive = last.items.find((item) => item.key === "interactive");
-  const constraintOnly = last.items.find((item) => item.key === "constraint-only");
+  const constraintOnly = last.items.find(
+    (item) => item.key === "constraint-only",
+  );
   const conditional = last.items.find((item) => item.key === "conditional");
-  const runtimeEvented = last.items.find((item) => item.key === "runtime-evented");
-  const transformOnly = last.items.find((item) => item.key === "transform-only");
+  const runtimeEvented = last.items.find(
+    (item) => item.key === "runtime-evented",
+  );
+  const transformOnly = last.items.find(
+    (item) => item.key === "transform-only",
+  );
+  const activationOnly = last.items.find(
+    (item) => item.key === "activation-only",
+  );
   assertEqual(
     interactive?.spec.props.selectable,
     true,
@@ -1429,9 +1815,9 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "constraints alone should not enable Fabric selection",
   );
   assertEqual(
-    constraintOnly?.spec.data?.interactionEnabled,
-    false,
-    "constraints alone should not mark the live object interactive",
+    constraintOnly?.spec.props.lockMovementX,
+    true,
+    "disabled move constraints should keep movement locked",
   );
   assertEqual(
     conditional?.spec.props.visible,
@@ -1454,9 +1840,9 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "runtime props should keep graph objects targetable for canvas clicks",
   );
   assertEqual(
-    runtimeEvented?.spec.data?.interactionEnabled,
-    false,
-    "runtime evented props should not opt into declarative drag handling",
+    runtimeEvented?.spec.data?.interactionSpec,
+    undefined,
+    "runtime evented props should not create declarative interaction state",
   );
   assertEqual(
     transformOnly?.spec.props.selectable,
@@ -1474,9 +1860,55 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     "transform-only interaction should keep movement locked",
   );
   assertEqual(
-    transformOnly?.spec.data?.interactionEnabled,
+    transformOnly?.spec.props.lockRotation,
+    false,
+    "rotate interaction should unlock rotation controls",
+  );
+  assertEqual(
+    activationOnly?.spec.props.selectable,
+    false,
+    "activation-only objects should not become selectable",
+  );
+  assertEqual(
+    activationOnly?.spec.props.evented,
     true,
-    "transform interaction should mark the live object interactive",
+    "activation-only objects should remain pointer targets",
+  );
+  assertEqual(
+    activationOnly?.spec.data?.interactionSpec?.activation?.action.commandId,
+    "test.open",
+    "activation declarations should be attached to the render target",
+  );
+
+  let activationEvent: any;
+  let activationPayload: any;
+  runtime.eventBus.on("interaction:activate", (event) => {
+    activationEvent = event;
+  });
+  runtime.services
+    .getOrThrow(COMMAND_SERVICE)
+    .registerCommand("test.open", (payload) => {
+      activationPayload = payload;
+      return "opened";
+    });
+  canvas.emitCanvasEvent("mouse:down", {
+    target: {
+      data: {
+        ...activationOnly?.spec.data,
+        renderTarget: "render-graph",
+      },
+    },
+  });
+  await Promise.resolve();
+  assertEqual(
+    activationPayload?.subjectId,
+    "activation-only",
+    "primary pointer activation should dispatch the Core command",
+  );
+  assertEqual(
+    activationEvent,
+    undefined,
+    "primary pointer activation should not emit a raw interaction event",
   );
 
   intents.setRuntimeConditionValue("can.interact", true);
@@ -1490,10 +1922,10 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     true,
     "matched interaction.enabledWhen should enable interaction",
   );
-  assertDeepEqual(
-    enabledConditional?.spec.data?.interactionConstraints,
-    [{ type: "grid.snap", params: { size: 5 } }],
-    "matched constraint.activeWhen should expose active constraints to dragging",
+  assertEqual(
+    enabledConditional?.spec.props.lockMovementX,
+    false,
+    "matched constraint.activeWhen should enable movement",
   );
 
   await runtime.dispose();
@@ -1514,16 +1946,27 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     scaleX: 1,
     scaleY: 1,
     data: {
+      renderKey: "constrained",
       renderTarget: "render-graph",
       subjectId: "constrained",
       renderIntentId: "constrained",
-      interactionEnabled: true,
-      interactionConstraints: [
-        {
-          type: "rect.contain",
-          params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+      interactionSpec: {
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                spec: {
+                  type: "rect.contain",
+                  params: {
+                    rect: { left: 0, top: 0, width: 100, height: 100 },
+                  },
+                },
+              },
+            ],
+          },
         },
-      ],
+      },
     },
     getBoundingRect() {
       return {
@@ -1545,17 +1988,51 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     90,
     "rect interaction constraints should clamp graph objects",
   );
+  assertEqual(
+    (target.data as any).renderOwnership.phase,
+    "active",
+    "moving a graph object should claim active interaction ownership",
+  );
   let modifiedTransform: any;
-  const transformListener = (event: any) => {
+  const rawTransformListener = (event: any) => {
     modifiedTransform = event;
   };
-  runtime.eventBus.on("render-graph:object-transform", transformListener);
+  const committedKinds: string[] = [];
+  runtime.services
+    .getOrThrow<InteractionService>(INTERACTION_SERVICE)
+    .onDidCommitManipulation((event) => committedKinds.push(event.kind));
+  runtime.eventBus.on("render-graph:object-transform", rawTransformListener);
   canvas.emitCanvasEvent("object:modified", { target });
-  runtime.eventBus.off("render-graph:object-transform", transformListener);
+  runtime.eventBus.off("render-graph:object-transform", rawTransformListener);
+  assertEqual(
+    modifiedTransform,
+    undefined,
+    "modified graph objects should not emit raw transform events",
+  );
   assertDeepEqual(
-    modifiedTransform?.transform?.frame,
-    { left: 90, top: 20, width: 10, height: 10 },
-    "modified graph objects should emit the resolved transform result",
+    committedKinds,
+    ["move"],
+    "modified graph objects should commit through InteractionService",
+  );
+  assertEqual(
+    (target.data as any).renderOwnership.phase,
+    "committing",
+    "commit should retain ownership until declarative state catches up",
+  );
+  (target.data as any).interactionSpec = {
+    manipulation: {
+      resize: { enabled: true },
+      rotate: { enabled: true },
+    },
+  };
+  canvas.emitCanvasEvent("object:scaling", { target });
+  canvas.emitCanvasEvent("object:modified", { target });
+  canvas.emitCanvasEvent("object:rotating", { target });
+  canvas.emitCanvasEvent("object:modified", { target });
+  assertDeepEqual(
+    committedKinds,
+    ["move", "resize", "rotate"],
+    "moving, scaling, and rotating should map to Core operation kinds",
   );
 
   const constraintOnly = {
@@ -1565,7 +2042,9 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
       ...target.data,
       subjectId: "constraint-only",
       renderIntentId: "constraint-only",
-      interactionEnabled: false,
+      interactionSpec: {
+        manipulation: { move: { enabled: false } },
+      },
     },
   };
   canvas.emitCanvasEvent("object:moving", { target: constraintOnly });
@@ -1604,14 +2083,22 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
       renderTarget: "render-graph",
       subjectId: "object-constrained",
       renderIntentId: "object-constrained",
-      interactionEnabled: true,
-      interactionConstraints: [
-        {
-          type: "object-frame.contain",
-          source: { sourceId: "render-graph", geometryId: "bounds" },
-          params: { target: "center" },
+      interactionSpec: {
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                spec: {
+                  type: "object-frame.contain",
+                  source: { sourceId: "render-graph", geometryId: "bounds" },
+                  params: { target: "center" },
+                },
+              },
+            ],
+          },
         },
-      ],
+      },
     },
   };
   canvas.objects = [reference];
@@ -1643,21 +2130,19 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
   clipped.clipPath = new FakeFabricObject("rect");
   canvas.objects.push(stale, clipped);
 
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "kept",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "kept",
-          type: "rect",
-          props: { width: 10, height: 10 },
-          data: { subjectId: "art" },
-        },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "kept",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "kept",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "art" },
       },
-    ],
-  );
+    },
+  ]);
 
   assert(
     !canvas.objects.includes(stale),
@@ -1678,37 +2163,170 @@ async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
 async function testCanvasReconcileSortsByRenderOrder() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
 
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "guide",
-        layerId: "guide",
-        order: 900,
-        spec: {
-          id: "guide",
-          type: "path",
-          props: { pathData: "M0 0H10V10H0Z" },
-          data: { subjectId: "guide" },
-        },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "guide",
+      layerId: "guide",
+      order: 900,
+      spec: {
+        id: "guide",
+        type: "path",
+        props: { pathData: "M0 0H10V10H0Z" },
+        data: { subjectId: "guide" },
       },
-      {
-        key: "content",
-        layerId: "content",
-        order: 10,
-        spec: {
-          id: "content",
-          type: "rect",
-          props: { height: 10, width: 10 },
-          data: { subjectId: "content" },
-        },
+    },
+    {
+      key: "content",
+      layerId: "content",
+      order: 10,
+      spec: {
+        id: "content",
+        type: "rect",
+        props: { height: 10, width: 10 },
+        data: { subjectId: "content" },
       },
-    ],
-  );
+    },
+  ]);
 
   assertDeepEqual(
     canvas.objects.map((object) => object.data.renderKey),
     ["content", "guide"],
     "render graph objects should stack by resolved render order",
+  );
+}
+
+async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+  const workingImage: FabricRenderTargetItem = {
+    key: "working-image",
+    layerId: "image.session.image",
+    origin: {
+      type: "scene-element",
+      sceneId: "image-session",
+      elementId: "working-image",
+    },
+    order: 0,
+    spec: {
+      id: "working-image",
+      type: "image",
+      src: "/working-image.png",
+      props: { left: 100, top: 100, width: 50, height: 50 },
+      data: { source: "working" },
+    },
+  };
+
+  await service.reconcileRenderGraphDrawList([workingImage], {
+    invalidations: [{ type: "full" }],
+  });
+  const image = canvas.objects[0] as any;
+  image.left = 137;
+  image.top = 142;
+
+  await service.reconcileRenderGraphDrawList([
+    workingImage,
+    {
+      key: "snap-guide",
+      layerId: "image.session.controls",
+      origin: {
+        type: "scene-element",
+        sceneId: "image-session",
+        elementId: "snap-guide",
+      },
+      order: 1,
+      spec: {
+        id: "snap-guide",
+        type: "path",
+        props: { pathData: "M100 0L100 200" },
+      },
+    },
+  ], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["snap-guide"],
+      },
+    ],
+  });
+
+  assertEqual(
+    image.left,
+    137,
+    "adding a snap guide should not reset the live image x position",
+  );
+  assertEqual(
+    image.top,
+    142,
+    "adding a snap guide should not reset the live image y position",
+  );
+
+  const movedWorkingImage: FabricRenderTargetItem = {
+    ...workingImage,
+    spec: {
+      ...workingImage.spec,
+      props: { ...workingImage.spec.props, left: 120 },
+    },
+  };
+  await service.reconcileRenderGraphDrawList([movedWorkingImage], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["working-image"],
+      },
+    ],
+  });
+
+  assertEqual(
+    image.left,
+    120,
+    "a changed image spec should still replace the live transform",
+  );
+
+  image.left = 145;
+  image.data.renderOwnership = {
+    type: "interaction",
+    interactionId: "working-image:1",
+    phase: "active",
+  };
+  await service.reconcileRenderGraphDrawList([workingImage], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["working-image"],
+      },
+    ],
+  });
+  assertEqual(
+    image.left,
+    145,
+    "an active interaction should retain transform ownership",
+  );
+
+  image.data.renderOwnership = {
+    type: "interaction",
+    interactionId: "working-image:1",
+    phase: "committing",
+  };
+  await service.reconcileRenderGraphDrawList([workingImage], {
+    invalidations: [
+      {
+        type: "scene-elements",
+        sceneId: "image-session",
+        elementIds: ["working-image"],
+      },
+    ],
+  });
+  assertEqual(
+    image.left,
+    100,
+    "a committing interaction should yield to the next declarative update",
+  );
+  assertEqual(
+    image.data.renderOwnership.type,
+    "declarative",
+    "a declarative update should release interaction ownership",
   );
 }
 
@@ -1788,43 +2406,75 @@ function testCanvasServiceScalesImagesToTargetFrame() {
   );
 }
 
+function testCanvasServicePreservesIntrinsicImageSize() {
+  const { service } = createCanvasServiceForReconcileTests();
+  const image: any = new FakeFabricObject("image", {
+    height: 480,
+    width: 640,
+  });
+
+  (service as any).patchFabricObject(image, {
+    id: "working-image",
+    type: "image",
+    src: "/working-image.png",
+    space: "scene",
+    props: {
+      height: undefined,
+      left: 10,
+      scaleX: 0.5,
+      scaleY: 0.5,
+      top: 10,
+      width: undefined,
+    },
+  });
+
+  assertEqual(
+    image.width,
+    640,
+    "undefined target width should not overwrite the intrinsic image width",
+  );
+  assertEqual(
+    image.height,
+    480,
+    "undefined target height should not overwrite the intrinsic image height",
+  );
+}
+
 async function testCanvasReconcileAppliesInteractiveControlDefaults() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
 
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "interactive",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "interactive",
-          type: "rect",
-          props: {
-            width: 10,
-            height: 10,
-            hasControls: true,
-          },
-          data: { subjectId: "interactive-subject" },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "interactive",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "interactive",
+        type: "rect",
+        props: {
+          width: 10,
+          height: 10,
+          hasControls: true,
         },
+        data: { subjectId: "interactive-subject" },
       },
-      {
-        key: "non-interactive",
-        layerId: "controls",
-        order: 1,
-        spec: {
-          id: "non-interactive",
-          type: "rect",
-          props: {
-            width: 10,
-            height: 10,
-            hasControls: false,
-          },
-          data: { subjectId: "non-interactive-subject" },
+    },
+    {
+      key: "non-interactive",
+      layerId: "controls",
+      order: 1,
+      spec: {
+        id: "non-interactive",
+        type: "rect",
+        props: {
+          width: 10,
+          height: 10,
+          hasControls: false,
         },
+        data: { subjectId: "non-interactive-subject" },
       },
-    ],
-  );
+    },
+  ]);
 
   const interactive = canvas.objects.find(
     (object) => object.data?.id === "interactive",
@@ -1911,32 +2561,30 @@ async function testCanvasReconcileAppliesInteractiveControlDefaults() {
 
 async function testCanvasReconcileAppliesClipPath() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "art-node",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "art-node",
-          type: "rect",
-          props: { width: 10, height: 10 },
-          data: { subjectId: "art-subject" },
-          effects: [
-            {
-              type: "clipPath",
-              id: "clip.art",
-              source: {
-                id: "clip-source",
-                type: "rect",
-                props: { width: 5, height: 5 },
-              },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "art-node",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "art-node",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "art-subject" },
+        effects: [
+          {
+            type: "clipPath",
+            id: "clip.art",
+            source: {
+              id: "clip-source",
+              type: "rect",
+              props: { width: 5, height: 5 },
             },
-          ],
-        },
+          },
+        ],
       },
-    ],
-  );
+    },
+  ]);
 
   assert(canvas.objects[0]?.clipPath, "clip path should be attached");
   assertEqual(
@@ -1948,34 +2596,32 @@ async function testCanvasReconcileAppliesClipPath() {
 
 async function testCanvasReconcileAppliesImageClipPath() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
-  await service.reconcileRenderGraphDrawList(
-    [
-      {
-        key: "art-node",
-        layerId: "art",
-        order: 0,
-        spec: {
-          id: "art-node",
-          type: "rect",
-          props: { width: 10, height: 10 },
-          data: { subjectId: "art-subject" },
-          effects: [
-            {
-              type: "clipPath",
-              id: "clip.art",
-              source: {
-                id: "clip-source",
-                type: "image",
-                src: "data:image/png;base64,dieline",
-                space: "screen",
-                props: { left: 1, top: 2, width: 100, height: 80 },
-              },
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "art-node",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "art-node",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "art-subject" },
+        effects: [
+          {
+            type: "clipPath",
+            id: "clip.art",
+            source: {
+              id: "clip-source",
+              type: "image",
+              src: "data:image/png;base64,dieline",
+              space: "screen",
+              props: { left: 1, top: 2, width: 100, height: 80 },
             },
-          ],
-        },
+          },
+        ],
       },
-    ],
-  );
+    },
+  ]);
 
   const clipPath = canvas.objects[0]?.clipPath as any;
   assert(clipPath, "image clip path should be attached");
@@ -2802,6 +3448,10 @@ async function main() {
       testFabricRenderGraphAdapterBuildsDrawList,
     ],
     [
+      "composes explicit read-only session roots",
+      testSessionRootCompositionIsExplicitAndReadOnly,
+    ],
+    [
       "renders renderable SceneService scenes",
       testFabricRenderGraphAdapterRendersRenderableScenes,
     ],
@@ -2866,12 +3516,20 @@ async function main() {
       testCanvasReconcileSortsByRenderOrder,
     ],
     [
+      "reconciles by invalidation and interaction ownership",
+      testCanvasReconcileUsesInvalidationAndInteractionOwnership,
+    ],
+    [
       "omits path source props from Fabric props",
       testCanvasServiceOmitsPathSourcePropsFromFabricProps,
     ],
     [
       "scales image target frames from source dimensions",
       testCanvasServiceScalesImagesToTargetFrame,
+    ],
+    [
+      "preserves intrinsic image dimensions when target size is omitted",
+      testCanvasServicePreservesIntrinsicImageSize,
     ],
     [
       "applies interactive control defaults",

@@ -1,4 +1,13 @@
-export const EDITOR_DOCUMENT_VERSION = 5 as const;
+import type {
+  ConstraintSpec,
+  InteractionConstraintSpec,
+  InteractionOperationSpec,
+  InteractionSessionIntent,
+  InteractionSpec,
+  RuntimeConditionExpr,
+} from "@pooder/core";
+
+export const EDITOR_DOCUMENT_VERSION = 6 as const;
 
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
@@ -42,22 +51,6 @@ export interface EditorTransform {
   angle?: number;
   originX?: "left" | "center" | "right";
   originY?: "top" | "center" | "bottom";
-}
-
-export interface EditorInteractionConstraint {
-  activeWhen?: Record<string, unknown>;
-  spec: Record<string, unknown>;
-}
-
-export interface EditorObjectInteraction {
-  enabledWhen?: Record<string, unknown>;
-  transform?: {
-    enabled?: boolean;
-  };
-  drag?: {
-    enabled?: boolean;
-    constraints?: EditorInteractionConstraint[];
-  };
 }
 
 export interface EditorDocument {
@@ -130,7 +123,7 @@ export interface EditorObjectBase {
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  interaction?: EditorObjectInteraction;
+  interaction?: InteractionSpec;
   effects?: EditorObjectEffect[];
 }
 
@@ -197,18 +190,6 @@ export type EditorBuiltinObjectEffect =
       targetId: string;
       operation: "add" | "subtract" | "intersect" | "exclude";
       participation?: "preview" | "export" | "both";
-    })
-  | (EditorObjectEffectCommon & {
-      type: "object-constraint";
-      targetId: string;
-      strategy: "path" | "edge" | "inside" | "lowest-tangent";
-      params?: Record<string, unknown>;
-    })
-  | (EditorObjectEffectCommon & {
-      type: "interactive";
-      enabled: boolean;
-      session?: boolean;
-      groupId?: string;
     })
   | (EditorObjectEffectCommon & {
       type: "guide";
@@ -499,15 +480,20 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
   return Object.keys(transform).length ? transform : undefined;
 }
 
-function normalizeRuntimeCondition(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? cloneRecord(value) : undefined;
+function normalizeRuntimeCondition(
+  value: unknown,
+): RuntimeConditionExpr | undefined {
+  return isRecord(value)
+    ? (cloneRecord(value) as unknown as RuntimeConditionExpr)
+    : undefined;
 }
 
 function normalizeInteractionConstraint(
   value: unknown,
-): EditorInteractionConstraint | null {
+): InteractionConstraintSpec | null {
   if (!isRecord(value)) return null;
-  const rawSpec = isRecord(value.spec) ? value.spec : value;
+  const rawSpec = isRecord(value.spec) ? value.spec : undefined;
+  if (!rawSpec) return null;
   const type = normalizeId(rawSpec.type);
   if (!type) return null;
   return {
@@ -517,42 +503,113 @@ function normalizeInteractionConstraint(
     spec: {
       ...cloneRecord(rawSpec),
       type,
-    },
+    } as ConstraintSpec,
   };
 }
 
 function normalizeInteractionConstraints(
   value: unknown,
-): EditorInteractionConstraint[] | undefined {
+): InteractionConstraintSpec[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const constraints = value
     .map((item) => normalizeInteractionConstraint(item))
-    .filter(
-      (item): item is EditorInteractionConstraint => Boolean(item),
-    );
+    .filter((item): item is InteractionConstraintSpec => Boolean(item));
   return constraints.length ? constraints : undefined;
+}
+
+function normalizeInteractionOperation(
+  value: unknown,
+): InteractionOperationSpec | undefined {
+  if (!isRecord(value) || typeof value.enabled !== "boolean") return undefined;
+  const constraints = normalizeInteractionConstraints(value.constraints);
+  return {
+    enabled: value.enabled,
+    ...(constraints ? { constraints } : {}),
+  };
+}
+
+function normalizeInteractionSession(
+  value: unknown,
+): InteractionSessionIntent | undefined {
+  if (!isRecord(value)) return undefined;
+  const channel = normalizeId(value.channel);
+  const groupId = normalizeId(value.groupId);
+  const sessionId = normalizeId(value.sessionId);
+  if (
+    !channel ||
+    !groupId ||
+    (value.mode !== "exclusive" &&
+      value.mode !== "cooperative" &&
+      value.mode !== "passive") ||
+    (value.scope !== "subject" &&
+      value.scope !== "surface" &&
+      value.scope !== "editor")
+  ) {
+    return undefined;
+  }
+  return {
+    channel,
+    groupId,
+    ...(sessionId ? { sessionId } : {}),
+    mode: value.mode,
+    scope: value.scope,
+    ...(value.leavePolicy === "block" ||
+    value.leavePolicy === "commit" ||
+    value.leavePolicy === "rollback"
+      ? { leavePolicy: value.leavePolicy }
+      : {}),
+  };
 }
 
 function normalizeObjectInteraction(
   value: unknown,
-): EditorObjectInteraction | undefined {
+): InteractionSpec | undefined {
   if (!isRecord(value)) return undefined;
-  const interaction: EditorObjectInteraction = {};
+  const interaction: InteractionSpec = {};
   const enabledWhen = normalizeRuntimeCondition(value.enabledWhen);
   if (enabledWhen) interaction.enabledWhen = enabledWhen;
 
-  if (isRecord(value.transform)) {
-    interaction.transform = {
-      enabled: value.transform.enabled === true,
-    };
+  if (
+    isRecord(value.selection) &&
+    typeof value.selection.enabled === "boolean"
+  ) {
+    interaction.selection = { enabled: value.selection.enabled };
   }
 
-  if (isRecord(value.drag)) {
-    const constraints = normalizeInteractionConstraints(value.drag.constraints);
-    interaction.drag = {
-      enabled: value.drag.enabled === true,
-      ...(constraints ? { constraints } : {}),
-    };
+  if (isRecord(value.activation) && isRecord(value.activation.action)) {
+    const commandId = normalizeId(value.activation.action.commandId);
+    if (commandId) {
+      const session = normalizeInteractionSession(value.activation.session);
+      interaction.activation = {
+        ...(typeof value.activation.enabled === "boolean"
+          ? { enabled: value.activation.enabled }
+          : {}),
+        ...(value.activation.trigger === "primary-pointer" ||
+        value.activation.trigger === "double-click"
+          ? { trigger: value.activation.trigger }
+          : {}),
+        action: {
+          commandId,
+          ...(isRecord(value.activation.action.payload)
+            ? { payload: cloneRecord(value.activation.action.payload) }
+            : {}),
+        },
+        ...(session ? { session } : {}),
+      };
+    }
+  }
+
+  if (isRecord(value.manipulation)) {
+    const move = normalizeInteractionOperation(value.manipulation.move);
+    const resize = normalizeInteractionOperation(value.manipulation.resize);
+    const rotate = normalizeInteractionOperation(value.manipulation.rotate);
+    if (move || resize || rotate) {
+      interaction.manipulation = {
+        ...(move ? { move } : {}),
+        ...(resize ? { resize } : {}),
+        ...(rotate ? { rotate } : {}),
+      };
+    }
   }
 
   return Object.keys(interaction).length ? interaction : undefined;
@@ -637,35 +694,6 @@ function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
       participation === "export" ||
       participation === "both"
         ? { participation }
-        : {}),
-    };
-  }
-
-  if (type === "object-constraint") {
-    const targetId = normalizeId(value.targetId);
-    const strategy = normalizeId(value.strategy);
-    if (
-      !targetId ||
-      !["path", "edge", "inside", "lowest-tangent"].includes(strategy)
-    ) {
-      return null;
-    }
-
-    return {
-      type,
-      targetId,
-      strategy: strategy as "path" | "edge" | "inside" | "lowest-tangent",
-      ...(isRecord(value.params) ? { params: cloneRecord(value.params) } : {}),
-    };
-  }
-
-  if (type === "interactive") {
-    return {
-      type,
-      enabled: value.enabled === true,
-      ...(typeof value.session === "boolean" ? { session: value.session } : {}),
-      ...(normalizeId(value.groupId)
-        ? { groupId: normalizeId(value.groupId) }
         : {}),
     };
   }
@@ -881,8 +909,6 @@ export function isEditorBuiltinObjectEffect(
   return (
     effect.type === "clip-source" ||
     effect.type === "boolean" ||
-    effect.type === "object-constraint" ||
-    effect.type === "interactive" ||
     effect.type === "guide"
   );
 }
@@ -953,6 +979,131 @@ function validateObjectEffects(
     if (isGenericEditorEffect(effect)) {
       validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options);
     }
+  });
+}
+
+function validateObjectInteraction(
+  diagnostics: EditorDocumentDiagnostic[],
+  value: unknown,
+  path: string,
+) {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "interaction-invalid",
+      message: "Object interaction must be an object.",
+      path,
+    });
+    return;
+  }
+
+  const allowedFields = new Set([
+    "enabledWhen",
+    "selection",
+    "activation",
+    "manipulation",
+  ]);
+  Object.keys(value).forEach((field) => {
+    if (allowedFields.has(field)) return;
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "interaction-field-invalid",
+      message: `Interaction field "${field}" is not supported in EditorDocument v6.`,
+      path: `${path}.${field}`,
+    });
+  });
+
+  if (
+    value.selection !== undefined &&
+    (!isRecord(value.selection) || typeof value.selection.enabled !== "boolean")
+  ) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "interaction-selection-invalid",
+      message: "Interaction selection requires a boolean enabled field.",
+      path: `${path}.selection`,
+    });
+  }
+
+  if (value.activation !== undefined) {
+    const activation = isRecord(value.activation)
+      ? value.activation
+      : undefined;
+    const action = isRecord(activation?.action) ? activation.action : undefined;
+    if (!activation || !action || !normalizeId(action.commandId)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "interaction-activation-invalid",
+        message: "Interaction activation requires action.commandId.",
+        path: `${path}.activation.action.commandId`,
+      });
+    }
+    if (action && Object.prototype.hasOwnProperty.call(action, "command")) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "interaction-action-command-legacy",
+        message:
+          "Interaction action.command is not supported; use action.commandId.",
+        path: `${path}.activation.action.command`,
+      });
+    }
+  }
+
+  if (value.manipulation === undefined) return;
+  if (!isRecord(value.manipulation)) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "interaction-manipulation-invalid",
+      message: "Interaction manipulation must be an object.",
+      path: `${path}.manipulation`,
+    });
+    return;
+  }
+  Object.entries(value.manipulation).forEach(([kind, operation]) => {
+    const operationPath = `${path}.manipulation.${kind}`;
+    if (kind !== "move" && kind !== "resize" && kind !== "rotate") {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "interaction-operation-invalid",
+        message: `Interaction manipulation operation "${kind}" is not supported.`,
+        path: operationPath,
+      });
+      return;
+    }
+    if (!isRecord(operation) || typeof operation.enabled !== "boolean") {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "interaction-operation-enabled-required",
+        message: `Interaction ${kind} requires a boolean enabled field.`,
+        path: `${operationPath}.enabled`,
+      });
+      return;
+    }
+    if (operation.constraints === undefined) return;
+    if (!Array.isArray(operation.constraints)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "interaction-constraints-invalid",
+        message: `Interaction ${kind} constraints must be an array.`,
+        path: `${operationPath}.constraints`,
+      });
+      return;
+    }
+    operation.constraints.forEach((constraint, constraintIndex) => {
+      const spec =
+        isRecord(constraint) && isRecord(constraint.spec)
+          ? constraint.spec
+          : undefined;
+      if (!spec || !normalizeId(spec.type)) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "interaction-constraint-invalid",
+          message: "Interaction constraint requires spec.type.",
+          path: `${operationPath}.constraints[${constraintIndex}].spec`,
+        });
+      }
+    });
   });
 }
 
@@ -1096,6 +1247,17 @@ export function validateEditorDocument(
       );
       layer.objects?.forEach((object, objectIndex) => {
         const objectPath = `${layerPath}.objects[${objectIndex}]`;
+        const rawLayer = Array.isArray(
+          (rawSurface as Record<string, unknown>).layers,
+        )
+          ? ((rawSurface as Record<string, unknown>).layers as unknown[])[
+              layerIndex
+            ]
+          : undefined;
+        const rawObject =
+          isRecord(rawLayer) && Array.isArray(rawLayer.objects)
+            ? rawLayer.objects[objectIndex]
+            : undefined;
         validateUniqueId(
           diagnostics,
           objectIds,
@@ -1111,6 +1273,11 @@ export function validateEditorDocument(
             path: `${objectPath}.frame`,
           });
         }
+        validateObjectInteraction(
+          diagnostics,
+          isRecord(rawObject) ? rawObject.interaction : undefined,
+          `${objectPath}.interaction`,
+        );
         validateObjectEffects(diagnostics, object.effects, objectPath, options);
         runValidators(diagnostics, options.validators, {
           document,

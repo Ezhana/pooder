@@ -6,33 +6,35 @@ import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
 import { ImagePlacementCapabilityExtension } from "./extensions/image";
-import { InteractionCapabilityExtension } from "./extensions/interaction";
 import { MirrorCapabilityExtension } from "./extensions/mirror";
 import { SceneExportCapabilityExtension } from "./extensions/scene-export";
+import { defineLegacyExtension } from "@pooder/core/internal/legacy-extension";
 
 export const createClipCapability = (
   options?: ConstructorParameters<typeof ClipCapabilityExtension>[0],
-) => new ClipCapabilityExtension(options);
+) => defineLegacyExtension(new ClipCapabilityExtension(options));
 
 export const createConfigurableVisualCapability = (
-  options?: ConstructorParameters<typeof ConfigurableVisualCapabilityExtension>[0],
-) => new ConfigurableVisualCapabilityExtension(options);
+  options?: ConstructorParameters<
+    typeof ConfigurableVisualCapabilityExtension
+  >[0],
+) => defineLegacyExtension(new ConfigurableVisualCapabilityExtension(options));
 
 export const createDesignExportCapability = (
   options?: ConstructorParameters<typeof DesignExportCapabilityExtension>[0],
-) => new DesignExportCapabilityExtension(options);
+) => defineLegacyExtension(new DesignExportCapabilityExtension(options));
 
 export const createEdgeDetectionCapability = (
   options?: ConstructorParameters<typeof EdgeDetectionCapabilityExtension>[0],
-) => new EdgeDetectionCapabilityExtension(options);
+) => defineLegacyExtension(new EdgeDetectionCapabilityExtension(options));
 
 export const createDielineGeometryCapability = (
   options?: ConstructorParameters<typeof DielineGeometryCapabilityExtension>[0],
-) => new DielineGeometryCapabilityExtension(options);
+) => defineLegacyExtension(new DielineGeometryCapabilityExtension(options));
 
 export const createFeatureCapability = (
   options?: ConstructorParameters<typeof FeatureCapabilityExtension>[0],
-) => new FeatureCapabilityExtension(options);
+) => defineLegacyExtension(new FeatureCapabilityExtension(options));
 
 export const createImagePlacementCapability = (
   options?: ConstructorParameters<typeof ImagePlacementCapabilityExtension>[0],
@@ -40,15 +42,12 @@ export const createImagePlacementCapability = (
 
 export const createImageMaskCapability = (
   options?: ConstructorParameters<typeof ImageMaskCapabilityExtension>[0],
-) => new ImageMaskCapabilityExtension(options);
-
-export const createInteractionCapability = () =>
-  new InteractionCapabilityExtension();
+) => defineLegacyExtension(new ImageMaskCapabilityExtension(options));
 
 export const createMirrorCapability = (
   options?: ConstructorParameters<typeof MirrorCapabilityExtension>[0],
-) => new MirrorCapabilityExtension(options);
+) => defineLegacyExtension(new MirrorCapabilityExtension(options));
 
 export const createSceneExportCapability = (
   options?: ConstructorParameters<typeof SceneExportCapabilityExtension>[0],
-) => new SceneExportCapabilityExtension(options);
+) => defineLegacyExtension(new SceneExportCapabilityExtension(options));

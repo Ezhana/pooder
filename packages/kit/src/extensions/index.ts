@@ -4,7 +4,6 @@ export * from "./design-export";
 export * from "./edge-detection";
 export * from "./image-mask";
 export * from "./image";
-export * from "./interaction";
 export * from "./dieline";
 export * from "./feature";
 export * from "./mirror";

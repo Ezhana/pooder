@@ -19,8 +19,9 @@ import {
   CapabilityRegistryService,
   CommandService,
   ConfigurationService,
-  DefaultConstraintResolverCapability,
-  DefaultGeometrySourceCapability,
+  ConstraintResolverService,
+  GeometrySourceService,
+  InteractionService,
   DefaultSurfaceFrameService,
   RenderEffectRegistryService,
   RenderIntentCompilerRegistryService,
@@ -29,6 +30,13 @@ import {
   SessionService,
 } from "./services";
 import { ExtensionContext } from "./context";
+import { TypedEventEmitter } from "./typed-event";
+
+export interface RuntimeServiceChangeEvent {
+  readonly type: "registered" | "unregistered";
+  readonly id: string;
+  readonly service: Service;
+}
 
 export * from "./extension";
 export * from "./context";
@@ -38,6 +46,7 @@ export * from "./scene";
 export * from "./render";
 export * from "./render-intent";
 export * from "./coordinate";
+export * from "./image-geometry";
 export * from "./units";
 export * from "./dieline-shape";
 export * from "./scene-layout-model";
@@ -46,8 +55,11 @@ export * from "./workflow-session";
 export * from "./interaction";
 export * from "./geometry-source";
 export * from "./constraint-resolver";
+export * from "./interaction-service";
 export * from "./surface-frames";
+export * from "./typed-event";
 export * from "./services";
+/** @internal Temporary legacy test/extension bridge. */
 export { default as EventBus } from "./event";
 
 type RuntimeServicesApi = {
@@ -75,6 +87,7 @@ type RuntimeServicesApi = {
     errorMessage?: string,
   ): T;
   has(identifier: ServiceIdentifier<Service>): boolean;
+  onDidChange(listener: (event: RuntimeServiceChangeEvent) => void): Disposable;
 };
 
 type RuntimeExtensionsApi = {
@@ -86,6 +99,7 @@ type RuntimeExtensionsApi = {
   getState(id: string): ExtensionStateSnapshot | undefined;
   listStates(): ExtensionStateSnapshot[];
   unregister(id: string): Promise<boolean>;
+  onDidChange: ExtensionManager["onDidChange"];
 };
 
 type RuntimeCommandsApi = {
@@ -125,27 +139,20 @@ type RuntimeConfigApi = {
 };
 
 type RuntimeSessionsApi = {
-  create: SessionService["createSession"];
-  update: SessionService["updateSession"];
-  get: SessionService["getSession"];
-  list: SessionService["listSessions"];
-  isActive: SessionService["isSessionActive"];
-  hasActive: SessionService["hasActiveSession"];
-  isDirty: SessionService["isDirty"];
-  markDirty: SessionService["markDirty"];
-  focus: SessionService["focusSession"];
-  getFocusedId: SessionService["getFocusedSessionId"];
-  validate: SessionService["validateSession"];
-  commit: SessionService["commitSession"];
-  rollback: SessionService["rollbackSession"];
-  cancel: SessionService["cancelSession"];
-  handleBeforeLeave: SessionService["handleBeforeLeave"];
+  open: SessionService["open"];
+  getHandle: SessionService["getHandle"];
+  listSnapshots: SessionService["listSnapshots"];
   onDidChange: SessionService["onDidChange"];
+  onDidTerminate: SessionService["onDidTerminate"];
 };
 
 export class Pooder {
+  /** @internal Temporary bridge for extensions wrapped by defineLegacyExtension(). */
   readonly eventBus: EventBus = new EventBus();
   private readonly serviceRegistry: ServiceRegistry = new ServiceRegistry();
+  private readonly serviceEvents = new TypedEventEmitter<{
+    change: RuntimeServiceChangeEvent;
+  }>();
   private readonly serviceContext: ServiceContext = {
     eventBus: this.eventBus,
     get: <T extends Service>(identifier: ServiceIdentifier<T>) =>
@@ -161,15 +168,22 @@ export class Pooder {
   private readonly capabilityRegistryService = new CapabilityRegistryService();
   private readonly configurationService = new ConfigurationService();
   private readonly renderIntentService = new RenderIntentService();
-  private readonly renderEffectRegistryService = new RenderEffectRegistryService();
+  private readonly renderEffectRegistryService =
+    new RenderEffectRegistryService();
   private readonly renderIntentCompilerRegistryService =
     new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
   private readonly sessionService = new SessionService();
   private readonly surfaceFrameService = new DefaultSurfaceFrameService();
-  private readonly geometrySourceService = new DefaultGeometrySourceCapability();
-  private readonly constraintResolverService =
-    new DefaultConstraintResolverCapability(this.geometrySourceService);
+  private readonly geometrySourceService = new GeometrySourceService();
+  private readonly constraintResolverService = new ConstraintResolverService(
+    this.geometrySourceService,
+  );
+  private readonly interactionService = new InteractionService({
+    commandService: this.commandService,
+    constraintResolver: this.constraintResolverService,
+    sessionService: this.sessionService,
+  });
   private readonly extensionManager: ExtensionManager;
 
   readonly services: RuntimeServicesApi;
@@ -201,11 +215,8 @@ export class Pooder {
       this.renderIntentCompilerRegistryService,
       CORE_SERVICE_TOKENS.RENDER_INTENT_COMPILER_REGISTRY,
     );
+    this.registerService(this.sessionService, CORE_SERVICE_TOKENS.SESSION);
     this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
-    this.registerService(
-      this.sessionService,
-      CORE_SERVICE_TOKENS.SESSION,
-    );
     this.registerService(
       this.surfaceFrameService,
       CORE_SERVICE_TOKENS.SURFACE_FRAME,
@@ -217,6 +228,10 @@ export class Pooder {
     this.registerService(
       this.constraintResolverService,
       CORE_SERVICE_TOKENS.CONSTRAINT_RESOLVER,
+    );
+    this.registerService(
+      this.interactionService,
+      CORE_SERVICE_TOKENS.INTERACTION,
     );
     const context: ExtensionContext = {
       eventBus: this.eventBus,
@@ -233,7 +248,6 @@ export class Pooder {
     };
 
     this.extensionManager = new ExtensionManager(context, {
-      eventBus: this.eventBus,
       capabilityRegistry: this.capabilityRegistryService,
       configurationService: this.configurationService,
       commandService: this.commandService,
@@ -254,15 +268,18 @@ export class Pooder {
       getOrThrow: (identifier, errorMessage) =>
         this.getServiceOrThrow(identifier, errorMessage),
       has: (identifier) => this.hasService(identifier),
+      onDidChange: (listener) => this.serviceEvents.on("change", listener),
     };
 
     this.extensions = {
       register: (extension) => this.extensionManager.register(extension),
-      registerMany: (extensions) => this.extensionManager.registerMany(extensions),
+      registerMany: (extensions) =>
+        this.extensionManager.registerMany(extensions),
       flushActivation: () => this.extensionManager.flushActivation(),
       getState: (id) => this.extensionManager.getState(id),
       listStates: () => this.extensionManager.listStates(),
       unregister: (id) => this.extensionManager.unregister(id),
+      onDidChange: (listener) => this.extensionManager.onDidChange(listener),
     };
 
     this.commands = {
@@ -281,7 +298,8 @@ export class Pooder {
     };
 
     this.config = {
-      get: (key, defaultValue) => this.configurationService.get(key, defaultValue),
+      get: (key, defaultValue) =>
+        this.configurationService.get(key, defaultValue),
       update: (key, value) => this.configurationService.update(key, value),
       import: (data) => this.configurationService.import(data),
       export: () => this.configurationService.export(),
@@ -289,29 +307,18 @@ export class Pooder {
       getDefinition: (id) => this.configurationService.getDefinition(id),
       onDidChange: (key, callback) =>
         this.configurationService.onDidChange(key, callback),
-      onAnyChange: (callback) => this.configurationService.onAnyChange(callback),
+      onAnyChange: (callback) =>
+        this.configurationService.onAnyChange(callback),
       onDefinitionsChange: (callback) =>
         this.configurationService.onDefinitionsChange(callback),
     };
 
     this.sessions = {
-      create: (...args) => this.sessionService.createSession(...args),
-      update: (...args) => this.sessionService.updateSession(...args),
-      get: (...args) => this.sessionService.getSession(...args),
-      list: (...args) => this.sessionService.listSessions(...args),
-      isActive: (...args) => this.sessionService.isSessionActive(...args),
-      hasActive: (...args) => this.sessionService.hasActiveSession(...args),
-      isDirty: (...args) => this.sessionService.isDirty(...args),
-      markDirty: (...args) => this.sessionService.markDirty(...args),
-      focus: (...args) => this.sessionService.focusSession(...args),
-      getFocusedId: () => this.sessionService.getFocusedSessionId(),
-      validate: (...args) => this.sessionService.validateSession(...args),
-      commit: (...args) => this.sessionService.commitSession(...args),
-      rollback: (...args) => this.sessionService.rollbackSession(...args),
-      cancel: (...args) => this.sessionService.cancelSession(...args),
-      handleBeforeLeave: (...args) =>
-        this.sessionService.handleBeforeLeave(...args),
+      open: (...args) => this.sessionService.open(...args),
+      getHandle: (...args) => this.sessionService.getHandle(...args),
+      listSnapshots: () => this.sessionService.listSnapshots(),
       onDidChange: (...args) => this.sessionService.onDidChange(...args),
+      onDidTerminate: (...args) => this.sessionService.onDidTerminate(...args),
     };
   }
 
@@ -320,7 +327,10 @@ export class Pooder {
     identifier?: ServiceIdentifier<T>,
     options: RegisterServiceOptions = {},
   ): boolean {
-    const serviceIdentifier = this.resolveServiceIdentifier(service, identifier);
+    const serviceIdentifier = this.resolveServiceIdentifier(
+      service,
+      identifier,
+    );
     const serviceId = this.getServiceLabel(serviceIdentifier);
 
     try {
@@ -332,7 +342,11 @@ export class Pooder {
       }
 
       this.serviceRegistry.register(serviceIdentifier, service, options);
-      this.eventBus.emit("service:register", service, { id: serviceId });
+      this.serviceEvents.emit("change", {
+        type: "registered",
+        id: serviceId,
+        service,
+      });
       return true;
     } catch (error) {
       console.error(`Error initializing service ${serviceId}:`, error);
@@ -345,13 +359,20 @@ export class Pooder {
     identifier?: ServiceIdentifier<T>,
     options: RegisterServiceOptions = {},
   ): Promise<boolean> {
-    const serviceIdentifier = this.resolveServiceIdentifier(service, identifier);
+    const serviceIdentifier = this.resolveServiceIdentifier(
+      service,
+      identifier,
+    );
     const serviceId = this.getServiceLabel(serviceIdentifier);
 
     try {
       await this.invokeServiceHookAsync(service, "init");
       this.serviceRegistry.register(serviceIdentifier, service, options);
-      this.eventBus.emit("service:register", service, { id: serviceId });
+      this.serviceEvents.emit("change", {
+        type: "registered",
+        id: serviceId,
+        service,
+      });
       return true;
     } catch (error) {
       console.error(`Error initializing service ${serviceId}:`, error);
@@ -378,7 +399,10 @@ export class Pooder {
     }
 
     try {
-      const disposeResult = this.invokeServiceHook(registeredService, "dispose");
+      const disposeResult = this.invokeServiceHook(
+        registeredService,
+        "dispose",
+      );
       if (this.isPromiseLike(disposeResult)) {
         throw new Error(
           `Service "${serviceId}" dispose() is async. Use unregisterServiceAsync() instead.`,
@@ -390,8 +414,10 @@ export class Pooder {
     }
 
     this.serviceRegistry.delete(resolvedIdentifier);
-    this.eventBus.emit("service:unregister", registeredService, {
+    this.serviceEvents.emit("change", {
+      type: "unregistered",
       id: serviceId,
+      service: registeredService,
     });
     return true;
   }
@@ -420,13 +446,17 @@ export class Pooder {
     }
 
     this.serviceRegistry.delete(resolvedIdentifier);
-    this.eventBus.emit("service:unregister", registeredService, {
+    this.serviceEvents.emit("change", {
+      type: "unregistered",
       id: serviceId,
+      service: registeredService,
     });
     return true;
   }
 
-  getService<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined {
+  getService<T extends Service>(
+    identifier: ServiceIdentifier<T>,
+  ): T | undefined {
     return this.serviceRegistry.get<T>(identifier);
   }
 
@@ -462,6 +492,7 @@ export class Pooder {
     }
 
     this.serviceRegistry.clear();
+    this.serviceEvents.clear();
     this.eventBus.clear();
   }
 
@@ -476,10 +507,7 @@ export class Pooder {
     serviceOrIdentifier: Service | ServiceIdentifier<Service>,
     id?: ServiceIdentifier<Service>,
   ): boolean {
-    return this.unregisterService(
-      serviceOrIdentifier as Service,
-      id,
-    );
+    return this.unregisterService(serviceOrIdentifier as Service, id);
   }
 
   private async unregisterServiceEntryAsync(

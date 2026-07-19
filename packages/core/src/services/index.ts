@@ -8,8 +8,9 @@ import {
 } from "../render-intent";
 import SceneService from "./SceneService";
 import SessionService from "./SessionService";
-import { DefaultConstraintResolverCapability } from "../constraint-resolver";
-import { DefaultGeometrySourceCapability } from "../geometry-source";
+import { ConstraintResolverService } from "../constraint-resolver";
+import { GeometrySourceService } from "../geometry-source";
+import { InteractionService } from "../interaction-service";
 import { DefaultSurfaceFrameService } from "../surface-frames";
 import {
   CAPABILITY_REGISTRY_SERVICE,
@@ -27,6 +28,7 @@ import {
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
+  INTERACTION_SERVICE,
 } from "./tokens";
 
 export {
@@ -38,8 +40,9 @@ export {
   RenderIntentService,
   SceneService,
   SessionService,
-  DefaultGeometrySourceCapability,
-  DefaultConstraintResolverCapability,
+  GeometrySourceService,
+  ConstraintResolverService,
+  InteractionService,
   DefaultSurfaceFrameService,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -55,6 +58,7 @@ export {
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
+  INTERACTION_SERVICE,
   CORE_SERVICE_TOKENS,
 };
 
@@ -75,6 +79,7 @@ export type {
   RenderGraphLayer,
   RenderGraphNode,
   RenderIntentChangeEvent,
+  RenderIntentChangeReason,
   RenderIntentCompilerContext,
   RenderIntentCompilerContribution,
   RenderIntentCompilerQuery,

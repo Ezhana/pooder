@@ -56,6 +56,32 @@ export interface RenderObjectSpec {
   visibleWhen?: RuntimeConditionExpr;
 }
 
+/** Identifies the declarative render sources whose backend projection is stale. */
+export type RenderInvalidation =
+  /** Reproject every target; this is an authoritative interaction barrier. */
+  | { type: "full" }
+  | { type: "render-intents"; intentIds: readonly string[] }
+  | { type: "scene"; sceneId: string }
+  | {
+      type: "scene-elements";
+      sceneId: string;
+      elementIds: readonly string[];
+    };
+
+/** Stable provenance used to match a backend target to an invalidation. */
+export type RenderObjectOrigin =
+  | { type: "render-intent"; intentId: string }
+  | { type: "scene-element"; sceneId: string; elementId: string };
+
+/** Determines whether declarative state or a live interaction owns a transform. */
+export type RenderObjectOwnership =
+  | { type: "declarative" }
+  | {
+      type: "interaction";
+      interactionId: string;
+      phase: "active" | "committing";
+    };
+
 export interface RenderLayerSpec {
   id: string;
   order: number;
@@ -410,6 +436,34 @@ export interface CanvasObjectLike {
   [key: string]: any;
 }
 
+export interface CanvasSelectionEvent {
+  readonly kind: "created" | "updated" | "cleared";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasObjectChangeEvent {
+  readonly kind: "added" | "modified" | "removed";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasPointerEvent {
+  readonly kind: "down" | "double-click";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasTransformEvent {
+  readonly kind: "move" | "resize" | "rotate" | "commit";
+  readonly target?: CanvasObjectLike;
+}
+
+export interface CanvasServiceEventMap {
+  resized: CanvasSize;
+  selection: CanvasSelectionEvent;
+  objectChange: CanvasObjectChangeEvent;
+  pointer: CanvasPointerEvent;
+  transform: CanvasTransformEvent;
+}
+
 export interface CanvasObjectSelector {
   ids?: readonly string[];
   layerIds?: readonly string[];
@@ -422,6 +476,10 @@ export interface CanvasObjectSelector {
 }
 
 export interface CanvasService extends Service {
+  on<TKey extends keyof CanvasServiceEventMap>(
+    type: TKey,
+    listener: (event: CanvasServiceEventMap[TKey]) => void,
+  ): { dispose(): void };
   requestRenderAll(): void;
   resize(width: number, height: number): void;
   getViewportSize(): CanvasSize;
@@ -431,7 +489,9 @@ export interface CanvasService extends Service {
   getActiveObject(): CanvasObjectLike | undefined;
   setActiveObject(object: CanvasObjectLike): boolean;
   discardActiveObject(): boolean;
+  /** @internal Legacy backend event adapter. */
   onCanvasEvent(event: string, handler: (...args: any[]) => void): void;
+  /** @internal Legacy backend event adapter. */
   offCanvasEvent(event: string, handler: (...args: any[]) => void): void;
   getTopContext(): CanvasRenderingContext2D | undefined;
   clearTopContext(): void;

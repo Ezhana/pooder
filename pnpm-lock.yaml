@@ -31,6 +31,10 @@ importers:
         version: 5.8.2
 
   packages/document:
+    dependencies:
+      '@pooder/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       tsup:
         specifier: ^8.0.0

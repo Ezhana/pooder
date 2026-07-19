@@ -1,13 +1,13 @@
 import { ExtensionContext } from "./context";
 import Disposable from "./disposable";
 import { ExtensionContributions } from "./contribution";
-import EventBus from "./event";
 import { Service, ServiceIdentifier, isServiceToken } from "./service";
 import CapabilityRegistryService from "./services/CapabilityRegistryService";
 import CommandService from "./services/CommandService";
 import ConfigurationService from "./services/ConfigurationService";
 import { RenderIntentCompilerRegistryService } from "./render-intent";
 import { RenderEffectRegistryService } from "./render";
+import { TypedEventEmitter } from "./typed-event";
 
 export interface ExtensionActivationSpec {
   requiresExtensions?: string[];
@@ -44,6 +44,10 @@ export interface ExtensionStateChangeEvent extends ExtensionStateSnapshot {
   previousState?: ExtensionState;
 }
 
+export interface ExtensionManagerEventMap {
+  stateChange: ExtensionStateChangeEvent;
+}
+
 interface BlockingResult extends ExtensionStateDetails {
   ready: boolean;
 }
@@ -74,7 +78,6 @@ interface ExtensionRecord {
 }
 
 interface ExtensionManagerDependencies {
-  eventBus: EventBus;
   capabilityRegistry: CapabilityRegistryService;
   configurationService: ConfigurationService;
   commandService: CommandService;
@@ -84,13 +87,13 @@ interface ExtensionManagerDependencies {
 
 class ExtensionManager {
   private readonly context: ExtensionContext;
-  private readonly eventBus: EventBus;
   private readonly capabilityRegistry: CapabilityRegistryService;
   private readonly configurationService: ConfigurationService;
   private readonly commandService: CommandService;
   private readonly renderEffectRegistry: RenderEffectRegistryService;
   private readonly renderIntentCompilerRegistry: RenderIntentCompilerRegistryService;
   private readonly records = new Map<string, ExtensionRecord>();
+  private readonly events = new TypedEventEmitter<ExtensionManagerEventMap>();
   private registrationOrder = 0;
 
   constructor(
@@ -98,7 +101,6 @@ class ExtensionManager {
     dependencies: ExtensionManagerDependencies,
   ) {
     this.context = context;
-    this.eventBus = dependencies.eventBus;
     this.capabilityRegistry = dependencies.capabilityRegistry;
     this.configurationService = dependencies.configurationService;
     this.commandService = dependencies.commandService;
@@ -208,6 +210,17 @@ class ExtensionManager {
     return this.listRecords().map((record) => this.toSnapshot(record));
   }
 
+  on<TKey extends keyof ExtensionManagerEventMap>(
+    type: TKey,
+    listener: (event: ExtensionManagerEventMap[TKey]) => void,
+  ): Disposable {
+    return this.events.on(type, listener);
+  }
+
+  onDidChange(listener: (event: ExtensionStateChangeEvent) => void): Disposable {
+    return this.events.on("stateChange", listener);
+  }
+
   async unregister(id: string): Promise<boolean> {
     const record = this.records.get(id);
     if (!record) {
@@ -230,6 +243,7 @@ class ExtensionManager {
     for (const record of records) {
       await this.unregister(record.definition.id);
     }
+    this.events.clear();
   }
 
   private createRecord(
@@ -530,21 +544,8 @@ class ExtensionManager {
       ...this.toSnapshot(record),
     } satisfies ExtensionStateChangeEvent;
 
-    this.eventBus.emit("extension:state-change", event);
+    this.events.emit("stateChange", event);
 
-    if (nextState === "pending") {
-      this.eventBus.emit("extension:activation-blocked", event);
-      return;
-    }
-
-    if (nextState === "failed") {
-      this.eventBus.emit("extension:activation-failed", event);
-      return;
-    }
-
-    if (nextState === "active") {
-      this.eventBus.emit("extension:activated", event);
-    }
   }
 
   private toSnapshot(record: ExtensionRecord): ExtensionStateSnapshot {

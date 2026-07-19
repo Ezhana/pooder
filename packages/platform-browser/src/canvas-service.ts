@@ -9,19 +9,22 @@ import {
   controlsUtils,
 } from "fabric";
 import {
-  EventBus,
   Service,
-  ServiceContext,
+  TypedEventEmitter,
   evaluateRuntimeCondition,
   type CanvasObjectLike,
   type CanvasObjectSelector,
+  type CanvasServiceEventMap,
   type CanvasService as CanvasServiceContract,
   type CanvasSize,
   type CanvasViewportLayout,
   type RenderCoordinateSpace,
   type RenderEffectSpec,
+  type RenderInvalidation,
   type RenderLayoutInsets,
   type RenderLayoutLength,
+  type RenderObjectOrigin,
+  type RenderObjectOwnership,
   type RenderObjectLayoutSpec,
   type RenderObjectSpec,
   type RenderPatternSpec,
@@ -39,7 +42,13 @@ export interface FabricRenderTargetItem {
   key: string;
   layerId: string;
   order: number;
+  origin?: RenderObjectOrigin;
   spec: RenderObjectSpec;
+}
+
+export interface FabricRenderGraphReconcileOptions {
+  invalidations?: readonly RenderInvalidation[];
+  render?: boolean;
 }
 
 export interface FabricObjectEffectRendererContext {
@@ -132,30 +141,43 @@ export default class CanvasService implements Service, CanvasServiceContract {
   public canvas: Canvas;
   public viewport: ViewportSystem;
   public effectRenderers = new FabricEffectRendererRegistry();
-  private context?: ServiceContext;
-  private eventBus?: EventBus;
+  private readonly events = new TypedEventEmitter<CanvasServiceEventMap>();
   private canvasForwardersBound = false;
 
-  private readonly forwardSelectionCreated = (e: any) => {
-    this.eventBus?.emit("selection:created", e);
+  private readonly forwardSelectionCreated = (event: unknown) => {
+    this.events.emit("selection", { kind: "created", target: readFabricTarget(event) });
   };
-  private readonly forwardSelectionUpdated = (e: any) => {
-    this.eventBus?.emit("selection:updated", e);
+  private readonly forwardSelectionUpdated = (event: unknown) => {
+    this.events.emit("selection", { kind: "updated", target: readFabricTarget(event) });
   };
-  private readonly forwardSelectionCleared = (e: any) => {
-    this.eventBus?.emit("selection:cleared", e);
+  private readonly forwardSelectionCleared = (event: unknown) => {
+    this.events.emit("selection", { kind: "cleared", target: readFabricTarget(event) });
   };
-  private readonly forwardObjectModified = (e: any) => {
-    this.eventBus?.emit("object:modified", e);
+  private readonly forwardObjectModified = (event: unknown) => {
+    const target = readFabricTarget(event);
+    this.events.emit("objectChange", { kind: "modified", target });
+    this.events.emit("transform", { kind: "commit", target });
   };
-  private readonly forwardMouseDown = (e: any) => {
-    this.eventBus?.emit("mouse:down", e);
+  private readonly forwardMouseDown = (event: unknown) => {
+    this.events.emit("pointer", { kind: "down", target: readFabricTarget(event) });
   };
-  private readonly forwardObjectAdded = (e: any) => {
-    this.eventBus?.emit("object:added", e);
+  private readonly forwardDoubleClick = (event: unknown) => {
+    this.events.emit("pointer", { kind: "double-click", target: readFabricTarget(event) });
   };
-  private readonly forwardObjectRemoved = (e: any) => {
-    this.eventBus?.emit("object:removed", e);
+  private readonly forwardObjectAdded = (event: unknown) => {
+    this.events.emit("objectChange", { kind: "added", target: readFabricTarget(event) });
+  };
+  private readonly forwardObjectRemoved = (event: unknown) => {
+    this.events.emit("objectChange", { kind: "removed", target: readFabricTarget(event) });
+  };
+  private readonly forwardObjectMoving = (event: unknown) => {
+    this.events.emit("transform", { kind: "move", target: readFabricTarget(event) });
+  };
+  private readonly forwardObjectScaling = (event: unknown) => {
+    this.events.emit("transform", { kind: "resize", target: readFabricTarget(event) });
+  };
+  private readonly forwardObjectRotating = (event: unknown) => {
+    this.events.emit("transform", { kind: "rotate", target: readFabricTarget(event) });
   };
 
   constructor(el: HTMLCanvasElement | string | Canvas, options?: any) {
@@ -175,21 +197,16 @@ export default class CanvasService implements Service, CanvasServiceContract {
       this.viewport.updateContainer(this.canvas.width, this.canvas.height);
     }
 
-    if (options?.eventBus) {
-      this.setEventBus(options.eventBus);
-    }
   }
 
-  init(context: ServiceContext) {
-    this.context = context;
-    this.setEventBus(context.eventBus);
+  init() {
+    this.setupEvents();
     if (isDevelopmentRuntime() && typeof globalThis !== "undefined") {
       (globalThis as any).__POODER_CANVAS_SERVICE__ = this;
     }
   }
 
   dispose() {
-    this.context = undefined;
     if (
       typeof globalThis !== "undefined" &&
       (globalThis as any).__POODER_CANVAS_SERVICE__ === this
@@ -197,11 +214,14 @@ export default class CanvasService implements Service, CanvasServiceContract {
       delete (globalThis as any).__POODER_CANVAS_SERVICE__;
     }
     this.canvas.dispose();
+    this.events.clear();
   }
 
-  setEventBus(eventBus: EventBus) {
-    this.eventBus = eventBus;
-    this.setupEvents();
+  on<TKey extends keyof CanvasServiceEventMap>(
+    type: TKey,
+    listener: (event: CanvasServiceEventMap[TKey]) => void,
+  ) {
+    return this.events.on(type, listener);
   }
 
   private setupEvents() {
@@ -211,8 +231,12 @@ export default class CanvasService implements Service, CanvasServiceContract {
     this.canvas.on("selection:cleared", this.forwardSelectionCleared);
     this.canvas.on("object:modified", this.forwardObjectModified);
     this.canvas.on("mouse:down", this.forwardMouseDown);
+    this.canvas.on("mouse:dblclick", this.forwardDoubleClick);
     this.canvas.on("object:added", this.forwardObjectAdded);
     this.canvas.on("object:removed", this.forwardObjectRemoved);
+    this.canvas.on("object:moving", this.forwardObjectMoving);
+    this.canvas.on("object:scaling", this.forwardObjectScaling);
+    this.canvas.on("object:rotating", this.forwardObjectRotating);
     this.canvasForwardersBound = true;
   }
 
@@ -223,7 +247,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
   resize(width: number, height: number) {
     this.canvas.setDimensions({ width, height });
     this.viewport.updateContainer(width, height);
-    this.eventBus?.emit("canvas:resized", { width, height });
+    this.events.emit("resized", { width, height });
     this.requestRenderAll();
   }
 
@@ -268,10 +292,12 @@ export default class CanvasService implements Service, CanvasServiceContract {
     return true;
   }
 
+  /** @internal Legacy extension adapter. */
   onCanvasEvent(event: string, handler: (...args: any[]) => void): void {
     this.canvas.on(event as any, handler as any);
   }
 
+  /** @internal Legacy extension adapter. */
   offCanvasEvent(event: string, handler: (...args: any[]) => void): void {
     this.canvas.off(event as any, handler as any);
   }
@@ -378,7 +404,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   async reconcileRenderGraphDrawList(
     items: FabricRenderTargetItem[],
-    options: { render?: boolean } = {},
+    options: FabricRenderGraphReconcileOptions = {},
   ): Promise<void> {
     const normalizedItems = items
       .map((item, index) => ({
@@ -390,6 +416,12 @@ export default class CanvasService implements Service, CanvasServiceContract {
       .filter((item) => item.key && item.layerId)
       .sort((left, right) => left.order - right.order);
     const desiredKeys = new Set(normalizedItems.map((item) => item.key));
+    const invalidations = options.invalidations?.length
+      ? options.invalidations
+      : [{ type: "full" } satisfies RenderInvalidation];
+    const hasFullInvalidation = invalidations.some(
+      (invalidation) => invalidation.type === "full",
+    );
 
     this.canvas.getObjects().forEach((object: any) => {
       if (object?.data?.renderTarget !== GRAPH_RENDER_TARGET) return;
@@ -408,8 +440,18 @@ export default class CanvasService implements Service, CanvasServiceContract {
     for (const item of normalizedItems) {
       const spec = item.spec;
       let current = byKey.get(item.key);
+      const shouldPatch =
+        !current ||
+        hasFullInvalidation ||
+        this.isRenderTargetInvalidated(item, invalidations);
+      const ownership = this.readRenderObjectOwnership(current);
+      const interactionOwnsTransform =
+        !hasFullInvalidation &&
+        ownership?.type === "interaction" &&
+        ownership.phase === "active";
+      const shouldApplySpec = shouldPatch && !interactionOwnsTransform;
 
-      if (spec.type === "path") {
+      if (shouldApplySpec && spec.type === "path") {
         const nextPathData = this.readPathDataFromSpec(spec);
         if (!nextPathData?.trim()) {
           if (current) this.canvas.remove(current);
@@ -417,7 +459,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
         }
       }
 
-      if (current && this.shouldRecreateObject(current, spec)) {
+      if (
+        current &&
+        shouldApplySpec &&
+        this.shouldRecreateObject(current, spec)
+      ) {
         this.canvas.remove(current);
         current = undefined;
       }
@@ -429,13 +475,22 @@ export default class CanvasService implements Service, CanvasServiceContract {
         this.canvas.add(current);
       }
 
-      this.patchFabricObject(current, spec, {
+      const renderMetadata = {
         renderTarget: GRAPH_RENDER_TARGET,
         renderKey: item.key,
         layerId: item.layerId,
+        renderOrigin: item.origin,
         renderOrder: item.order,
-      });
-      await this.applyObjectEffects(current as FabricObject, spec);
+      };
+      if (shouldApplySpec) {
+        this.patchFabricObject(current, spec, {
+          ...renderMetadata,
+          renderOwnership: { type: "declarative" },
+        });
+        await this.applyObjectEffects(current as FabricObject, spec);
+      } else {
+        this.patchFabricRenderMetadata(current, renderMetadata);
+      }
     }
 
     this.syncRenderGraphStacking(normalizedItems.map((item) => item.key));
@@ -788,6 +843,24 @@ export default class CanvasService implements Service, CanvasServiceContract {
     spec: RenderObjectSpec,
     extraData?: Record<string, any>,
   ) {
+    const nextData = this.resolveFabricObjectData(obj, spec, extraData);
+    const props = this.resolveObjectFabricProps(obj, spec);
+    obj.set({ ...props, data: nextData });
+    obj.setCoords();
+  }
+
+  private patchFabricRenderMetadata(
+    obj: any,
+    metadata: Record<string, any>,
+  ) {
+    obj.set({ data: { ...(obj.data || {}), ...metadata } });
+  }
+
+  private resolveFabricObjectData(
+    obj: any,
+    spec: RenderObjectSpec,
+    extraData?: Record<string, any>,
+  ): Record<string, any> {
     const nextData = {
       ...(obj.data || {}),
       ...(spec.data || {}),
@@ -795,9 +868,47 @@ export default class CanvasService implements Service, CanvasServiceContract {
       id: spec.id,
     };
     nextData.renderSourceKey = this.getSpecRenderSourceKey(spec);
-    const props = this.resolveObjectFabricProps(obj, spec);
-    obj.set({ ...props, data: nextData });
-    obj.setCoords();
+    return nextData;
+  }
+
+  private readRenderObjectOwnership(
+    obj: any,
+  ): RenderObjectOwnership | undefined {
+    const ownership = obj?.data?.renderOwnership;
+    if (ownership?.type === "declarative") return ownership;
+    if (
+      ownership?.type === "interaction" &&
+      typeof ownership.interactionId === "string" &&
+      (ownership.phase === "active" || ownership.phase === "committing")
+    ) {
+      return ownership;
+    }
+    return undefined;
+  }
+
+  private isRenderTargetInvalidated(
+    item: FabricRenderTargetItem,
+    invalidations: readonly RenderInvalidation[],
+  ): boolean {
+    const origin = item.origin;
+    if (!origin) return true;
+    return invalidations.some((invalidation) => {
+      if (invalidation.type === "full") return true;
+      if (origin.type === "render-intent") {
+        return (
+          invalidation.type === "render-intents" &&
+          invalidation.intentIds.includes(origin.intentId)
+        );
+      }
+      if (invalidation.type === "scene") {
+        return invalidation.sceneId === origin.sceneId;
+      }
+      return (
+        invalidation.type === "scene-elements" &&
+        invalidation.sceneId === origin.sceneId &&
+        invalidation.elementIds.includes(origin.elementId)
+      );
+    });
   }
 
   private resolveObjectFabricProps(
@@ -871,7 +982,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
       evented: false,
       ...this.resolveRenderPatternProps(this.resolveLayoutProps(spec, props)),
     };
-    if (space === "screen") return this.resolveInteractiveControlProps(next);
+    if (space === "screen") {
+      return this.removeUndefinedFabricProps(
+        this.resolveInteractiveControlProps(next),
+      );
+    }
 
     const hasLeft = Number.isFinite(next.left);
     const hasTop = Number.isFinite(next.top);
@@ -889,7 +1004,17 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const sceneScale = this.getSceneScale();
     next.scaleX = rawScaleX * sceneScale;
     next.scaleY = rawScaleY * sceneScale;
-    return this.resolveInteractiveControlProps(next);
+    return this.removeUndefinedFabricProps(
+      this.resolveInteractiveControlProps(next),
+    );
+  }
+
+  private removeUndefinedFabricProps(
+    props: Record<string, any>,
+  ): Record<string, any> {
+    return Object.fromEntries(
+      Object.entries(props).filter(([, value]) => value !== undefined),
+    );
   }
 
   private resolveImageTargetSizeProps(
@@ -1080,4 +1205,14 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
     return undefined;
   }
+}
+
+function readFabricTarget(event: unknown): CanvasObjectLike | undefined {
+  if (typeof event !== "object" || event === null || !("target" in event)) {
+    return undefined;
+  }
+  const target = (event as { target?: unknown }).target;
+  return typeof target === "object" && target !== null
+    ? (target as CanvasObjectLike)
+    : undefined;
 }

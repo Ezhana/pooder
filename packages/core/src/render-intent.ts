@@ -1,4 +1,4 @@
-import EventBus from "./event";
+import { TypedEventEmitter } from "./typed-event";
 import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type {
@@ -8,8 +8,10 @@ import type {
   RuntimeConditionEvalContext,
   RuntimeConditionExpr,
 } from "./render";
-import type { ConstraintSpec } from "./constraint-resolver";
-import type { SessionScope } from "./workflow-session";
+import type {
+  InteractionOperationSpec,
+  InteractionSpec,
+} from "./interaction-service";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
 export type RenderIntentChannel =
@@ -64,27 +66,6 @@ export interface RenderIntentPlacementAspect {
   fit?: "cover" | "contain" | "stretch";
 }
 
-export interface RenderIntentInteractionConstraint {
-  activeWhen?: RuntimeConditionExpr;
-  spec: ConstraintSpec;
-}
-
-export interface RenderIntentTransformInteractionAspect {
-  enabled?: boolean;
-}
-
-export interface RenderIntentDragInteractionAspect {
-  enabled?: boolean;
-  constraints?: readonly RenderIntentInteractionConstraint[];
-}
-
-export interface RenderIntentInteractionAspect {
-  transform?: RenderIntentTransformInteractionAspect;
-  drag?: RenderIntentDragInteractionAspect;
-  enabledWhen?: RuntimeConditionExpr;
-  locked?: boolean;
-}
-
 export interface RenderIntentExportAspect {
   keys?: readonly string[];
   tags?: readonly string[];
@@ -107,7 +88,7 @@ export interface RenderIntentDraft {
   visual?: RenderIntentVisualAspect;
   placement?: RenderIntentPlacementAspect;
   effects?: RenderEffectSpec[];
-  interaction?: RenderIntentInteractionAspect;
+  interaction?: InteractionSpec;
   export?: RenderIntentExportAspect;
   coordinateSpace?: RenderCoordinateSpace;
   ordering: RenderIntentOrderingAspect;
@@ -168,7 +149,7 @@ export interface RenderGraphNode {
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
-  interaction?: RenderIntentInteractionAspect;
+  interaction?: InteractionSpec;
   visibleWhen?: RuntimeConditionExpr;
   visible: boolean;
   tags: string[];
@@ -193,7 +174,10 @@ export interface RenderGraph {
   diagnostics: RenderIntentDiagnostic[];
 }
 
-export interface RenderIntentCompilerContext<TEffect = unknown, TDocument = unknown> {
+export interface RenderIntentCompilerContext<
+  TEffect = unknown,
+  TDocument = unknown,
+> {
   document: TDocument;
   effect: TEffect;
   services?: unknown;
@@ -208,11 +192,14 @@ export interface RenderIntentCompilerContribution<
   effectType?: string;
   compile(
     context: RenderIntentCompilerContext<TEffect, TDocument>,
-  ): RenderIntentPatch[] | RenderIntentPatch | void | Promise<RenderIntentPatch[] | RenderIntentPatch | void>;
+  ):
+    | RenderIntentPatch[]
+    | RenderIntentPatch
+    | void
+    | Promise<RenderIntentPatch[] | RenderIntentPatch | void>;
 }
 
-export interface RegisteredRenderIntentCompiler
-  extends RenderIntentCompilerContribution {
+export interface RegisteredRenderIntentCompiler extends RenderIntentCompilerContribution {
   extensionId: string;
 }
 
@@ -221,8 +208,23 @@ export interface RenderIntentCompilerQuery {
   effectType: string;
 }
 
+export type RenderIntentChangeReason =
+  | { type: "document-replaced" }
+  | {
+      type: "runtime-patch";
+      operation: "upsert" | "remove" | "clear";
+      sourceId?: string;
+      intentIds: string[];
+    }
+  | {
+      type: "runtime-condition";
+      operation: "set" | "delete" | "clear";
+      keys: string[];
+    };
+
 export interface RenderIntentChangeEvent {
   graph: RenderGraph;
+  reason: RenderIntentChangeReason;
   revision: number;
 }
 
@@ -318,7 +320,9 @@ export class RenderIntentCompilerRegistryService implements Service {
     const effectType = String(compiler.effectType || "").trim();
     const capabilityId = String(compiler.capabilityId || "").trim();
     if (!effectType && !capabilityId) {
-      throw new Error("Render intent compiler requires effectType or capabilityId.");
+      throw new Error(
+        "Render intent compiler requires effectType or capabilityId.",
+      );
     }
 
     const registered: RegisteredRenderIntentCompiler = {
@@ -335,7 +339,9 @@ export class RenderIntentCompilerRegistryService implements Service {
     });
   }
 
-  getCompilers(query: RenderIntentCompilerQuery): RegisteredRenderIntentCompiler[] {
+  getCompilers(
+    query: RenderIntentCompilerQuery,
+  ): RegisteredRenderIntentCompiler[] {
     const capabilityId = String(query.capabilityId || "").trim();
     const effectType = String(query.effectType || "").trim();
     return this.compilers.filter((compiler) => {
@@ -359,7 +365,9 @@ export class RenderIntentCompilerRegistryService implements Service {
 }
 
 export class RenderIntentService implements Service {
-  private readonly eventBus = new EventBus();
+  private readonly events = new TypedEventEmitter<{
+    change: RenderIntentChangeEvent;
+  }>();
   private baseIntents: RenderIntentDraft[] = [];
   private runtimePatches = new Map<string, RequiredRuntimePatchEntry>();
   private runtimeConditionValues = new Map<string, unknown>();
@@ -371,7 +379,7 @@ export class RenderIntentService implements Service {
 
   setDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
     this.baseIntents = intents.map(cloneDraft);
-    return this.recompile();
+    return this.recompile({ type: "document-replaced" });
   }
 
   getDocumentIntents(): RenderIntentDraft[] {
@@ -393,7 +401,11 @@ export class RenderIntentService implements Service {
     const previous = this.runtimeConditionValues.get(normalizedKey);
     if (Object.is(previous, value)) return false;
     this.runtimeConditionValues.set(normalizedKey, value);
-    this.emitChange();
+    this.emitChange({
+      type: "runtime-condition",
+      operation: "set",
+      keys: [normalizedKey],
+    });
     return true;
   }
 
@@ -401,14 +413,25 @@ export class RenderIntentService implements Service {
     const normalizedKey = String(key || "").trim();
     if (!normalizedKey) return false;
     const removed = this.runtimeConditionValues.delete(normalizedKey);
-    if (removed) this.emitChange();
+    if (removed) {
+      this.emitChange({
+        type: "runtime-condition",
+        operation: "delete",
+        keys: [normalizedKey],
+      });
+    }
     return removed;
   }
 
   clearRuntimeConditionValues(): boolean {
     if (!this.runtimeConditionValues.size) return false;
+    const keys = Array.from(this.runtimeConditionValues.keys());
     this.runtimeConditionValues.clear();
-    this.emitChange();
+    this.emitChange({
+      type: "runtime-condition",
+      operation: "clear",
+      keys,
+    });
     return true;
   }
 
@@ -435,63 +458,99 @@ export class RenderIntentService implements Service {
       phase: "runtime",
       priority: 0,
     });
-    return this.recompile();
+    return this.recompile({
+      type: "runtime-patch",
+      operation: "upsert",
+      sourceId,
+      intentIds: [patch.id],
+    });
   }
 
   patchIntentEntry(entry: RenderIntentPatchEntry): RenderGraph {
     this.upsertRuntimePatchEntry(entry);
-    return this.recompile();
+    return this.recompile({
+      type: "runtime-patch",
+      operation: "upsert",
+      sourceId: entry.sourceId,
+      intentIds: [entry.patch.id],
+    });
   }
 
   clearRuntimePatch(sourceId: string, intentId: string): boolean {
     const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
     const id = normalizeId(intentId, "RenderIntentPatch.id");
-    if (!this.runtimePatches.delete(getRuntimePatchKey(source, id))) return false;
-    this.recompile();
+    if (!this.runtimePatches.delete(getRuntimePatchKey(source, id)))
+      return false;
+    this.recompile({
+      type: "runtime-patch",
+      operation: "remove",
+      sourceId: source,
+      intentIds: [id],
+    });
     return true;
   }
 
   clearRuntimePatches(sourceId?: string): boolean {
     if (sourceId === undefined) {
       if (this.runtimePatches.size === 0) return false;
+      const intentIds = Array.from(
+        new Set(
+          Array.from(this.runtimePatches.values()).map(
+            (entry) => entry.patch.id,
+          ),
+        ),
+      );
       this.runtimePatches.clear();
-      this.recompile();
+      this.recompile({
+        type: "runtime-patch",
+        operation: "clear",
+        intentIds,
+      });
       return true;
     }
     const source = normalizeId(sourceId, "RenderIntentPatch.sourceId");
     let removed = false;
+    const intentIds: string[] = [];
     for (const key of Array.from(this.runtimePatches.keys())) {
       if (this.runtimePatches.get(key)?.sourceId === source) {
+        intentIds.push(this.runtimePatches.get(key)!.patch.id);
         this.runtimePatches.delete(key);
         removed = true;
       }
     }
     if (!removed) return false;
-    this.recompile();
+    this.recompile({
+      type: "runtime-patch",
+      operation: "clear",
+      sourceId: source,
+      intentIds: Array.from(new Set(intentIds)),
+    });
     return true;
   }
 
   onDidChange(callback: (event: RenderIntentChangeEvent) => void): Disposable {
-    this.eventBus.on("render-intent:change", callback);
-    return new RegistryDisposable(() => {
-      this.eventBus.off("render-intent:change", callback);
-    });
+    return this.events.on("change", callback);
   }
 
-  private recompile(): RenderGraph {
+  private recompile(reason: RenderIntentChangeReason): RenderGraph {
     this.revision += 1;
     const merged = mergeRenderIntentPatchEntries(
       this.baseIntents,
       Array.from(this.runtimePatches.values()),
     );
-    this.graph = createRenderGraph(merged.drafts, this.revision, merged.diagnostics);
-    this.emitChange();
+    this.graph = createRenderGraph(
+      merged.drafts,
+      this.revision,
+      merged.diagnostics,
+    );
+    this.emitChange(reason);
     return this.getGraph();
   }
 
-  private emitChange(): void {
-    this.eventBus.emit("render-intent:change", {
+  private emitChange(reason: RenderIntentChangeReason): void {
+    this.events.emit("change", {
       graph: cloneGraph(this.graph),
+      reason,
       revision: this.revision,
     });
   }
@@ -501,7 +560,8 @@ export class RenderIntentService implements Service {
     const patchId = normalizeId(entry.patch.id, "RenderIntentPatch.id");
     const key = getRuntimePatchKey(sourceId, patchId);
     const existing = this.runtimePatches.get(key);
-    const sequence = entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
+    const sequence =
+      entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
     this.runtimePatches.set(key, normalizePatchEntry(entry, sequence));
   }
 }
@@ -518,7 +578,10 @@ export function reduceRenderIntentDrafts(
   const byId = new Map<string, RenderIntentDraft>();
   drafts.forEach((draft) => {
     const current = byId.get(draft.id);
-    byId.set(draft.id, current ? mergeDraft(current, draft) : cloneDraft(draft));
+    byId.set(
+      draft.id,
+      current ? mergeDraft(current, draft) : cloneDraft(draft),
+    );
   });
   return Array.from(byId.values());
 }
@@ -547,9 +610,9 @@ export function mergeRenderIntentPatchEntries(
   entries: readonly RenderIntentPatchEntry[],
 ): RenderIntentPatchBatchMergeResult {
   const result = reduceRenderIntentDrafts(drafts);
-  const normalizedEntries = entries.map((entry, index) =>
-    normalizePatchEntry(entry, entry.sequence ?? index),
-  ).sort(comparePatchEntries);
+  const normalizedEntries = entries
+    .map((entry, index) => normalizePatchEntry(entry, entry.sequence ?? index))
+    .sort(comparePatchEntries);
   const diagnostics = collectPatchConflictDiagnostics(normalizedEntries);
 
   normalizedEntries.forEach((entry) => {
@@ -638,7 +701,10 @@ function getRuntimePatchKey(sourceId: string, patchId: string): string {
 function collectPatchConflictDiagnostics(
   entries: readonly RequiredRuntimePatchEntry[],
 ): RenderIntentDiagnostic[] {
-  const seen = new Map<string, { sourceId: string; value: unknown; entry: RequiredRuntimePatchEntry }>();
+  const seen = new Map<
+    string,
+    { sourceId: string; value: unknown; entry: RequiredRuntimePatchEntry }
+  >();
   const diagnostics: RenderIntentDiagnostic[] = [];
 
   entries.forEach((entry) => {
@@ -827,7 +893,13 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   const type = draft.visual?.type;
   if (!type) return null;
 
-  const channel = draft.ordering.channel ?? (source.kind === "replacement" ? "replacement" : source.kind === "fallback" ? "fallback" : "normal");
+  const channel =
+    draft.ordering.channel ??
+    (source.kind === "replacement"
+      ? "replacement"
+      : source.kind === "fallback"
+        ? "fallback"
+        : "normal");
   const id = source.kind === "replacement" ? `image:${draft.id}` : draft.id;
   const subjectId =
     draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.surfaceId;
@@ -851,9 +923,6 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       renderIntentId: draft.id,
       subject: draft.subject,
       tags: normalizeIdList(draft.export?.tags),
-      ...(typeof draft.interaction?.locked === "boolean"
-        ? { locked: draft.interaction.locked }
-        : {}),
     },
     effects: draft.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
@@ -869,9 +938,10 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   };
 }
 
-function resolveVisualSource(
-  draft: RenderIntentDraft,
-): { kind: "replacement" | "fallback" | "base"; source: RenderIntentSource } {
+function resolveVisualSource(draft: RenderIntentDraft): {
+  kind: "replacement" | "fallback" | "base";
+  source: RenderIntentSource;
+} {
   const replacement = draft.visual?.replacement;
   if (replacement?.src) {
     return { kind: "replacement", source: cloneRecord(replacement) };
@@ -884,7 +954,9 @@ function resolveVisualSource(
     kind: "base",
     source: {
       ...(draft.visual?.src ? { src: draft.visual.src } : {}),
-      ...(draft.visual?.metadata ? { metadata: cloneRecord(draft.visual.metadata) } : {}),
+      ...(draft.visual?.metadata
+        ? { metadata: cloneRecord(draft.visual.metadata) }
+        : {}),
     },
   };
 }
@@ -936,7 +1008,10 @@ function mergePatch(
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
       placement: mergeOptionalRecord(clearedBase.placement, patch.placement),
       effects: mergeOptionalEffects(clearedBase.effects, patch.effects),
-      interaction: mergeInteractionAspect(clearedBase.interaction, patch.interaction),
+      interaction: mergeInteractionAspect(
+        clearedBase.interaction,
+        patch.interaction,
+      ),
       export: mergeOptionalRecord(clearedBase.export, patch.export),
       ordering: { ...clearedBase.ordering, ...(patch.ordering ?? {}) },
       props: mergeOptionalRecord(clearedBase.props, patch.props),
@@ -979,7 +1054,10 @@ function validateClearPath(
 ): { ok: true } | { ok: false; message: string } {
   const normalized = String(path || "").trim();
   const segments = normalized.split(".");
-  if (!normalized || segments.some((segment) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(segment))) {
+  if (
+    !normalized ||
+    segments.some((segment) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(segment))
+  ) {
     return {
       ok: false,
       message: `RenderIntentPatch clear path "${String(path)}" is invalid.`,
@@ -1025,48 +1103,75 @@ function sameJsonValue(left: unknown, right: unknown): boolean {
 }
 
 function mergeInteractionAspect(
-  base: RenderIntentInteractionAspect | undefined,
-  patch: RenderIntentInteractionAspect | undefined,
-): RenderIntentInteractionAspect | undefined {
+  base: InteractionSpec | undefined,
+  patch: InteractionSpec | undefined,
+): InteractionSpec | undefined {
   if (patch === undefined) return cloneRecord(base);
-  const dragConstraints = [
-    ...(base?.drag?.constraints ?? []),
-    ...(patch.drag?.constraints ?? []),
-  ].map(cloneRecord);
   const merged = {
     ...((base ?? {}) as object),
     ...((patch ?? {}) as object),
-    ...(base?.transform || patch.transform
+    ...(base?.selection || patch.selection
       ? {
-          transform: {
-            ...(base?.transform ?? {}),
-            ...(patch.transform ?? {}),
+          selection: { ...(base?.selection ?? {}), ...(patch.selection ?? {}) },
+        }
+      : {}),
+    ...(base?.activation || patch.activation
+      ? {
+          activation: {
+            ...(base?.activation ?? {}),
+            ...(patch.activation ?? {}),
+            action: {
+              ...(base?.activation?.action ?? {}),
+              ...(patch.activation?.action ?? {}),
+            },
           },
         }
       : {}),
-    ...(base?.drag || patch.drag
+    ...(base?.manipulation || patch.manipulation
       ? {
-          drag: {
-            ...(base?.drag ?? {}),
-            ...(patch.drag ?? {}),
+          manipulation: {
+            ...mergeInteractionOperation(
+              "move",
+              base?.manipulation?.move,
+              patch.manipulation?.move,
+            ),
+            ...mergeInteractionOperation(
+              "resize",
+              base?.manipulation?.resize,
+              patch.manipulation?.resize,
+            ),
+            ...mergeInteractionOperation(
+              "rotate",
+              base?.manipulation?.rotate,
+              patch.manipulation?.rotate,
+            ),
           },
         }
       : {}),
-  } as RenderIntentInteractionAspect;
-  if (merged.drag) {
-    if (dragConstraints.length) {
-      merged.drag.constraints = dragConstraints;
-    } else {
-      delete merged.drag.constraints;
-    }
-  }
+  } as InteractionSpec;
   return Object.keys(merged).length ? merged : undefined;
 }
 
-function mergeOptionalRecord<T>(
-  base: T,
-  patch: T,
-): T {
+function mergeInteractionOperation(
+  kind: "move" | "resize" | "rotate",
+  base: InteractionOperationSpec | undefined,
+  patch: InteractionOperationSpec | undefined,
+): Partial<NonNullable<InteractionSpec["manipulation"]>> {
+  if (!base && !patch) return {};
+  const constraints = [
+    ...(base?.constraints ?? []),
+    ...(patch?.constraints ?? []),
+  ].map(cloneRecord);
+  return {
+    [kind]: {
+      ...(base ?? {}),
+      ...(patch ?? {}),
+      ...(constraints.length ? { constraints } : {}),
+    },
+  } as Partial<NonNullable<InteractionSpec["manipulation"]>>;
+}
+
+function mergeOptionalRecord<T>(base: T, patch: T): T {
   if (patch === undefined) return cloneRecord(base) as T;
   return {
     ...((base ?? {}) as object),

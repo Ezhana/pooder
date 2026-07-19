@@ -13,8 +13,7 @@ import type {
 } from "./ImagePlacementCapabilityImplementation";
 import type { ImageOperation } from "./imageOperations";
 
-export const IMAGE_PLACEMENT_CAPABILITY_ID =
-  "pooder.kit.image-placement";
+export const IMAGE_PLACEMENT_CAPABILITY_ID = "pooder.kit.image-placement";
 
 export interface ImagePlacementLayerOptions {
   imageLayerId?: string;
@@ -29,14 +28,10 @@ export interface ImageSessionProjection {
   sourceTags: string[];
   placement: ImageSessionProjectionPlacement;
   surfaceScope?: ImageSessionProjectionSurfaceScope;
-  opacity?: number;
-  interactive?: boolean;
-  hideSource?: boolean;
 }
 
 export interface ImagePlacementCapabilityOptions {
   capabilityId?: string;
-  beginSessionOnCanvasInteraction?: boolean;
   layers?: ImagePlacementLayerOptions;
 }
 
@@ -64,6 +59,43 @@ export interface ImagePlacementViewState {
   hasWorkingChanges: boolean;
   sessionNotice: ImagePlacementSessionNotice | null;
 }
+
+export interface ImagePlacementSessionOpenEvent {
+  placementId: string;
+  sessionId: string;
+  sessionKey: string;
+  source: "api" | "document-interaction";
+  scope: {
+    surfaceId: string | null;
+    subjectId: string;
+    channel: string;
+    groupId: string;
+  };
+}
+
+export interface ImagePlacementSessionCloseEvent {
+  placementId: string | null;
+  reason: "committed" | "rolled-back" | "cancelled";
+  sessionId: string;
+}
+
+export type ImagePlacementCapabilityChangeEvent =
+  | {
+      type: "state";
+      state: ImagePlacementViewState;
+    }
+  | {
+      type: "session-notice";
+      notice: ImagePlacementSessionNotice | null;
+    }
+  | {
+      type: "session-opened";
+      event: ImagePlacementSessionOpenEvent;
+    }
+  | {
+      type: "session-closed";
+      event: ImagePlacementSessionCloseEvent;
+    };
 
 export type ImageSessionOverlayLayer = "underlay" | "overlay" | "controls";
 
@@ -94,18 +126,29 @@ export interface ImageSessionOverlayProvider {
 }
 
 export interface ImagePlacementCapabilityApi {
+  onDidChange(listener: (event: ImagePlacementCapabilityChangeEvent) => void): {
+    dispose(): void;
+  };
   applyOperation(
     input: string | ImagePlacementSessionInput,
     operation: ImageOperation,
   ): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
-  clearImage(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
-  commitSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
+  clearImage(
+    input: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string }>;
+  commitSession(
+    input?: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string } | ImagePlacementSessionNotice>;
   exportPlacementImage(
     options?: ImageExportPlacementImageOptions,
   ): Promise<ImageExportPlacementImageResult>;
   getViewState(): ImagePlacementViewState;
-  openSession(input: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
-  rollbackSession(input?: string | ImagePlacementSessionInput): Promise<{ ok: boolean; reason?: string }>;
+  openSession(
+    input: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string }>;
+  rollbackSession(
+    input?: string | ImagePlacementSessionInput,
+  ): Promise<{ ok: boolean; reason?: string }>;
   setSource(
     input: string | ImagePlacementSessionInput,
     source: ImagePlacementSource | string,
@@ -114,17 +157,17 @@ export interface ImagePlacementCapabilityApi {
     input: string | ImagePlacementSessionInput,
     transform: ImagePlacementTransformUpdates,
   ): Promise<{ ok: boolean; reason?: string }>;
-  validateSession(input?: string | ImagePlacementSessionInput): Promise<ImagePlacementSessionNotice | { ok: true }>;
+  validateSession(
+    input?: string | ImagePlacementSessionInput,
+  ): Promise<ImagePlacementSessionNotice | { ok: true }>;
 
-  /** @deprecated Use validateSession(). */
-  validatePlacement(placementId?: string): Promise<ImagePlacementSessionNotice | { ok: true }>;
   focusPlacement(
     placementId: string | null,
     options?: { syncCanvasSelection?: boolean; skipRender?: boolean },
   ): { ok: boolean; id?: string | null; reason?: string };
-  registerSessionOverlayProvider(
-    provider: ImageSessionOverlayProvider,
-  ): { dispose(): void };
+  registerSessionOverlayProvider(provider: ImageSessionOverlayProvider): {
+    dispose(): void;
+  };
   refresh(): Promise<void>;
 }
 

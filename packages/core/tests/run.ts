@@ -4,6 +4,7 @@ import {
   CONSTRAINT_RESOLVER_SERVICE,
   EventBus,
   GEOMETRY_SOURCE_SERVICE,
+  INTERACTION_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
@@ -14,8 +15,8 @@ import {
   containsRect,
   containsGeometryPoint,
   createStaticGeometrySourceProvider,
-  DefaultConstraintResolverCapability,
-  DefaultGeometrySourceCapability,
+  ConstraintResolverService,
+  GeometrySourceService,
   createRectSnapLines,
   findNearestGeometryPoint,
   getGeometryBounds,
@@ -24,16 +25,21 @@ import {
   normalizeRect,
   projectRectIntoRect,
   readSizeState,
+  resolveImageGeometry,
+  resolveImageFitScale,
   resolveViewPaddingPx,
   createServiceToken,
   type CanvasService,
   type ExtensionDefinition,
+  type InteractionService,
+  type RenderIntentChangeEvent,
   type RenderIntentService,
   type SceneChangeEvent,
   type SceneService,
   type Service,
   type SessionChangeEvent,
   type SessionService,
+  SessionConflictError,
 } from "../src";
 
 declare const process: {
@@ -55,6 +61,10 @@ class FakeLayoutCanvasService implements CanvasService {
     this.height = height;
   }
 
+  on() {
+    return { dispose() {} };
+  }
+
   requestRenderAll() {}
   resize() {}
   getViewportSize() {
@@ -69,8 +79,14 @@ class FakeLayoutCanvasService implements CanvasService {
     offsetX?: number;
     offsetY?: number;
   }) {
-    const availableWidth = Math.max(0, options.containerWidth - options.padding * 2);
-    const availableHeight = Math.max(0, options.containerHeight - options.padding * 2);
+    const availableWidth = Math.max(
+      0,
+      options.containerWidth - options.padding * 2,
+    );
+    const availableHeight = Math.max(
+      0,
+      options.containerHeight - options.padding * 2,
+    );
     const scale = Math.min(
       availableWidth / options.widthMm,
       availableHeight / options.heightMm,
@@ -129,10 +145,20 @@ class FakeLayoutCanvasService implements CanvasService {
   toSceneLength(value: number) {
     return value;
   }
-  toScreenRect(rect: { left: number; top: number; width: number; height: number }) {
+  toScreenRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) {
     return rect;
   }
-  toSceneRect(rect: { left: number; top: number; width: number; height: number }) {
+  toSceneRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) {
     return rect;
   }
   getSceneViewportRect() {
@@ -184,10 +210,7 @@ function assertClose(
   }
 }
 
-function computeTestSceneLayout(
-  canvas: FakeLayoutCanvasService,
-  state: any,
-) {
+function computeTestSceneLayout(canvas: FakeLayoutCanvasService, state: any) {
   return computeSceneLayout({
     frames: state.sceneFrames,
     fitOptions: { viewPadding: state.viewPadding ?? "16%" },
@@ -309,11 +332,16 @@ async function testPendingUntilRequiredServiceArrives() {
       cycle: undefined,
     });
     assertEqual(
-      runtime.services.getOrThrow(COMMAND_SERVICE).getCommand("dependent.command"),
+      runtime.services
+        .getOrThrow(COMMAND_SERVICE)
+        .getCommand("dependent.command"),
       undefined,
     );
 
-    runtime.services.register(new DeferredDependencyService(), REQUIRED_SERVICE);
+    runtime.services.register(
+      new DeferredDependencyService(),
+      REQUIRED_SERVICE,
+    );
     await runtime.extensions.flushActivation();
 
     assertEqual(activations, 1);
@@ -520,7 +548,9 @@ async function testRuntimeCapabilityFacadeApiKeepsCommandBridge() {
 
     assertEqual(runtime.capabilities.has("pooder.test.math"), true);
     assertEqual(
-      runtime.capabilities.get<MathCapabilityApi>("pooder.test.math")?.add(2, 3),
+      runtime.capabilities
+        .get<MathCapabilityApi>("pooder.test.math")
+        ?.add(2, 3),
       5,
     );
     assertEqual(
@@ -538,9 +568,7 @@ async function testRuntimeCapabilityFacadeApiKeepsCommandBridge() {
       ["pooder.test.math"],
     );
     assertEqual(await runtime.commands.execute("math.add", 7, 8), 15);
-    assertDeepEqual(changes, [
-      { added: ["pooder.test.math"], removed: [] },
-    ]);
+    assertDeepEqual(changes, [{ added: ["pooder.test.math"], removed: [] }]);
 
     await runtime.extensions.unregister("runtime-capability-api");
 
@@ -660,7 +688,9 @@ async function testUnregisterCleansDefinitionsCapabilitiesAndCommands() {
     assertEqual(runtime.config.getDefinition("cleanup.value"), undefined);
     assertEqual(runtime.config.get("cleanup.value"), 2);
     assertEqual(
-      runtime.services.getOrThrow(COMMAND_SERVICE).getCommand("cleanup.command"),
+      runtime.services
+        .getOrThrow(COMMAND_SERVICE)
+        .getCommand("cleanup.command"),
       undefined,
     );
     assertEqual(
@@ -741,8 +771,11 @@ async function testDuplicateCapabilityIdsFailWithoutLeakingContributions() {
 async function testCapabilityRegistryContractUsesDefensiveCopiesAndEvents() {
   await withRuntime(async (runtime) => {
     const registry = runtime.services.getOrThrow(CAPABILITY_REGISTRY_SERVICE);
-    const events: Array<{ added: string[]; removed: string[]; extensionId?: string }> =
-      [];
+    const events: Array<{
+      added: string[];
+      removed: string[];
+      extensionId?: string;
+    }> = [];
     const facade = { inspect: () => "ready" };
     let registrations = 0;
     let unregistrations = 0;
@@ -881,13 +914,15 @@ async function testSceneLayersAndElements() {
       true,
     );
     assertDeepEqual(
-      scene.selectElements({ layerIds: ["artwork"] }).map((element) => element.id),
+      scene
+        .selectElements({ layerIds: ["artwork"] })
+        .map((element) => element.id),
       ["image-1", "path-1", "text-1"],
     );
     assertDeepEqual(
-      scene.selectElements({ types: ["path"], visible: false }).map(
-        (element) => element.id,
-      ),
+      scene
+        .selectElements({ types: ["path"], visible: false })
+        .map((element) => element.id),
       ["path-1"],
     );
     assertEqual(scene.removeElement("path-1"), true);
@@ -951,7 +986,11 @@ async function testSceneSelectors() {
       "empty layer selector should return the ordered layer set",
     );
     assertDeepEqual(
-      scene.selectLayers({ tags: ["design", "missing"], metadata: { owner: "app" } })
+      scene
+        .selectLayers({
+          tags: ["design", "missing"],
+          metadata: { owner: "app" },
+        })
         .map((layer) => layer.id),
       ["artwork"],
       "layer selector should AND fields and match any requested tag",
@@ -1001,7 +1040,10 @@ async function testSceneServiceContractValidatesAndClonesState() {
     scene.addLayer({ id: "target", order: 2 });
 
     layer.metadata!.owner = "mutated";
-    assertEqual(scene.selectOneLayer({ ids: ["source"] })?.metadata?.owner, "app");
+    assertEqual(
+      scene.selectOneLayer({ ids: ["source"] })?.metadata?.owner,
+      "app",
+    );
 
     const rect = scene.addElement({
       id: "rect",
@@ -1031,10 +1073,15 @@ async function testSceneServiceContractValidatesAndClonesState() {
       metadata: { selected: true },
     });
     assertDeepEqual(
-      scene.selectElements({ layerIds: ["target"] }).map((element) => element.id),
+      scene
+        .selectElements({ layerIds: ["target"] })
+        .map((element) => element.id),
       ["rect"],
     );
-    assertEqual(scene.selectOneElement({ ids: ["rect"] })?.metadata?.selected, true);
+    assertEqual(
+      scene.selectOneElement({ ids: ["rect"] })?.metadata?.selected,
+      true,
+    );
 
     assertThrows(
       () => scene.addLayer({ id: "source" }),
@@ -1085,6 +1132,7 @@ async function testSceneTransactionsBatchAndRollback() {
     });
 
     assertEqual(changes.length, 1);
+    assertDeepEqual(changes[0].causes, [{ type: "scene-content" }]);
     assertDeepEqual(changes[0].layers.added, ["content"]);
     assertDeepEqual(changes[0].elements.added, ["rect-1"]);
     assertDeepEqual(changes[0].elements.updated, ["rect-1"]);
@@ -1108,6 +1156,25 @@ async function testSceneTransactionsBatchAndRollback() {
     assertEqual(scene.selectOneLayer({ ids: ["rollback"] }), undefined);
     assertEqual(scene.selectOneElement({ ids: ["text-1"] }), undefined);
     assertEqual(changes.length, 1);
+
+    scene.transaction(
+      {
+        cause: {
+          type: "interaction-preview",
+          sessionId: "image:front",
+          toolId: "image-placement",
+        },
+      },
+      () => scene.updateElement("rect-1", { width: 14 }),
+    );
+    assertEqual(changes.length, 2);
+    assertDeepEqual(changes[1].causes, [
+      {
+        type: "interaction-preview",
+        sessionId: "image:front",
+        toolId: "image-placement",
+      },
+    ]);
   });
 }
 
@@ -1177,11 +1244,19 @@ async function testSceneServiceManagesMultipleScenes() {
       "scene metadata should describe renderability",
     );
     assert(
-      Boolean(changes.some((change) => change.scenes?.added.includes("session"))),
+      Boolean(
+        changes.some((change) => change.scenes?.added.includes("session")),
+      ),
       "scene changes should report scene additions",
     );
     assert(
-      Boolean(changes.some((change) => change.sceneChanges?.session?.elements.added.includes("shared-element"))),
+      Boolean(
+        changes.some((change) =>
+          change.sceneChanges?.session?.elements.added.includes(
+            "shared-element",
+          ),
+        ),
+      ),
       "scene changes should report scoped element additions",
     );
     assertEqual(scene.removeScene("session"), true);
@@ -1221,9 +1296,8 @@ async function testSceneTransactionRollsBackMultipleScenes() {
 
 async function testSessionsWithoutTools() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(
-      SESSION_SERVICE,
-    );
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     const changes: SessionChangeEvent[] = [];
     let beginCount = 0;
     let validateCount = 0;
@@ -1265,12 +1339,9 @@ async function testSessionsWithoutTools() {
     assertEqual(validateCount, 1);
     assertEqual(commitCount, 1);
     assertEqual(
-      sessions.getSession("session.image-placement.front.slot")?.status,
-      "committed",
-    );
-    assertEqual(
-      sessions.getSession("session.image-placement.front.slot")?.dirty,
-      false,
+      sessions.getSession("session.image-placement.front.slot"),
+      undefined,
+      "terminal sessions should leave the active registry",
     );
     assertEqual(
       sessions.hasActiveSession({
@@ -1280,23 +1351,25 @@ async function testSessionsWithoutTools() {
     );
     assertDeepEqual(
       changes.map((event) => event.reason),
-      ["create", "dirty", "committing", "commit"],
+      ["opened", "phase", "phase", "phase"],
     );
   });
 }
 
 async function testSessionLifecycleEvents() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(
-      SESSION_SERVICE,
-    );
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     const events: Array<{
       reason: string;
       sessionId: string;
     }> = [];
 
     sessions.onDidChange((event) => {
-      events.push({ reason: event.reason, sessionId: event.sessionId });
+      events.push({
+        reason: event.reason,
+        sessionId: event.snapshot.descriptor.sessionId,
+      });
     });
 
     sessions.createSession({
@@ -1313,25 +1386,256 @@ async function testSessionLifecycleEvents() {
     await sessions.commitSession("image:front:slot");
     await sessions.cancelSession("image:front:slot-2");
 
-    assertEqual(sessions.getFocusedSessionId(), "image:front:slot");
+    assertEqual(sessions.getFocusedSessionId(), null);
     assertEqual(sessions.isSessionActive("image:front:slot"), false);
     assertEqual(
       sessions.listSessions({ scope: { channel: "image" } }).length,
-      2,
+      0,
     );
+    assert(
+      events.some(
+        (event) =>
+          event.reason === "draft" && event.sessionId === "image:front:slot",
+      ),
+      "session draft changes should be typed lifecycle events",
+    );
+  });
+}
+
+async function testExclusiveSessionRequests() {
+  await withRuntime(async (runtime) => {
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    await sessions.requestSession({
+      sessionId: "white-ink:front",
+      scope: { channel: "white-ink", groupId: "editor-interaction" },
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    });
+    sessions.markDirty("white-ink:front", true);
+
+    const blocked = await sessions.requestSession({
+      sessionId: "image:front",
+      scope: { channel: "image-placement", groupId: "editor-interaction" },
+      interactionMode: "exclusive",
+    });
+    assertEqual(blocked.ok, false);
+    assertEqual(blocked.conflictingSessionId, "white-ink:front");
+
+    sessions.markDirty("white-ink:front", false);
+    const activated = await sessions.requestSession({
+      sessionId: "image:front",
+      scope: { channel: "image-placement", groupId: "editor-interaction" },
+      interactionMode: "exclusive",
+    });
+    assertEqual(activated.ok, true);
+    assertEqual(sessions.isSessionActive("white-ink:front"), false);
+    assertEqual(sessions.isSessionActive("image:front"), true);
+    assertEqual(
+      sessions.hasActiveSession({
+        scope: { groupId: "editor-interaction" },
+      }),
+      true,
+    );
+  });
+}
+
+async function testSessionV2OwnsLifecycleAndResources() {
+  await withRuntime(async (runtime) => {
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    let releaseBegin!: () => void;
+    const beginGate = new Promise<void>((resolve) => {
+      releaseBegin = resolve;
+    });
+    let beginCount = 0;
+    let opened = false;
+    const opening = sessions
+      .open({
+        descriptor: {
+          sessionId: "v2:lifecycle",
+          ownerId: "test-owner",
+          scope: { groupId: "v2" },
+          interactionMode: "exclusive",
+          leavePolicy: "block",
+        },
+        initialDraft: { value: 1 },
+        lifecycle: {
+          begin: async () => {
+            beginCount += 1;
+            await beginGate;
+          },
+        },
+      })
+      .then((handle) => {
+        opened = true;
+        return handle;
+      });
+    await Promise.resolve();
+    assertEqual(opened, false, "open must await begin");
+    releaseBegin();
+    const handle = await opening;
+    const duplicate = await sessions.open({
+      descriptor: handle.descriptor,
+      initialDraft: { value: 99 },
+    });
+    assertEqual(duplicate, handle, "same owner must receive the same handle");
+    assertEqual(beginCount, 1, "duplicate open must not begin twice");
+
+    let ownerError = false;
+    try {
+      await sessions.open({
+        descriptor: { ...handle.descriptor, ownerId: "other-owner" },
+        initialDraft: { value: 1 },
+      });
+    } catch {
+      ownerError = true;
+    }
+    assertEqual(ownerError, true, "another owner must not reuse a session id");
+
+    const disposalOrder: string[] = [];
+    handle.own({ dispose: () => disposalOrder.push("first") });
+    handle.own({ dispose: () => disposalOrder.push("second") });
+    await handle.cancel();
+    assertDeepEqual(disposalOrder, ["second", "first"]);
+    assertEqual(sessions.getHandle("v2:lifecycle"), undefined);
+  });
+}
+
+async function testSessionV2RecoversCommitAndForcesTerminalCleanup() {
+  const sessions = new (
+    await import("../src/services/SessionService")
+  ).default();
+  let validationOk = false;
+  let commitThrows = true;
+  const handle = await sessions.open({
+    descriptor: {
+      sessionId: "v2:commit",
+      ownerId: "test-owner",
+      scope: {},
+      interactionMode: "cooperative",
+      leavePolicy: "block",
+    },
+    initialDraft: { value: 1 },
+    lifecycle: {
+      validate: () => validationOk,
+      commit: () => {
+        if (commitThrows) throw new Error("commit failed");
+        return "done";
+      },
+    },
+  });
+  handle.updateDraft({ value: 2 });
+  assertDeepEqual(await handle.commit(), {
+    ok: false,
+    validation: { ok: false },
+  });
+  assertEqual(handle.phase, "active");
+  assertDeepEqual(handle.getDraft(), { value: 2 });
+  validationOk = true;
+  let commitError = false;
+  try {
+    await handle.commit();
+  } catch {
+    commitError = true;
+  }
+  assertEqual(commitError, true);
+  assertEqual(handle.phase, "active");
+  assertEqual(handle.focused, true);
+  commitThrows = false;
+  assertDeepEqual(await handle.commit(), { ok: true, result: "done" });
+  assertEqual(sessions.getHandle("v2:commit"), undefined);
+
+  const forced = await sessions.open({
+    descriptor: {
+      sessionId: "v2:forced",
+      ownerId: "test-owner",
+      scope: {},
+      interactionMode: "cooperative",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+    lifecycle: {
+      rollback: () => {
+        throw new Error("rollback failed");
+      },
+    },
+  });
+  forced.own({
+    dispose: () => {
+      throw new Error("dispose failed");
+    },
+  });
+  let aggregate: unknown;
+  try {
+    await forced.rollback();
+  } catch (error) {
+    aggregate = error;
+  }
+  assert(aggregate instanceof AggregateError, "rollback errors must aggregate");
+  assertEqual((aggregate as AggregateError).errors.length, 2);
+  assertEqual(sessions.getHandle("v2:forced"), undefined);
+}
+
+async function testSessionSceneV2TracksFocusedRootAndOwnership() {
+  await withRuntime(async (runtime) => {
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    const session = await sessions.open({
+      descriptor: {
+        sessionId: "scene-session",
+        ownerId: "scene-owner",
+        scope: {},
+        interactionMode: "cooperative",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    const scene = scenes.createScene({
+      id: "session-root",
+      owner: { type: "session", sessionId: session.descriptor.sessionId },
+      composition: {
+        entries: [
+          { source: "local", layerIds: ["underlay"] },
+          { source: "document", interaction: "disabled" },
+          { source: "local", layerIds: ["controls"] },
+        ],
+      },
+    });
+    session.own(scene);
+    scene.addLayer({ id: "underlay" });
+    scene.addLayer({ id: "controls" });
+    scene.addElement({
+      id: "control",
+      layerId: "controls",
+      type: "rect",
+      width: 10,
+      height: 10,
+      interaction: { selection: { enabled: true } },
+    });
     assertDeepEqual(
-      events,
-      [
-        { reason: "create", sessionId: "image:front:slot" },
-        { reason: "create", sessionId: "image:front:slot-2" },
-        { reason: "update", sessionId: "image:front:slot" },
-        { reason: "focus", sessionId: "image:front:slot" },
-        { reason: "committing", sessionId: "image:front:slot" },
-        { reason: "commit", sessionId: "image:front:slot" },
-        { reason: "cancel", sessionId: "image:front:slot-2" },
-      ],
-      "sessions should emit unified lifecycle events",
+      scenes.getActiveRoot()?.composition.entries.map((entry) => entry.source),
+      ["local", "document", "local"],
     );
+
+    const other = await sessions.open({
+      descriptor: {
+        sessionId: "other-session",
+        ownerId: "other-owner",
+        scope: {},
+        interactionMode: "cooperative",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    assertEqual(scenes.getActiveRoot(), null);
+    await sessions.open({ descriptor: session.descriptor, initialDraft: {} });
+    assertEqual(scenes.getActiveRoot()?.id, "session-root");
+    await session.cancel();
+    assertEqual(scenes.getSceneHandle("session-root"), undefined);
+    assertEqual(scenes.getActiveRoot(), null);
+    await other.cancel();
   });
 }
 
@@ -1416,7 +1720,11 @@ async function testDragInteractionSnapsAndConstrains() {
     ],
     options: { thresholdPx: 6, includeCenters: false },
   });
-  assertEqual(snapped.frame.left, 100, "drag should snap x to the nearest line");
+  assertEqual(
+    snapped.frame.left,
+    100,
+    "drag should snap x to the nearest line",
+  );
   assertEqual(snapped.frame.top, 10, "drag should snap y to the nearest line");
   assertEqual(
     snapped.matches.length,
@@ -1440,7 +1748,11 @@ async function testDragInteractionSnapsAndConstrains() {
     0,
     "snap candidates that break hard constraints should be rejected",
   );
-  assertEqual(rejected.frame.left, 85, "final projection still enforces bounds");
+  assertEqual(
+    rejected.frame.left,
+    85,
+    "final projection still enforces bounds",
+  );
 
   assertEqual(
     createRectSnapLines({ left: 0, top: 0, width: 10, height: 20 }).length,
@@ -1449,9 +1761,9 @@ async function testDragInteractionSnapsAndConstrains() {
   );
 }
 
-async function testGeometrySourceCapabilityRegistry() {
+async function testGeometrySourceServiceRegistry() {
   await withRuntime(async (runtime) => {
-    const geometry = runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
+    const geometry = runtime.services.getOrThrow<GeometrySourceService>(
       GEOMETRY_SOURCE_SERVICE,
     );
     const disposable = geometry.registerSource(
@@ -1518,12 +1830,12 @@ async function testGeometrySourceCapabilityRegistry() {
   });
 }
 
-async function testConstraintResolverCapabilityBuiltins() {
+async function testConstraintResolverServiceBuiltins() {
   await withRuntime(async (runtime) => {
-    const geometry = runtime.services.getOrThrow<DefaultGeometrySourceCapability>(
+    const geometry = runtime.services.getOrThrow<GeometrySourceService>(
       GEOMETRY_SOURCE_SERVICE,
     );
-    const resolver = runtime.services.getOrThrow<DefaultConstraintResolverCapability>(
+    const resolver = runtime.services.getOrThrow<ConstraintResolverService>(
       CONSTRAINT_RESOLVER_SERVICE,
     );
     geometry.registerSource(
@@ -1591,11 +1903,224 @@ async function testConstraintResolverCapabilityBuiltins() {
   });
 }
 
+async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
+  await withRuntime(async (runtime) => {
+    const interaction =
+      runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
+    const resolver = runtime.services.getOrThrow<ConstraintResolverService>(
+      CONSTRAINT_RESOLVER_SERVICE,
+    );
+    resolver.registerConstraint("test.move", (result) => ({
+      ...result,
+      frame: result.frame ? { ...result.frame, left: 10 } : result.frame,
+    }));
+    resolver.registerConstraint("test.resize", (result) => ({
+      ...result,
+      size: { width: 50, height: 60 },
+    }));
+    resolver.registerConstraint("test.rotate", (result) => ({
+      ...result,
+      rotation: 90,
+    }));
+
+    const spec = {
+      enabledWhen: {
+        op: "truthy" as const,
+        ref: { source: "context" as const, key: "editable" },
+      },
+      selection: { enabled: false },
+      activation: {
+        action: { commandId: "interaction.open", payload: { value: 7 } },
+      },
+      manipulation: {
+        move: {
+          enabled: true,
+          constraints: [
+            {
+              activeWhen: { op: "const" as const, value: true },
+              spec: { type: "test.move" },
+            },
+          ],
+        },
+        resize: {
+          enabled: true,
+          constraints: [{ spec: { type: "test.resize" } }],
+        },
+        rotate: {
+          enabled: true,
+          constraints: [{ spec: { type: "test.rotate" } }],
+        },
+      },
+    };
+    const runtimeContext = { contextValues: { editable: true } };
+    const state = interaction.resolveState(spec, runtimeContext, false);
+    assertEqual(
+      state.selectionEnabled,
+      true,
+      "manipulation should imply selection",
+    );
+    assertEqual(
+      state.hitTestEnabled,
+      true,
+      "manipulation should imply hit testing",
+    );
+    assertEqual(
+      state.activationEnabled,
+      true,
+      "activation should default enabled",
+    );
+    assertEqual(state.manipulation.move.constraints.length, 1);
+
+    const lockedState = interaction.resolveState(spec, runtimeContext, true);
+    assertEqual(
+      lockedState.selectionEnabled,
+      false,
+      "lock should disable selection",
+    );
+    assertEqual(lockedState.manipulation.move.enabled, false);
+    assertEqual(
+      lockedState.activationEnabled,
+      true,
+      "lock should not implicitly disable activation",
+    );
+    assertEqual(
+      interaction.resolveState(
+        spec,
+        { contextValues: { editable: false } },
+        false,
+      ).enabled,
+      false,
+      "enabledWhen should control the complete interaction spec",
+    );
+
+    const committedKinds: string[] = [];
+    interaction.onDidCommitManipulation((event) =>
+      committedKinds.push(event.kind),
+    );
+    const transform = {
+      frame: { left: 1, top: 2, width: 20, height: 30 },
+      size: { width: 20, height: 30 },
+      rotation: 12,
+    };
+    assertEqual(
+      interaction.resolveManipulation("move", {
+        spec,
+        runtimeContext,
+        transform,
+      }).result.frame?.left,
+      10,
+    );
+    assertDeepEqual(
+      interaction.resolveManipulation("resize", {
+        spec,
+        runtimeContext,
+        transform,
+      }).result.size,
+      { width: 50, height: 60 },
+    );
+    assertEqual(
+      interaction.resolveManipulation("rotate", {
+        spec,
+        runtimeContext,
+        transform,
+        commit: true,
+      }).result.rotation,
+      90,
+    );
+    assertDeepEqual(committedKinds, ["rotate"]);
+
+    runtime.services
+      .getOrThrow(COMMAND_SERVICE)
+      .registerCommand("interaction.open", (payload) => payload.value * 2);
+    const activation = await interaction.activate<number>({
+      spec,
+      runtimeContext,
+      trigger: "primary-pointer",
+      subjectId: "image",
+    });
+    assertEqual(activation.activated, true);
+    assertEqual(
+      activation.commandResult,
+      14,
+      "activate should return command result",
+    );
+
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    runtime.services
+      .getOrThrow(COMMAND_SERVICE)
+      .registerCommand("interaction.open-session", async (payload) => {
+        try {
+          const handle = await sessions.open({
+            descriptor: {
+              sessionId: payload.session.sessionId,
+              ownerId: "interaction-test-owner",
+              scope: payload.session.scope,
+              interactionMode: payload.session.interactionMode,
+              leavePolicy: payload.session.leavePolicy,
+            },
+            initialDraft: {},
+          });
+          return { ok: true as const, ownerId: handle.descriptor.ownerId };
+        } catch (error) {
+          if (error instanceof SessionConflictError) {
+            return { ok: false as const, reason: "session-conflict" as const };
+          }
+          throw error;
+        }
+      });
+    const sessionActivationSpec = {
+      activation: {
+        action: { commandId: "interaction.open-session" },
+        session: {
+          channel: "image-placement",
+          groupId: "editor-interaction",
+          mode: "exclusive" as const,
+          scope: "subject" as const,
+        },
+      },
+    };
+    const opened = await interaction.activate({
+      spec: sessionActivationSpec,
+      runtimeContext: {},
+      trigger: "primary-pointer",
+      subjectId: "current",
+    });
+    assertEqual(opened.activated, true);
+    assertEqual(
+      opened.sessionResult?.descriptor.ownerId,
+      "interaction-test-owner",
+      "activation commands should own sessions and attach their lifecycle",
+    );
+    await opened.sessionResult?.cancel();
+
+    const existing = await sessions.open({
+      descriptor: {
+        sessionId: "existing",
+        ownerId: "existing-owner",
+        scope: { groupId: "editor-interaction" },
+        interactionMode: "exclusive",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    existing.setDirty();
+    const blocked = await interaction.activate({
+      spec: sessionActivationSpec,
+      runtimeContext: {},
+      trigger: "primary-pointer",
+      subjectId: "next",
+    });
+    assertEqual(blocked.activated, false);
+    assertEqual(blocked.reason, "session-conflict");
+    await existing.cancel();
+  });
+}
+
 async function testSessionDirtyTrackerCanBlockLeave() {
   await withRuntime(async (runtime) => {
-    const sessions = runtime.services.getOrThrow<SessionService>(
-      SESSION_SERVICE,
-    );
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     sessions.createSession({
       sessionId: "session.feature",
       scope: { channel: "feature" },
@@ -1605,8 +2130,7 @@ async function testSessionDirtyTrackerCanBlockLeave() {
       () => true,
     );
 
-    const leaveResult =
-      await sessions.handleBeforeLeave("session.feature");
+    const leaveResult = await sessions.handleBeforeLeave("session.feature");
 
     assertDeepEqual(leaveResult, {
       decision: "blocked",
@@ -1616,10 +2140,9 @@ async function testSessionDirtyTrackerCanBlockLeave() {
 
     tracker.dispose();
     sessions.markDirty("session.feature", false);
-    assertDeepEqual(
-      await sessions.handleBeforeLeave("session.feature"),
-      { decision: "allow" },
-    );
+    assertDeepEqual(await sessions.handleBeforeLeave("session.feature"), {
+      decision: "allow",
+    });
   });
 }
 
@@ -1628,6 +2151,8 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
+    const changes: RenderIntentChangeEvent[] = [];
+    intents.onDidChange((event) => changes.push(event));
     intents.setDocumentIntents([
       {
         id: "image",
@@ -1698,6 +2223,43 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
       node?.visual?.src,
       "/base.png",
       "clearing the remaining source patch should restore the base source",
+    );
+    intents.setRuntimeConditionValue("session.image.active", true);
+    assertDeepEqual(
+      changes.map((event) => event.reason),
+      [
+        { type: "document-replaced" },
+        {
+          type: "runtime-patch",
+          operation: "upsert",
+          sourceId: "source-a",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-patch",
+          operation: "upsert",
+          sourceId: "source-b",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-patch",
+          operation: "clear",
+          sourceId: "source-b",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-patch",
+          operation: "remove",
+          sourceId: "source-a",
+          intentIds: ["image"],
+        },
+        {
+          type: "runtime-condition",
+          operation: "set",
+          keys: ["session.image.active"],
+        },
+      ],
+      "render intent changes should preserve their semantic origin",
     );
   });
 }
@@ -1856,25 +2418,30 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         coordinateSpace: "screen",
         placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
         ordering: { layerId: "artwork" },
-        export: { keys: ["image.export"], tags: [" design ", "design", "mockup"] },
+        export: {
+          keys: ["image.export"],
+          tags: [" design ", "design", "mockup"],
+        },
         props: { fill: "red" },
         data: { locked: false },
         interaction: {
-          transform: { enabled: true },
-          drag: {
-            enabled: true,
-            constraints: [
-              {
-                activeWhen: { op: "const", value: true },
-                spec: { type: "grid.snap", params: { size: 10 } },
-              },
-            ],
+          manipulation: {
+            move: {
+              enabled: true,
+              constraints: [
+                {
+                  activeWhen: { op: "const", value: true },
+                  spec: { type: "grid.snap", params: { size: 10 } },
+                },
+              ],
+            },
+            resize: { enabled: true },
+            rotate: { enabled: true },
           },
           enabledWhen: {
             op: "truthy",
             ref: { source: "context", key: "can-interact" },
           },
-          locked: true,
         },
       },
     ]);
@@ -1885,15 +2452,20 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       patch: {
         id: "image",
         interaction: {
-          drag: {
-            constraints: [
-              {
-                spec: {
-                  type: "rect.contain",
-                  params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+          manipulation: {
+            move: {
+              enabled: true,
+              constraints: [
+                {
+                  spec: {
+                    type: "rect.contain",
+                    params: {
+                      rect: { left: 0, top: 0, width: 100, height: 100 },
+                    },
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
         },
       },
@@ -1905,17 +2477,20 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       patch: {
         id: "image",
         interaction: {
-          drag: {
-            constraints: [
-              {
-                activeWhen: {
-                  op: "in",
-                  ref: { source: "activeToolId" },
-                  values: ["move"],
+          manipulation: {
+            move: {
+              enabled: true,
+              constraints: [
+                {
+                  activeWhen: {
+                    op: "in",
+                    ref: { source: "activeToolId" },
+                    values: ["move"],
+                  },
+                  spec: { type: "axis.lock", mode: "x" },
                 },
-                spec: { type: "axis.lock", mode: "x" },
-              },
-            ],
+              ],
+            },
           },
         },
       },
@@ -1934,41 +2509,45 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
     );
     assertEqual(
       node?.data.locked,
-      true,
-      "interaction locked should override graph data",
+      false,
+      "lock state should remain document data rather than interaction state",
     );
     assertDeepEqual(
       node?.interaction,
       {
-        transform: { enabled: true },
-        drag: {
-          enabled: true,
-          constraints: [
-            {
-              activeWhen: { op: "const", value: true },
-              spec: { type: "grid.snap", params: { size: 10 } },
-            },
-            {
-              spec: {
-                type: "rect.contain",
-                params: { rect: { left: 0, top: 0, width: 100, height: 100 } },
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [
+              {
+                activeWhen: { op: "const", value: true },
+                spec: { type: "grid.snap", params: { size: 10 } },
               },
-            },
-            {
-              activeWhen: {
-                op: "in",
-                ref: { source: "activeToolId" },
-                values: ["move"],
+              {
+                spec: {
+                  type: "rect.contain",
+                  params: {
+                    rect: { left: 0, top: 0, width: 100, height: 100 },
+                  },
+                },
               },
-              spec: { type: "axis.lock", mode: "x" },
-            },
-          ],
+              {
+                activeWhen: {
+                  op: "in",
+                  ref: { source: "activeToolId" },
+                  values: ["move"],
+                },
+                spec: { type: "axis.lock", mode: "x" },
+              },
+            ],
+          },
+          resize: { enabled: true },
+          rotate: { enabled: true },
         },
         enabledWhen: {
           op: "truthy",
           ref: { source: "context", key: "can-interact" },
         },
-        locked: true,
       },
       "interaction aspect should carry merged constraints in patch order",
     );
@@ -2052,12 +2631,14 @@ async function testRenderIntentObjectLocalEffects() {
       "clip effects should stay local on the render graph node",
     );
     assertEqual(
-      "targetLayerIds" in ((effect ?? {}) as unknown as Record<string, unknown>),
+      "targetLayerIds" in
+        ((effect ?? {}) as unknown as Record<string, unknown>),
       false,
       "clip effects should not expose global layer selectors",
     );
     assertEqual(
-      "targetSubjectIds" in ((effect ?? {}) as unknown as Record<string, unknown>),
+      "targetSubjectIds" in
+        ((effect ?? {}) as unknown as Record<string, unknown>),
       false,
       "clip effects should not expose global subject selectors",
     );
@@ -2211,10 +2792,7 @@ async function testSceneLayoutModelPositionsProductionFrame() {
   assertClose(layout.scale, 800 / 1299);
   assertClose(layout.trimRect.centerX, 650 * layout.scale);
   assertClose(layout.trimRect.left, 265 * layout.scale);
-  assertClose(
-    layout.trimRect.top,
-    300 - 150 * layout.scale,
-  );
+  assertClose(layout.trimRect.top, 300 - 150 * layout.scale);
   assertClose(layout.trimRect.width, 770 * layout.scale);
   assertClose(layout.trimRect.height, 300 * layout.scale);
   assertClose(layout.cutRect.left, layout.trimRect.left);
@@ -2263,6 +2841,51 @@ async function testSceneLayoutModelUsesExplicitExportFrame() {
   assert(layout, "explicit export frame layout should resolve");
   assertClose(layout.cutRect.left, 190);
   assertClose(layout.cutRect.width, 80 * layout.scale);
+}
+
+async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
+  const frame = { left: 10, top: 20, width: 200, height: 100 };
+  const source = { width: 400, height: 400 };
+
+  assertDeepEqual(resolveImageFitScale(frame, source, "cover"), {
+    x: 0.5,
+    y: 0.5,
+  });
+  assertDeepEqual(resolveImageFitScale(frame, source, "contain"), {
+    x: 0.25,
+    y: 0.25,
+  });
+  assertDeepEqual(resolveImageFitScale(frame, source, "stretch"), {
+    x: 0.5,
+    y: 0.25,
+  });
+
+  const resolved = resolveImageGeometry({
+    source: { src: "/image.png", size: source },
+    frame,
+    fit: "cover",
+    transform: {
+      anchorX: 0.25,
+      anchorY: 0.75,
+      zoom: 1.2,
+      rotation: 15,
+      opacity: 0.8,
+    },
+    clip: frame,
+  });
+  assertDeepEqual(resolved, {
+    width: 400,
+    height: 400,
+    left: 60,
+    top: 95,
+    scaleX: 0.6,
+    scaleY: 0.6,
+    angle: 15,
+    opacity: 0.8,
+    originX: "center",
+    originY: "center",
+    clip: frame,
+  });
 }
 
 async function main() {
@@ -2320,23 +2943,41 @@ async function main() {
       "rolls back multi-scene transactions",
       testSceneTransactionRollsBackMultipleScenes,
     ],
+    ["manages sessions without registered tools", testSessionsWithoutTools],
+    ["emits generic session lifecycle events", testSessionLifecycleEvents],
+    ["coordinates exclusive session requests", testExclusiveSessionRequests],
     [
-      "manages sessions without registered tools",
-      testSessionsWithoutTools,
+      "owns V2 session lifecycle and resources",
+      testSessionV2OwnsLifecycleAndResources,
     ],
     [
-      "emits generic session lifecycle events",
-      testSessionLifecycleEvents,
+      "recovers failed V2 commits and forces terminal cleanup",
+      testSessionV2RecoversCommitAndForcesTerminalCleanup,
+    ],
+    [
+      "tracks focused session scene roots and ownership",
+      testSessionSceneV2TracksFocusedRootAndOwnership,
     ],
     ["computes geometry primitives", testGeometryPrimitives],
-    ["computes drag interaction snaps and constraints", testDragInteractionSnapsAndConstrains],
+    [
+      "keeps intrinsic image size while resolving fit geometry",
+      testImageGeometryKeepsIntrinsicSizeAndResolvesFit,
+    ],
+    [
+      "computes drag interaction snaps and constraints",
+      testDragInteractionSnapsAndConstrains,
+    ],
     [
       "registers and queries geometry sources",
-      testGeometrySourceCapabilityRegistry,
+      testGeometrySourceServiceRegistry,
     ],
     [
       "resolves generic constraints through capability",
-      testConstraintResolverCapabilityBuiltins,
+      testConstraintResolverServiceBuiltins,
+    ],
+    [
+      "owns interaction state, constraints, activation, and commits",
+      testInteractionServiceOwnsStateConstraintsAndDispatch,
     ],
     [
       "session dirty trackers can block leave",
@@ -2378,7 +3019,10 @@ async function main() {
       "resolves scene layout defaults and responsive padding",
       testSceneLayoutModelDefaultsAndPadding,
     ],
-    ["computes scene export frame layouts", testSceneLayoutModelUsesExportFrames],
+    [
+      "computes scene export frame layouts",
+      testSceneLayoutModelUsesExportFrames,
+    ],
     [
       "positions trim and cut rectangles from production frame",
       testSceneLayoutModelPositionsProductionFrame,

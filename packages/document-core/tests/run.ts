@@ -146,7 +146,7 @@ async function testApplyEditorDocument() {
   const result = await applyEditorDocument(
     runtime,
     {
-      version: 5,
+      version: 6,
       config: { mode: "test" },
       surfaces: [
         {
@@ -165,15 +165,21 @@ async function testApplyEditorDocument() {
                     shape: "rect",
                     params: { width: 20, height: 20 },
                   },
-                  effects: [
-                    { type: "custom" },
-                    { type: "interactive", enabled: true },
-                    {
-                      type: "object-constraint",
-                      targetId: "frame",
-                      strategy: "inside",
+                  effects: [{ type: "custom" }],
+                  interaction: {
+                    selection: { enabled: false },
+                    activation: {
+                      action: { commandId: "test.open-session" },
                     },
-                  ],
+                    manipulation: {
+                      move: {
+                        enabled: true,
+                        constraints: [{ spec: { type: "rect.contain" } }],
+                      },
+                      resize: { enabled: true },
+                      rotate: { enabled: false },
+                    },
+                  },
                 },
                 {
                   id: "label",
@@ -207,14 +213,19 @@ async function testApplyEditorDocument() {
     "generic effect compiler should patch node",
   );
   assertEqual(
-    node?.interaction?.drag?.enabled,
+    node?.interaction?.manipulation?.move?.enabled,
     true,
-    "interactive object effect should translate",
+    "object interaction should enable drag",
   );
   assertEqual(
-    node?.interaction?.drag?.constraints?.[0]?.spec.type,
+    node?.interaction?.manipulation?.move?.constraints?.[0]?.spec.type,
     "rect.contain",
-    "object-constraint should translate to render intent interaction constraint",
+    "object interaction constraints should translate to render intent",
+  );
+  assertEqual(
+    node?.interaction?.activation?.action.commandId,
+    "test.open-session",
+    "object activation should translate to render intent",
   );
 }
 

@@ -13,17 +13,6 @@ import type {
 } from "@pooder/core";
 
 export interface PooderRuntimeLike {
-  readonly eventBus: {
-    clear(): void;
-    count(event: string): number;
-    emit(event: string, ...args: any[]): void;
-    off(event: string, handler: (...args: any[]) => void | boolean): void;
-    on(
-      event: string,
-      handler: (...args: any[]) => void | boolean,
-      priority?: number,
-    ): void;
-  };
   readonly services: {
     register<T extends Service>(
       service: T,

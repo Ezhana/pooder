@@ -1,24 +1,18 @@
 import type Disposable from "./disposable";
-import type { CapabilityDefinition } from "./capability";
 import type { Service, ServiceContext } from "./service";
 import type { GeometryPoint, GeometryRect } from "./interaction";
-import {
-  GEOMETRY_SOURCE_SERVICE,
-} from "./services/tokens";
+import { GEOMETRY_SOURCE_SERVICE } from "./services/tokens";
 import type {
   CoordinateSpace,
   GeometryRef,
   GeometrySnapshot,
-  GeometrySourceCapability,
+  GeometrySourceService,
 } from "./geometry-source";
 import {
-  GEOMETRY_SOURCE_CAPABILITY_ID,
   containsGeometryPoint,
   findNearestGeometryPoint,
   getGeometryBounds,
 } from "./geometry-source";
-
-export const CONSTRAINT_RESOLVER_CAPABILITY_ID = "pooder.constraint-resolver";
 
 export interface TransformInput {
   position?: GeometryPoint;
@@ -61,7 +55,7 @@ export interface ConstraintResolveInput {
   transform: TransformInput;
   constraints?: readonly ConstraintSpec[];
   coordinateSpace?: CoordinateSpace;
-  geometrySource?: GeometrySourceCapability;
+  geometrySource?: GeometrySourceService;
   target?: unknown;
   metadata?: Record<string, unknown>;
 }
@@ -73,8 +67,8 @@ export interface ConstraintResolveResult {
 }
 
 export interface ConstraintHandlerContext {
-  capability: ConstraintResolverCapability;
-  geometrySource?: GeometrySourceCapability;
+  resolver: ConstraintResolverService;
+  geometrySource?: GeometrySourceService;
   coordinateSpace?: CoordinateSpace;
   input: ConstraintResolveInput;
   diagnostics: ConstraintDiagnostic[];
@@ -86,35 +80,11 @@ export type ConstraintHandler = (
   context: ConstraintHandlerContext,
 ) => TransformResult;
 
-export interface ConstraintResolverCapability {
-  resolve(input: ConstraintResolveInput): ConstraintResolveResult;
-  registerConstraint(type: string, resolver: ConstraintHandler): Disposable;
-}
-
-export function createConstraintResolverCapabilityDefinition(
-  facade: ConstraintResolverCapability,
-): CapabilityDefinition<ConstraintResolverCapability> {
-  return {
-    id: CONSTRAINT_RESOLVER_CAPABILITY_ID,
-    metadata: {
-      name: "Constraint Resolver",
-      description: "Resolve generic transforms against geometry constraints.",
-      tags: ["core", "constraint", "interaction"],
-    },
-    dependencies: {
-      capabilities: [GEOMETRY_SOURCE_CAPABILITY_ID],
-    },
-    facade,
-  };
-}
-
-export class DefaultConstraintResolverCapability
-  implements Service, ConstraintResolverCapability
-{
+export class ConstraintResolverService implements Service {
   private readonly handlers = new Map<string, ConstraintHandler>();
-  private geometrySource?: GeometrySourceCapability;
+  private geometrySource?: GeometrySourceService;
 
-  constructor(geometrySource?: GeometrySourceCapability) {
+  constructor(geometrySource?: GeometrySourceService) {
     this.geometrySource = geometrySource;
     registerBuiltinConstraints(this);
   }
@@ -144,7 +114,7 @@ export class DefaultConstraintResolverCapability
       : [];
     const diagnostics: ConstraintDiagnostic[] = [];
     const context: ConstraintHandlerContext = {
-      capability: this,
+      resolver: this,
       geometrySource: input.geometrySource ?? this.geometrySource,
       coordinateSpace: input.coordinateSpace,
       input,
@@ -182,27 +152,29 @@ export class DefaultConstraintResolverCapability
 }
 
 export function registerBuiltinConstraints(
-  capability: ConstraintResolverCapability,
+  resolver: ConstraintResolverService,
 ): void {
-  registerIfMissing(capability, "rect.contain", resolveRectContain);
-  registerIfMissing(capability, "rect.clamp-center", resolveRectClampCenter);
-  registerIfMissing(capability, "path.nearest-point", resolvePathNearestPoint);
-  registerIfMissing(capability, "path.follow", resolvePathNearestPoint);
-  registerIfMissing(capability, "object-frame.contain", resolveRectContain);
-  registerIfMissing(capability, "snap.points", resolveSnapPoints);
-  registerIfMissing(capability, "axis.lock", resolveAxisLock);
-  registerIfMissing(capability, "grid.snap", resolveGridSnap);
+  registerIfMissing(resolver, "rect.contain", resolveRectContain);
+  registerIfMissing(resolver, "rect.clamp-center", resolveRectClampCenter);
+  registerIfMissing(resolver, "path.nearest-point", resolvePathNearestPoint);
+  registerIfMissing(resolver, "path.follow", resolvePathNearestPoint);
+  registerIfMissing(resolver, "object-frame.contain", resolveRectContain);
+  registerIfMissing(resolver, "snap.points", resolveSnapPoints);
+  registerIfMissing(resolver, "axis.lock", resolveAxisLock);
+  registerIfMissing(resolver, "grid.snap", resolveGridSnap);
 }
 
 function registerIfMissing(
-  capability: ConstraintResolverCapability,
+  resolver: ConstraintResolverService,
   type: string,
   handler: ConstraintHandler,
 ) {
   try {
-    capability.registerConstraint(type, handler);
+    resolver.registerConstraint(type, handler);
   } catch (error) {
-    if (!String((error as Error).message || "").includes("already registered")) {
+    if (
+      !String((error as Error).message || "").includes("already registered")
+    ) {
       throw error;
     }
   }
@@ -247,7 +219,10 @@ function resolvePathNearestPoint(
   const nearest = findNearestGeometryPoint(geometry, position);
   if (!nearest) return result;
   const next = moveResultToPosition(result, nearest);
-  if (constraint.type === "path.follow" && constraint.params?.contain === true) {
+  if (
+    constraint.type === "path.follow" &&
+    constraint.params?.contain === true
+  ) {
     return containsGeometryPoint(geometry, nearest) ? next : result;
   }
   return next;
@@ -284,7 +259,8 @@ function resolveAxisLock(
   const position = getResultPosition(result);
   if (!position) return result;
   const axis = constraint.params?.axis ?? constraint.mode;
-  const origin = normalizeOptionalPoint(constraint.params?.origin) ??
+  const origin =
+    normalizeOptionalPoint(constraint.params?.origin) ??
     normalizeOptionalPoint(result.metadata?.origin) ??
     position;
   if (axis === "x") {
@@ -305,7 +281,10 @@ function resolveGridSnap(
   const size = finitePositiveNumber(constraint.params?.size, 0);
   const sizeX = finitePositiveNumber(constraint.params?.sizeX, size || 1);
   const sizeY = finitePositiveNumber(constraint.params?.sizeY, size || 1);
-  const origin = normalizeOptionalPoint(constraint.params?.origin) ?? { x: 0, y: 0 };
+  const origin = normalizeOptionalPoint(constraint.params?.origin) ?? {
+    x: 0,
+    y: 0,
+  };
   return moveResultToPosition(result, {
     x: origin.x + Math.round((position.x - origin.x) / sizeX) * sizeX,
     y: origin.y + Math.round((position.y - origin.y) / sizeY) * sizeY,
@@ -385,10 +364,18 @@ function normalizeTransformResult(
     ...(position ? { position } : {}),
     ...(frame ? { frame } : {}),
     ...(size ? { size } : {}),
-    ...(Number.isFinite(input.rotation) ? { rotation: Number(input.rotation) } : {}),
-    ...(input.scale !== undefined ? { scale: normalizeScale(input.scale) } : {}),
+    ...(Number.isFinite(input.rotation)
+      ? { rotation: Number(input.rotation) }
+      : {}),
+    ...(input.scale !== undefined
+      ? { scale: normalizeScale(input.scale) }
+      : {}),
     changed: (input as TransformResult).changed ?? fallback?.changed ?? false,
-    diagnostics: ((input as TransformResult).diagnostics ?? fallback?.diagnostics ?? []).slice(),
+    diagnostics: (
+      (input as TransformResult).diagnostics ??
+      fallback?.diagnostics ??
+      []
+    ).slice(),
     metadata: input.metadata ? { ...input.metadata } : fallback?.metadata,
   };
 }
@@ -432,7 +419,10 @@ function moveResultToPosition(
   };
 }
 
-function clampCenter(result: TransformResult, rect: GeometryRect): TransformResult {
+function clampCenter(
+  result: TransformResult,
+  rect: GeometryRect,
+): TransformResult {
   const frame = result.frame;
   if (frame) {
     const center = clampPointToRect(
@@ -444,7 +434,10 @@ function clampCenter(result: TransformResult, rect: GeometryRect): TransformResu
     );
     return {
       ...result,
-      position: { x: center.x - frame.width / 2, y: center.y - frame.height / 2 },
+      position: {
+        x: center.x - frame.width / 2,
+        y: center.y - frame.height / 2,
+      },
       frame: {
         ...frame,
         left: center.x - frame.width / 2,
@@ -480,7 +473,10 @@ function projectFrameIntoRect(
   };
 }
 
-function clampPointToRect(point: GeometryPoint, rect: GeometryRect): GeometryPoint {
+function clampPointToRect(
+  point: GeometryPoint,
+  rect: GeometryRect,
+): GeometryPoint {
   const box = normalizeRectLike(rect);
   return {
     x: clamp(point.x, box.left, box.left + box.width),
@@ -492,8 +488,10 @@ function hasTransformChanged(
   initial: TransformResult,
   result: TransformResult,
 ): boolean {
-  return JSON.stringify(toComparableTransform(initial)) !==
-    JSON.stringify(toComparableTransform(result));
+  return (
+    JSON.stringify(toComparableTransform(initial)) !==
+    JSON.stringify(toComparableTransform(result))
+  );
 }
 
 function toComparableTransform(result: TransformResult) {
@@ -506,7 +504,9 @@ function toComparableTransform(result: TransformResult) {
   };
 }
 
-function isGeometrySnapshot(value: ConstraintSource): value is GeometrySnapshot {
+function isGeometrySnapshot(
+  value: ConstraintSource,
+): value is GeometrySnapshot {
   return typeof (value as GeometrySnapshot).kind === "string";
 }
 

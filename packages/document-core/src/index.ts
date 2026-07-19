@@ -3,17 +3,15 @@ import {
   RENDER_INTENT_SERVICE,
   SURFACE_FRAME_SERVICE,
   mergeRenderIntentPatchEntries,
-  type ConstraintSpec,
   type GeometryPoint,
   type GeometryRect,
+  type InteractionSpec,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDiagnostic,
   type RenderIntentDraft,
-  type RenderIntentInteractionAspect,
   type RenderIntentPatch,
   type RenderIntentPatchEntry,
   type RenderIntentService,
-  type RuntimeConditionExpr,
   type Service,
   type ServiceIdentifier,
   type SurfaceFrameService,
@@ -28,9 +26,7 @@ import {
   type EditorDocumentDiagnostic,
   type EditorDocumentEffectCapabilityResolver,
   type EditorDocumentValidationOptions,
-  type EditorBuiltinObjectEffect,
   type EditorEffect,
-  type EditorInteractionConstraint,
   type EditorLayer,
   type EditorObject,
   type EditorObjectEffect,
@@ -582,7 +578,7 @@ function createObjectRenderIntentDraft(
   if (!object.frame) return null;
   const objectOrder = object.order ?? index;
   const layerOrder = layer.order ?? 0;
-  const locked = object.locked;
+  const locked = object.locked === true || layer.locked === true;
   const interaction = createObjectInteractionAspect(object);
   const objectEffects = cloneObjectEffects(object.effects);
   const outputMaskKeys = normalizeOutputMaskKeys(
@@ -806,94 +802,8 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
 
 function createObjectInteractionAspect(
   object: EditorObject,
-): RenderIntentInteractionAspect | undefined {
-  const effects = object.effects ?? [];
-  const interactive = effects.find(isObjectInteractiveEffect);
-  const effectConstraints = effects
-    .filter(isObjectConstraintEffect)
-    .map((effect) => ({
-      spec: {
-        type: mapObjectConstraintStrategy(effect.strategy),
-        source: { sourceId: "render-graph", geometryId: effect.targetId },
-        ...(effect.params ? { params: { ...effect.params } } : {}),
-      },
-    }));
-  const documentConstraints =
-    object.interaction?.drag?.constraints
-      ?.map(normalizeDocumentInteractionConstraint)
-      .filter(
-        (constraint): constraint is NonNullable<typeof constraint> =>
-          Boolean(constraint),
-      ) ?? [];
-  const constraints = [...documentConstraints, ...effectConstraints];
-  const transformEnabled = object.interaction?.transform?.enabled;
-  const dragEnabled =
-    object.interaction?.drag?.enabled ??
-    (typeof interactive?.enabled === "boolean" ? interactive.enabled : undefined);
-
-  if (
-    transformEnabled === undefined &&
-    dragEnabled === undefined &&
-    !object.interaction?.enabledWhen &&
-    constraints.length === 0
-  )
-    return undefined;
-
-  return {
-    ...(object.interaction?.enabledWhen
-      ? {
-          enabledWhen:
-            object.interaction.enabledWhen as RuntimeConditionExpr,
-        }
-      : {}),
-    ...(transformEnabled !== undefined
-      ? { transform: { enabled: transformEnabled } }
-      : {}),
-    ...(dragEnabled !== undefined || constraints.length
-      ? {
-          drag: {
-            ...(dragEnabled !== undefined ? { enabled: dragEnabled } : {}),
-            ...(constraints.length ? { constraints } : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-function normalizeDocumentInteractionConstraint(
-  constraint: EditorInteractionConstraint,
-) {
-  const spec = constraint.spec;
-  const type = typeof spec.type === "string" ? spec.type.trim() : "";
-  if (!type) return null;
-  return {
-    ...(constraint.activeWhen
-      ? { activeWhen: constraint.activeWhen as RuntimeConditionExpr }
-      : {}),
-    spec: {
-      ...((spec as unknown) as ConstraintSpec),
-      type,
-    },
-  };
-}
-
-function isObjectInteractiveEffect(
-  effect: EditorObjectEffect,
-): effect is Extract<EditorObjectEffect, { type: "interactive" }> {
-  return effect.type === "interactive" && "enabled" in effect;
-}
-
-function isObjectConstraintEffect(
-  effect: EditorObjectEffect,
-): effect is Extract<EditorBuiltinObjectEffect, { type: "object-constraint" }> {
-  return effect.type === "object-constraint";
-}
-
-function mapObjectConstraintStrategy(strategy: string): string {
-  if (strategy === "path" || strategy === "lowest-tangent")
-    return "path.follow";
-  if (strategy === "inside") return "rect.contain";
-  return strategy;
+): InteractionSpec | undefined {
+  return object.interaction;
 }
 
 function compareEffectEntries(a: EffectEntry, b: EffectEntry) {

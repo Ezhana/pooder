@@ -1,8 +1,6 @@
+import { resolveImageFitScale, type ImageFitMode } from "@pooder/core";
 import type { FrameRect } from "../../shared/scene/frame";
-import {
-  getCoverScale as getCoverScaleFromRect,
-  type SourceSize,
-} from "../../shared/imaging/sourceSizeCache";
+import type { SourceSize } from "../../shared/imaging/sourceSizeCache";
 
 export interface ImageOperationArea {
   width: number;
@@ -36,6 +34,7 @@ export type ImageOperation =
 export interface ComputeImageOperationArgs {
   frame: FrameRect;
   source: SourceSize;
+  fit: ImageFitMode;
   operation: ImageOperation;
   area: ImageOperationArea;
 }
@@ -44,7 +43,11 @@ function clampNormalizedAnchor(value: number): number {
   return Math.max(-1, Math.min(2, value));
 }
 
-function toNormalizedAnchor(center: number, start: number, size: number): number {
+function toNormalizedAnchor(
+  center: number,
+  start: number,
+  size: number,
+): number {
   return clampNormalizedAnchor((center - start) / Math.max(1, size));
 }
 
@@ -103,10 +106,13 @@ export function resolveImageOperationArea(args: {
   };
 }
 
-export function computeImageOperationUpdates(
-  args: ComputeImageOperationArgs,
-): { scale?: number; left?: number; top?: number; angle?: number } {
-  const { frame, source, operation, area } = args;
+export function computeImageOperationUpdates(args: ComputeImageOperationArgs): {
+  scale?: number;
+  left?: number;
+  top?: number;
+  angle?: number;
+} {
+  const { frame, source, fit, operation, area } = args;
 
   if (operation.type === "resetTransform") {
     return {
@@ -125,10 +131,10 @@ export function computeImageOperationUpdates(
   }
 
   const absoluteScale = resolveAbsoluteScale(operation, area, source);
-  const coverScale = getCoverScaleFromRect(frame, source);
+  const baseScale = resolveImageFitScale(frame, source, fit).x;
 
   return {
-    scale: Math.max(0.05, (absoluteScale || coverScale) / coverScale),
+    scale: Math.max(0.05, (absoluteScale || baseScale) / baseScale),
     left,
     top,
   };

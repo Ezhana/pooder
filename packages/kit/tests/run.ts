@@ -67,7 +67,6 @@ import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   type ConfigurableVisualCapabilityApi,
 } from "../src/extensions/configurable-visual";
-import { INTERACTION_CAPABILITY_ID } from "../src/extensions/interaction";
 import { createDielineCommands } from "../src/extensions/dieline/commands";
 import { createDielineConfigurations } from "../src/extensions/dieline/config";
 import { listLegacyCommandBridges } from "../src/extensions/legacyCommandBridge";
@@ -82,6 +81,7 @@ import {
   type FeatureCapabilityApi,
 } from "../src/extensions/feature/capability";
 import { hasAnyImageInViewState } from "../src/extensions/image/model";
+import { IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID } from "../src/document/imagePlacementInteraction";
 import {
   createDielineGeometryCapability,
   createClipCapability,
@@ -89,7 +89,6 @@ import {
   createConfigurableVisualCapability,
   createImageMaskCapability,
   createImagePlacementCapability,
-  createInteractionCapability,
   createMirrorCapability,
   createSceneExportCapability,
 } from "../src/factories";
@@ -101,6 +100,8 @@ import { createKitCapabilitiesForDocument } from "../src/document/capabilities";
 import {
   SCENE_EXPORT_SERVICE,
   CANVAS_SERVICE,
+  IMAGE_GEOMETRY_DATA_KEY,
+  INTERACTION_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SURFACE_FRAME_SERVICE,
@@ -122,8 +123,10 @@ import {
   type CommandContribution,
   type CommandService,
   type ExtensionDefinition,
+  type InteractionService,
   Pooder,
   type RenderIntentService,
+  type SceneChangeEvent,
   type SceneService,
   type SessionService,
 } from "@pooder/core";
@@ -234,7 +237,7 @@ type ImagePlacementTestDriver = {
     multiplier?: number;
     format?: "png" | "jpeg";
   }): Promise<unknown>;
-  resetSession(input?: ImagePlacementSessionInput): void;
+  resetSession(input?: ImagePlacementSessionInput): Promise<void>;
 };
 
 function getImagePlacementTestDriver(
@@ -337,6 +340,18 @@ class FakeCanvasService {
     this.activeObject = null;
   }
 
+  on(eventName: string, handler: (event?: any) => void) {
+    let handlers = this.eventHandlers.get(eventName);
+    if (!handlers) {
+      handlers = new Set();
+      this.eventHandlers.set(eventName, handlers);
+    }
+    handlers.add(handler);
+    return {
+      dispose: () => handlers?.delete(handler),
+    };
+  }
+
   onCanvasEvent(eventName: string, handler: (event?: any) => void) {
     let handlers = this.eventHandlers.get(eventName);
     if (!handlers) {
@@ -344,6 +359,10 @@ class FakeCanvasService {
       this.eventHandlers.set(eventName, handlers);
     }
     handlers.add(handler);
+  }
+
+  emit(eventName: string, event?: unknown) {
+    this.eventHandlers.get(eventName)?.forEach((handler) => handler(event));
   }
 
   offCanvasEvent(eventName: string, handler: (event?: any) => void) {
@@ -1372,7 +1391,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
   runtime.extensions.register(createClipCapability());
   runtime.extensions.register(createFeatureCapability());
   runtime.extensions.register(createConfigurableVisualCapability());
-  runtime.extensions.register(createInteractionCapability());
   runtime.extensions.register(createMirrorCapability());
   runtime.extensions.register(createSceneExportCapability());
   await runtime.extensions.flushActivation();
@@ -1405,10 +1423,6 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
     "configurable visual capability factory should activate",
   );
   assert(
-    runtime.extensions.getState(INTERACTION_CAPABILITY_ID)?.state === "active",
-    "interaction capability factory should activate",
-  );
-  assert(
     runtime.extensions.getState(MIRROR_CAPABILITY_ID)?.state === "active",
     "mirror capability factory should activate",
   );
@@ -1421,7 +1435,7 @@ async function testKitCapabilityFactoriesDoNotRegisterTools() {
 
 function testCreateKitCapabilitiesForDocument() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1442,17 +1456,19 @@ function testCreateKitCapabilitiesForDocument() {
                 id: "placement",
                 frame: { x: 0, y: 0, width: 20, height: 20 },
                 source: { kind: "url", url: "/placement.png" },
+                interaction: {
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [{ spec: { type: "grid.snap" } }],
+                    },
+                  },
+                },
                 effects: [
                   { type: "image-placement", payload: { accepts: ["image"] } },
                   { type: "clip", payload: { source: { type: "dieline" } } },
                   { type: "configurable-visual" },
                   { type: "mirror" },
-                  { type: "interaction", phase: "interaction" },
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    payload: { constraints: [{ type: "grid.snap" }] },
-                  },
                 ],
               },
             ],
@@ -1470,7 +1486,6 @@ function testCreateKitCapabilitiesForDocument() {
       FEATURE_CAPABILITY_ID,
       CONFIGURABLE_VISUAL_CAPABILITY_ID,
       IMAGE_PLACEMENT_CAPABILITY_ID,
-      INTERACTION_CAPABILITY_ID,
       MIRROR_CAPABILITY_ID,
     ].sort(),
     "document helper should create supported kit capabilities once and ignore background effects",
@@ -1479,7 +1494,7 @@ function testCreateKitCapabilitiesForDocument() {
 
 function testCreateKitCapabilitiesForDocumentInfersDielineLayers() {
   const capabilities = createKitCapabilitiesForDocument({
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1539,7 +1554,7 @@ async function testApplyKitEditorDocument() {
   const canvasService = new FakeCanvasService();
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1703,18 +1718,18 @@ async function testApplyKitEditorDocument() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    false,
-    "document apply should keep image placement targets non-selectable",
+    undefined,
+    "document apply should leave renderer selection to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    true,
-    "document apply should keep image placement targets evented",
+    undefined,
+    "document apply should leave renderer hit testing to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.hasControls,
-    false,
-    "document apply should not expose controls for image placement targets",
+    undefined,
+    "document apply should leave renderer controls to InteractionSpec",
   );
   assertDeepEqual(
     {
@@ -1784,7 +1799,7 @@ async function testApplyKitEditorDocument() {
 async function testApplyKitEditorDocumentStacksGuideLayersAboveRuntimeOverlays() {
   const runtime = new Pooder();
   const document = {
-    version: 5 as const,
+    version: 6 as const,
     config: {},
     surfaces: [
       {
@@ -1836,7 +1851,7 @@ async function testApplyKitEditorDocumentRefreshesImagePlacementOverlay() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -1897,7 +1912,7 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
   await runtime.extensions.flushActivation();
 
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2092,7 +2107,7 @@ async function testMirrorCapabilityDocumentEffectAndFacade() {
 
 async function testDocumentCompilerAndRuntimePatchUseSameMerge() {
   const baseDocument = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2214,7 +2229,7 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
   const runtime = new Pooder();
   const controller = createKitEditorDocumentController(runtime);
   const document = {
-    version: 5,
+    version: 6,
     config: {
       ...TEST_DOCUMENT_CONFIG,
       "dieline.shape": "rect",
@@ -2397,7 +2412,7 @@ async function testKitEditorDocumentControllerMutatesObjectSource() {
 async function testApplyKitEditorDocumentObjectInteraction() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2427,23 +2442,28 @@ async function testApplyKitEditorDocumentObjectInteraction() {
                   params: { width: 20, height: 20 },
                 },
                 interaction: {
-                  transform: { enabled: true },
-                  drag: {
-                    enabled: true,
-                    constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [
+                        { spec: { type: "grid.snap", params: { size: 5 } } },
+                      ],
+                    },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
                   },
                 },
                 frame: { x: 25, y: 0, width: 20, height: 20 },
               },
               {
-                id: "unsupported-interaction",
+                id: "selection-only",
                 locked: false,
                 source: {
                   kind: "shape",
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                interaction: { selectable: true, evented: true, locked: true },
+                interaction: { selection: { enabled: true } },
                 frame: { x: 50, y: 0, width: 20, height: 20 },
               },
             ],
@@ -2457,14 +2477,6 @@ async function testApplyKitEditorDocumentObjectInteraction() {
     result.ok,
     `document interaction apply should succeed (${JSON.stringify(result.diagnostics)})`,
   );
-  assert(
-    !(
-      "interaction" in
-      (result.document.surfaces[0].layers[0].objects?.[2] ?? {})
-    ),
-    "unsupported renderer interaction should not remain on the normalized document",
-  );
-
   const renderGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
@@ -2473,9 +2485,7 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   const explicitInteractionNode = nodes.find(
     (node) => node.id === "explicit-interaction",
   );
-  const unsupportedInteractionNode = nodes.find(
-    (node) => node.id === "unsupported-interaction",
-  );
+  const selectionOnlyNode = nodes.find((node) => node.id === "selection-only");
 
   assertEqual(
     legacyLockedNode?.props.selectable,
@@ -2495,27 +2505,30 @@ async function testApplyKitEditorDocumentObjectInteraction() {
   assertDeepEqual(
     explicitInteractionNode?.interaction,
     {
-      transform: { enabled: true },
-      drag: {
-        enabled: true,
-        constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+      manipulation: {
+        move: {
+          enabled: true,
+          constraints: [{ spec: { type: "grid.snap", params: { size: 5 } } }],
+        },
+        resize: { enabled: true },
+        rotate: { enabled: true },
       },
     },
     "document object interaction should create render intent interaction",
   );
   assertEqual(
-    unsupportedInteractionNode?.data.locked,
+    selectionOnlyNode?.data.locked,
     false,
-    "unsupported interaction.locked should not override object locked",
+    "selection interaction should not override object locked",
   );
 
   await runtime.dispose();
 }
 
-async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
+async function testApplyKitEditorDocumentDeclarativeObjectInteraction() {
   const runtime = new Pooder();
   const document = {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2534,23 +2547,21 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                effects: [
-                  {
-                    type: "interaction",
-                    phase: "interaction",
-                    payload: {
-                      enabled: true,
-                      enabledWhen: {
-                        op: "truthy",
-                        ref: {
-                          source: "workflowSession",
-                          field: "scopeActive",
-                          scope: { channel: "layout-edit" },
-                        },
-                      },
+                interaction: {
+                  manipulation: {
+                    move: { enabled: true },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
+                  },
+                  enabledWhen: {
+                    op: "truthy",
+                    ref: {
+                      source: "workflowSession",
+                      field: "scopeActive",
+                      scope: { channel: "layout-edit" },
                     },
                   },
-                ],
+                },
               },
               {
                 id: "constraint-only",
@@ -2560,22 +2571,23 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                effects: [
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    payload: {
+                interaction: {
+                  manipulation: {
+                    move: {
+                      enabled: false,
                       constraints: [
                         {
-                          type: "rect.contain",
-                          params: {
-                            rect: { left: 0, top: 0, width: 90, height: 90 },
+                          spec: {
+                            type: "rect.contain",
+                            params: {
+                              rect: { left: 0, top: 0, width: 90, height: 90 },
+                            },
                           },
                         },
                       ],
                     },
                   },
-                ],
+                },
               },
               {
                 id: "interactive-constrained",
@@ -2585,51 +2597,37 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
                   shape: "rect",
                   params: { width: 20, height: 20 },
                 },
-                effects: [
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    order: 2,
-                    payload: {
-                      activeWhen: {
-                        op: "in",
-                        ref: { source: "activeToolId" },
-                        values: ["move"],
-                      },
+                interaction: {
+                  manipulation: {
+                    move: {
+                      enabled: true,
                       constraints: [
                         {
-                          type: "rect.contain",
-                          params: {
-                            rect: { left: 0, top: 0, width: 90, height: 90 },
+                          activeWhen: {
+                            op: "in",
+                            ref: { source: "activeToolId" },
+                            values: ["move"],
+                          },
+                          spec: {
+                            type: "rect.contain",
+                            params: {
+                              rect: { left: 0, top: 0, width: 90, height: 90 },
+                            },
                           },
                         },
-                      ],
-                    },
-                  },
-                  {
-                    type: "interaction",
-                    phase: "interaction",
-                    order: 1,
-                    payload: { enabled: true },
-                  },
-                  {
-                    type: "constraint",
-                    phase: "interaction",
-                    order: 3,
-                    payload: {
-                      constraints: [
                         {
-                          type: "grid.snap",
                           activeWhen: {
                             op: "truthy",
                             ref: { source: "context", key: "snap.enabled" },
                           },
-                          params: { size: 5 },
+                          spec: { type: "grid.snap", params: { size: 5 } },
                         },
                       ],
                     },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
                   },
-                ],
+                },
               },
             ],
           },
@@ -2643,7 +2641,7 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
 
   assert(
     result.ok,
-    `declarative interaction effects should apply (${JSON.stringify(result.diagnostics)})`,
+    `declarative object interaction should apply (${JSON.stringify(result.diagnostics)})`,
   );
   const renderGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
@@ -2652,8 +2650,6 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
   assertDeepEqual(
     nodes.find((node) => node.id === "interaction-only")?.interaction,
     {
-      transform: { enabled: true },
-      drag: { enabled: true },
       enabledWhen: {
         op: "truthy",
         ref: {
@@ -2662,54 +2658,65 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
           scope: { channel: "layout-edit" },
         },
       },
+      manipulation: {
+        move: { enabled: true },
+        resize: { enabled: true },
+        rotate: { enabled: true },
+      },
     },
-    "interaction effect should compile to transform/drag enabledWhen",
+    "object interaction should preserve operation-level enabledWhen",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "constraint-only")?.interaction,
     {
-      drag: {
-        constraints: [
-          {
-            spec: {
-              type: "rect.contain",
-              params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+      manipulation: {
+        move: {
+          enabled: false,
+          constraints: [
+            {
+              spec: {
+                type: "rect.contain",
+                params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+              },
             },
-          },
-        ],
+          ],
+        },
       },
     },
-    "constraint effect alone should not enable interaction",
+    "object constraints alone should not enable interaction",
   );
   assertDeepEqual(
     nodes.find((node) => node.id === "interactive-constrained")?.interaction,
     {
-      transform: { enabled: true },
-      drag: {
-        enabled: true,
-        constraints: [
-          {
-            activeWhen: {
-              op: "in",
-              ref: { source: "activeToolId" },
-              values: ["move"],
+      manipulation: {
+        move: {
+          enabled: true,
+          constraints: [
+            {
+              activeWhen: {
+                op: "in",
+                ref: { source: "activeToolId" },
+                values: ["move"],
+              },
+              spec: {
+                type: "rect.contain",
+                params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+              },
             },
-            spec: {
-              type: "rect.contain",
-              params: { rect: { left: 0, top: 0, width: 90, height: 90 } },
+            {
+              activeWhen: {
+                op: "truthy",
+                ref: { source: "context", key: "snap.enabled" },
+              },
+              spec: { type: "grid.snap", params: { size: 5 } },
             },
-          },
-          {
-            activeWhen: {
-              op: "truthy",
-              ref: { source: "context", key: "snap.enabled" },
-            },
-            spec: { type: "grid.snap", params: { size: 5 } },
-          },
-        ],
+          ],
+        },
+        resize: { enabled: true },
+        rotate: { enabled: true },
       },
     },
-    "interaction and constraint effects should merge constraints in order",
+    "object interaction should preserve constraints in declaration order",
   );
   assertEqual(
     nodes.find((node) => node.id === "interactive-constrained")?.data
@@ -2724,7 +2731,7 @@ async function testApplyKitEditorDocumentDeclarativeInteractionEffects() {
 async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
   const runtime = new Pooder();
   const result = await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2787,7 +2794,7 @@ async function testApplyKitEditorDocumentRejectsInteractionComponentEffects() {
 async function testApplyKitEditorDocumentMissingCapabilities() {
   const strictRuntime = new Pooder();
   const strictResult = await applyKitEditorDocument(strictRuntime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2820,7 +2827,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 
   const optionalRuntime = new Pooder();
   const optionalResult = await applyKitEditorDocument(optionalRuntime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2880,7 +2887,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   const missingCompilerResult = await applyKitEditorDocument(
     missingCompilerRuntime,
     {
-      version: 5,
+      version: 6,
       config: TEST_DOCUMENT_CONFIG,
       surfaces: [
         {
@@ -2934,7 +2941,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
   });
   await throwRuntime.extensions.flushActivation();
   const throwResult = await applyKitEditorDocument(throwRuntime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -2971,6 +2978,7 @@ async function testApplyKitEditorDocumentMissingCapabilities() {
 async function testImagePlacementCapabilityExtension() {
   const runtime = new Pooder();
   const facade: ImagePlacementCapabilityApi = {
+    onDidChange: () => ({ dispose() {} }),
     applyOperation: async () => ({ ok: true }),
     clearImage: async () => ({ ok: true }),
     commitSession: async () => ({ ok: true }),
@@ -2997,7 +3005,6 @@ async function testImagePlacementCapabilityExtension() {
     setSource: async () => ({ ok: true }),
     setTransform: async () => ({ ok: true }),
     validateSession: async () => ({ ok: true }),
-    validatePlacement: async () => ({ ok: true }),
     registerSessionOverlayProvider: () => ({ dispose() {} }),
     refresh: async () => {},
   };
@@ -3118,38 +3125,32 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
             id: "business-helper",
             sourceTags: ["business-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "hidden-helper",
             sourceTags: ["hidden-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "conditional-hidden-helper",
             sourceTags: ["conditional-hidden-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "conditional-visible-helper",
             sourceTags: ["conditional-visible-helper"],
             placement: "above",
-            interactive: false,
           },
           {
             id: "global-helper",
             sourceTags: ["global-helper"],
             surfaceScope: "all",
             placement: "above",
-            interactive: false,
           },
           {
             id: "ignored-helper",
             sourceLayerIds: ["front.ignored-helper"],
             placement: "above",
-            interactive: false,
           },
         ],
       },
@@ -3165,7 +3166,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-business-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.business-helper",
         objectId: "front-business-helper",
       },
@@ -3199,7 +3200,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-hidden-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.hidden-helper",
         objectId: "front-hidden-helper",
       },
@@ -3216,7 +3217,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-conditional-hidden-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.conditional-hidden-helper",
         objectId: "front-conditional-hidden-helper",
       },
@@ -3239,7 +3240,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-conditional-visible-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.conditional-visible-helper",
         objectId: "front-conditional-visible-helper",
       },
@@ -3279,7 +3280,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       id: "front-ignored-helper",
       subject: {
         kind: "object",
-        surfaceId: "legacy",
+        surfaceId: "image-placement.unscoped",
         layerId: "front.ignored-helper",
         objectId: "front-ignored-helper",
       },
@@ -3312,7 +3313,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   const imageLayer = renderGraph.layers.find((layer) => layer.id === "artwork");
   const sessionSceneId =
     "pooder.kit.image-placement.session:image-placement:placement";
-  const sessionScene = scene.getScene(sessionSceneId);
+  const sessionRoot = scene.getActiveRoot();
   const committedImageNode = imageLayer?.nodes.find(
     (node: any) => node.id === "image:placement",
   );
@@ -3322,9 +3323,9 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     "committed image object should carry graph visibleWhen while its working session is active",
   );
   assertEqual(
-    sessionScene?.renderable,
-    true,
-    "image session should create a renderable transient scene",
+    sessionRoot?.id,
+    sessionSceneId,
+    "image session should install a session-owned active root",
   );
   const sessionImage = scene.selectOneElement({
     ids: ["session-image:image-placement:placement"],
@@ -3333,19 +3334,39 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   assert(sessionImage, "image session should render a separate working object");
   const sessionImageNode = sessionImage!;
   assertEqual(
-    sessionImageNode.style?.selectable,
-    true,
-    "session image should be selectable",
+    (sessionImageNode as any).width,
+    100,
+    "image sessions should preserve the source image intrinsic width",
   );
   assertEqual(
-    sessionImageNode.style?.lockUniScaling,
-    true,
-    "session image should keep aspect ratio while scaling",
+    (sessionImageNode as any).height,
+    80,
+    "image sessions should preserve the source image intrinsic height",
   );
   assertEqual(
-    sessionImageNode.style?.lockRotation,
-    false,
-    "session image should support rotation",
+    sessionImageNode.transform?.scaleX,
+    2,
+    "cover fit should resolve through scale without replacing intrinsic width",
+  );
+  assertEqual(
+    sessionImageNode.transform?.scaleY,
+    2,
+    "cover fit should resolve through scale without replacing intrinsic height",
+  );
+  assertEqual(
+    sessionImageNode.interaction?.selection?.enabled,
+    true,
+    "session image should expose typed selection interaction",
+  );
+  assertEqual(
+    sessionImageNode.interaction?.manipulation?.resize?.enabled,
+    true,
+    "session image should expose typed resize interaction",
+  );
+  assertEqual(
+    sessionImageNode.interaction?.manipulation?.rotate?.enabled,
+    true,
+    "session image should expose typed rotation interaction",
   );
   assert(
     Boolean(
@@ -3356,67 +3377,32 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     ),
     "image session should render dieline hatch overlay",
   );
-  const overlayElements = scene.selectElements({
-    layerIds: ["image.session.overlay"],
-    sceneId: sessionSceneId,
-  });
-  const visibleProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:business-helper"),
-  );
-  const hiddenProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:hidden-helper"),
-  );
-  const conditionalHiddenProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:conditional-hidden-helper"),
-  );
-  const conditionalVisibleProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:conditional-visible-helper"),
-  );
-  const crossSurfaceBusinessProjection = overlayElements.find((element) =>
-    element.id.includes("back-business-helper"),
-  );
-  const globalProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:global-helper"),
-  );
-  const ignoredProjection = overlayElements.find((element) =>
-    element.id.startsWith("projection:placement:ignored-helper"),
-  );
+  const projectedNodeIds =
+    sessionRoot?.composition.entries.flatMap((entry) =>
+      entry.source === "document"
+        ? renderGraph.layers.flatMap((layer) =>
+            layer.nodes
+              .filter((node) => entry.filter?.({ layer, node }) ?? true)
+              .map((node) => node.id),
+          )
+        : [],
+    ) ?? [];
   assert(
-    Boolean(visibleProjection),
-    "image session should project declared business helpers above the working image",
+    projectedNodeIds.includes("front-business-helper"),
+    "image session should explicitly project declared document helpers",
   );
   assertEqual(
-    visibleProjection?.visible,
-    true,
-    "image session should keep visible projection sources visible",
-  );
-  assertEqual(
-    hiddenProjection?.visible,
+    projectedNodeIds.includes("back-business-helper"),
     false,
-    "image session should keep statically hidden projection sources hidden",
-  );
-  assertEqual(
-    conditionalHiddenProjection?.visible,
-    false,
-    "image session should snapshot false visibleWhen expressions onto projection elements",
-  );
-  assertEqual(
-    conditionalVisibleProjection?.visible,
-    true,
-    "image session should snapshot true visibleWhen expressions onto projection elements",
-  );
-  assertEqual(
-    crossSurfaceBusinessProjection,
-    undefined,
     "image session tag projections should default to the placement surface",
   );
   assert(
-    Boolean(globalProjection),
+    projectedNodeIds.includes("back-global-helper"),
     "image session tag projections should allow cross-surface sources when requested",
   );
   assertEqual(
-    ignoredProjection,
-    undefined,
+    projectedNodeIds.includes("front-ignored-helper"),
+    false,
     "image session should ignore legacy projection configs without source tags",
   );
   const snapTarget = {
@@ -3437,6 +3423,44 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     },
     setCoords() {},
   };
+  const interactionPreviewChanges: SceneChangeEvent[] = [];
+  const interactionPreviewSubscription = scene.onDidChange((event) =>
+    interactionPreviewChanges.push(event),
+  );
+  (imageExtension as any).handleCanvasObjectMoving(snapTarget);
+  interactionPreviewSubscription.dispose();
+  assertEqual(
+    interactionPreviewChanges.length,
+    1,
+    "snap preview should publish one transactional scene change",
+  );
+  assertDeepEqual(
+    interactionPreviewChanges[0]?.causes,
+    [
+      {
+        type: "interaction-preview",
+        sessionId: "image-placement:placement",
+        toolId: IMAGE_PLACEMENT_CAPABILITY_ID,
+      },
+    ],
+    "snap preview should preserve its interaction provenance",
+  );
+  const previewSceneChanges =
+    interactionPreviewChanges[0]?.sceneChanges?.[sessionSceneId];
+  assertEqual(
+    previewSceneChanges?.elements.removed.includes(
+      "session-image:image-placement:placement",
+    ),
+    false,
+    "snap preview should keep the working image element stable",
+  );
+  assertEqual(
+    previewSceneChanges?.elements.added.includes(
+      "session-image:image-placement:placement",
+    ),
+    false,
+    "snap preview should not recreate the working image element",
+  );
   (imageExtension as any).applyMoveSnapToTarget(snapTarget);
   assertEqual(
     snapTarget.left,
@@ -3468,14 +3492,14 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     sceneId: sessionSceneId,
   });
   assertEqual(
-    movedSessionImage?.style?.left,
+    movedSessionImage?.transform?.left,
     220,
-    "dragged image session object should update the transient scene before session sync",
+    "dragged image session object should update the active root scene before session sync",
   );
   assertEqual(
-    movedSessionImage?.style?.top,
+    movedSessionImage?.transform?.top,
     216,
-    "dragged image session object should keep its moved y position in the transient scene",
+    "dragged image session object should keep its moved y position in the active root scene",
   );
 
   await driver.setImageTransform("placement", {
@@ -3524,6 +3548,35 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     },
     "completed session should keep the editable source transform in metadata",
   );
+  await driver.beginSession("placement");
+  const reopenedPlacement = facade
+    .getViewState()
+    .placements.find((placement) => placement.id === "placement");
+  assertEqual(
+    reopenedPlacement?.image?.src,
+    "/photo.png",
+    "reopened sessions should restore the editable source instead of the cropped bitmap",
+  );
+  assertEqual(
+    reopenedPlacement?.image?.scale,
+    1.3,
+    "reopened sessions should restore the committed source scale",
+  );
+  assertEqual(
+    reopenedPlacement?.image?.angle,
+    22,
+    "reopened sessions should restore the committed source rotation",
+  );
+  const reopenedSessionImage = scene.selectOneElement({
+    ids: ["session-image:image-placement:placement"],
+    sceneId: sessionSceneId,
+  });
+  assertEqual(
+    reopenedSessionImage?.transform?.angle,
+    22,
+    "the reopened session scene should publish the restored rotation",
+  );
+  await facade.rollbackSession("placement");
   assertDeepEqual(
     exportService.calls[0]?.crop,
     {
@@ -3577,18 +3630,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     committedGraphNode?.props.selectable,
-    false,
-    "completed placement should keep committed image non-selectable",
+    undefined,
+    "completed placement should leave renderer selection to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    true,
-    "completed placement should keep committed image evented",
+    undefined,
+    "completed placement should leave renderer hit testing to InteractionSpec",
   );
   assertEqual(
     committedGraphNode?.props.hasControls,
-    false,
-    "completed placement should not expose committed image controls",
+    undefined,
+    "completed placement should leave renderer controls to InteractionSpec",
   );
   assertDeepEqual(
     {
@@ -3602,6 +3655,26 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
       type: "image-placement-image",
     },
     "completed placement should expose generic committed image interaction data",
+  );
+  assertDeepEqual(
+    committedGraphNode?.data[IMAGE_GEOMETRY_DATA_KEY],
+    {
+      source: {
+        src: "/photo.png",
+        size: { width: 100, height: 80 },
+      },
+      frame: { left: 100, top: 120, width: 200, height: 160 },
+      fit: "cover",
+      transform: {
+        anchorX: 0.6,
+        anchorY: 0.4,
+        zoom: 1.3,
+        rotation: 22,
+        opacity: 1,
+      },
+      clip: { left: 100, top: 120, width: 200, height: 160 },
+    },
+    "completed placement should expose source-space geometry for dependent tools",
   );
   assert(
     committedGraphNode?.exportKeys.includes("image:placement"),
@@ -3647,7 +3720,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
     1.3,
     "reopened image session should restore the source transform",
   );
-  driver.resetSession("placement");
+  await driver.resetSession("placement");
   const resetGraph = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
     .getGraph();
@@ -3673,18 +3746,18 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   assertEqual(
     resetGraphNode?.props.selectable,
-    false,
-    "resetting a reopened image session should keep committed images non-selectable",
+    undefined,
+    "resetting should leave renderer selection to InteractionSpec",
   );
   assertEqual(
     resetGraphNode?.props.evented,
-    true,
-    "resetting a reopened image session should keep committed images evented",
+    undefined,
+    "resetting should leave renderer hit testing to InteractionSpec",
   );
   assertEqual(
     resetGraphNode?.props.hasControls,
-    false,
-    "resetting a reopened image session should not expose committed image controls",
+    undefined,
+    "resetting should leave renderer controls to InteractionSpec",
   );
   assertDeepEqual(
     {
@@ -3772,24 +3845,24 @@ async function testImagePlacementStretchSessionUsesFrameSize() {
   });
 
   assertEqual(
-    sessionImage?.style?.width,
-    200,
-    "stretch image session should use the placement frame width",
+    sessionImage?.type === "image" ? sessionImage.width : undefined,
+    100,
+    "stretch image session should preserve the source intrinsic width",
   );
   assertEqual(
-    sessionImage?.style?.height,
-    160,
-    "stretch image session should use the placement frame height",
+    sessionImage?.type === "image" ? sessionImage.height : undefined,
+    50,
+    "stretch image session should preserve the source intrinsic height",
   );
   assertEqual(
-    sessionImage?.style?.scaleX,
-    1,
-    "stretch image session should not derive x scale from source dimensions",
+    sessionImage?.transform?.scaleX,
+    2,
+    "stretch image session should resolve the frame width through x scale",
   );
   assertEqual(
-    sessionImage?.style?.scaleY,
-    1,
-    "stretch image session should not derive y scale from source dimensions",
+    sessionImage?.transform?.scaleY,
+    3.2,
+    "stretch image session should resolve the frame height through y scale",
   );
 
   await runtime.dispose();
@@ -3871,12 +3944,13 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
   };
   canvasService.canvas.getObjects = () => [canvasTarget] as any;
   canvasService.setActiveObject(canvasTarget);
+  canvasService.emit("transform", { kind: "commit", target: canvasTarget });
   exportService.exportImage = async (options: Record<string, any>) => {
     const sessionNode = scene.selectOneElement({
       ids: ["session-image:image-placement:placement"],
       sceneId: "pooder.kit.image-placement.session:image-placement:placement",
     });
-    renderedSessionScale = Number(sessionNode?.style?.scaleX || 0);
+    renderedSessionScale = Number(sessionNode?.transform?.scaleX || 0);
     return FakeSceneExportService.prototype.exportImage.call(
       exportService,
       options,
@@ -3896,7 +3970,7 @@ async function testImagePlacementCompleteSyncsCanvasTransform() {
       angle: 12,
       opacity: 1,
     },
-    "complete session should sync the latest canvas object transform before cropping",
+    "complete session should await the typed canvas transform commit before cropping",
   );
   assertEqual(
     renderedSessionScale,
@@ -4089,7 +4163,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     metadata: { width: 100, height: 100 },
   });
   await driver.setImageTransform("placement-a", { scale: 1.8 });
-  driver.resetSession("placement-a");
+  await driver.resetSession("placement-a");
   const resetUploadedPlacement = facade
     .getViewState()
     .placements.find((placement) => placement.id === "placement-a");
@@ -4104,15 +4178,16 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     "resetting after upload should restore the upload baseline transform",
   );
   await driver.beginSession("placement-b");
+  const placementBSceneId =
+    "pooder.kit.image-placement.session:image-placement:placement-b";
   assert(
     Boolean(
       scene.selectOneElement({
         ids: ["session-image:image-placement:placement-a"],
-        sceneId:
-          "pooder.kit.image-placement.session:image-placement:placement-a",
+        sceneId: placementBSceneId,
       }),
     ),
-    "uploaded working image should remain visible after focusing another placement",
+    "the focused root should retain uploaded working images from other placements",
   );
 
   await driver.setImageSource("placement-b", {
@@ -4123,15 +4198,13 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     Boolean(
       scene.selectOneElement({
         ids: ["session-image:image-placement:placement-a"],
-        sceneId:
-          "pooder.kit.image-placement.session:image-placement:placement-a",
+        sceneId: placementBSceneId,
       }),
     ) &&
       Boolean(
         scene.selectOneElement({
           ids: ["session-image:image-placement:placement-b"],
-          sceneId:
-            "pooder.kit.image-placement.session:image-placement:placement-b",
+          sceneId: placementBSceneId,
         }),
       ),
     "multiple uploaded working images should render together before commit",
@@ -4148,7 +4221,7 @@ async function testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches() {
     scale: 1.5,
     left: 0.2,
   });
-  driver.resetSession("committed-placement");
+  await driver.resetSession("committed-placement");
   const restoredPlacement = facade
     .getViewState()
     .placements.find((placement) => placement.id === "committed-placement");
@@ -4229,8 +4302,29 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
   });
   await driver.setImageTransform(sessionInput, { scale: 1.7 });
 
+  const canvasTarget = {
+    angle: 0,
+    data: {
+      id: "session-image:image-placement:placement",
+      layerId: "image.session.image",
+      placementId: "placement",
+      source: "working",
+      type: "image-placement-image",
+    },
+    getCenterPoint: () => ({ x: 50, y: 50 }),
+    getObjectScaling: () => ({ x: 1.7, y: 1.7 }),
+    height: 100,
+    left: 50,
+    scaleX: 1.7,
+    scaleY: 1.7,
+    top: 50,
+    width: 100,
+  };
+  canvasService.canvas.getObjects = () => [canvasTarget] as any;
+  canvasService.setActiveObject(canvasTarget);
+
   assert(
-    Boolean(sessions.getSession(sessionInput.sessionId)),
+    Boolean(sessions.getHandle(sessionInput.sessionId)),
     "app-owned image session id should be registered in SessionService",
   );
   await driver.beginSession(sessionInput);
@@ -4255,7 +4349,12 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
     "returning to the original app-owned image session should restore its draft",
   );
 
-  await driver.completeSession(sessionInput);
+  const completeResult = await driver.completeSession(sessionInput);
+  assertEqual(
+    (completeResult as any).ok,
+    true,
+    "canvas sync should complete the app-owned session without replacing its uploaded draft",
+  );
   const committedImage = (
     scene.selectOneElement({ ids: ["placement"] })?.data as any
   )?.imagePlacement?.image;
@@ -4265,22 +4364,20 @@ async function testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft() {
     "completed app-owned image session should commit the draft to the placement",
   );
   assertEqual(
-    sessions.getSession(sessionInput.sessionId)?.status,
-    "committed",
-    "completed app-owned image session should commit the matching SessionService record",
+    sessions.getHandle(sessionInput.sessionId),
+    undefined,
+    "completed app-owned image session should leave the active SessionService registry",
   );
 
   await runtime.dispose();
 }
 
-async function testImagePlacementCanvasPressCanOnlyRequestSession() {
+async function testImagePlacementInteractionCommandOwnsSessionLifecycle() {
   const runtime = new Pooder();
-  const canvasService = new FakeCanvasService();
-  runtime.services.register(canvasService as any, CANVAS_SERVICE);
-
-  const scene = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
-  scene.addLayer({ id: "artwork" });
-  scene.addElement({
+  runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
+  const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scenes.addLayer({ id: "artwork" });
+  scenes.addElement({
     id: "placement",
     layerId: "artwork",
     type: "rect",
@@ -4294,59 +4391,95 @@ async function testImagePlacementCanvasPressCanOnlyRequestSession() {
     },
   });
 
-  runtime.extensions.register(
-    createImagePlacementCapability({
-      beginSessionOnCanvasInteraction: false,
-    }),
-  );
+  runtime.extensions.register(createImagePlacementCapability({}));
   await runtime.extensions.flushActivation();
   const facade = runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
     IMAGE_PLACEMENT_CAPABILITY_ID,
   );
+  const interaction =
+    runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
   const sessions = runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
-  const events: any[] = [];
-  const handler = (event: unknown) => {
-    events.push(event);
-  };
-  runtime.eventBus.on("image:session:open", handler);
+  const sessionId = "front.image.user.1";
+  const changes: string[] = [];
+  const subscription = facade.onDidChange((event) => changes.push(event.type));
 
-  runtime.eventBus.emit("mouse:down", {
-    target: {
-      data: {
-        placementId: "placement",
-        type: "image-placement-image",
+  const activation = await interaction.activate({
+    spec: {
+      activation: {
+        action: { commandId: IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID },
+        session: {
+          channel: "image-placement",
+          groupId: "editor-interaction",
+          sessionId,
+          mode: "exclusive",
+          scope: "subject",
+          leavePolicy: "block",
+        },
       },
     },
+    runtimeContext: {},
+    trigger: "primary-pointer",
+    subjectId: "placement",
+    surfaceId: "legacy",
+    targetData: { imagePlacement: { sessionKey: sessionId } },
   });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  runtime.eventBus.off("image:session:open", handler);
 
+  const handle = sessions.getHandle(sessionId);
+  assertEqual(activation.activated, true, "typed interaction should activate");
   assertEqual(
-    events.length,
-    1,
-    "canvas press should still emit one image session request event",
+    handle?.descriptor.ownerId,
+    IMAGE_PLACEMENT_CAPABILITY_ID,
+    "ImagePlacement capability should be the sole session lifecycle owner",
   );
   assertEqual(
-    events[0]?.placementId,
-    "placement",
-    "canvas session request event should expose placementId",
+    activation.sessionResult,
+    handle,
+    "InteractionService should return the command-owned session handle",
+  );
+  assert(
+    changes.includes("session-opened"),
+    "typed capability events should report interaction session activation",
   );
   assertEqual(
-    "slotId" in (events[0] ?? {}),
-    false,
-    "canvas session request event should not expose slotId",
-  );
-  assertEqual(
-    facade.getViewState().hasWorkingChanges,
-    false,
-    "canvas session request should not create a working draft when auto begin is disabled",
-  );
-  assertEqual(
-    sessions.getSession("image-placement:placement"),
-    undefined,
-    "canvas session request should not create an internal image placement session",
+    scenes.getActiveRoot()?.owner.sessionId,
+    sessionId,
+    "interaction activation should install the session-owned root scene",
   );
 
+  await facade.rollbackSession({ placementId: "placement", sessionId });
+  const stateChangeCount = changes.filter((type) => type === "state").length;
+  const foreignSession = await sessions.open({
+    descriptor: {
+      sessionId: "white-ink:front",
+      ownerId: "popecho.white-ink",
+      scope: {},
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+  });
+  const foreignScene = scenes.createScene({
+    id: "popecho.white-ink.session:front",
+    owner: { type: "session", sessionId: foreignSession.descriptor.sessionId },
+    composition: { entries: [{ source: "local", layerIds: ["white-ink"] }] },
+  });
+  foreignSession.own(foreignScene);
+  foreignScene.addLayer({ id: "white-ink" });
+  foreignScene.addElement({
+    id: "white-ink-preview",
+    layerId: "white-ink",
+    type: "rect",
+    width: 10,
+    height: 10,
+  });
+  await Promise.resolve();
+  assertEqual(
+    changes.filter((type) => type === "state").length,
+    stateChangeCount,
+    "foreign session scene updates must not feed back into image placement state",
+  );
+  await foreignSession.cancel();
+  subscription.dispose();
   await runtime.dispose();
 }
 
@@ -4782,7 +4915,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -4894,7 +5027,7 @@ async function testConfigurableVisualConfigPatchesOriginalRenderIntents() {
   );
   await runtimeWithPersistedConfig.extensions.flushActivation();
   await applyKitEditorDocument(runtimeWithPersistedConfig, {
-    version: 5,
+    version: 6,
     config: {
       ...TEST_DOCUMENT_CONFIG,
       configurableVisual: {
@@ -4966,14 +5099,12 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   runtime.services.register(canvasService as any, CANVAS_SERVICE);
   runtime.services.register(exportService as any, SCENE_EXPORT_SERVICE);
   runtime.extensions.register(createConfigurableVisualCapability());
-  const imageExtension = createImagePlacementCapability({
-    beginSessionOnCanvasInteraction: false,
-  });
+  const imageExtension = createImagePlacementCapability({});
   runtime.extensions.register(imageExtension);
   await runtime.extensions.flushActivation();
 
   await applyKitEditorDocument(runtime, {
-    version: 5,
+    version: 6,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -5100,8 +5231,8 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
   );
   assertEqual(
     committedGraphNode?.props.evented,
-    true,
-    "configurable visual image placement commit should keep the committed image evented",
+    undefined,
+    "configurable visual commits should leave hit testing to InteractionSpec",
   );
   assertEqual(
     evaluateRuntimeCondition(committedGraphNode?.visibleWhen, {
@@ -5128,7 +5259,7 @@ async function testImagePlacementConfigurableVisualCommitKeepsCommittedImageVisi
     "blob:front-image-original",
     "reopened configurable visual image session should edit from the retained original source",
   );
-  driver.resetSession(sessionInput);
+  await driver.resetSession(sessionInput);
 
   try {
     await runtime.dispose();
@@ -5194,7 +5325,7 @@ async function testFeatureCapabilityUsesObjectEffectState() {
     radius: 4,
   };
   const document = {
-    version: 5 as const,
+    version: 6 as const,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -5331,7 +5462,7 @@ async function testKitEditorDocumentControllerMutatesObjectEffects() {
   const runtime = new Pooder();
   runtime.services.register(new FakeCanvasService() as any, CANVAS_SERVICE);
   const document = {
-    version: 5 as const,
+    version: 6 as const,
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
@@ -5604,7 +5735,7 @@ async function main() {
   await testDocumentCompilerAndRuntimePatchUseSameMerge();
   await testKitEditorDocumentControllerMutatesObjectSource();
   await testApplyKitEditorDocumentObjectInteraction();
-  await testApplyKitEditorDocumentDeclarativeInteractionEffects();
+  await testApplyKitEditorDocumentDeclarativeObjectInteraction();
   await testApplyKitEditorDocumentRejectsInteractionComponentEffects();
   await testApplyKitEditorDocumentMissingCapabilities();
   await testImagePlacementCapabilityExtension();
@@ -5614,7 +5745,7 @@ async function main() {
   await testImagePlacementCommittedExportUsesObjectUrl();
   await testImagePlacementKeepsWorkingImagesAcrossPlacementSwitches();
   await testImagePlacementUsesAppOwnedSessionIdAndPreservesDraft();
-  await testImagePlacementCanvasPressCanOnlyRequestSession();
+  await testImagePlacementInteractionCommandOwnsSessionLifecycle();
   await testEdgeDetectionCapabilityExtension();
   await testDielineOverlayConditionFollowsEditingSessions();
   testImageSessionOverlayBuildsBaseCropControls();
