@@ -671,7 +671,10 @@ export class FabricRenderGraphAdapter implements Service {
         items.push({
           key: keyPrefix ? `${keyPrefix}:${node.id}` : node.id,
           layerId: layer.id,
-          origin: { type: "render-intent", intentId: node.id },
+          origin: {
+            type: "render-intent",
+            intentId: String(node.data.renderIntentId || node.id),
+          },
           order:
             orderBase +
             this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex, node),

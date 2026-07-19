@@ -986,8 +986,14 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
 
   await adapter.flush();
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
-  const image = last?.items.find((item) => item.spec.id === "image:slot")?.spec;
+  const imageItem = last?.items.find((item) => item.spec.id === "image:slot");
+  const image = imageItem?.spec;
   assert(image, "adapter should draw the committed image replacement");
+  assertDeepEqual(
+    imageItem?.origin,
+    { type: "render-intent", intentId: "slot" },
+    "replacement nodes should retain their declarative render intent origin",
+  );
   assertEqual(
     image.props.width,
     200,
@@ -1007,6 +1013,26 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
     image.props.scaleY,
     1,
     "image replacements should not depend on bitmap scale for frame sizing",
+  );
+
+  renderIntentService.patchIntent("template-switch", {
+    id: "slot",
+    visual: {
+      type: "image",
+      replacement: { src: "data:image/png;base64,next-template" },
+    },
+  });
+  await adapter.flush();
+  const switched = canvas.reconcileCalls.at(-1);
+  assertDeepEqual(
+    switched?.options?.invalidations,
+    [{ type: "render-intents", intentIds: ["slot"] }],
+    "resource switches should invalidate the declarative intent id",
+  );
+  assertEqual(
+    switched?.items.find((item) => item.key === "image:slot")?.spec.src,
+    "data:image/png;base64,next-template",
+    "resource switches should publish the next replacement source",
   );
 
   await runtime.dispose();
@@ -2330,6 +2356,47 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
   );
 }
 
+async function testCanvasReconcileReplacesInvalidatedRenderIntentImage() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+  const createTemplateItem = (src: string): FabricRenderTargetItem => ({
+    key: "image:template-slot",
+    layerId: "template-visuals",
+    order: 0,
+    origin: { type: "render-intent", intentId: "template-slot" },
+    spec: {
+      id: "image:template-slot",
+      type: "image",
+      src,
+      props: { left: 0, top: 0, width: 100, height: 80 },
+    },
+  });
+
+  await service.reconcileRenderGraphDrawList(
+    [createTemplateItem("/template-one.png")],
+    { invalidations: [{ type: "full" }] },
+  );
+  const firstImage = canvas.objects[0] as any;
+
+  await service.reconcileRenderGraphDrawList(
+    [createTemplateItem("/template-two.png")],
+    {
+      invalidations: [
+        { type: "render-intents", intentIds: ["template-slot"] },
+      ],
+    },
+  );
+
+  assert(
+    canvas.objects[0] !== firstImage,
+    "changing an invalidated render intent image source should recreate the backend object",
+  );
+  assertEqual(
+    (canvas.objects[0] as any).src,
+    "/template-two.png",
+    "changing a template resource should render the new image source",
+  );
+}
+
 function testCanvasServiceOmitsPathSourcePropsFromFabricProps() {
   const { service } = createCanvasServiceForReconcileTests();
   const props = (service as any).resolveObjectFabricProps(
@@ -3518,6 +3585,10 @@ async function main() {
     [
       "reconciles by invalidation and interaction ownership",
       testCanvasReconcileUsesInvalidationAndInteractionOwnership,
+    ],
+    [
+      "replaces invalidated render intent image resources",
+      testCanvasReconcileReplacesInvalidatedRenderIntentImage,
     ],
     [
       "omits path source props from Fabric props",
