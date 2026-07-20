@@ -64,6 +64,7 @@ const FABRIC_INTERACTION_PROP_KEYS = new Set([
 export type FabricRenderGraphSyncCause =
   | { type: "initial" }
   | { type: "document-apply" }
+  | { type: "document-update"; intentIds: string[] }
   | {
       type: "runtime-patch";
       operation: "upsert" | "remove" | "clear";
@@ -134,6 +135,7 @@ export class FabricRenderGraphAdapter implements Service {
   private activeSyncCauses = new Map<string, FabricRenderGraphSyncCause>();
   private pendingInvalidations = new Map<string, RenderInvalidation>();
   private activeInvalidations = new Map<string, RenderInvalidation>();
+  private renderedRootId: string | null | undefined;
   private interactionSequence = 0;
   private readonly syncStateListeners =
     new Set<FabricRenderGraphSyncStateListener>();
@@ -164,6 +166,12 @@ export class FabricRenderGraphAdapter implements Service {
     }
 
     this.graphSubscription = this.renderIntentService.onDidChange((event) => {
+      if (
+        event.reason.type === "document-updated" &&
+        event.reason.intentIds.length === 0
+      ) {
+        return;
+      }
       this.requestSync(
         this.toRenderIntentSyncCause(event.reason),
         this.toRenderIntentInvalidations(event.reason),
@@ -227,6 +235,7 @@ export class FabricRenderGraphAdapter implements Service {
     this.activeSyncCauses.clear();
     this.pendingInvalidations.clear();
     this.activeInvalidations.clear();
+    this.renderedRootId = undefined;
     this.emitSyncState();
     this.syncStateListeners.clear();
   }
@@ -375,6 +384,12 @@ export class FabricRenderGraphAdapter implements Service {
     reason: RenderIntentChangeReason,
   ): FabricRenderGraphSyncCause {
     if (reason.type === "document-replaced") return { type: "document-apply" };
+    if (reason.type === "document-updated") {
+      return {
+        type: "document-update",
+        intentIds: reason.intentIds.slice(),
+      };
+    }
     if (reason.type === "runtime-condition") {
       return {
         type: "runtime-condition",
@@ -393,6 +408,11 @@ export class FabricRenderGraphAdapter implements Service {
   private toRenderIntentInvalidations(
     reason: RenderIntentChangeReason,
   ): RenderInvalidation[] {
+    if (reason.type === "document-updated") {
+      return reason.intentIds.length
+        ? [{ type: "render-intents", intentIds: reason.intentIds.slice() }]
+        : [];
+    }
     if (reason.type !== "runtime-patch" || !reason.intentIds.length) {
       return [{ type: "full" }];
     }
@@ -418,7 +438,7 @@ export class FabricRenderGraphAdapter implements Service {
         event.scenes.updated.length ||
         event.scenes.removed.length),
     );
-    if (sceneStructureChanged) return [{ type: "full" }];
+    if (sceneStructureChanged) return [{ type: "composition" }];
 
     const invalidations: RenderInvalidation[] = [];
     Object.entries(event.sceneChanges ?? {}).forEach(([sceneId, change]) => {
@@ -448,14 +468,10 @@ export class FabricRenderGraphAdapter implements Service {
   private attachRuntimeConditionEvents() {
     this.detachRuntimeConditionEvents();
     const sessionDisposable = this.sessionService?.onDidChange((event) => {
-      if (
-        event.reason !== "opened" &&
-        event.reason !== "focus" &&
-        event.reason !== "phase"
-      ) {
+      if (event.reason !== "opened" && event.reason !== "focus") {
         return;
       }
-      this.requestSync({
+      this.requestRootSyncIfChanged({
         type: "session-state",
         sessionId: event.snapshot.descriptor.sessionId,
         reason: event.reason,
@@ -463,7 +479,7 @@ export class FabricRenderGraphAdapter implements Service {
     });
     const sessionTerminalDisposable = this.sessionService?.onDidTerminate(
       (event) => {
-        this.requestSync({
+        this.requestRootSyncIfChanged({
           type: "session-state",
           sessionId: event.descriptor.sessionId,
           reason: "terminal",
@@ -485,6 +501,12 @@ export class FabricRenderGraphAdapter implements Service {
       disposable.dispose(),
     );
     this.runtimeConditionDisposables = [];
+  }
+
+  private requestRootSyncIfChanged(cause: FabricRenderGraphSyncCause): void {
+    const activeRootId = this.sceneService?.getActiveRoot()?.id ?? null;
+    if (activeRootId === this.renderedRootId) return;
+    this.requestSync(cause, { type: "composition" });
   }
 
   private attachLayoutChangeEvents() {
@@ -591,6 +613,7 @@ export class FabricRenderGraphAdapter implements Service {
       invalidations: invalidations.length ? invalidations : [{ type: "full" }],
       render: false,
     });
+    this.renderedRootId = activeRoot?.id ?? null;
     const autoFocusTarget = canvas.selectObjects({
       visible: true,
       data: { autoFocus: true },
@@ -609,6 +632,7 @@ export class FabricRenderGraphAdapter implements Service {
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
     >,
   ): void {
+    const rootItemStart = items.length;
     root.composition.entries.forEach((entry, entryIndex) => {
       const orderBase = entryIndex * 1_000_000_000;
       if (entry.source === "document") {
@@ -661,6 +685,63 @@ export class FabricRenderGraphAdapter implements Service {
           });
         });
       });
+    });
+    this.stabilizeRootCompositionItems(items, rootItemStart, graph);
+    this.appendRetainedDocumentItems(items, graph, conditionContext);
+  }
+
+  private stabilizeRootCompositionItems(
+    items: FabricRenderTargetItem[],
+    start: number,
+    graph: RenderGraph,
+  ): void {
+    const nodes = graph.layers.flatMap((layer) => layer.nodes);
+    const usedKeys = new Set<string>();
+    items.slice(start).forEach((item) => {
+      let canonicalKey =
+        item.origin?.type === "render-intent" ? item.spec.id : undefined;
+      const imageSlotObjectId = String(
+        item.spec.data?.imageSlotObjectId || "",
+      ).trim();
+      if (imageSlotObjectId) {
+        canonicalKey = nodes.find(
+          (node) =>
+            node.subjectId === imageSlotObjectId &&
+            node.type === item.spec.type,
+        )?.id;
+      }
+      if (canonicalKey && !usedKeys.has(canonicalKey)) {
+        item.key = canonicalKey;
+      }
+      usedKeys.add(item.key);
+    });
+  }
+
+  private appendRetainedDocumentItems(
+    items: FabricRenderTargetItem[],
+    graph: RenderGraph,
+    conditionContext: ReturnType<
+      FabricRenderGraphAdapter["buildRuntimeConditionContext"]
+    >,
+  ): void {
+    const usedKeys = new Set(items.map((item) => item.key));
+    const retained: FabricRenderTargetItem[] = [];
+    this.appendDocumentItems(retained, graph, conditionContext);
+    retained.forEach((item) => {
+      if (usedKeys.has(item.key)) return;
+      items.push({
+        ...item,
+        spec: {
+          ...item.spec,
+          props: {
+            ...item.spec.props,
+            evented: false,
+            selectable: false,
+            visible: false,
+          },
+        },
+      });
+      usedKeys.add(item.key);
     });
   }
 

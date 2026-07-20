@@ -46,7 +46,7 @@ export default class ConfigurationService implements Service {
 
   update(key: string, value: any) {
     const oldValue = this.configValues.get(key);
-    if (oldValue !== value) {
+    if (!sameConfigurationValue(oldValue, value)) {
       this.configValues.set(key, value);
       const event = { key, value, oldValue };
       [...(this.valueListenersByKey.get(key) ?? [])].forEach((listener) =>
@@ -188,5 +188,22 @@ export default class ConfigurationService implements Service {
     this.definitionIdsByExtension.clear();
     this.valueListenersByKey.clear();
     this.events.clear();
+  }
+}
+
+function sameConfigurationValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (
+    !left ||
+    !right ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
+    return false;
+  }
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
   }
 }

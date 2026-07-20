@@ -60,6 +60,8 @@ export interface RenderObjectSpec {
 export type RenderInvalidation =
   /** Reproject every target; this is an authoritative interaction barrier. */
   | { type: "full" }
+  /** Reconcile a root/composition transition without discarding stable targets. */
+  | { type: "composition" }
   | { type: "render-intents"; intentIds: readonly string[] }
   | { type: "scene"; sceneId: string }
   | {

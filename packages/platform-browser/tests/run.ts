@@ -836,6 +836,11 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     undefined,
     "document projections do not activate document interaction",
   );
+  assertEqual(
+    items.find((item) => item.spec.id === "document-node")?.key,
+    "document-node",
+    "document projections should preserve their canonical render key",
+  );
   const control = items.find((item) => item.spec.id === "control-node")?.spec;
   assertEqual(
     control?.props.selectable,
@@ -866,10 +871,98 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
   });
   session.own(localOnly);
   await adapter.flush();
+  const retainedDocument = canvas.reconcileCalls
+    .at(-1)
+    ?.items.find((item) => item.key === "document-node");
   assertEqual(
-    canvas.reconcileCalls.at(-1)?.items.length,
-    0,
-    "a root without document projection must not render the document",
+    retainedDocument?.spec.props.visible,
+    false,
+    "a root without document projection should retain the document target invisibly",
+  );
+  assertEqual(
+    retainedDocument?.spec.props.evented,
+    false,
+    "retained document targets must not receive pointer events",
+  );
+  await session.cancel();
+  await runtime.dispose();
+}
+
+async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "user-image",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "user-image",
+      },
+      visual: { type: "image", src: "/user.png" },
+      ordering: { layerId: "art" },
+      placement: { width: 100, height: 80 },
+    },
+  ]);
+  const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
+    descriptor: {
+      sessionId: "image-session",
+      ownerId: "platform-test",
+      scope: { subjectId: "user-image" },
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+  });
+  const scene = runtime.services.getOrThrow(SCENE_SERVICE).createScene({
+    id: "image-root",
+    owner: { type: "session", sessionId: session.descriptor.sessionId },
+    composition: {
+      entries: [{ source: "local", layerIds: ["working"] }],
+    },
+  });
+  session.own(scene);
+  scene.addLayer({ id: "working" });
+  scene.addElement({
+    id: "working-user-image",
+    layerId: "working",
+    type: "image",
+    src: "/user.png",
+    data: { imageSlotObjectId: "user-image" },
+  });
+  await adapter.flush();
+  const workingItems = canvas.reconcileCalls.at(-1)?.items ?? [];
+  assertEqual(
+    workingItems.find((item) => item.spec.id === "working-user-image")?.key,
+    "user-image",
+    "working image should take over the committed image canonical key",
+  );
+  assertEqual(
+    workingItems.filter((item) => item.key === "user-image").length,
+    1,
+    "working and retained document images must not duplicate the canonical target",
+  );
+
+  const reconcileCount = canvas.reconcileCalls.length;
+  await session.validate();
+  await adapter.flush();
+  assertEqual(
+    canvas.reconcileCalls.length,
+    reconcileCount,
+    "session phase-only changes should not reconcile the canvas",
+  );
+
+  scene.dispose();
+  await adapter.flush();
+  assertEqual(
+    canvas.reconcileCalls.at(-1)?.items.find((item) => item.key === "user-image")
+      ?.spec.id,
+    "user-image",
+    "committed document image should inherit the same canonical target",
   );
   await session.cancel();
   await runtime.dispose();
@@ -3597,6 +3690,10 @@ async function main() {
     [
       "composes explicit read-only session roots",
       testSessionRootCompositionIsExplicitAndReadOnly,
+    ],
+    [
+      "hands session working images back to canonical document targets",
+      testSessionWorkingImageHandsOffCanonicalRenderKey,
     ],
     [
       "renders renderable SceneService scenes",

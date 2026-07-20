@@ -212,6 +212,7 @@ export interface RenderIntentCompilerQuery {
 
 export type RenderIntentChangeReason =
   | { type: "document-replaced" }
+  | { type: "document-updated"; intentIds: string[] }
   | {
       type: "runtime-patch";
       operation: "upsert" | "remove" | "clear";
@@ -382,6 +383,26 @@ export class RenderIntentService implements Service {
   setDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
     this.baseIntents = intents.map(cloneDraft);
     return this.recompile({ type: "document-replaced" });
+  }
+
+  updateDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
+    const previous = this.graph;
+    this.baseIntents = intents.map(cloneDraft);
+    this.revision += 1;
+    const merged = mergeRenderIntentPatchEntries(
+      this.baseIntents,
+      Array.from(this.runtimePatches.values()),
+    );
+    this.graph = createRenderGraph(
+      merged.drafts,
+      this.revision,
+      merged.diagnostics,
+    );
+    const intentIds = collectChangedRenderIntentIds(previous, this.graph);
+    if (intentIds.length) {
+      this.emitChange({ type: "document-updated", intentIds });
+    }
+    return this.getGraph();
   }
 
   getDocumentIntents(): RenderIntentDraft[] {
@@ -566,6 +587,40 @@ export class RenderIntentService implements Service {
       entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
     this.runtimePatches.set(key, normalizePatchEntry(entry, sequence));
   }
+}
+
+function collectChangedRenderIntentIds(
+  previous: RenderGraph,
+  next: RenderGraph,
+): string[] {
+  const before = collectRenderIntentSnapshots(previous);
+  const after = collectRenderIntentSnapshots(next);
+  return Array.from(new Set([...before.keys(), ...after.keys()]))
+    .filter((intentId) => !sameJsonValue(before.get(intentId), after.get(intentId)))
+    .sort();
+}
+
+function collectRenderIntentSnapshots(graph: RenderGraph) {
+  const snapshots = new Map<string, unknown[]>();
+  graph.layers.forEach((layer) => {
+    layer.nodes.forEach((node) => {
+      const intentId = String(node.data.renderIntentId || node.id);
+      const entries = snapshots.get(intentId) ?? [];
+      entries.push({
+        layer: {
+          effects: layer.effects,
+          id: layer.id,
+          order: layer.order,
+          stack: layer.stack,
+          surfaceId: layer.surfaceId,
+          visible: layer.visible,
+        },
+        node,
+      });
+      snapshots.set(intentId, entries);
+    });
+  });
+  return snapshots;
 }
 
 type RequiredRuntimePatchEntry = RenderIntentPatchEntry & {

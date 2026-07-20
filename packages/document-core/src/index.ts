@@ -222,6 +222,15 @@ export async function applyEditorDocument(
   value: unknown,
   options: ApplyEditorDocumentOptions = {},
 ): Promise<ApplyEditorDocumentResult> {
+  return applyEditorDocumentInternal(runtime, value, options, "replace");
+}
+
+async function applyEditorDocumentInternal(
+  runtime: EditorDocumentRuntime,
+  value: unknown,
+  options: ApplyEditorDocumentOptions,
+  renderIntentMode: "replace" | "update",
+): Promise<ApplyEditorDocumentResult> {
   const validationOptions = toValidationOptions(options);
   const collectionOptions = toCollectionOptions(options);
   const document = normalizeEditorDocument(value);
@@ -325,7 +334,11 @@ export async function applyEditorDocument(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  renderIntentService.setDocumentIntents(mergeResult.drafts);
+  if (renderIntentMode === "update") {
+    renderIntentService.updateDocumentIntents(mergeResult.drafts);
+  } else {
+    renderIntentService.setDocumentIntents(mergeResult.drafts);
+  }
   await options.afterApply?.(runtime, document);
 
   return createResult(
@@ -369,7 +382,12 @@ export function createEditorDocumentController(
         return { ok: false, reason: "validation-failed", diagnostics: [] };
       }
       replaceSourceObject(nextDocument, id, cloneDocumentObject(updated));
-      const result = await applyEditorDocument(runtime, nextDocument, options);
+      const result = await applyEditorDocumentInternal(
+        runtime,
+        nextDocument,
+        options,
+        "update",
+      );
       if (!result.ok) {
         return {
           ok: false,

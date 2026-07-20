@@ -10,6 +10,7 @@ import {
 } from "@pooder/core";
 import {
   applyEditorDocument,
+  createEditorDocumentController,
   resolveObjectSource,
   SourceResolver,
 } from "../src";
@@ -261,9 +262,55 @@ async function testApplyEditorDocument() {
   );
 }
 
+async function testControllerUpdatesOnlyChangedRenderIntents() {
+  const { runtime, renderIntentService } = createRuntime();
+  const controller = createEditorDocumentController(runtime);
+  const document = {
+    version: 7 as const,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" as const },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: ["first", "second"].map((id, index) => ({
+              id,
+              frame: { x: index * 20, y: 0, width: 10, height: 10 },
+              source: {
+                kind: "shape" as const,
+                shape: "rect" as const,
+                params: { width: 10, height: 10 },
+              },
+            })),
+          },
+        ],
+      },
+    ],
+  };
+  const applied = await controller.apply(document);
+  assertEqual(applied.ok, true, "controller document should apply");
+  const reasons: unknown[] = [];
+  renderIntentService.onDidChange((event) => reasons.push(event.reason));
+
+  const updated = await controller.updateObject("first", (current) => ({
+    ...current,
+    style: { ...(current.style ?? {}), opacity: 0.5 },
+  }));
+  assertEqual(updated.ok, true, "controller object update should succeed");
+  assertDeepEqual(
+    reasons,
+    [{ type: "document-updated", intentIds: ["first"] }],
+    "controller updates should publish only changed render intents",
+  );
+}
+
 async function main() {
   testSourceResolver();
   await testApplyEditorDocument();
+  await testControllerUpdatesOnlyChangedRenderIntents();
   console.log("ok");
 }
 

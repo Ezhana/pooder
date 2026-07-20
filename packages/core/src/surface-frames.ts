@@ -113,10 +113,28 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
   }
 
   importFrames(framesBySurfaceId: Record<string, SurfaceSceneFrames>): void {
-    this.clear();
+    const next = new Map<string, SurfaceSceneFrames>();
     Object.entries(framesBySurfaceId).forEach(([surfaceId, frames]) => {
-      this.setFrames(surfaceId, frames);
+      const normalized = normalizeId(surfaceId);
+      if (!normalized) return;
+      next.set(normalized, normalizeFrames(frames));
     });
+    const changed = new Set<string>();
+    this.framesBySurfaceId.forEach((frames, surfaceId) => {
+      const replacement = next.get(surfaceId);
+      if (!replacement || !sameFrames(frames, replacement)) {
+        changed.add(surfaceId);
+      }
+    });
+    next.forEach((frames, surfaceId) => {
+      const current = this.framesBySurfaceId.get(surfaceId);
+      if (!current || !sameFrames(current, frames)) changed.add(surfaceId);
+    });
+    this.framesBySurfaceId.clear();
+    next.forEach((frames, surfaceId) =>
+      this.framesBySurfaceId.set(surfaceId, frames),
+    );
+    changed.forEach((surfaceId) => this.emit(surfaceId));
   }
 
   listSurfaceIds(): string[] {
@@ -162,7 +180,10 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
     if (!normalized) {
       throw new Error("SurfaceFrameService requires surfaceId.");
     }
-    this.framesBySurfaceId.set(normalized, normalizeFrames(frames));
+    const next = normalizeFrames(frames);
+    const current = this.framesBySurfaceId.get(normalized);
+    if (current && sameFrames(current, next)) return;
+    this.framesBySurfaceId.set(normalized, next);
     this.emit(normalized);
   }
 
@@ -177,4 +198,11 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
       .get(surfaceId)
       ?.forEach((listener) => listener(event));
   }
+}
+
+function sameFrames(
+  left: SurfaceSceneFrames,
+  right: SurfaceSceneFrames,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
