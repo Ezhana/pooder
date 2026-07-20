@@ -16,6 +16,7 @@ import {
   containsGeometryPoint,
   createStaticGeometrySourceProvider,
   ConstraintResolverService,
+  DefaultSurfaceFrameService,
   GeometrySourceService,
   createRectSnapLines,
   findNearestGeometryPoint,
@@ -1900,6 +1901,36 @@ async function testConstraintResolverServiceBuiltins() {
       { x: 20, y: 30 },
       "axis.lock and grid.snap should compose deterministically",
     );
+
+    const rectSnapped = resolver.resolve({
+      transform: {
+        frame: { left: 96, top: 15, width: 10, height: 10 },
+      },
+      constraints: [
+        {
+          type: "rect.snap",
+          params: {
+            id: "frame",
+            rect: { left: 100, top: 10, width: 80, height: 60 },
+            thresholdPx: 6,
+          },
+        },
+      ],
+      metadata: { viewportScale: 1 },
+    });
+    assertDeepEqual(
+      rectSnapped.result.frame,
+      { left: 100, top: 10, width: 10, height: 10 },
+      "rect.snap should align the moving frame to target edges",
+    );
+    assertEqual(
+      Array.isArray(
+        (rectSnapped.result.metadata?.rectSnap as { guides?: unknown[] })
+          ?.guides,
+      ),
+      true,
+      "rect.snap should expose snap guides in result metadata",
+    );
   });
 }
 
@@ -2262,6 +2293,86 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
       "render intent changes should preserve their semantic origin",
     );
   });
+}
+
+async function testRenderIntentDocumentUpdatesAreScoped() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const changes: RenderIntentChangeEvent[] = [];
+    intents.onDidChange((event) => changes.push(event));
+    const createIntent = (id: string, opacity: number) => ({
+      id,
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId: "art",
+        objectId: id,
+      },
+      visual: { type: "rect" as const },
+      ordering: { layerId: "art" },
+      props: { opacity, width: 10, height: 10 },
+    });
+    intents.setDocumentIntents([
+      createIntent("first", 1),
+      createIntent("second", 1),
+    ]);
+    changes.length = 0;
+
+    intents.updateDocumentIntents([
+      createIntent("first", 0.5),
+      createIntent("second", 1),
+    ]);
+    assertDeepEqual(
+      changes.map((event) => event.reason),
+      [{ type: "document-updated", intentIds: ["first"] }],
+      "document updates should invalidate only semantically changed intents",
+    );
+
+    changes.length = 0;
+    intents.updateDocumentIntents([
+      createIntent("first", 0.5),
+      createIntent("second", 1),
+    ]);
+    assertEqual(
+      changes.length,
+      0,
+      "equivalent document updates should not emit render invalidations",
+    );
+  });
+}
+
+async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
+  const frames = new DefaultSurfaceFrameService();
+  const changes: string[] = [];
+  frames.onAnyFramesChange((event) => changes.push(event.surfaceId));
+  const front = {
+    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
+    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+  };
+  frames.importFrames({ front });
+  assertDeepEqual(changes, ["front"], "initial frame import should emit once");
+
+  changes.length = 0;
+  frames.importFrames({ front: { ...front } });
+  assertEqual(
+    changes.length,
+    0,
+    "equivalent frame imports should not invalidate scene layout",
+  );
+
+  frames.importFrames({
+    front: {
+      ...front,
+      productionFrame: { ...front.productionFrame, widthMm: 88 },
+    },
+  });
+  assertDeepEqual(
+    changes,
+    ["front"],
+    "changed frames should invalidate only their surface",
+  );
 }
 
 async function testRenderIntentPatchEntriesAreSortedDeterministically() {
@@ -2990,6 +3101,14 @@ async function main() {
     [
       "keeps render intent runtime patches source scoped",
       testRenderIntentRuntimePatchesAreSourceScoped,
+    ],
+    [
+      "scopes document render intent updates by semantic diff",
+      testRenderIntentDocumentUpdatesAreScoped,
+    ],
+    [
+      "emits surface frame changes only for semantic updates",
+      testSurfaceFrameImportsOnlyEmitSemanticChanges,
     ],
     [
       "sorts render intent patch entries deterministically",

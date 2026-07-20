@@ -37,10 +37,10 @@ import {
   KIT_LEGACY_LAYER_PRESET,
 } from "../../shared/constants/layers";
 import {
-  IMAGE_PLACEMENT_CAPABILITY_ID,
-  type ImagePlacementCapabilityApi,
-  type ImageSessionOverlayContext,
-} from "../image/capability";
+  IMAGE_SLOT_CAPABILITY_ID,
+  type ImageSlotCapabilityApi,
+  type SessionSceneDecorationContext,
+} from "../image-slot/capability";
 import { createDielineCommands } from "./commands";
 import { createDielineConfigurations } from "./config";
 import {
@@ -69,13 +69,13 @@ import {
   patchRenderObjectSpecs,
 } from "../../shared/runtime/renderIntentPatches";
 
-const IMAGE_SESSION_CHANNEL = "image-placement";
-const IMAGE_SESSION_DIELINE_OVERLAY_ID = "dieline.image-session-overlay";
-const IMAGE_SESSION_SHAPE_HATCH_ID = "image.cropShapeHatch";
-const IMAGE_SESSION_SHAPE_OUTLINE_ID = "image.cropShapeOutline";
+const IMAGE_SLOT_SESSION_CHANNEL = "image-slot";
+const IMAGE_SLOT_DIELINE_DECORATION_ID = "dieline.image-slot-decoration";
+const IMAGE_SLOT_SHAPE_HATCH_ID = "imageSlot.cropShapeHatch";
+const IMAGE_SLOT_SHAPE_OUTLINE_ID = "imageSlot.cropShapeOutline";
 const EPSILON = 0.0001;
 const SHAPE_OUTLINE_COLOR = "rgba(255, 0, 0, 0.9)";
-const DEFAULT_IMAGE_SESSION_HATCH_COLOR = "rgba(255, 0, 0, 0.35)";
+const DEFAULT_IMAGE_SLOT_HATCH_COLOR = "rgba(255, 0, 0, 0.35)";
 
 export interface DielineToolOptions
   extends Partial<DielineState>, DielineGeometryCapabilityOptions {
@@ -99,7 +99,7 @@ export class DielineTool implements ExtensionDefinition {
       CONFIGURATION_SERVICE,
       RENDER_INTENT_SERVICE,
     ],
-    after: [IMAGE_PLACEMENT_CAPABILITY_ID],
+    after: [IMAGE_SLOT_CAPABILITY_ID],
   };
 
   private state: DielineState = createDefaultDielineState();
@@ -195,10 +195,8 @@ export class DielineTool implements ExtensionDefinition {
     this.imageSessionOverlayDisposable?.dispose();
     this.imageSessionOverlayDisposable = context.services
       .get<CapabilityRegistryService>(CAPABILITY_REGISTRY_SERVICE)
-      ?.getFacade<ImagePlacementCapabilityApi>(IMAGE_PLACEMENT_CAPABILITY_ID)
-      ?.registerSessionOverlayProvider(
-        this.createImageSessionOverlayProvider(),
-      );
+      ?.getFacade<ImageSlotCapabilityApi>(IMAGE_SLOT_CAPABILITY_ID)
+      ?.registerSessionSceneDecoration(this.createImageSlotSessionDecoration());
 
     const configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
@@ -383,16 +381,22 @@ export class DielineTool implements ExtensionDefinition {
     );
   }
 
-  private createImageSessionOverlayProvider() {
+  private createImageSlotSessionDecoration() {
     return {
-      id: IMAGE_SESSION_DIELINE_OVERLAY_ID,
-      order: 100,
-      getOverlaySpecs: (context: ImageSessionOverlayContext) => {
-        const surfaceId = this.getSurfaceId(context.surfaceId ?? undefined);
+      id: IMAGE_SLOT_DIELINE_DECORATION_ID,
+      placement: "controls" as const,
+      provide: (context: SessionSceneDecorationContext) => {
+        const surfaceId = this.getSurfaceId(context.surfaceId);
         const geometry = this.getGeometryForSurface(surfaceId);
         if (!geometry || geometry.shape === "custom") return [];
         const radius = this.resolveImageSessionShapeRadius(geometry);
         if (geometry.shape === "rect" && radius <= EPSILON) return [];
+        const layout = this.getSurfaceLayout(surfaceId);
+        if (!layout) return [];
+        const viewport = this.canvasService?.getViewportSize() ?? {
+          width: 1,
+          height: 1,
+        };
 
         const shapePathData = generateDielinePath({
           shape: geometry.shape,
@@ -403,58 +407,52 @@ export class DielineTool implements ExtensionDefinition {
           x: geometry.x,
           y: geometry.y,
           features: [],
-          canvasWidth: context.viewport.width,
-          canvasHeight: context.viewport.height,
+          canvasWidth: viewport.width,
+          canvasHeight: viewport.height,
         });
         if (!shapePathData) return [];
 
         const hatchPathData = `${this.buildAbsoluteRectPath(
-          context.layout.cutRect,
+          layout.cutRect,
         )} ${shapePathData}`;
         return [
           {
-            layer: "controls" as const,
-            spec: {
-              id: IMAGE_SESSION_SHAPE_HATCH_ID,
-              type: "path" as const,
-              space: "screen" as const,
-              data: { id: IMAGE_SESSION_SHAPE_HATCH_ID, zIndex: 5 },
-              props: {
-                pathData: hatchPathData,
-                originX: "left",
-                originY: "top",
-                fill: this.createHatchPattern(
-                  DEFAULT_IMAGE_SESSION_HATCH_COLOR,
-                ),
-                opacity: 1,
-                stroke: null,
-                fillRule: "evenodd",
-                selectable: false,
-                evented: false,
-                excludeFromExport: true,
-                objectCaching: false,
-              },
+            id: IMAGE_SLOT_SHAPE_HATCH_ID,
+            layerId: "image-slot.controls",
+            type: "path" as const,
+            path: hatchPathData,
+            order: 5,
+            data: { id: IMAGE_SLOT_SHAPE_HATCH_ID, zIndex: 5 },
+            style: {
+              originX: "left",
+              originY: "top",
+              fill: this.createHatchPattern(DEFAULT_IMAGE_SLOT_HATCH_COLOR),
+              opacity: 1,
+              stroke: null,
+              fillRule: "evenodd",
+              selectable: false,
+              evented: false,
+              excludeFromExport: true,
+              objectCaching: false,
             },
           },
           {
-            layer: "controls" as const,
-            spec: {
-              id: IMAGE_SESSION_SHAPE_OUTLINE_ID,
-              type: "path" as const,
-              space: "screen" as const,
-              data: { id: IMAGE_SESSION_SHAPE_OUTLINE_ID, zIndex: 6 },
-              props: {
-                pathData: shapePathData,
-                originX: "left",
-                originY: "top",
-                fill: "transparent",
-                stroke: SHAPE_OUTLINE_COLOR,
-                strokeWidth: 1,
-                selectable: false,
-                evented: false,
-                excludeFromExport: true,
-                objectCaching: false,
-              },
+            id: IMAGE_SLOT_SHAPE_OUTLINE_ID,
+            layerId: "image-slot.controls",
+            type: "path" as const,
+            path: shapePathData,
+            order: 6,
+            data: { id: IMAGE_SLOT_SHAPE_OUTLINE_ID, zIndex: 6 },
+            style: {
+              originX: "left",
+              originY: "top",
+              fill: "transparent",
+              stroke: SHAPE_OUTLINE_COLOR,
+              strokeWidth: 1,
+              selectable: false,
+              evented: false,
+              excludeFromExport: true,
+              objectCaching: false,
             },
           },
         ];
@@ -553,7 +551,7 @@ export class DielineTool implements ExtensionDefinition {
             ref: {
               source: "workflowSession",
               field: "anyActive",
-              scope: { channel: IMAGE_SESSION_CHANNEL },
+              scope: { channel: IMAGE_SLOT_SESSION_CHANNEL },
             },
           },
         ],

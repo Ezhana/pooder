@@ -7,7 +7,7 @@ import type {
   RuntimeConditionExpr,
 } from "@pooder/core";
 
-export const EDITOR_DOCUMENT_VERSION = 6 as const;
+export const EDITOR_DOCUMENT_VERSION = 7 as const;
 
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
@@ -127,7 +127,7 @@ export interface EditorObjectBase {
   effects?: EditorObjectEffect[];
 }
 
-export type ObjectSource =
+export type EditorImageResource =
   | {
       kind: "url";
       url: string;
@@ -145,6 +145,38 @@ export type ObjectSource =
       url: string;
       transient: true;
       intrinsicSize?: EditorSize;
+    };
+
+export interface EditorImagePlacement {
+  fit: "cover" | "contain" | "stretch";
+  anchorX: number;
+  anchorY: number;
+  zoom: number;
+  rotation: number;
+  opacity: number;
+  clip: "frame" | "none";
+}
+
+export interface EditorImageSlotSpec {
+  accepts?: string[];
+  emptyPresentation?: {
+    resource: EditorImageResource;
+    fit: EditorImagePlacement["fit"];
+  };
+  sessionProjections?: Array<{
+    placement: "underlay" | "overlay" | "controls";
+    source: {
+      objectIds?: string[];
+      tags?: string[];
+    };
+    surfaceScope?: "same-surface" | "all";
+  }>;
+}
+
+export type ObjectSource =
+  | {
+      kind: "image";
+      resource?: EditorImageResource;
     }
   | {
       kind: "path";
@@ -162,9 +194,18 @@ export type ObjectSource =
       text: string;
     };
 
-export interface EditorObject extends EditorObjectBase {
-  source: ObjectSource;
+export interface EditorImageObject extends EditorObjectBase {
+  frame: EditorRect;
+  source: { kind: "image"; resource?: EditorImageResource };
+  placement: EditorImagePlacement;
+  slot?: EditorImageSlotSpec;
 }
+
+export interface EditorPrimitiveObject extends EditorObjectBase {
+  source: Exclude<ObjectSource, { kind: "image" }>;
+}
+
+export type EditorObject = EditorImageObject | EditorPrimitiveObject;
 
 export interface EditorEffect<TPayload = Record<string, unknown>> {
   id?: string;
@@ -317,49 +358,55 @@ function normalizeSize(value: unknown): EditorSize | undefined {
     : undefined;
 }
 
+function normalizeImageResource(
+  value: unknown,
+): EditorImageResource | undefined {
+  if (!isRecord(value)) return undefined;
+  const intrinsicSize = normalizeSize(value.intrinsicSize);
+  const mimeType = normalizeId(value.mimeType);
+  if (value.kind === "url") {
+    const url = normalizeId(value.url);
+    return url
+      ? {
+          kind: "url",
+          url,
+          ...(mimeType ? { mimeType } : {}),
+          ...(intrinsicSize ? { intrinsicSize } : {}),
+        }
+      : undefined;
+  }
+  if (value.kind === "data-url") {
+    const dataUrl = normalizeId(value.dataUrl);
+    return dataUrl
+      ? {
+          kind: "data-url",
+          dataUrl,
+          ...(mimeType ? { mimeType } : {}),
+          ...(intrinsicSize ? { intrinsicSize } : {}),
+        }
+      : undefined;
+  }
+  if (value.kind === "blob-url") {
+    const url = normalizeId(value.url);
+    return url
+      ? {
+          kind: "blob-url",
+          url,
+          transient: true,
+          ...(intrinsicSize ? { intrinsicSize } : {}),
+        }
+      : undefined;
+  }
+  return undefined;
+}
+
 function normalizeObjectSource(value: unknown): ObjectSource | null {
   if (!isRecord(value)) return null;
+  if (value.kind === "image") {
+    const resource = normalizeImageResource(value.resource);
+    return { kind: "image", ...(resource ? { resource } : {}) };
+  }
   switch (value.kind) {
-    case "url": {
-      const url = normalizeId(value.url);
-      if (!url) return null;
-      return {
-        kind: "url",
-        url,
-        ...(typeof value.mimeType === "string" && value.mimeType.trim()
-          ? { mimeType: value.mimeType.trim() }
-          : {}),
-        ...(normalizeSize(value.intrinsicSize)
-          ? { intrinsicSize: normalizeSize(value.intrinsicSize) }
-          : {}),
-      };
-    }
-    case "data-url": {
-      const dataUrl = normalizeId(value.dataUrl);
-      if (!dataUrl) return null;
-      return {
-        kind: "data-url",
-        dataUrl,
-        ...(typeof value.mimeType === "string" && value.mimeType.trim()
-          ? { mimeType: value.mimeType.trim() }
-          : {}),
-        ...(normalizeSize(value.intrinsicSize)
-          ? { intrinsicSize: normalizeSize(value.intrinsicSize) }
-          : {}),
-      };
-    }
-    case "blob-url": {
-      const url = normalizeId(value.url);
-      if (!url) return null;
-      return {
-        kind: "blob-url",
-        url,
-        transient: true,
-        ...(normalizeSize(value.intrinsicSize)
-          ? { intrinsicSize: normalizeSize(value.intrinsicSize) }
-          : {}),
-      };
-    }
     case "path": {
       const pathData =
         typeof value.pathData === "string" ? value.pathData.trim() : "";
@@ -397,6 +444,73 @@ function normalizeObjectSource(value: unknown): ObjectSource | null {
     default:
       return null;
   }
+}
+
+function normalizeImagePlacement(value: unknown): EditorImagePlacement {
+  const placement = isRecord(value) ? value : {};
+  return {
+    fit:
+      placement.fit === "contain" || placement.fit === "stretch"
+        ? placement.fit
+        : "cover",
+    anchorX: normalizeFiniteNumber(placement.anchorX) ?? 0.5,
+    anchorY: normalizeFiniteNumber(placement.anchorY) ?? 0.5,
+    zoom: normalizePositiveNumber(placement.zoom) ?? 1,
+    rotation: normalizeFiniteNumber(placement.rotation) ?? 0,
+    opacity: normalizeFiniteNumber(placement.opacity) ?? 1,
+    clip: placement.clip === "none" ? "none" : "frame",
+  };
+}
+
+function normalizeImageSlot(value: unknown): EditorImageSlotSpec | undefined {
+  if (!isRecord(value)) return undefined;
+  const accepts = normalizeIdList(value.accepts);
+  const empty = isRecord(value.emptyPresentation)
+    ? value.emptyPresentation
+    : undefined;
+  const emptyResource = normalizeImageResource(empty?.resource);
+  const sessionProjections = Array.isArray(value.sessionProjections)
+    ? value.sessionProjections.flatMap((item) => {
+        if (!isRecord(item) || !isRecord(item.source)) return [];
+        if (
+          item.placement !== "underlay" &&
+          item.placement !== "overlay" &&
+          item.placement !== "controls"
+        )
+          return [];
+        const objectIds = normalizeIdList(item.source.objectIds);
+        const tags = normalizeIdList(item.source.tags);
+        if (!objectIds && !tags) return [];
+        return [
+          {
+            placement: item.placement as "underlay" | "overlay" | "controls",
+            source: {
+              ...(objectIds ? { objectIds } : {}),
+              ...(tags ? { tags } : {}),
+            },
+            surfaceScope:
+              item.surfaceScope === "all"
+                ? ("all" as const)
+                : ("same-surface" as const),
+          },
+        ];
+      })
+    : undefined;
+  return {
+    ...(accepts ? { accepts } : {}),
+    ...(emptyResource
+      ? {
+          emptyPresentation: {
+            resource: emptyResource,
+            fit:
+              empty?.fit === "contain" || empty?.fit === "stretch"
+                ? empty.fit
+                : "cover",
+          },
+        }
+      : {}),
+    ...(sessionProjections?.length ? { sessionProjections } : {}),
+  };
 }
 
 function normalizeSceneFrameMm(
@@ -566,6 +680,9 @@ function normalizeObjectInteraction(
 ): InteractionSpec | undefined {
   if (!isRecord(value)) return undefined;
   const interaction: InteractionSpec = {};
+  if (isRecord(value.hitRegion) && value.hitRegion.type === "frame") {
+    interaction.hitRegion = { type: "frame" };
+  }
   const enabledWhen = normalizeRuntimeCondition(value.enabledWhen);
   if (enabledWhen) interaction.enabledWhen = enabledWhen;
 
@@ -748,6 +865,19 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     effects: normalizeObjectEffects(value.effects),
     frame: normalizeRect(value.frame),
   };
+  if (source.kind === "image") {
+    const frame = normalizeRect(value.frame);
+    if (!frame) return null;
+    return {
+      ...base,
+      frame,
+      source,
+      placement: normalizeImagePlacement(value.placement),
+      ...(isRecord(value.slot)
+        ? { slot: normalizeImageSlot(value.slot) ?? {} }
+        : {}),
+    };
+  }
   return { ...base, source };
 }
 
@@ -999,6 +1129,7 @@ function validateObjectInteraction(
   }
 
   const allowedFields = new Set([
+    "hitRegion",
     "enabledWhen",
     "selection",
     "activation",
@@ -1013,6 +1144,18 @@ function validateObjectInteraction(
       path: `${path}.${field}`,
     });
   });
+
+  if (
+    value.hitRegion !== undefined &&
+    (!isRecord(value.hitRegion) || value.hitRegion.type !== "frame")
+  ) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "interaction-hit-region-invalid",
+      message: 'Interaction hitRegion must be { type: "frame" }.',
+      path: `${path}.hitRegion`,
+    });
+  }
 
   if (
     value.selection !== undefined &&
@@ -1124,6 +1267,84 @@ function runValidators(
   });
 }
 
+function validateV7ImageObjects(
+  diagnostics: EditorDocumentDiagnostic[],
+  input: Record<string, unknown>,
+) {
+  const surfaces = Array.isArray(input.surfaces) ? input.surfaces : [];
+  surfaces.forEach((surface, surfaceIndex) => {
+    const layers =
+      isRecord(surface) && Array.isArray(surface.layers) ? surface.layers : [];
+    layers.forEach((layer, layerIndex) => {
+      const objects =
+        isRecord(layer) && Array.isArray(layer.objects) ? layer.objects : [];
+      objects.forEach((object, objectIndex) => {
+        if (!isRecord(object)) return;
+        const path = `surfaces[${surfaceIndex}].layers[${layerIndex}].objects[${objectIndex}]`;
+        const source = isRecord(object.source) ? object.source : undefined;
+        if (!source) return;
+        if (
+          source.kind === "url" ||
+          source.kind === "data-url" ||
+          source.kind === "blob-url"
+        ) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "image-source-legacy",
+            message:
+              'Top-level image resources are not supported in EditorDocument v7; use source.kind "image".',
+            path: `${path}.source.kind`,
+          });
+          return;
+        }
+        if (source.kind !== "image") return;
+        if (
+          source.resource !== undefined &&
+          !normalizeImageResource(source.resource)
+        ) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "image-resource-invalid",
+            message: "Image resource is invalid.",
+            path: `${path}.source.resource`,
+          });
+        }
+        const placement = isRecord(object.placement)
+          ? object.placement
+          : undefined;
+        const required = [
+          "fit",
+          "anchorX",
+          "anchorY",
+          "zoom",
+          "rotation",
+          "opacity",
+          "clip",
+        ];
+        const missing = required.filter(
+          (key) => !placement || placement[key] === undefined,
+        );
+        if (missing.length) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "image-placement-incomplete",
+            message: `Image placement requires ${missing.join(", ")}.`,
+            path: `${path}.placement`,
+          });
+        }
+        if (object.slot !== undefined && !isRecord(object.slot)) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "image-slot-invalid",
+            message: "Image slot must be an object.",
+            path: `${path}.slot`,
+          });
+        }
+      });
+    });
+  });
+}
+
 export function validateEditorDocument(
   value: unknown,
   options: EditorDocumentValidationOptions = {},
@@ -1146,6 +1367,7 @@ export function validateEditorDocument(
   const viewIds = new Set<string>();
 
   validateDocumentConfig(diagnostics, input);
+  validateV7ImageObjects(diagnostics, input);
 
   runValidators(diagnostics, options.validators, {
     document,

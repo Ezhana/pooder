@@ -15,38 +15,23 @@ import {
   type EditorDocumentValidationOptions,
   type EditorEffect,
   type EditorObject,
-  type EditorObjectEffect,
   type ObjectSource,
 } from "@pooder/document";
 export {
-  IMAGE_PLACEMENT_OPEN_SESSION_COMMAND_ID,
-  IMAGE_PLACEMENT_SESSION_GROUP_ID,
-} from "./imagePlacementInteraction";
+  IMAGE_SLOT_CAPABILITY_ID,
+  IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
+} from "../extensions/image-slot/capability";
 
 export type KitEditorDocumentRuntime = EditorDocumentRuntime;
 export type ApplyKitEditorDocumentResult = ApplyEditorDocumentResult;
 
-export interface KitEditorDocumentController extends EditorDocumentController {
-  updateObjectSource(
-    objectId: string,
-    source: ObjectSource,
-    options?: {
-      frame?: EditorObject["frame"];
-      style?: Record<string, unknown>;
-    },
-  ): Promise<boolean>;
-  updateObjectEffects(
-    objectId: string,
-    effects: readonly EditorObjectEffect[],
-  ): Promise<boolean>;
-}
+export interface KitEditorDocumentController extends EditorDocumentController {}
 
 export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   clip: "pooder.kit.clip",
   dieline: "pooder.kit.dieline-geometry",
   feature: "pooder.kit.feature",
   "configurable-visual": "pooder.kit.configurable-visual",
-  "image-placement": "pooder.kit.image-placement",
   mirror: "pooder.kit.mirror",
 } as const;
 
@@ -121,15 +106,19 @@ export async function applyKitEditorDocument(
 export function createKitEditorDocumentController(
   runtime: KitEditorDocumentRuntime,
 ): KitEditorDocumentController {
-  return createEditorDocumentController(runtime, {
+  let controller: KitEditorDocumentController;
+  controller = createEditorDocumentController(runtime, {
     resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
-    afterApply: refreshKitDocumentRuntimeCapabilities,
+    afterApply: (nextRuntime, document) =>
+      refreshKitDocumentRuntimeCapabilities(nextRuntime, document, controller),
   });
+  return controller;
 }
 
 async function refreshKitDocumentRuntimeCapabilities(
   runtime: KitEditorDocumentRuntime,
   document: EditorDocument,
+  controller?: KitEditorDocumentController,
 ): Promise<void> {
   const featureState = readObjectFeatureEffectState(document);
   runtime.capabilities
@@ -144,11 +133,16 @@ async function refreshKitDocumentRuntimeCapabilities(
       target: "both",
     });
 
-  await runtime.capabilities
-    .get<{
-      refresh(): Promise<void> | void;
-    }>(KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS["image-placement"])
-    ?.refresh();
+  if (controller) {
+    runtime.capabilities
+      .get<{
+        syncDocument(
+          document: EditorDocument,
+          controller: EditorDocumentController,
+        ): void;
+      }>("pooder.kit.image-slot")
+      ?.syncDocument(document, controller);
+  }
 }
 
 function readObjectFeatureEffectState(

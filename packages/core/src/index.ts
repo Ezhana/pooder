@@ -47,6 +47,7 @@ export * from "./render";
 export * from "./render-intent";
 export * from "./coordinate";
 export * from "./image-geometry";
+export * from "./image-resource";
 export * from "./units";
 export * from "./dieline-shape";
 export * from "./scene-layout-model";

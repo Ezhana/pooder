@@ -893,7 +893,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const origin = item.origin;
     if (!origin) return true;
     return invalidations.some((invalidation) => {
-      if (invalidation.type === "full") return true;
+      if (
+        invalidation.type === "full" ||
+        invalidation.type === "composition"
+      )
+        return true;
       if (origin.type === "render-intent") {
         return (
           invalidation.type === "render-intents" &&

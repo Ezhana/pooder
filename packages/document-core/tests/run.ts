@@ -10,6 +10,7 @@ import {
 } from "@pooder/core";
 import {
   applyEditorDocument,
+  createEditorDocumentController,
   resolveObjectSource,
   SourceResolver,
 } from "../src";
@@ -108,9 +109,12 @@ function testSourceResolver() {
   const resolver = new SourceResolver();
   assertDeepEqual(
     resolver.resolve({
-      kind: "url",
-      url: "/art.png",
-      intrinsicSize: { width: 120, height: 80 },
+      kind: "image",
+      resource: {
+        kind: "url",
+        url: "/art.png",
+        intrinsicSize: { width: 120, height: 80 },
+      },
     })?.bounds,
     { left: 0, top: 0, width: 120, height: 80 },
     "url source should resolve intrinsic bounds",
@@ -146,7 +150,7 @@ async function testApplyEditorDocument() {
   const result = await applyEditorDocument(
     runtime,
     {
-      version: 6,
+      version: 7,
       config: { mode: "test" },
       surfaces: [
         {
@@ -186,6 +190,22 @@ async function testApplyEditorDocument() {
                   frame: { x: 5, y: 6, width: 30, height: 10 },
                   source: { kind: "text", text: "Label" },
                 },
+                {
+                  id: "empty-image-slot",
+                  frame: { x: 20, y: 30, width: 50, height: 60 },
+                  source: { kind: "image" },
+                  placement: {
+                    fit: "cover",
+                    anchorX: 0.5,
+                    anchorY: 0.5,
+                    zoom: 1,
+                    rotation: 0,
+                    opacity: 1,
+                    clip: "frame",
+                  },
+                  slot: {},
+                  interaction: { hitRegion: { type: "frame" } },
+                },
               ],
             },
           ],
@@ -199,6 +219,9 @@ async function testApplyEditorDocument() {
   const graph = renderIntentService.getGraph();
   const node = graph.layers[0]?.nodes.find((item) => item.id === "shape");
   const labelNode = graph.layers[0]?.nodes.find((item) => item.id === "label");
+  const emptySlotNode = graph.layers[0]?.nodes.find(
+    (item) => item.id === "empty-image-slot",
+  );
   assertEqual(node?.id, "shape", "source object should become a render node");
   assertEqual(node?.type, "path", "shape source should render as path");
   assertEqual(labelNode?.type, "text", "text source should render as text");
@@ -227,11 +250,67 @@ async function testApplyEditorDocument() {
     "test.open-session",
     "object activation should translate to render intent",
   );
+  assertEqual(
+    emptySlotNode?.visible,
+    true,
+    "empty image slots should remain visible to frame hit testing",
+  );
+  assertEqual(
+    emptySlotNode?.visual?.src,
+    undefined,
+    "empty image slots should not synthesize content resources",
+  );
+}
+
+async function testControllerUpdatesOnlyChangedRenderIntents() {
+  const { runtime, renderIntentService } = createRuntime();
+  const controller = createEditorDocumentController(runtime);
+  const document = {
+    version: 7 as const,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" as const },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: ["first", "second"].map((id, index) => ({
+              id,
+              frame: { x: index * 20, y: 0, width: 10, height: 10 },
+              source: {
+                kind: "shape" as const,
+                shape: "rect" as const,
+                params: { width: 10, height: 10 },
+              },
+            })),
+          },
+        ],
+      },
+    ],
+  };
+  const applied = await controller.apply(document);
+  assertEqual(applied.ok, true, "controller document should apply");
+  const reasons: unknown[] = [];
+  renderIntentService.onDidChange((event) => reasons.push(event.reason));
+
+  const updated = await controller.updateObject("first", (current) => ({
+    ...current,
+    style: { ...(current.style ?? {}), opacity: 0.5 },
+  }));
+  assertEqual(updated.ok, true, "controller object update should succeed");
+  assertDeepEqual(
+    reasons,
+    [{ type: "document-updated", intentIds: ["first"] }],
+    "controller updates should publish only changed render intents",
+  );
 }
 
 async function main() {
   testSourceResolver();
   await testApplyEditorDocument();
+  await testControllerUpdatesOnlyChangedRenderIntents();
   console.log("ok");
 }
 

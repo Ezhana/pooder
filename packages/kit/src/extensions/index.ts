@@ -3,7 +3,7 @@ export * from "./configurable-visual";
 export * from "./design-export";
 export * from "./edge-detection";
 export * from "./image-mask";
-export * from "./image";
+export * from "./image-slot";
 export * from "./dieline";
 export * from "./feature";
 export * from "./mirror";

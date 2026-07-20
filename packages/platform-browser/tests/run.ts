@@ -836,6 +836,11 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     undefined,
     "document projections do not activate document interaction",
   );
+  assertEqual(
+    items.find((item) => item.spec.id === "document-node")?.key,
+    "document-node",
+    "document projections should preserve their canonical render key",
+  );
   const control = items.find((item) => item.spec.id === "control-node")?.spec;
   assertEqual(
     control?.props.selectable,
@@ -866,10 +871,98 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
   });
   session.own(localOnly);
   await adapter.flush();
+  const retainedDocument = canvas.reconcileCalls
+    .at(-1)
+    ?.items.find((item) => item.key === "document-node");
   assertEqual(
-    canvas.reconcileCalls.at(-1)?.items.length,
-    0,
-    "a root without document projection must not render the document",
+    retainedDocument?.spec.props.visible,
+    false,
+    "a root without document projection should retain the document target invisibly",
+  );
+  assertEqual(
+    retainedDocument?.spec.props.evented,
+    false,
+    "retained document targets must not receive pointer events",
+  );
+  await session.cancel();
+  await runtime.dispose();
+}
+
+async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "user-image",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "user-image",
+      },
+      visual: { type: "image", src: "/user.png" },
+      ordering: { layerId: "art" },
+      placement: { width: 100, height: 80 },
+    },
+  ]);
+  const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
+    descriptor: {
+      sessionId: "image-session",
+      ownerId: "platform-test",
+      scope: { subjectId: "user-image" },
+      interactionMode: "exclusive",
+      leavePolicy: "block",
+    },
+    initialDraft: {},
+  });
+  const scene = runtime.services.getOrThrow(SCENE_SERVICE).createScene({
+    id: "image-root",
+    owner: { type: "session", sessionId: session.descriptor.sessionId },
+    composition: {
+      entries: [{ source: "local", layerIds: ["working"] }],
+    },
+  });
+  session.own(scene);
+  scene.addLayer({ id: "working" });
+  scene.addElement({
+    id: "working-user-image",
+    layerId: "working",
+    type: "image",
+    src: "/user.png",
+    data: { imageSlotObjectId: "user-image" },
+  });
+  await adapter.flush();
+  const workingItems = canvas.reconcileCalls.at(-1)?.items ?? [];
+  assertEqual(
+    workingItems.find((item) => item.spec.id === "working-user-image")?.key,
+    "user-image",
+    "working image should take over the committed image canonical key",
+  );
+  assertEqual(
+    workingItems.filter((item) => item.key === "user-image").length,
+    1,
+    "working and retained document images must not duplicate the canonical target",
+  );
+
+  const reconcileCount = canvas.reconcileCalls.length;
+  await session.validate();
+  await adapter.flush();
+  assertEqual(
+    canvas.reconcileCalls.length,
+    reconcileCount,
+    "session phase-only changes should not reconcile the canvas",
+  );
+
+  scene.dispose();
+  await adapter.flush();
+  assertEqual(
+    canvas.reconcileCalls.at(-1)?.items.find((item) => item.key === "user-image")
+      ?.spec.id,
+    "user-image",
+    "committed document image should inherit the same canonical target",
   );
   await session.cancel();
   await runtime.dispose();
@@ -982,12 +1075,44 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
       },
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
     },
+    {
+      id: "resolved-slot",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "resolved-slot",
+        objectType: "image",
+      },
+      visual: { type: "image", src: "data:image/png;base64,resolved" },
+      placement: {
+        frame: { x: 100, y: 120, width: 200, height: 160 },
+        width: 400,
+        height: 320,
+        transform: {
+          left: 220,
+          top: 210,
+          originX: "center",
+          originY: "center",
+          scaleX: 0.75,
+          scaleY: 0.6,
+          angle: 15,
+        },
+      },
+      ordering: { layerId: "art", stack: 10, layerOrder: 0, objectOrder: 1 },
+    },
   ]);
 
   await adapter.flush();
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
-  const image = last?.items.find((item) => item.spec.id === "image:slot")?.spec;
+  const imageItem = last?.items.find((item) => item.spec.id === "image:slot");
+  const image = imageItem?.spec;
   assert(image, "adapter should draw the committed image replacement");
+  assertDeepEqual(
+    imageItem?.origin,
+    { type: "render-intent", intentId: "slot" },
+    "replacement nodes should retain their declarative render intent origin",
+  );
   assertEqual(
     image.props.width,
     200,
@@ -1007,6 +1132,49 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
     image.props.scaleY,
     1,
     "image replacements should not depend on bitmap scale for frame sizing",
+  );
+  const resolvedImage = last?.items.find(
+    (item) => item.spec.id === "resolved-slot",
+  )?.spec;
+  assertEqual(
+    resolvedImage?.props.width,
+    400,
+    "resolved images should preserve intrinsic width",
+  );
+  assertEqual(
+    resolvedImage?.props.height,
+    320,
+    "resolved images should preserve intrinsic height",
+  );
+  assertEqual(
+    resolvedImage?.props.scaleX,
+    0.75,
+    "resolved images should preserve horizontal placement scale",
+  );
+  assertEqual(
+    resolvedImage?.props.scaleY,
+    0.6,
+    "resolved images should preserve vertical placement scale",
+  );
+
+  renderIntentService.patchIntent("template-switch", {
+    id: "slot",
+    visual: {
+      type: "image",
+      replacement: { src: "data:image/png;base64,next-template" },
+    },
+  });
+  await adapter.flush();
+  const switched = canvas.reconcileCalls.at(-1);
+  assertDeepEqual(
+    switched?.options?.invalidations,
+    [{ type: "render-intents", intentIds: ["slot"] }],
+    "resource switches should invalidate the declarative intent id",
+  );
+  assertEqual(
+    switched?.items.find((item) => item.key === "image:slot")?.spec.src,
+    "data:image/png;base64,next-template",
+    "resource switches should publish the next replacement source",
   );
 
   await runtime.dispose();
@@ -1770,6 +1938,24 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         },
       },
     },
+    {
+      id: "empty-slot",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "empty-slot",
+      },
+      visual: { type: "image" },
+      placement: {
+        frame: { x: 12, y: 24, width: 80, height: 60 },
+      },
+      ordering: { layerId: "art", objectOrder: 6 },
+      interaction: {
+        hitRegion: { type: "frame" },
+        activation: { action: { commandId: "test.open" } },
+      },
+    },
   ]);
 
   await adapter.flush();
@@ -1788,6 +1974,9 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   );
   const activationOnly = last.items.find(
     (item) => item.key === "activation-only",
+  );
+  const emptySlotHitTarget = last.items.find(
+    (item) => item.key === "empty-slot:frame-hit-target",
   );
   assertEqual(
     interactive?.spec.props.selectable,
@@ -1878,6 +2067,16 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     activationOnly?.spec.data?.interactionSpec?.activation?.action.commandId,
     "test.open",
     "activation declarations should be attached to the render target",
+  );
+  assertEqual(
+    emptySlotHitTarget?.spec.props.visible,
+    true,
+    "empty image slots should keep their frame hit target visible",
+  );
+  assertEqual(
+    emptySlotHitTarget?.spec.props.evented,
+    true,
+    "empty image slot frame hit targets should receive pointer events",
   );
 
   let activationEvent: any;
@@ -2327,6 +2526,47 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
     image.data.renderOwnership.type,
     "declarative",
     "a declarative update should release interaction ownership",
+  );
+}
+
+async function testCanvasReconcileReplacesInvalidatedRenderIntentImage() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+  const createTemplateItem = (src: string): FabricRenderTargetItem => ({
+    key: "image:template-slot",
+    layerId: "template-visuals",
+    order: 0,
+    origin: { type: "render-intent", intentId: "template-slot" },
+    spec: {
+      id: "image:template-slot",
+      type: "image",
+      src,
+      props: { left: 0, top: 0, width: 100, height: 80 },
+    },
+  });
+
+  await service.reconcileRenderGraphDrawList(
+    [createTemplateItem("/template-one.png")],
+    { invalidations: [{ type: "full" }] },
+  );
+  const firstImage = canvas.objects[0] as any;
+
+  await service.reconcileRenderGraphDrawList(
+    [createTemplateItem("/template-two.png")],
+    {
+      invalidations: [
+        { type: "render-intents", intentIds: ["template-slot"] },
+      ],
+    },
+  );
+
+  assert(
+    canvas.objects[0] !== firstImage,
+    "changing an invalidated render intent image source should recreate the backend object",
+  );
+  assertEqual(
+    (canvas.objects[0] as any).src,
+    "/template-two.png",
+    "changing a template resource should render the new image source",
   );
 }
 
@@ -3452,6 +3692,10 @@ async function main() {
       testSessionRootCompositionIsExplicitAndReadOnly,
     ],
     [
+      "hands session working images back to canonical document targets",
+      testSessionWorkingImageHandsOffCanonicalRenderKey,
+    ],
+    [
       "renders renderable SceneService scenes",
       testFabricRenderGraphAdapterRendersRenderableScenes,
     ],
@@ -3518,6 +3762,10 @@ async function main() {
     [
       "reconciles by invalidation and interaction ownership",
       testCanvasReconcileUsesInvalidationAndInteractionOwnership,
+    ],
+    [
+      "replaces invalidated render intent image resources",
+      testCanvasReconcileReplacesInvalidatedRenderIntentImage,
     ],
     [
       "omits path source props from Fabric props",

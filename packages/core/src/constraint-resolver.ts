@@ -1,6 +1,10 @@
 import type Disposable from "./disposable";
 import type { Service, ServiceContext } from "./service";
-import type { GeometryPoint, GeometryRect } from "./interaction";
+import {
+  computeDragInteraction,
+  type GeometryPoint,
+  type GeometryRect,
+} from "./interaction";
 import { GEOMETRY_SOURCE_SERVICE } from "./services/tokens";
 import type {
   CoordinateSpace,
@@ -159,6 +163,7 @@ export function registerBuiltinConstraints(
   registerIfMissing(resolver, "path.nearest-point", resolvePathNearestPoint);
   registerIfMissing(resolver, "path.follow", resolvePathNearestPoint);
   registerIfMissing(resolver, "object-frame.contain", resolveRectContain);
+  registerIfMissing(resolver, "rect.snap", resolveRectSnap);
   registerIfMissing(resolver, "snap.points", resolveSnapPoints);
   registerIfMissing(resolver, "axis.lock", resolveAxisLock);
   registerIfMissing(resolver, "grid.snap", resolveGridSnap);
@@ -250,6 +255,50 @@ function resolveSnapPoints(
     }
   });
   return best ? moveResultToPosition(result, best) : result;
+}
+
+function resolveRectSnap(
+  result: TransformResult,
+  constraint: ConstraintSpec,
+  context: ConstraintHandlerContext,
+): TransformResult {
+  const frame = result.frame;
+  const rect = resolveConstraintRect(constraint, context);
+  if (!frame || !rect) return result;
+  const snap = computeDragInteraction({
+    frame,
+    proposedFrame: frame,
+    snapTargets: [
+      {
+        id: String(constraint.params?.id || "rect"),
+        rect,
+      },
+    ],
+    options: {
+      thresholdPx: finiteNumber(constraint.params?.thresholdPx, 6),
+      viewportScale: finitePositiveNumber(
+        constraint.params?.viewportScale ??
+          context.input.metadata?.viewportScale,
+        1,
+      ),
+      includeEdges: constraint.params?.includeEdges !== false,
+      includeCenters: constraint.params?.includeCenters !== false,
+    },
+  });
+  const moved = moveResultToPosition(result, {
+    x: snap.frame.left,
+    y: snap.frame.top,
+  });
+  return {
+    ...moved,
+    metadata: {
+      ...result.metadata,
+      rectSnap: {
+        guides: snap.guides,
+        matches: snap.matches,
+      },
+    },
+  };
 }
 
 function resolveAxisLock(
