@@ -1,12 +1,16 @@
 import {
+  CANVAS_SERVICE,
+  SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
   resolveImageFitScale,
   resolveImageGeometry,
+  type CanvasService,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
   type SceneHandle,
+  type SceneLayoutService,
   type SceneService,
   type SessionHandle,
   type SessionService,
@@ -74,8 +78,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     SessionSceneDecorationContribution
   >();
   private sceneService?: SceneService;
+  private canvasService?: CanvasService;
+  private sceneLayoutService?: SceneLayoutService;
   private sessionService?: SessionService;
   private sceneHandle: SceneHandle | null = null;
+  private sceneLayoutSubscription: { dispose(): void } | null = null;
   private sessionHandle: SessionHandle<ImageSlotSessionDraft> | null = null;
   private openingSession: {
     objectId: string;
@@ -83,6 +90,9 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   } | null = null;
 
   activate(context: ExtensionContext): void {
+    this.canvasService = context.services.get<CanvasService>(CANVAS_SERVICE);
+    this.sceneLayoutService =
+      context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.sceneService =
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.sessionService =
@@ -95,6 +105,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       await this.sessionHandle.cancel();
     }
     this.sessionHandle = null;
+    this.canvasService = undefined;
+    this.sceneLayoutService = undefined;
+    this.sceneService = undefined;
+    this.sessionService = undefined;
   }
 
   contribute(): ExtensionContributions {
@@ -375,13 +389,19 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private async validateSession() {
     const draft = this.state.draft;
     if (!draft) return { ok: false as const, reason: "session-not-active" };
-    this.setState({ ...this.state, phase: "validating" });
+    this.setState(
+      { ...this.state, phase: "validating" },
+      { renderScene: false },
+    );
     if (draft.resource && !draft.resource.intrinsicSize) {
-      this.setState({
-        ...this.state,
-        phase: "error",
-        error: "resource-load-failed",
-      });
+      this.setState(
+        {
+          ...this.state,
+          phase: "error",
+          error: "resource-load-failed",
+        },
+        { renderScene: false },
+      );
       return { ok: false as const, reason: "resource-load-failed" };
     }
     const policy = this.document?.config["imageSlot.outsideFramePolicy"];
@@ -390,14 +410,20 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       this.document &&
       isDraftOutsideFrame(this.document, draft)
     ) {
-      this.setState({
-        ...this.state,
-        phase: "error",
-        error: "validation-failed",
-      });
+      this.setState(
+        {
+          ...this.state,
+          phase: "error",
+          error: "validation-failed",
+        },
+        { renderScene: false },
+      );
       return { ok: false as const, reason: "outside-frame" };
     }
-    this.setState({ ...this.state, phase: "active", error: undefined });
+    this.setState(
+      { ...this.state, phase: "active", error: undefined },
+      { renderScene: false },
+    );
     return { ok: true as const };
   }
 
@@ -409,7 +435,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         type: "error" as const,
         reason: validation.ok ? "commit-failed" : validation.reason,
       };
-    this.setState({ ...this.state, phase: "committing" });
+    this.setState(
+      { ...this.state, phase: "committing" },
+      { renderScene: false },
+    );
     const result = await this.controller.updateObject(
       draft.objectId,
       (current) => {
@@ -426,7 +455,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       },
     );
     if (!result.ok) {
-      this.setState({ ...this.state, phase: "error", error: "commit-failed" });
+      this.setState(
+        { ...this.state, phase: "error", error: "commit-failed" },
+        { renderScene: false },
+      );
       return { type: "error" as const, reason: result.reason };
     }
     this.document = result.document;
@@ -533,6 +565,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         visible: true,
       }),
     );
+    this.sceneLayoutSubscription =
+      this.sceneLayoutService?.onLayoutChange(surfaceId, () =>
+        this.renderSessionScene(),
+      ) ?? null;
     this.renderSessionScene();
   }
 
@@ -631,6 +667,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         },
       });
     }
+    this.renderSessionFrame(scene, draft.objectId, context.surfaceId);
     for (const contribution of this.decorations.values()) {
       contribution
         .provide({ objectId: draft.objectId, surfaceId: context.surfaceId })
@@ -641,6 +678,67 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           }),
         );
     }
+  }
+
+  private renderSessionFrame(
+    scene: SceneHandle,
+    objectId: string,
+    surfaceId: string,
+  ): void {
+    const viewport = this.canvasService?.getScreenViewportRect();
+    const cutRect = this.sceneLayoutService?.getLayout(surfaceId)?.cutRect;
+    if (!viewport || !cutRect) return;
+
+    scene.addElement({
+      id: `image-slot:${objectId}:crop-mask`,
+      layerId: "image-slot.controls",
+      type: "path",
+      path: buildViewportMaskPath(viewport, cutRect),
+      data: {
+        imageSlotObjectId: objectId,
+        renderSpace: "screen",
+        type: "image-slot-crop-mask",
+      },
+      transform: {
+        left: viewport.left,
+        top: viewport.top,
+        originX: "left",
+        originY: "top",
+      },
+      style: {
+        excludeFromExport: true,
+        fill: "rgba(245, 245, 245, 0.72)",
+        fillRule: "evenodd",
+        objectCaching: false,
+        stroke: null,
+      },
+    });
+    scene.addElement({
+      id: `image-slot:${objectId}:crop-frame`,
+      layerId: "image-slot.controls",
+      type: "rect",
+      width: cutRect.width,
+      height: cutRect.height,
+      data: {
+        imageSlotObjectId: objectId,
+        renderSpace: "screen",
+        type: "image-slot-crop-frame",
+      },
+      transform: {
+        left: cutRect.left,
+        top: cutRect.top,
+        originX: "left",
+        originY: "top",
+      },
+      style: {
+        excludeFromExport: true,
+        fill: "rgba(0, 0, 0, 0)",
+        stroke: "rgba(80, 80, 80, 0.9)",
+        strokeDashArray: [8, 8],
+        strokeUniform: true,
+        strokeWidth: 1,
+      },
+    });
   }
 
   private renderSnapGuides(
@@ -696,9 +794,34 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   }
 
   private disposeScene(): void {
+    this.sceneLayoutSubscription?.dispose();
+    this.sceneLayoutSubscription = null;
     this.sceneHandle?.dispose();
     this.sceneHandle = null;
   }
+}
+
+function buildViewportMaskPath(
+  viewport: { left: number; top: number; width: number; height: number },
+  cutRect: { left: number; top: number; width: number; height: number },
+): string {
+  const cutLeft = cutRect.left - viewport.left;
+  const cutTop = cutRect.top - viewport.top;
+  return [
+    buildRectPath(0, 0, viewport.width, viewport.height),
+    buildRectPath(cutLeft, cutTop, cutRect.width, cutRect.height),
+  ].join(" ");
+}
+
+function buildRectPath(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): string {
+  return `M ${left} ${top} L ${left + width} ${top} L ${left + width} ${
+    top + height
+  } L ${left} ${top + height} Z`;
 }
 
 function createImageSlotPlacementAction(objectId: string) {
