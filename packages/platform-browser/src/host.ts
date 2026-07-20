@@ -4,10 +4,12 @@ import type {
   SurfaceFrameService,
 } from "@pooder/core";
 import { SURFACE_FRAME_SERVICE } from "@pooder/core";
+import { IMAGE_RESOURCE_SERVICE } from "@pooder/core";
 import { BrowserSceneExportService } from "./browser-scene-export-service";
 import CanvasService from "./canvas-service";
 import { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
 import { SceneLayoutService } from "./scene-layout-service";
+import { BrowserImageResourceService } from "./image-resource-service";
 import {
   CANVAS_SERVICE,
   FABRIC_RENDER_GRAPH_ADAPTER,
@@ -35,6 +37,7 @@ export interface BrowserHostAttachment {
   readonly browserSceneExportService: BrowserSceneExportService;
   readonly canvasService: CanvasService;
   readonly fabricRenderGraphAdapter: FabricRenderGraphAdapter;
+  readonly imageResourceService: BrowserImageResourceService;
   readonly sceneLayoutService: SceneLayoutService;
   dispose(): void;
 }
@@ -57,6 +60,7 @@ export interface AttachBrowserHostOptions {
     callback: ResizeObserverCallback,
   ) => ResizeObserverLike;
   createSceneLayoutService?: () => SceneLayoutService;
+  createImageResourceService?: () => BrowserImageResourceService;
 }
 
 function measureContainer(container: AttachBrowserHostOptions["container"]): {
@@ -74,8 +78,7 @@ export function attachBrowserHost(
   options: AttachBrowserHostOptions,
 ): BrowserHostAttachment {
   const createCanvasService =
-    options.createCanvasService ??
-    ((canvas) => new CanvasService(canvas));
+    options.createCanvasService ?? ((canvas) => new CanvasService(canvas));
   const createBrowserSceneExportService =
     options.createBrowserSceneExportService ??
     (() => new BrowserSceneExportService());
@@ -87,6 +90,9 @@ export function attachBrowserHost(
   const createResizeObserver =
     options.createResizeObserver ??
     ((callback) => new ResizeObserver(callback));
+  const createImageResourceService =
+    options.createImageResourceService ??
+    (() => new BrowserImageResourceService());
 
   const { container, canvas } = options;
   const { height, width } = measureContainer(container);
@@ -98,6 +104,17 @@ export function attachBrowserHost(
   const sceneLayoutService = createSceneLayoutService();
   const browserSceneExportService = createBrowserSceneExportService();
   const fabricRenderGraphAdapter = createFabricRenderGraphAdapter();
+  const imageResourceService = createImageResourceService();
+
+  const registeredImageResources = runtime.services.register(
+    imageResourceService,
+    IMAGE_RESOURCE_SERVICE,
+  );
+  if (!registeredImageResources) {
+    throw new Error(
+      "[@pooder/platform-browser] Failed to register BrowserImageResourceService.",
+    );
+  }
 
   const registeredCanvas = runtime.services.register(
     canvasService,
@@ -160,8 +177,9 @@ export function attachBrowserHost(
 
   const viewportDisposables: Array<{ dispose(): void }> = [];
   const observedSurfaceIds = new Set<string>();
-  const surfaceFrameService =
-    runtime.services.get<SurfaceFrameService>(SURFACE_FRAME_SERVICE);
+  const surfaceFrameService = runtime.services.get<SurfaceFrameService>(
+    SURFACE_FRAME_SERVICE,
+  );
   const applyViewportLayout = (surfaceId: string) => {
     const layout = sceneLayoutService.getLayout(surfaceId);
     const frames = surfaceFrameService?.getFrames(surfaceId);
@@ -175,7 +193,8 @@ export function attachBrowserHost(
     });
     canvasService.requestRenderAll();
   };
-  const getActiveSurfaceId = () => surfaceFrameService?.listSurfaceIds()[0] ?? "";
+  const getActiveSurfaceId = () =>
+    surfaceFrameService?.listSurfaceIds()[0] ?? "";
   const observeSurface = (surfaceId: string) => {
     if (!surfaceId || observedSurfaceIds.has(surfaceId)) return;
     observedSurfaceIds.add(surfaceId);
@@ -205,6 +224,7 @@ export function attachBrowserHost(
     browserSceneExportService,
     canvasService,
     fabricRenderGraphAdapter,
+    imageResourceService,
     sceneLayoutService,
     dispose() {
       resizeObserver.disconnect();
@@ -213,6 +233,7 @@ export function attachBrowserHost(
         fabricRenderGraphAdapter,
         FABRIC_RENDER_GRAPH_ADAPTER,
       );
+      runtime.services.unregister(imageResourceService, IMAGE_RESOURCE_SERVICE);
       runtime.services.unregister(
         browserSceneExportService,
         SCENE_EXPORT_SERVICE,

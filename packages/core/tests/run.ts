@@ -1900,6 +1900,36 @@ async function testConstraintResolverServiceBuiltins() {
       { x: 20, y: 30 },
       "axis.lock and grid.snap should compose deterministically",
     );
+
+    const rectSnapped = resolver.resolve({
+      transform: {
+        frame: { left: 96, top: 15, width: 10, height: 10 },
+      },
+      constraints: [
+        {
+          type: "rect.snap",
+          params: {
+            id: "frame",
+            rect: { left: 100, top: 10, width: 80, height: 60 },
+            thresholdPx: 6,
+          },
+        },
+      ],
+      metadata: { viewportScale: 1 },
+    });
+    assertDeepEqual(
+      rectSnapped.result.frame,
+      { left: 100, top: 10, width: 10, height: 10 },
+      "rect.snap should align the moving frame to target edges",
+    );
+    assertEqual(
+      Array.isArray(
+        (rectSnapped.result.metadata?.rectSnap as { guides?: unknown[] })
+          ?.guides,
+      ),
+      true,
+      "rect.snap should expose snap guides in result metadata",
+    );
   });
 }
 

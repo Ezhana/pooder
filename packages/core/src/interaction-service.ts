@@ -71,9 +71,14 @@ export interface InteractionConstraintSpec {
 export interface InteractionOperationSpec {
   enabled: boolean;
   constraints?: InteractionConstraintSpec[];
+  action?: {
+    commandId: string;
+    payload?: Record<string, unknown>;
+  };
 }
 
 export interface InteractionSpec {
+  hitRegion?: { type: "frame" };
   enabledWhen?: RuntimeConditionExpr;
   selection?: {
     enabled: boolean;
@@ -257,7 +262,6 @@ export class InteractionService implements Service {
       sessionId =
         normalizeId(activation.session.sessionId) ||
         normalizeId(actionPayload.sessionId) ||
-        resolveTargetSessionKey(input.targetData) ||
         `${channel}:${normalizeId(input.subjectId) || "editor"}`;
       sessionContext = {
         sessionId,
@@ -410,15 +414,6 @@ function createSessionScope(
     surfaceId: session.scope === "editor" ? null : context.surfaceId || null,
     subjectId: session.scope === "subject" ? context.subjectId || null : null,
   };
-}
-
-function resolveTargetSessionKey(
-  targetData: Record<string, unknown> | undefined,
-): string {
-  const imagePlacement = isRecord(targetData?.imagePlacement)
-    ? targetData.imagePlacement
-    : undefined;
-  return normalizeId(imagePlacement?.sessionKey);
 }
 
 function cloneConstraintSpec(spec: ConstraintSpec): ConstraintSpec {

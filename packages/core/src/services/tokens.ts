@@ -18,6 +18,7 @@ import type {
   SceneLayoutService,
 } from "../render";
 import type { DefaultSurfaceFrameService } from "../surface-frames";
+import type { ImageResourceService } from "../image-resource";
 
 export const CAPABILITY_REGISTRY_SERVICE =
   createServiceToken<CapabilityRegistryService>("CapabilityRegistryService");
@@ -54,6 +55,9 @@ export const CONSTRAINT_RESOLVER_SERVICE =
   createServiceToken<ConstraintResolverService>("ConstraintResolverService");
 export const INTERACTION_SERVICE =
   createServiceToken<InteractionService>("InteractionService");
+export const IMAGE_RESOURCE_SERVICE = createServiceToken<ImageResourceService>(
+  "ImageResourceService",
+);
 
 export const CORE_SERVICE_TOKENS = {
   CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
@@ -71,4 +75,5 @@ export const CORE_SERVICE_TOKENS = {
   GEOMETRY_SOURCE: GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER: CONSTRAINT_RESOLVER_SERVICE,
   INTERACTION: INTERACTION_SERVICE,
+  IMAGE_RESOURCE: IMAGE_RESOURCE_SERVICE,
 } as const;

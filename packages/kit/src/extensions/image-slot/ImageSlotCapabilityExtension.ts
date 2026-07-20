@@ -1,0 +1,893 @@
+import {
+  SCENE_SERVICE,
+  SESSION_SERVICE,
+  resolveImageFitScale,
+  resolveImageGeometry,
+  type ExtensionContext,
+  type ExtensionContributions,
+  type ExtensionDefinition,
+  type SceneHandle,
+  type SceneService,
+  type SessionHandle,
+  type SessionService,
+} from "@pooder/core";
+import type {
+  EditorDocument,
+  EditorImageObject,
+  EditorImagePlacement,
+  EditorImageResource,
+} from "@pooder/document";
+import type { EditorDocumentController } from "@pooder/document-core";
+import {
+  IMAGE_SLOT_CAPABILITY_ID,
+  IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
+  IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
+  createImageSlotCapabilityDefinition,
+  type ImageSlotCapabilityApi,
+  type ImageSlotSessionDraft,
+  type ImageSlotPlacementPreset,
+  type ImageSlotViewState,
+  type SessionSceneDecorationContribution,
+} from "./capability";
+
+const DEFAULT_PLACEMENT: EditorImagePlacement = {
+  fit: "cover",
+  anchorX: 0.5,
+  anchorY: 0.5,
+  zoom: 1,
+  rotation: 0,
+  opacity: 1,
+  clip: "frame",
+};
+
+type ImageSlotOpenSessionResult = { ok: true } | { ok: false; reason: string };
+
+interface ImageSlotCanvasTransformInput {
+  commit?: boolean;
+  objectId?: string;
+  snap?: {
+    guides?: Array<{
+      axis?: string;
+      position?: number;
+    }>;
+  };
+  transform?: {
+    centerX?: number;
+    centerY?: number;
+    rotation?: number;
+    scaleX?: number;
+    scaleY?: number;
+  };
+}
+
+export class ImageSlotCapabilityExtension implements ExtensionDefinition {
+  readonly id = IMAGE_SLOT_CAPABILITY_ID;
+  readonly metadata = { name: "ImageSlotCapabilityExtension" };
+  readonly activation = { requiresServices: [SCENE_SERVICE, SESSION_SERVICE] };
+  private document: EditorDocument | null = null;
+  private controller: EditorDocumentController | null = null;
+  private original: ImageSlotSessionDraft | null = null;
+  private state: ImageSlotViewState = { phase: "idle", draft: null };
+  private readonly listeners = new Set<(state: ImageSlotViewState) => void>();
+  private readonly decorations = new Map<
+    string,
+    SessionSceneDecorationContribution
+  >();
+  private sceneService?: SceneService;
+  private sessionService?: SessionService;
+  private sceneHandle: SceneHandle | null = null;
+  private sessionHandle: SessionHandle<ImageSlotSessionDraft> | null = null;
+  private openingSession: {
+    objectId: string;
+    promise: Promise<ImageSlotOpenSessionResult>;
+  } | null = null;
+
+  activate(context: ExtensionContext): void {
+    this.sceneService =
+      context.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    this.sessionService =
+      context.services.getOrThrow<SessionService>(SESSION_SERVICE);
+  }
+
+  async deactivate(): Promise<void> {
+    this.disposeScene();
+    if (this.sessionHandle && this.sessionHandle.phase !== "closed") {
+      await this.sessionHandle.cancel();
+    }
+    this.sessionHandle = null;
+  }
+
+  contribute(): ExtensionContributions {
+    return {
+      capabilities: [createImageSlotCapabilityDefinition(this.facade())],
+      commands: [
+        {
+          id: IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
+          command: IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
+          title: "Open Image Slot",
+          handler: (input: { objectId?: string; subjectId?: string } = {}) =>
+            this.openSession({
+              objectId: String(input.objectId || input.subjectId || ""),
+            }),
+        },
+        {
+          id: IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
+          command: IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
+          title: "Update Image Slot Placement",
+          handler: (input: ImageSlotCanvasTransformInput = {}) =>
+            this.updatePlacementFromCanvas(input),
+        },
+      ],
+    };
+  }
+
+  bindDocument(
+    document: EditorDocument,
+    controller: EditorDocumentController,
+  ): void {
+    this.document = document;
+    this.controller = controller;
+    if (
+      this.state.draft &&
+      !findImageSlot(document, this.state.draft.objectId)
+    ) {
+      this.disposeScene();
+      const sessionHandle = this.sessionHandle;
+      this.sessionHandle = null;
+      if (sessionHandle && sessionHandle.phase !== "closed") {
+        void sessionHandle.cancel();
+      }
+      this.original = null;
+      this.setState({ phase: "idle", draft: null });
+    }
+  }
+
+  private facade(): ImageSlotCapabilityApi {
+    return {
+      syncDocument: (document, controller) =>
+        this.bindDocument(document, controller),
+      openSession: (input) => this.openSession(input),
+      getViewState: () => clone(this.state),
+      onDidChange: (listener) => {
+        this.listeners.add(listener);
+        return { dispose: () => this.listeners.delete(listener) };
+      },
+      setResource: (resource, options) => this.setResource(resource, options),
+      clearResource: () => this.clearResource(),
+      updatePlacement: (partial) => this.updatePlacement(partial),
+      applyPlacementPreset: (preset) => this.applyPlacementPreset(preset),
+      validateSession: () => this.validateSession(),
+      commitSession: () => this.commitSession(),
+      rollbackSession: () => this.rollbackSession(),
+      registerSessionSceneDecoration: (contribution) => {
+        this.decorations.set(contribution.id, contribution);
+        this.renderSessionScene();
+        return { dispose: () => this.decorations.delete(contribution.id) };
+      },
+    };
+  }
+
+  private openSession(input: {
+    objectId: string;
+  }): Promise<ImageSlotOpenSessionResult> {
+    const objectId = String(input.objectId || "").trim();
+    if (
+      this.state.draft?.objectId === objectId &&
+      this.sessionHandle?.phase === "active"
+    ) {
+      return Promise.resolve({ ok: true });
+    }
+    if (this.openingSession) {
+      return this.openingSession.objectId === objectId
+        ? this.openingSession.promise
+        : Promise.resolve({ ok: false, reason: "session-owner-conflict" });
+    }
+    const promise = this.openSessionInternal(objectId);
+    this.openingSession = { objectId, promise };
+    return promise.then(
+      (result) => {
+        if (this.openingSession?.promise === promise) {
+          this.openingSession = null;
+        }
+        return result;
+      },
+      (error) => {
+        if (this.openingSession?.promise === promise) {
+          this.openingSession = null;
+        }
+        throw error;
+      },
+    );
+  }
+
+  private async openSessionInternal(
+    objectId: string,
+  ): Promise<ImageSlotOpenSessionResult> {
+    const context = this.document
+      ? findImageSlotContext(this.document, objectId)
+      : null;
+    const object = context?.object;
+    if (!object || !context)
+      return { ok: false as const, reason: "not-image-slot" };
+    if (
+      this.state.phase !== "idle" &&
+      this.state.draft?.objectId !== objectId
+    ) {
+      return { ok: false as const, reason: "session-owner-conflict" };
+    }
+    const draft = toDraft(object);
+    const sessionId = `image-slot:${objectId}`;
+    try {
+      this.sessionHandle =
+        this.sessionService?.getHandle<ImageSlotSessionDraft>(sessionId) ??
+        (await this.sessionService?.open<ImageSlotSessionDraft>({
+          descriptor: {
+            sessionId,
+            ownerId: IMAGE_SLOT_CAPABILITY_ID,
+            scope: {
+              channel: "image-slot",
+              groupId: IMAGE_SLOT_CAPABILITY_ID,
+              subjectId: objectId,
+              surfaceId: context.surfaceId,
+            },
+            interactionMode: "exclusive",
+            leavePolicy: "block",
+          },
+          initialDraft: draft,
+        })) ??
+        null;
+    } catch {
+      return { ok: false as const, reason: "session-owner-conflict" };
+    }
+    this.original = clone(draft);
+    this.setState({ phase: "active", draft });
+    this.createSessionScene(context.surfaceId, object);
+    return { ok: true };
+  }
+
+  private async setResource(
+    resource: EditorImageResource,
+    options: { placement?: "reset" | "preserve" } = {},
+  ) {
+    const draft = this.state.draft;
+    if (!draft) return { ok: false, reason: "session-not-active" };
+    releaseUncommittedResource(
+      draft.resource,
+      this.original?.resource,
+      resource,
+    );
+    const placement =
+      options.placement === "preserve"
+        ? draft.placement
+        : {
+            ...DEFAULT_PLACEMENT,
+            fit: draft.placement.fit,
+            clip: draft.placement.clip,
+          };
+    this.setState({
+      phase: "active",
+      draft: { ...draft, resource: clone(resource), placement },
+    });
+    return { ok: true };
+  }
+
+  private async clearResource() {
+    const draft = this.state.draft;
+    if (!draft) return { ok: false, reason: "session-not-active" };
+    releaseUncommittedResource(draft.resource, this.original?.resource);
+    this.setState({
+      phase: "active",
+      draft: { objectId: draft.objectId, placement: draft.placement },
+    });
+    return { ok: true };
+  }
+
+  private updatePlacement(partial: Partial<EditorImagePlacement>) {
+    const draft = this.state.draft;
+    if (!draft) return { ok: false, reason: "session-not-active" };
+    const next = normalizePlacement({ ...draft.placement, ...partial });
+    this.setState({ phase: "active", draft: { ...draft, placement: next } });
+    return { ok: true };
+  }
+
+  private applyPlacementPreset(preset: ImageSlotPlacementPreset) {
+    const draft = this.state.draft;
+    const context =
+      draft && this.document
+        ? findImageSlotContext(this.document, draft.objectId)
+        : null;
+    const source = draft?.resource?.intrinsicSize;
+    if (!draft || !context) {
+      return { ok: false, reason: "session-not-active" };
+    }
+    if (!source) return { ok: false, reason: "resource-load-failed" };
+    const frame = context.object.frame;
+    const widthScale = frame.width / Math.max(source.width, 1);
+    const heightScale = frame.height / Math.max(source.height, 1);
+    const absoluteScale =
+      preset === "cover"
+        ? Math.max(widthScale, heightScale)
+        : preset === "contain"
+          ? Math.min(widthScale, heightScale)
+          : preset === "maximizeHeight"
+            ? heightScale
+            : widthScale;
+    const baseScale = resolveImageFitScale(
+      frame,
+      source,
+      draft.placement.fit,
+    ).x;
+    const placement = normalizePlacement({
+      ...draft.placement,
+      anchorX: 0.5,
+      anchorY: 0.5,
+      zoom: absoluteScale / Math.max(baseScale, 0.0001),
+    });
+    this.setState({ phase: "active", draft: { ...draft, placement } });
+    return { ok: true };
+  }
+
+  private updatePlacementFromCanvas(input: ImageSlotCanvasTransformInput) {
+    const draft = this.state.draft;
+    const objectId = String(input.objectId || "").trim();
+    const context =
+      draft && this.document
+        ? findImageSlotContext(this.document, draft.objectId)
+        : null;
+    const source = draft?.resource?.intrinsicSize;
+    const transform = input.transform;
+    if (!draft || !context || (objectId && objectId !== draft.objectId)) {
+      return { ok: false, reason: "session-not-active" };
+    }
+    if (!source || !transform) {
+      return { ok: false, reason: "resource-load-failed" };
+    }
+    const frame = context.object.frame;
+    const fitScale = resolveImageFitScale(frame, source, draft.placement.fit);
+    const zoomCandidates = [
+      Number(transform.scaleX) / Math.max(Math.abs(fitScale.x), 0.0001),
+      Number(transform.scaleY) / Math.max(Math.abs(fitScale.y), 0.0001),
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    const zoom = zoomCandidates.length
+      ? zoomCandidates.reduce((total, value) => total + value, 0) /
+        zoomCandidates.length
+      : draft.placement.zoom;
+    const placement = normalizePlacement({
+      ...draft.placement,
+      anchorX: (Number(transform.centerX) - frame.x) / Math.max(frame.width, 1),
+      anchorY:
+        (Number(transform.centerY) - frame.y) / Math.max(frame.height, 1),
+      rotation: Number(transform.rotation),
+      zoom,
+    });
+    this.setState(
+      { phase: "active", draft: { ...draft, placement } },
+      { renderScene: false },
+    );
+    this.renderSnapGuides(
+      input.commit ? undefined : input.snap,
+      draft.objectId,
+      frame,
+    );
+    return { ok: true };
+  }
+
+  private async validateSession() {
+    const draft = this.state.draft;
+    if (!draft) return { ok: false as const, reason: "session-not-active" };
+    this.setState({ ...this.state, phase: "validating" });
+    if (draft.resource && !draft.resource.intrinsicSize) {
+      this.setState({
+        ...this.state,
+        phase: "error",
+        error: "resource-load-failed",
+      });
+      return { ok: false as const, reason: "resource-load-failed" };
+    }
+    const policy = this.document?.config["imageSlot.outsideFramePolicy"];
+    if (
+      policy === "strict" &&
+      this.document &&
+      isDraftOutsideFrame(this.document, draft)
+    ) {
+      this.setState({
+        ...this.state,
+        phase: "error",
+        error: "validation-failed",
+      });
+      return { ok: false as const, reason: "outside-frame" };
+    }
+    this.setState({ ...this.state, phase: "active", error: undefined });
+    return { ok: true as const };
+  }
+
+  private async commitSession() {
+    const validation = await this.validateSession();
+    const draft = this.state.draft;
+    if (!validation.ok || !draft || !this.controller)
+      return {
+        type: "error" as const,
+        reason: validation.ok ? "commit-failed" : validation.reason,
+      };
+    this.setState({ ...this.state, phase: "committing" });
+    const result = await this.controller.updateObject(
+      draft.objectId,
+      (current) => {
+        if (current.source.kind !== "image" || !("placement" in current))
+          return current;
+        return {
+          ...current,
+          source: {
+            kind: "image",
+            ...(draft.resource ? { resource: clone(draft.resource) } : {}),
+          },
+          placement: clone(draft.placement),
+        };
+      },
+    );
+    if (!result.ok) {
+      this.setState({ ...this.state, phase: "error", error: "commit-failed" });
+      return { type: "error" as const, reason: result.reason };
+    }
+    this.document = result.document;
+    this.disposeScene();
+    if (this.sessionHandle?.phase === "active") {
+      await this.sessionHandle.commit();
+    }
+    this.sessionHandle = null;
+    this.original = null;
+    this.setState({ phase: "idle", draft: null });
+    return draft.resource
+      ? {
+          type: "placed" as const,
+          objectId: draft.objectId,
+          resource: draft.resource,
+          placement: draft.placement,
+        }
+      : { type: "cleared" as const, objectId: draft.objectId };
+  }
+
+  private async rollbackSession() {
+    if (!this.state.draft) return { ok: false, reason: "session-not-active" };
+    releaseUncommittedResource(
+      this.state.draft.resource,
+      this.original?.resource,
+    );
+    this.disposeScene();
+    if (this.sessionHandle?.phase === "active") {
+      await this.sessionHandle.rollback();
+    }
+    this.sessionHandle = null;
+    this.original = null;
+    this.setState({ phase: "idle", draft: null });
+    return { ok: true };
+  }
+
+  private setState(
+    state: ImageSlotViewState,
+    options: { renderScene?: boolean } = {},
+  ): void {
+    this.state = clone(state);
+    if (this.state.draft && this.sessionHandle?.phase === "active") {
+      this.sessionHandle.updateDraft(this.state.draft);
+      if (options.renderScene !== false) this.renderSessionScene();
+    }
+    this.listeners.forEach((listener) => listener(clone(this.state)));
+  }
+
+  private createSessionScene(
+    surfaceId: string,
+    object: EditorImageObject,
+  ): void {
+    this.disposeScene();
+    if (!this.sceneService || !this.sessionHandle) return;
+    const sceneId = `image-slot:${object.id}:scene`;
+    this.sceneService.getSceneHandle(sceneId)?.dispose();
+    const projections = object.slot?.sessionProjections ?? [];
+    const documentEntries = (placement: "underlay" | "overlay") =>
+      projections
+        .filter((projection) => projection.placement === placement)
+        .map((projection) => ({
+          source: "document" as const,
+          interaction: "disabled" as const,
+          filter: ({
+            node,
+          }: {
+            node: { subjectId: string; surfaceId: string; tags: string[] };
+          }) => {
+            if (node.subjectId === object.id) return false;
+            if (
+              projection.surfaceScope !== "all" &&
+              node.surfaceId !== surfaceId
+            )
+              return false;
+            return (
+              projection.source.objectIds?.includes(node.subjectId) === true ||
+              node.tags.some(
+                (tag) => projection.source.tags?.includes(tag) === true,
+              )
+            );
+          },
+        }));
+    this.sceneHandle = this.sceneService.createScene({
+      id: sceneId,
+      owner: {
+        type: "session",
+        sessionId: this.sessionHandle.descriptor.sessionId,
+      },
+      composition: {
+        entries: [
+          ...documentEntries("underlay"),
+          { source: "local", layerIds: ["image-slot.underlay"] },
+          { source: "local", layerIds: ["image-slot.working"] },
+          ...documentEntries("overlay"),
+          { source: "local", layerIds: ["image-slot.overlay"] },
+          { source: "local", layerIds: ["image-slot.controls"] },
+        ],
+      },
+    });
+    ["underlay", "working", "overlay", "controls"].forEach((name, order) =>
+      this.sceneHandle?.addLayer({
+        id: `image-slot.${name}`,
+        order,
+        visible: true,
+      }),
+    );
+    this.renderSessionScene();
+  }
+
+  private renderSessionScene(): void {
+    const scene = this.sceneHandle;
+    const draft = this.state.draft;
+    if (!scene || !draft || !this.document) return;
+    scene
+      .selectElements()
+      .forEach((element) => scene.removeElement(element.id));
+    const context = findImageSlotContext(this.document, draft.objectId);
+    if (!context) return;
+    const resource = draft.resource;
+    if (resource?.intrinsicSize) {
+      const src = resourceLocation(resource);
+      const clipFrame = resolveImageSlotClipFrame(this.document, context);
+      const geometry = resolveImageGeometry({
+        source: { src, size: resource.intrinsicSize },
+        frame: {
+          left: context.object.frame.x,
+          top: context.object.frame.y,
+          width: context.object.frame.width,
+          height: context.object.frame.height,
+        },
+        fit: draft.placement.fit,
+        transform: draft.placement,
+        ...(draft.placement.clip === "frame"
+          ? {
+              clip: clipFrame,
+            }
+          : {}),
+      });
+      scene.addElement({
+        id: `image-slot:${draft.objectId}:working`,
+        layerId: "image-slot.working",
+        type: "image",
+        src,
+        width: geometry.width,
+        height: geometry.height,
+        data: {
+          autoFocus: true,
+          imageSlotObjectId: draft.objectId,
+        },
+        transform: {
+          left: geometry.left,
+          top: geometry.top,
+          scaleX: geometry.scaleX,
+          scaleY: geometry.scaleY,
+          angle: geometry.angle,
+          originX: geometry.originX,
+          originY: geometry.originY,
+        },
+        style: {
+          opacity: geometry.opacity,
+        },
+        ...(geometry.clip
+          ? {
+              effects: [
+                createImageSlotClipEffect(draft.objectId, geometry.clip),
+              ],
+            }
+          : {}),
+        interaction: {
+          selection: { enabled: true },
+          manipulation: {
+            move: {
+              enabled: true,
+              constraints: [
+                {
+                  spec: {
+                    type: "rect.snap",
+                    params: {
+                      id: `image-slot:${draft.objectId}:frame`,
+                      rect: {
+                        left: context.object.frame.x,
+                        top: context.object.frame.y,
+                        width: context.object.frame.width,
+                        height: context.object.frame.height,
+                      },
+                      thresholdPx: 6,
+                    },
+                  },
+                },
+              ],
+              action: createImageSlotPlacementAction(draft.objectId),
+            },
+            resize: {
+              enabled: true,
+              action: createImageSlotPlacementAction(draft.objectId),
+            },
+            rotate: {
+              enabled: true,
+              action: createImageSlotPlacementAction(draft.objectId),
+            },
+          },
+        },
+      });
+    }
+    for (const contribution of this.decorations.values()) {
+      contribution
+        .provide({ objectId: draft.objectId, surfaceId: context.surfaceId })
+        .forEach((element) =>
+          scene.addElement({
+            ...element,
+            layerId: `image-slot.${contribution.placement}`,
+          }),
+        );
+    }
+  }
+
+  private renderSnapGuides(
+    snap: ImageSlotCanvasTransformInput["snap"] | undefined,
+    objectId: string,
+    frame: { x: number; y: number; width: number; height: number },
+  ): void {
+    const scene = this.sceneHandle;
+    if (!scene) return;
+    scene
+      .selectElements({ layerIds: ["image-slot.controls"] })
+      .filter((element) => element.data?.type === "image-slot-snap-guide")
+      .forEach((element) => scene.removeElement(element.id));
+
+    const guides = Array.isArray(snap?.guides) ? snap.guides : [];
+    const vertical = guides.find(
+      (guide) => guide.axis === "x" && Number.isFinite(guide.position),
+    );
+    const horizontal = guides.find(
+      (guide) => guide.axis === "y" && Number.isFinite(guide.position),
+    );
+    const addGuide = (axis: "x" | "y", position: number) => {
+      const vertical = axis === "x";
+      scene.addElement({
+        id: `image-slot:${objectId}:snap-guide:${axis}`,
+        layerId: "image-slot.controls",
+        type: "path",
+        path: vertical
+          ? `M 0 0 L 0 ${frame.height}`
+          : `M 0 0 L ${frame.width} 0`,
+        data: {
+          type: "image-slot-snap-guide",
+          imageSlotObjectId: objectId,
+        },
+        transform: {
+          left: vertical ? position : frame.x,
+          top: vertical ? frame.y : position,
+          originX: "left",
+          originY: "top",
+        },
+        style: {
+          excludeFromExport: true,
+          fill: null,
+          objectCaching: false,
+          stroke: "#1677ff",
+          strokeUniform: true,
+          strokeWidth: 1,
+        },
+      });
+    };
+    if (vertical) addGuide("x", Number(vertical.position));
+    if (horizontal) addGuide("y", Number(horizontal.position));
+  }
+
+  private disposeScene(): void {
+    this.sceneHandle?.dispose();
+    this.sceneHandle = null;
+  }
+}
+
+function createImageSlotPlacementAction(objectId: string) {
+  return {
+    commandId: IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
+    payload: { objectId },
+  };
+}
+
+function createImageSlotClipEffect(
+  objectId: string,
+  frame: { left: number; top: number; width: number; height: number },
+) {
+  return {
+    type: "clipPath" as const,
+    id: `image-slot:${objectId}:clip`,
+    coordinateMode: "absolute" as const,
+    source: {
+      id: `image-slot:${objectId}:clip-source`,
+      type: "rect" as const,
+      space: "scene" as const,
+      data: { type: "image-slot-clip", objectId },
+      props: {
+        left: frame.left,
+        top: frame.top,
+        width: frame.width,
+        height: frame.height,
+        originX: "left",
+        originY: "top",
+        fill: "#000000",
+        stroke: null,
+      },
+    },
+  };
+}
+
+function resolveImageSlotClipFrame(
+  document: EditorDocument,
+  context: { object: EditorImageObject; surfaceId: string },
+) {
+  const objectFrame = {
+    left: context.object.frame.x,
+    top: context.object.frame.y,
+    width: context.object.frame.width,
+    height: context.object.frame.height,
+  };
+  const production = document.surfaces.find(
+    (surface) => surface.id === context.surfaceId,
+  )?.frames.productionFrame;
+  if (!production) return objectFrame;
+  const left = Math.max(objectFrame.left, production.xMm);
+  const top = Math.max(objectFrame.top, production.yMm);
+  const right = Math.min(
+    objectFrame.left + objectFrame.width,
+    production.xMm + production.widthMm,
+  );
+  const bottom = Math.min(
+    objectFrame.top + objectFrame.height,
+    production.yMm + production.heightMm,
+  );
+  return right > left && bottom > top
+    ? { left, top, width: right - left, height: bottom - top }
+    : objectFrame;
+}
+
+function findImageSlot(
+  document: EditorDocument,
+  objectId: string,
+): EditorImageObject | null {
+  for (const surface of document.surfaces)
+    for (const layer of surface.layers)
+      for (const object of layer.objects ?? []) {
+        if (
+          object.id === objectId &&
+          object.source.kind === "image" &&
+          "placement" in object &&
+          object.slot
+        )
+          return object as EditorImageObject;
+      }
+  return null;
+}
+
+function findImageSlotContext(
+  document: EditorDocument,
+  objectId: string,
+): { object: EditorImageObject; surfaceId: string } | null {
+  for (const surface of document.surfaces)
+    for (const layer of surface.layers)
+      for (const object of layer.objects ?? []) {
+        if (
+          object.id === objectId &&
+          object.source.kind === "image" &&
+          "placement" in object &&
+          object.slot
+        )
+          return { object: object as EditorImageObject, surfaceId: surface.id };
+      }
+  return null;
+}
+
+function toDraft(object: EditorImageObject): ImageSlotSessionDraft {
+  return {
+    objectId: object.id,
+    ...(object.source.resource
+      ? { resource: clone(object.source.resource) }
+      : {}),
+    placement: clone(object.placement),
+  };
+}
+
+function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {
+  return {
+    fit:
+      value.fit === "contain" || value.fit === "stretch" ? value.fit : "cover",
+    anchorX: Number.isFinite(value.anchorX) ? value.anchorX : 0.5,
+    anchorY: Number.isFinite(value.anchorY) ? value.anchorY : 0.5,
+    zoom: Number.isFinite(value.zoom) && value.zoom > 0 ? value.zoom : 1,
+    rotation: Number.isFinite(value.rotation) ? value.rotation : 0,
+    opacity: Number.isFinite(value.opacity)
+      ? Math.max(0, Math.min(1, value.opacity))
+      : 1,
+    clip: value.clip === "none" ? "none" : "frame",
+  };
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function releaseUncommittedResource(
+  resource: EditorImageResource | undefined,
+  committed: EditorImageResource | undefined,
+  replacement?: EditorImageResource,
+): void {
+  if (
+    resource?.kind !== "blob-url" ||
+    resource.url === resourceLocation(replacement)
+  )
+    return;
+  if (committed?.kind === "blob-url" && committed.url === resource.url) return;
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(resource.url);
+  }
+}
+
+function resourceLocation(resource: EditorImageResource | undefined): string {
+  return resource
+    ? resource.kind === "data-url"
+      ? resource.dataUrl
+      : resource.url
+    : "";
+}
+
+function isDraftOutsideFrame(
+  document: EditorDocument,
+  draft: ImageSlotSessionDraft,
+): boolean {
+  const context = findImageSlotContext(document, draft.objectId);
+  const size = draft.resource?.intrinsicSize;
+  if (!context || !size) return false;
+  const object = context.object;
+  const geometry = resolveImageGeometry({
+    source: { src: resourceLocation(draft.resource), size },
+    frame: {
+      left: object.frame.x,
+      top: object.frame.y,
+      width: object.frame.width,
+      height: object.frame.height,
+    },
+    fit: draft.placement.fit,
+    transform: draft.placement,
+  });
+  const radians = (geometry.angle * Math.PI) / 180;
+  const width = geometry.width * Math.abs(geometry.scaleX);
+  const height = geometry.height * Math.abs(geometry.scaleY);
+  const halfWidth =
+    (Math.abs(Math.cos(radians)) * width +
+      Math.abs(Math.sin(radians)) * height) /
+    2;
+  const halfHeight =
+    (Math.abs(Math.sin(radians)) * width +
+      Math.abs(Math.cos(radians)) * height) /
+    2;
+  const epsilon = 1e-6;
+  return (
+    geometry.left - halfWidth < object.frame.x - epsilon ||
+    geometry.top - halfHeight < object.frame.y - epsilon ||
+    geometry.left + halfWidth > object.frame.x + object.frame.width + epsilon ||
+    geometry.top + halfHeight > object.frame.y + object.frame.height + epsilon
+  );
+}

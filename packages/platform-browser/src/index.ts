@@ -2,6 +2,7 @@ export * from "./browser-scene-export-service";
 export * from "./canvas-service";
 export { default as CanvasService } from "./canvas-service";
 export * from "./host";
+export * from "./image-resource-service";
 export * from "./output-mask";
 export * from "./scene-layout-service";
 export * from "./render-spec";

@@ -5,7 +5,7 @@ import { DielineGeometryCapabilityExtension } from "./extensions/dieline";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
-import { ImagePlacementCapabilityExtension } from "./extensions/image";
+import { ImageSlotCapabilityExtension } from "./extensions/image-slot";
 import { MirrorCapabilityExtension } from "./extensions/mirror";
 import { SceneExportCapabilityExtension } from "./extensions/scene-export";
 import { defineLegacyExtension } from "@pooder/core/internal/legacy-extension";
@@ -36,9 +36,8 @@ export const createFeatureCapability = (
   options?: ConstructorParameters<typeof FeatureCapabilityExtension>[0],
 ) => defineLegacyExtension(new FeatureCapabilityExtension(options));
 
-export const createImagePlacementCapability = (
-  options?: ConstructorParameters<typeof ImagePlacementCapabilityExtension>[0],
-) => new ImagePlacementCapabilityExtension(options);
+export const createImageSlotCapability = () =>
+  new ImageSlotCapabilityExtension();
 
 export const createImageMaskCapability = (
   options?: ConstructorParameters<typeof ImageMaskCapabilityExtension>[0],

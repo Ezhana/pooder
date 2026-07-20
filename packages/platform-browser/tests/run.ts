@@ -982,6 +982,32 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
       },
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
     },
+    {
+      id: "resolved-slot",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "resolved-slot",
+        objectType: "image",
+      },
+      visual: { type: "image", src: "data:image/png;base64,resolved" },
+      placement: {
+        frame: { x: 100, y: 120, width: 200, height: 160 },
+        width: 400,
+        height: 320,
+        transform: {
+          left: 220,
+          top: 210,
+          originX: "center",
+          originY: "center",
+          scaleX: 0.75,
+          scaleY: 0.6,
+          angle: 15,
+        },
+      },
+      ordering: { layerId: "art", stack: 10, layerOrder: 0, objectOrder: 1 },
+    },
   ]);
 
   await adapter.flush();
@@ -1013,6 +1039,29 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
     image.props.scaleY,
     1,
     "image replacements should not depend on bitmap scale for frame sizing",
+  );
+  const resolvedImage = last?.items.find(
+    (item) => item.spec.id === "resolved-slot",
+  )?.spec;
+  assertEqual(
+    resolvedImage?.props.width,
+    400,
+    "resolved images should preserve intrinsic width",
+  );
+  assertEqual(
+    resolvedImage?.props.height,
+    320,
+    "resolved images should preserve intrinsic height",
+  );
+  assertEqual(
+    resolvedImage?.props.scaleX,
+    0.75,
+    "resolved images should preserve horizontal placement scale",
+  );
+  assertEqual(
+    resolvedImage?.props.scaleY,
+    0.6,
+    "resolved images should preserve vertical placement scale",
   );
 
   renderIntentService.patchIntent("template-switch", {
@@ -1796,6 +1845,24 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         },
       },
     },
+    {
+      id: "empty-slot",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "empty-slot",
+      },
+      visual: { type: "image" },
+      placement: {
+        frame: { x: 12, y: 24, width: 80, height: 60 },
+      },
+      ordering: { layerId: "art", objectOrder: 6 },
+      interaction: {
+        hitRegion: { type: "frame" },
+        activation: { action: { commandId: "test.open" } },
+      },
+    },
   ]);
 
   await adapter.flush();
@@ -1814,6 +1881,9 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   );
   const activationOnly = last.items.find(
     (item) => item.key === "activation-only",
+  );
+  const emptySlotHitTarget = last.items.find(
+    (item) => item.key === "empty-slot:frame-hit-target",
   );
   assertEqual(
     interactive?.spec.props.selectable,
@@ -1904,6 +1974,16 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     activationOnly?.spec.data?.interactionSpec?.activation?.action.commandId,
     "test.open",
     "activation declarations should be attached to the render target",
+  );
+  assertEqual(
+    emptySlotHitTarget?.spec.props.visible,
+    true,
+    "empty image slots should keep their frame hit target visible",
+  );
+  assertEqual(
+    emptySlotHitTarget?.spec.props.evented,
+    true,
+    "empty image slot frame hit targets should receive pointer events",
   );
 
   let activationEvent: any;

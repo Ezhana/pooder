@@ -146,6 +146,8 @@ export interface RenderGraphNode {
   exportKeys: string[];
   frame?: RenderIntentFrame;
   transform?: RenderIntentTransform;
+  width?: number;
+  height?: number;
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
@@ -915,6 +917,8 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     tags: normalizeIdList(draft.export?.tags),
     frame: draft.placement?.frame,
     transform: draft.placement?.transform,
+    width: draft.placement?.width,
+    height: draft.placement?.height,
     props: {
       ...(draft.props ?? {}),
     },
