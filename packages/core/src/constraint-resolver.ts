@@ -1,3 +1,4 @@
+import type { DocumentConstraintSpec } from "@pooder/document";
 import type Disposable from "./disposable";
 import type { Service, ServiceContext } from "./service";
 import {
@@ -41,12 +42,9 @@ export interface TransformResult {
 
 export type ConstraintSource = GeometryRef | GeometrySnapshot;
 
-export interface ConstraintSpec {
-  type: string;
+export type ConstraintSpec = Omit<DocumentConstraintSpec, "source"> & {
   source?: ConstraintSource;
-  mode?: string;
-  params?: Record<string, unknown>;
-}
+};
 
 export interface ConstraintDiagnostic {
   severity: "warning" | "error";

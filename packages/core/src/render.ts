@@ -1,3 +1,7 @@
+import type {
+  DocumentRuntimeConditionExpr,
+  DocumentRuntimeConditionRef,
+} from "@pooder/document";
 import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type { Unit } from "./coordinate";
@@ -100,46 +104,12 @@ export interface RenderPatternSpec {
   repetition?: "repeat";
 }
 
-export type RuntimeConditionComparator = ">" | ">=" | "==" | "!=" | "<" | "<=";
-
-export type RuntimeConditionRef =
-  | { source: "context"; key: string }
-  | { source: "activeToolId" }
-  | {
-      source: "workflowSession";
-      field: "active" | "focused";
-      sessionId: string;
-    }
-  | {
-      source: "workflowSession";
-      field: "scopeActive";
-      scope: Partial<SessionScope>;
-    }
-  | {
-      source: "workflowSession";
-      field: "anyActive";
-      scope?: Partial<SessionScope>;
-    }
-  | {
-      source: "renderLayer";
-      layerId: string;
-      field: "exists" | "objectCount" | "visibleObjectCount";
-    };
-
-export type RuntimeConditionExpr =
-  | { op: "const"; value: boolean }
-  | { op: "truthy"; ref: RuntimeConditionRef }
-  | { op: "equals"; ref: RuntimeConditionRef; value: unknown }
-  | { op: "in"; ref: RuntimeConditionRef; values: readonly unknown[] }
-  | {
-      op: "compare";
-      ref: RuntimeConditionRef;
-      cmp: RuntimeConditionComparator;
-      value: number;
-    }
-  | { op: "not"; expr: RuntimeConditionExpr }
-  | { op: "all"; exprs: readonly RuntimeConditionExpr[] }
-  | { op: "any"; exprs: readonly RuntimeConditionExpr[] };
+export type RuntimeConditionComparator = Extract<
+  DocumentRuntimeConditionExpr,
+  { op: "compare" }
+>["cmp"];
+export type RuntimeConditionRef = DocumentRuntimeConditionRef;
+export type RuntimeConditionExpr = DocumentRuntimeConditionExpr;
 
 export interface RenderClipPathEffectSpec {
   type: "clipPath";

@@ -1,3 +1,9 @@
+import type {
+  DocumentInteractionConstraintSpec,
+  DocumentInteractionOperationSpec,
+  DocumentInteractionSessionIntent,
+  DocumentInteractionSpec,
+} from "@pooder/document";
 import type Disposable from "./disposable";
 import type {
   ConstraintResolveResult,
@@ -9,7 +15,6 @@ import type { CoordinateSpace, GeometrySourceService } from "./geometry-source";
 import {
   evaluateRuntimeCondition,
   type RuntimeConditionEvalContext,
-  type RuntimeConditionExpr,
 } from "./render";
 import type { Service, ServiceContext } from "./service";
 import { TypedEventEmitter } from "./typed-event";
@@ -30,15 +35,10 @@ import { SessionConflictError } from "./workflow-session";
 
 export type InteractionActivationTrigger = "primary-pointer" | "double-click";
 export type InteractionManipulationKind = "move" | "resize" | "rotate";
-
-export interface InteractionSessionIntent {
-  channel: string;
-  groupId: string;
-  sessionId?: string;
-  mode: SessionInteractionMode;
-  scope: "subject" | "surface" | "editor";
-  leavePolicy?: SessionLeavePolicy;
-}
+export type InteractionSessionIntent = DocumentInteractionSessionIntent;
+export type InteractionConstraintSpec = DocumentInteractionConstraintSpec;
+export type InteractionOperationSpec = DocumentInteractionOperationSpec;
+export type InteractionSpec = DocumentInteractionSpec;
 
 /**
  * Resolved session intent forwarded to the activation command. The command's
@@ -61,42 +61,6 @@ export interface InteractionActivationCommandInput {
   readonly surfaceId?: string;
   readonly targetData?: Record<string, unknown>;
   readonly trigger: InteractionActivationTrigger;
-}
-
-export interface InteractionConstraintSpec {
-  activeWhen?: RuntimeConditionExpr;
-  spec: ConstraintSpec;
-}
-
-export interface InteractionOperationSpec {
-  enabled: boolean;
-  constraints?: InteractionConstraintSpec[];
-  action?: {
-    commandId: string;
-    payload?: Record<string, unknown>;
-  };
-}
-
-export interface InteractionSpec {
-  hitRegion?: { type: "frame" };
-  enabledWhen?: RuntimeConditionExpr;
-  selection?: {
-    enabled: boolean;
-  };
-  activation?: {
-    enabled?: boolean;
-    trigger?: InteractionActivationTrigger;
-    action: {
-      commandId: string;
-      payload?: Record<string, unknown>;
-    };
-    session?: InteractionSessionIntent;
-  };
-  manipulation?: {
-    move?: InteractionOperationSpec;
-    resize?: InteractionOperationSpec;
-    rotate?: InteractionOperationSpec;
-  };
 }
 
 export interface ResolvedInteractionOperationState {

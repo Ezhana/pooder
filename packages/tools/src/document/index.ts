@@ -62,15 +62,9 @@ export function normalizeOfficialToolDocument(value: unknown) {
 
 export function validateOfficialToolDocument(
   value: unknown,
-  options: Omit<
-    EditorDocumentValidationOptions,
-    "resolveEffectCapabilityId"
-  > = {},
+  options: EditorDocumentValidationOptions = {},
 ) {
-  return validateEditorDocument(value, {
-    ...options,
-    resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
-  });
+  return validateEditorDocument(value, options);
 }
 
 export function collectOfficialToolDocumentCapabilityRequirements(

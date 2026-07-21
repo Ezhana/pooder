@@ -1,8 +1,14 @@
 export interface DocumentConstraintSpec {
   type: string;
-  source?: unknown;
+  source?: DocumentGeometryRef;
   mode?: string;
   params?: Record<string, unknown>;
+}
+
+export interface DocumentGeometryRef {
+  sourceId: string;
+  geometryId: string;
+  variant?: string;
 }
 
 export type DocumentRuntimeConditionRef =
@@ -227,7 +233,7 @@ export interface EditorObjectBase {
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  interaction?: InteractionSpec;
+  interaction?: DocumentInteractionSpec;
   effects?: EditorObjectEffect[];
 }
 
@@ -354,11 +360,11 @@ export interface EditorDocumentDiagnostic {
 }
 
 export interface EditorDocumentValidationOptions {
-  resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
   validators?: readonly EditorDocumentValidator[];
 }
 
-export interface EditorDocumentCapabilityCollectionOptions extends EditorDocumentValidationOptions {
+export interface EditorDocumentCapabilityCollectionOptions {
+  resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
   availableCapabilityIds?: Iterable<string>;
   includeIgnored?: boolean;
 }
@@ -399,6 +405,21 @@ export interface EditorDocumentCapabilityCollectionResult {
   diagnostics: EditorDocumentDiagnostic[];
 }
 
+export interface EditorDocumentObjectVisitContext {
+  document: EditorDocument;
+  surface: EditorSurface;
+  surfaceIndex: number;
+  layer: EditorLayer;
+  layerIndex: number;
+  object: EditorObject;
+  objectIndex: number;
+  path: string;
+}
+
+export type EditorDocumentObjectVisitor = (
+  context: EditorDocumentObjectVisitContext,
+) => void;
+
 const VALID_UNITS = new Set(["px", "mm", "cm", "in"]);
 const VALID_REQUIRE_POLICIES = new Set(["strict", "warn", "ignore"]);
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -409,7 +430,88 @@ function cloneRecord<T extends Record<string, unknown> | undefined>(
   value: T,
 ): T {
   if (!value) return value;
-  return { ...value } as T;
+  const normalized = normalizeSerializableValue(value);
+  return (isRecord(normalized) ? normalized : {}) as T;
+}
+
+function normalizeSerializableValue(
+  value: unknown,
+  ancestors = new Set<unknown>(),
+): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (value === undefined || typeof value !== "object") return undefined;
+  if (ancestors.has(value)) return undefined;
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map(
+        (item) => normalizeSerializableValue(item, ancestors) ?? null,
+      );
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    return Object.fromEntries(
+      Object.entries(value).flatMap(([key, item]) => {
+        const normalized = normalizeSerializableValue(item, ancestors);
+        return normalized === undefined ? [] : [[key, normalized]];
+      }),
+    );
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function cloneSerializableValue(
+  value: unknown,
+  ancestors = new Set<unknown>(),
+): unknown {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) return value;
+    throw new TypeError("EditorDocument contains a non-finite number.");
+  }
+  if (typeof value !== "object") {
+    throw new TypeError("EditorDocument contains a non-serializable value.");
+  }
+  if (ancestors.has(value)) {
+    throw new TypeError("EditorDocument contains a circular reference.");
+  }
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneSerializableValue(item, ancestors));
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("EditorDocument contains a non-plain object.");
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        cloneSerializableValue(item, ancestors),
+      ]),
+    );
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function normalizeId(value: unknown): string {
@@ -701,9 +803,127 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
 function normalizeRuntimeCondition(
   value: unknown,
 ): RuntimeConditionExpr | undefined {
-  return isRecord(value)
-    ? (cloneRecord(value) as unknown as RuntimeConditionExpr)
-    : undefined;
+  if (!isRecord(value)) return undefined;
+  if (value.op === "const" && typeof value.value === "boolean") {
+    return { op: "const", value: value.value };
+  }
+  if (value.op === "not") {
+    const expr = normalizeRuntimeCondition(value.expr);
+    return expr ? { op: "not", expr } : undefined;
+  }
+  if (value.op === "all" || value.op === "any") {
+    if (!Array.isArray(value.exprs)) return undefined;
+    const exprs = value.exprs.map(normalizeRuntimeCondition);
+    if (exprs.some((expr) => !expr)) return undefined;
+    return { op: value.op, exprs: exprs as RuntimeConditionExpr[] };
+  }
+
+  const ref = normalizeRuntimeConditionRef(value.ref);
+  if (!ref) return undefined;
+  if (value.op === "truthy") return { op: "truthy", ref };
+  if (value.op === "equals") {
+    const normalized = normalizeSerializableValue(value.value);
+    return normalized === undefined
+      ? undefined
+      : { op: "equals", ref, value: normalized };
+  }
+  if (value.op === "in" && Array.isArray(value.values)) {
+    return {
+      op: "in",
+      ref,
+      values: value.values.map(
+        (item) => normalizeSerializableValue(item) ?? null,
+      ),
+    };
+  }
+  if (
+    value.op === "compare" &&
+    (value.cmp === ">" ||
+      value.cmp === ">=" ||
+      value.cmp === "==" ||
+      value.cmp === "!=" ||
+      value.cmp === "<" ||
+      value.cmp === "<=")
+  ) {
+    const normalized = normalizeFiniteNumber(value.value);
+    return normalized === undefined
+      ? undefined
+      : { op: "compare", ref, cmp: value.cmp, value: normalized };
+  }
+  return undefined;
+}
+
+function normalizeRuntimeConditionRef(
+  value: unknown,
+): DocumentRuntimeConditionRef | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.source === "activeToolId") return { source: "activeToolId" };
+  if (value.source === "context") {
+    const key = normalizeId(value.key);
+    return key ? { source: "context", key } : undefined;
+  }
+  if (value.source === "renderLayer") {
+    const layerId = normalizeId(value.layerId);
+    if (
+      !layerId ||
+      (value.field !== "exists" &&
+        value.field !== "objectCount" &&
+        value.field !== "visibleObjectCount")
+    ) {
+      return undefined;
+    }
+    return { source: "renderLayer", layerId, field: value.field };
+  }
+  if (value.source !== "workflowSession") return undefined;
+  if (value.field === "active" || value.field === "focused") {
+    const sessionId = normalizeId(value.sessionId);
+    return sessionId
+      ? { source: "workflowSession", field: value.field, sessionId }
+      : undefined;
+  }
+  if (value.field === "scopeActive") {
+    const scope = normalizeSessionScope(value.scope);
+    return scope
+      ? { source: "workflowSession", field: "scopeActive", scope }
+      : undefined;
+  }
+  if (value.field === "anyActive") {
+    const scope = normalizeSessionScope(value.scope);
+    return {
+      source: "workflowSession",
+      field: "anyActive",
+      ...(scope ? { scope } : {}),
+    };
+  }
+  return undefined;
+}
+
+function normalizeSessionScope(
+  value: unknown,
+): DocumentSessionScope | undefined {
+  if (!isRecord(value)) return undefined;
+  const scope: DocumentSessionScope = {};
+  (["surfaceId", "subjectId", "channel", "groupId"] as const).forEach((key) => {
+    if (value[key] === null) scope[key] = null;
+    else {
+      const normalized = normalizeId(value[key]);
+      if (normalized) scope[key] = normalized;
+    }
+  });
+  return Object.keys(scope).length ? scope : undefined;
+}
+
+function normalizeGeometryRef(value: unknown): DocumentGeometryRef | undefined {
+  if (!isRecord(value)) return undefined;
+  const sourceId = normalizeId(value.sourceId);
+  const geometryId = normalizeId(value.geometryId);
+  const variant = normalizeId(value.variant);
+  if (!sourceId || !geometryId) return undefined;
+  return {
+    sourceId,
+    geometryId,
+    ...(variant ? { variant } : {}),
+  };
 }
 
 function normalizeInteractionConstraint(
@@ -714,14 +934,19 @@ function normalizeInteractionConstraint(
   if (!rawSpec) return null;
   const type = normalizeId(rawSpec.type);
   if (!type) return null;
+  const source = normalizeGeometryRef(rawSpec.source);
   return {
     ...(normalizeRuntimeCondition(value.activeWhen)
       ? { activeWhen: normalizeRuntimeCondition(value.activeWhen) }
       : {}),
     spec: {
-      ...cloneRecord(rawSpec),
       type,
-    } as ConstraintSpec,
+      ...(source ? { source } : {}),
+      ...(typeof rawSpec.mode === "string" ? { mode: rawSpec.mode } : {}),
+      ...(isRecord(rawSpec.params)
+        ? { params: cloneRecord(rawSpec.params) }
+        : {}),
+    },
   };
 }
 
@@ -740,9 +965,21 @@ function normalizeInteractionOperation(
 ): InteractionOperationSpec | undefined {
   if (!isRecord(value) || typeof value.enabled !== "boolean") return undefined;
   const constraints = normalizeInteractionConstraints(value.constraints);
+  const rawAction = isRecord(value.action) ? value.action : undefined;
+  const commandId = normalizeId(rawAction?.commandId);
   return {
     enabled: value.enabled,
     ...(constraints ? { constraints } : {}),
+    ...(commandId
+      ? {
+          action: {
+            commandId,
+            ...(isRecord(rawAction?.payload)
+              ? { payload: cloneRecord(rawAction.payload) }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -1096,6 +1333,58 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
   };
 }
 
+/** Creates a fully detached copy without relying on browser or runtime APIs. */
+export function cloneEditorDocument(document: EditorDocument): EditorDocument {
+  return cloneSerializableValue(document) as EditorDocument;
+}
+
+/**
+ * Visits every persisted editor object in document order.
+ *
+ * The context keeps hierarchy and path information together so callers do not
+ * need to repeat the surface/layer/object recursion themselves.
+ */
+export function visitEditorDocumentObjects(
+  document: EditorDocument,
+  visitor: EditorDocumentObjectVisitor,
+): void {
+  document.surfaces.forEach((surface, surfaceIndex) => {
+    surface.layers.forEach((layer, layerIndex) => {
+      layer.objects?.forEach((object, objectIndex) => {
+        visitor({
+          document,
+          surface,
+          surfaceIndex,
+          layer,
+          layerIndex,
+          object,
+          objectIndex,
+          path: `surfaces[${surfaceIndex}].layers[${layerIndex}].objects[${objectIndex}]`,
+        });
+      });
+    });
+  });
+}
+
+export function getEditorDocumentObjects(
+  document: EditorDocument,
+): EditorObject[] {
+  const objects: EditorObject[] = [];
+  visitEditorDocumentObjects(document, ({ object }) => objects.push(object));
+  return objects;
+}
+
+export function findEditorDocumentObject(
+  document: EditorDocument,
+  objectId: string,
+): EditorObject | undefined {
+  let match: EditorObject | undefined;
+  visitEditorDocumentObjects(document, ({ object }) => {
+    if (!match && object.id === objectId) match = object;
+  });
+  return match;
+}
+
 function addDiagnostic(
   diagnostics: EditorDocumentDiagnostic[],
   diagnostic: EditorDocumentDiagnostic,
@@ -1132,7 +1421,7 @@ function validateUniqueId(
 
 function resolveEffectCapabilityId(
   effect: EditorEffect,
-  options: EditorDocumentValidationOptions,
+  options: EditorDocumentCapabilityCollectionOptions,
 ): string | undefined {
   return effect.capabilityId || options.resolveEffectCapabilityId?.(effect);
 }
@@ -1157,7 +1446,6 @@ function validateEffect(
   diagnostics: EditorDocumentDiagnostic[],
   effect: EditorEffect,
   path: string,
-  options: EditorDocumentValidationOptions,
 ) {
   if (!effect.type) {
     addDiagnostic(diagnostics, {
@@ -1165,15 +1453,6 @@ function validateEffect(
       code: "effect-type-required",
       message: "Effect type is required.",
       path,
-    });
-  }
-  if (!resolveEffectCapabilityId(effect, options)) {
-    addDiagnostic(diagnostics, {
-      severity: "error",
-      code: "effect-capability-required",
-      message: `Effect "${effect.type || "(unknown)"}" requires a capabilityId.`,
-      path,
-      effectType: effect.type,
     });
   }
 }
@@ -1196,10 +1475,9 @@ function validateEffects(
   diagnostics: EditorDocumentDiagnostic[],
   effects: EditorEffect[] | undefined,
   path: string,
-  options: EditorDocumentValidationOptions,
 ) {
   effects?.forEach((effect, index) =>
-    validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options),
+    validateEffect(diagnostics, effect, `${path}.effects[${index}]`),
   );
 }
 
@@ -1207,11 +1485,10 @@ function validateObjectEffects(
   diagnostics: EditorDocumentDiagnostic[],
   effects: EditorObjectEffect[] | undefined,
   path: string,
-  options: EditorDocumentValidationOptions,
 ) {
   effects?.forEach((effect, index) => {
     if (isGenericEditorEffect(effect)) {
-      validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options);
+      validateEffect(diagnostics, effect, `${path}.effects[${index}]`);
     }
   });
 }
@@ -1270,6 +1547,18 @@ function validateObjectInteraction(
       code: "interaction-selection-invalid",
       message: "Interaction selection requires a boolean enabled field.",
       path: `${path}.selection`,
+    });
+  }
+
+  if (
+    value.enabledWhen !== undefined &&
+    !normalizeRuntimeCondition(value.enabledWhen)
+  ) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "interaction-condition-invalid",
+      message: "Interaction enabledWhen is not a valid condition expression.",
+      path: `${path}.enabledWhen`,
     });
   }
 
@@ -1338,6 +1627,7 @@ function validateObjectInteraction(
       return;
     }
     operation.constraints.forEach((constraint, constraintIndex) => {
+      const constraintPath = `${operationPath}.constraints[${constraintIndex}]`;
       const spec =
         isRecord(constraint) && isRecord(constraint.spec)
           ? constraint.spec
@@ -1347,7 +1637,19 @@ function validateObjectInteraction(
           severity: "error",
           code: "interaction-constraint-invalid",
           message: "Interaction constraint requires spec.type.",
-          path: `${operationPath}.constraints[${constraintIndex}].spec`,
+          path: `${constraintPath}.spec`,
+        });
+      }
+      if (
+        isRecord(constraint) &&
+        constraint.activeWhen !== undefined &&
+        !normalizeRuntimeCondition(constraint.activeWhen)
+      ) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "interaction-condition-invalid",
+          message: "Constraint activeWhen is not a valid condition expression.",
+          path: `${constraintPath}.activeWhen`,
         });
       }
     });
@@ -1531,7 +1833,7 @@ export function validateEditorDocument(
         });
       }
     });
-    validateEffects(diagnostics, surface.effects, surfacePath, options);
+    validateEffects(diagnostics, surface.effects, surfacePath);
     runValidators(diagnostics, options.validators, {
       document,
       path: surfacePath,
@@ -1555,7 +1857,7 @@ export function validateEditorDocument(
         `${layerPath}.id`,
         "layer",
       );
-      validateEffects(diagnostics, layer.effects, layerPath, options);
+      validateEffects(diagnostics, layer.effects, layerPath);
       runValidators(diagnostics, options.validators, {
         document,
         path: layerPath,
@@ -1604,7 +1906,7 @@ export function validateEditorDocument(
           isRecord(rawObject) ? rawObject.interaction : undefined,
           `${objectPath}.interaction`,
         );
-        validateObjectEffects(diagnostics, object.effects, objectPath, options);
+        validateObjectEffects(diagnostics, object.effects, objectPath);
         runValidators(diagnostics, options.validators, {
           document,
           path: objectPath,

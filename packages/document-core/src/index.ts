@@ -8,7 +8,6 @@ import {
   mergeRenderIntentPatchEntries,
   type GeometryPoint,
   type GeometryRect,
-  type InteractionSpec,
   type ImageResourceResolution,
   type ImageResourceService,
   type RenderIntentCompilerRegistryService,
@@ -22,7 +21,9 @@ import {
   type SurfaceFrameService,
 } from "@pooder/core";
 import {
+  cloneEditorDocument,
   collectEditorDocumentCapabilityRequirements,
+  findEditorDocumentObject,
   isGenericEditorEffect,
   normalizeEditorDocument,
   validateEditorDocument,
@@ -31,6 +32,7 @@ import {
   type EditorDocumentDiagnostic,
   type EditorDocumentEffectCapabilityResolver,
   type EditorDocumentValidationOptions,
+  type DocumentInteractionSpec,
   type EditorEffect,
   type EditorLayer,
   type EditorImageObject,
@@ -359,21 +361,21 @@ export function createEditorDocumentController(
     async apply(value) {
       const result = await applyEditorDocument(runtime, value, options);
       if (result.ok) {
-        currentDocument = cloneDocument(result.document);
+        currentDocument = cloneEditorDocument(result.document);
       }
       return result;
     },
     export() {
-      return currentDocument ? cloneDocument(currentDocument) : null;
+      return currentDocument ? cloneEditorDocument(currentDocument) : null;
     },
     async updateObject(objectId, update) {
       const id = normalizeObjectId(objectId);
       if (!id || !currentDocument)
         return { ok: false, reason: "object-not-found" };
 
-      const nextDocument = cloneDocument(currentDocument);
+      const nextDocument = cloneEditorDocument(currentDocument);
       nextDocument.config = runtime.config?.export() ?? nextDocument.config;
-      const object = findSourceObject(nextDocument, id);
+      const object = findEditorDocumentObject(nextDocument, id);
       if (!object) return { ok: false, reason: "object-not-found" };
       let updated: EditorObject;
       try {
@@ -396,8 +398,8 @@ export function createEditorDocumentController(
         };
       }
 
-      currentDocument = cloneDocument(result.document);
-      return { ok: true, document: cloneDocument(currentDocument) };
+      currentDocument = cloneEditorDocument(result.document);
+      return { ok: true, document: cloneEditorDocument(currentDocument) };
     },
   };
 }
@@ -406,7 +408,6 @@ function toValidationOptions(
   options: ApplyEditorDocumentOptions,
 ): EditorDocumentValidationOptions {
   return {
-    resolveEffectCapabilityId: options.resolveEffectCapabilityId,
     validators: options.validators,
   };
 }
@@ -428,10 +429,6 @@ function resolveEffectCapabilityId(
 
 function normalizeObjectId(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function cloneDocument(document: EditorDocument): EditorDocument {
-  return JSON.parse(JSON.stringify(document)) as EditorDocument;
 }
 
 function cloneDocumentObject(object: EditorObject): EditorObject {
@@ -461,21 +458,6 @@ function cloneObjectEffects(
   return effects?.length
     ? (JSON.parse(JSON.stringify(effects)) as EditorObjectEffect[])
     : undefined;
-}
-
-function findSourceObject(
-  document: EditorDocument,
-  objectId: string,
-): EditorObject | null {
-  for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      for (const object of layer.objects ?? []) {
-        if (object.id === objectId) return object;
-      }
-    }
-  }
-
-  return null;
 }
 
 function createScaledPathTransform(
@@ -994,11 +976,8 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
 
 function createObjectInteractionAspect(
   object: EditorObject,
-): InteractionSpec | undefined {
-  // The document package intentionally models serialized constraint sources as
-  // unknown. This runtime adapter is the boundary that narrows them to core's
-  // executable interaction contract.
-  return object.interaction as InteractionSpec | undefined;
+): DocumentInteractionSpec | undefined {
+  return object.interaction;
 }
 
 function compareEffectEntries(a: EffectEntry, b: EffectEntry) {

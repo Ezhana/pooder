@@ -1,9 +1,13 @@
 import {
   EDITOR_DOCUMENT_VERSION,
+  cloneEditorDocument,
   collectEditorDocumentCapabilityRequirements,
+  findEditorDocumentObject,
+  getEditorDocumentObjects,
   isGenericEditorEffect,
   normalizeEditorDocument,
   validateEditorDocument,
+  visitEditorDocumentObjects,
   type EditorDocument,
   type EditorEffect,
 } from "../src";
@@ -717,7 +721,7 @@ function testCustomValidatorDiagnostics() {
   );
 }
 
-function testCustomEffectRequiresCapabilityId() {
+function testStructuralValidationDoesNotResolveCapabilities() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
     config: TEST_DOCUMENT_CONFIG,
@@ -731,56 +735,58 @@ function testCustomEffectRequiresCapabilityId() {
     ],
   });
 
-  assert(
-    diagnostics.some((item) => item.code === "effect-capability-required"),
-    "custom effect without capabilityId should be invalid",
+  assertDeepEqual(
+    diagnostics,
+    [],
+    "structural validation should not require runtime capability resolution",
   );
 }
 
-function testInjectedEffectCapabilityResolution() {
-  const diagnostics = validateEditorDocument(
-    {
-      version: EDITOR_DOCUMENT_VERSION,
-      config: TEST_DOCUMENT_CONFIG,
-      surfaces: [
-        {
-          id: "front",
-          size: { width: 1, height: 1, unit: "px" },
-          frames: TEST_SURFACE_FRAMES,
-          layers: [
-            {
-              id: "layer",
-              effects: [{ type: "dieline" }, { type: "feature" }],
-              objects: [
-                {
-                  id: "image",
-                  frame: { x: 0, y: 0, width: 1, height: 1 },
-                  source: {
-                    kind: "shape",
-                    shape: "rect",
-                    params: { width: 1, height: 1 },
-                  },
-                  effects: [{ type: "constraint" }],
-                  interaction: {
-                    manipulation: {
-                      move: {
-                        enabled: true,
-                        constraints: [{ spec: { type: "rect.contain" } }],
-                      },
-                      resize: { enabled: true },
-                      rotate: { enabled: true },
+function testEffectsValidateWithoutCapabilityResolver() {
+  const diagnostics = validateEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "layer",
+            effects: [{ type: "dieline" }, { type: "feature" }],
+            objects: [
+              {
+                id: "image",
+                frame: { x: 0, y: 0, width: 1, height: 1 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 1, height: 1 },
+                },
+                effects: [{ type: "constraint" }],
+                interaction: {
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [{ spec: { type: "rect.contain" } }],
                     },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
                   },
                 },
-              ],
-            },
-          ],
-        },
-      ],
-    },
-    { resolveEffectCapabilityId: resolveTestEffectCapabilityId },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assertDeepEqual(
+    diagnostics,
+    [],
+    "effect structure should validate without a capability resolver",
   );
-  assertDeepEqual(diagnostics, [], "injected known effects should validate");
 }
 
 function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
@@ -916,6 +922,71 @@ function testRequirePolicyDiagnostics() {
   );
 }
 
+function testCloneAndRecursiveObjectAccessors() {
+  const document = normalizeEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: { nested: { enabled: true } },
+    metadata: { nested: { label: "original" } },
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "first",
+            objects: [
+              {
+                id: "one",
+                frame: { x: 0, y: 0, width: 1, height: 1 },
+                source: { kind: "shape", shape: "rect", params: {} },
+              },
+            ],
+          },
+          {
+            id: "second",
+            objects: [
+              {
+                id: "two",
+                frame: { x: 0, y: 0, width: 1, height: 1 },
+                source: { kind: "text", text: "two" },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const clone = cloneEditorDocument(document);
+  assertDeepEqual(clone, document, "clone should preserve document data");
+  assert(clone !== document, "clone should detach the document root");
+  assert(
+    clone.config !== document.config &&
+      clone.metadata !== document.metadata &&
+      clone.surfaces[0] !== document.surfaces[0],
+    "clone should recursively detach nested values",
+  );
+
+  assertDeepEqual(
+    getEditorDocumentObjects(document).map((object) => object.id),
+    ["one", "two"],
+    "object accessor should preserve document order",
+  );
+  assertEqual(
+    findEditorDocumentObject(document, "two")?.id,
+    "two",
+    "object lookup should traverse the hierarchy",
+  );
+  const paths: string[] = [];
+  visitEditorDocumentObjects(document, ({ path }) => paths.push(path));
+  assertDeepEqual(
+    paths,
+    ["surfaces[0].layers[0].objects[0]", "surfaces[0].layers[1].objects[0]"],
+    "visitor should expose stable object paths",
+  );
+}
+
 function main() {
   testNormalizeDefaults();
   testObjectInteractionNormalizesSupportedFields();
@@ -929,10 +1000,11 @@ function main() {
   testImageObjectRequiresFrame();
   testValidationStructureAndReferences();
   testCustomValidatorDiagnostics();
-  testCustomEffectRequiresCapabilityId();
-  testInjectedEffectCapabilityResolution();
+  testStructuralValidationDoesNotResolveCapabilities();
+  testEffectsValidateWithoutCapabilityResolver();
   testObjectInteractionNormalizesSeparatelyFromGenericEffects();
   testRequirePolicyDiagnostics();
+  testCloneAndRecursiveObjectAccessors();
   console.log("ok");
 }
 
