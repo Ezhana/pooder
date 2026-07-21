@@ -6,10 +6,13 @@ import {
   IMAGE_RESOURCE_SERVICE,
   IMAGE_GEOMETRY_DATA_KEY,
   coordinateMatrix,
+  coordinateRect,
   createAffinePlacement,
   createLocalToSceneMatrix,
+  invertCoordinateMatrix,
   multiplyCoordinateMatrices,
   resolveImageGeometry,
+  transformCoordinateRect,
   mergeRenderIntentPatchEntries,
   createServiceToken,
   type GeometryPoint,
@@ -1182,6 +1185,7 @@ function createObjectRenderIntentDraft(
       documentSurfaceId: surface.id,
       documentObjectSourceKind: object.source.kind,
       documentLayerRole: layer.role,
+      documentObjectPlacement: framePlacement,
       ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
       ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
@@ -1193,7 +1197,11 @@ function createObjectRenderIntentDraft(
       base,
       object as EditorImageObject,
       imageResolution,
-      resolveEditorImageClipFrame(surface, object as EditorImageObject),
+      resolveEditorImageClipFrame(
+        surface,
+        object as EditorImageObject,
+        framePlacement,
+      ),
     );
   }
   const visual = resolveObjectSource(object.source);
@@ -1242,7 +1250,7 @@ function createImageRenderIntentDraft(
   base: Omit<RenderIntentDraft, "visual">,
   object: EditorImageObject,
   resolution?: ImageResourceResolution,
-  clipFrame?: { left: number; top: number; width: number; height: number },
+  clipFrame?: import("@pooder/core").CoordinateRect<"object-local">,
 ): RenderIntentDraft {
   const resource = object.source.resource;
   const resolved = resolution?.ok
@@ -1278,12 +1286,12 @@ function createImageRenderIntentDraft(
           src: image.src,
           size: { width: image.width, height: image.height },
         },
-        frame: {
-          left: object.frame.x,
-          top: object.frame.y,
+        frame: coordinateRect("object-local", {
+          left: 0,
+          top: 0,
           width: object.frame.width,
           height: object.frame.height,
-        },
+        }),
         fit,
         transform: object.placement,
         ...(object.placement.clip === "frame" && clipFrame
@@ -1301,37 +1309,27 @@ function createImageRenderIntentDraft(
     effects: geometry?.clip
       ? [
           ...(base.effects ?? []),
-          createEditorImageClipEffect(object.id, geometry.clip),
+          createEditorImageClipEffect(
+            object.id,
+            geometry.clip,
+            base.placement!,
+          ),
         ]
       : base.effects,
     placement: geometry
       ? createAffinePlacement({
-          localBounds: {
-            left: 0,
-            top: 0,
-            width: geometry.width,
-            height: geometry.height,
+          localBounds: geometry.imageLocalBounds,
+          pivot: {
+            x:
+              geometry.imageLocalBounds.left +
+              geometry.imageLocalBounds.width / 2,
+            y:
+              geometry.imageLocalBounds.top +
+              geometry.imageLocalBounds.height / 2,
           },
-          pivot: { x: geometry.width / 2, y: geometry.height / 2 },
           localToScene: multiplyCoordinateMatrices(
             base.placement!.localToScene,
-            coordinateMatrix(
-              "object-local",
-              "object-local",
-              createLocalToSceneMatrix({
-                position: {
-                  x: geometry.left - object.frame.x,
-                  y: geometry.top - object.frame.y,
-                },
-                pivot: {
-                  x: geometry.width / 2,
-                  y: geometry.height / 2,
-                },
-                scaleX: geometry.scaleX,
-                scaleY: geometry.scaleY,
-                rotation: geometry.angle,
-              }).values,
-            ),
+            geometry.imageLocalToObjectLocal,
           ),
         })
       : base.placement,
@@ -1356,33 +1354,44 @@ function createImageRenderIntentDraft(
 function resolveEditorImageClipFrame(
   surface: EditorSurface,
   object: EditorImageObject,
+  objectPlacement: AffinePlacement,
 ) {
-  const objectFrame = {
-    left: object.frame.x,
-    top: object.frame.y,
-    width: object.frame.width,
-    height: object.frame.height,
-  };
+  const objectFrame = objectPlacement.localBounds;
   const production = surface.frames.productionFrame;
   if (!object.slot) return objectFrame;
-  const left = Math.max(objectFrame.left, production.xMm);
-  const top = Math.max(objectFrame.top, production.yMm);
+  const productionInObject = transformCoordinateRect(
+    invertCoordinateMatrix(objectPlacement.localToScene),
+    coordinateRect("scene", {
+      left: production.xMm,
+      top: production.yMm,
+      width: production.widthMm,
+      height: production.heightMm,
+    }),
+  );
+  const left = Math.max(objectFrame.left, productionInObject.left);
+  const top = Math.max(objectFrame.top, productionInObject.top);
   const right = Math.min(
     objectFrame.left + objectFrame.width,
-    production.xMm + production.widthMm,
+    productionInObject.left + productionInObject.width,
   );
   const bottom = Math.min(
     objectFrame.top + objectFrame.height,
-    production.yMm + production.heightMm,
+    productionInObject.top + productionInObject.height,
   );
   return right > left && bottom > top
-    ? { left, top, width: right - left, height: bottom - top }
+    ? coordinateRect("object-local", {
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
+      })
     : objectFrame;
 }
 
 function createEditorImageClipEffect(
   objectId: string,
-  frame: { left: number; top: number; width: number; height: number },
+  frame: import("@pooder/core").CoordinateRect<"object-local">,
+  objectPlacement: AffinePlacement,
 ) {
   return {
     type: "clipPath" as const,
@@ -1392,14 +1401,16 @@ function createEditorImageClipEffect(
       id: `document-image:${objectId}:clip-source`,
       type: "rect" as const,
       space: "scene" as const,
+      placement: createAffinePlacement({
+        localBounds: frame,
+        localToScene: objectPlacement.localToScene,
+        pivot: {
+          x: frame.left + frame.width / 2,
+          y: frame.top + frame.height / 2,
+        },
+      }),
       data: { type: "document-image-clip", objectId },
       props: {
-        left: frame.left,
-        top: frame.top,
-        width: frame.width,
-        height: frame.height,
-        originX: "left",
-        originY: "top",
         fill: "#000000",
         stroke: null,
       },

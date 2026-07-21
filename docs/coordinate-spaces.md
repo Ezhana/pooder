@@ -64,3 +64,23 @@ not infer origins from visual type. Fabric receives the normalized matrix after
 one explicit conversion from declared local bounds to Fabric's center and one
 viewport projection. Reapplying a viewport always starts from
 `localToScene`, never from Fabric's previously projected screen transform.
+
+## Image-local geometry
+
+Image fit is a local geometry capability. `cover`, `contain`, and `stretch`
+produce an `imageLocalToObjectLocal` matrix; they never produce Fabric
+`left`, `top`, `scale`, `angle`, or origin fields. Anchor values are normalized
+coordinates in the object's local frame and are clamped to `[0, 1]`.
+“Image-local” is the image visual's `object-local` domain, not a fifth global
+coordinate space; the matrix name distinguishes it from the containing
+document object's local domain.
+
+The document compiler composes matrices in one direction:
+
+`image-local → object-local → parent-local → scene`
+
+Real resources and empty-slot presentation resources call the same geometry
+resolver. Changing the image source therefore cannot change the document frame
+or its scene placement. A frame clip remains an object-local rectangle in the
+geometry result; the render compiler projects it with the object's canonical
+matrix when it creates the scene clip node.

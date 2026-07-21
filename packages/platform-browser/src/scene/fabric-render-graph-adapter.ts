@@ -1129,6 +1129,7 @@ export class FabricRenderGraphAdapter implements Service {
         layerId: target?.data?.layerId,
         sceneId: target?.data?.sceneId,
         snap: resultMetadata?.rectSnap,
+        sceneMatrix: this.resolveTargetSceneMatrix(target),
         subjectId: target?.data?.subjectId,
         surfaceId: target?.data?.surfaceId,
         transform: {
@@ -1458,7 +1459,7 @@ export class FabricRenderGraphAdapter implements Service {
     const controlsEnabled = resizeEnabled || rotateEnabled;
     const props = {
       ...withoutFabricInteractionProps(element.style),
-      ...element.transform,
+      ...(element.placement ? {} : element.transform),
       ...renderProps,
       ...(element.type === "rect"
         ? { width: element.width, height: element.height }
@@ -1501,6 +1502,7 @@ export class FabricRenderGraphAdapter implements Service {
       id: element.id,
       type: element.type,
       ...(element.type === "image" ? { src: element.src } : {}),
+      ...(element.placement ? { placement: element.placement } : {}),
       space: element.data?.renderSpace === "screen" ? "screen" : "scene",
       data,
       effects: [

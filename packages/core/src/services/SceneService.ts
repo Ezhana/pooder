@@ -29,6 +29,7 @@ import type { Service, ServiceContext } from "../service";
 import type SessionService from "./SessionService";
 import { SESSION_SERVICE } from "./tokens";
 import { TypedEventEmitter } from "../typed-event";
+import type { AffinePlacement } from "../coordinate";
 
 export type SceneChangeEvent = SceneChangeSet;
 
@@ -505,6 +506,10 @@ export default class SceneService implements Service {
         patch.transform === undefined
           ? this.cloneRecord(current.transform)
           : this.cloneRecord(patch.transform),
+      placement:
+        patch.placement === undefined
+          ? this.clonePlacement(current.placement)
+          : this.clonePlacement(patch.placement),
     } as SceneElement);
 
     scene.elementsById.set(elementId, next);
@@ -780,7 +785,22 @@ export default class SceneService implements Service {
       metadata: this.cloneRecord(element.metadata),
       data: this.cloneRecord(element.data),
       style: this.cloneRecord(element.style),
+      placement: this.clonePlacement(element.placement),
       transform: this.cloneRecord(element.transform),
+    };
+  }
+
+  private clonePlacement(
+    placement: AffinePlacement | undefined,
+  ): AffinePlacement | undefined {
+    if (!placement) return undefined;
+    return {
+      localBounds: { ...placement.localBounds },
+      localToScene: {
+        ...placement.localToScene,
+        values: [...placement.localToScene.values],
+      },
+      pivot: { ...placement.pivot },
     };
   }
 

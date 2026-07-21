@@ -587,7 +587,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const sourceId = String(source.id || "").trim();
     if (!sourceId) return null;
 
-    const template = await this.createFabricObject({
+    const templateSpec: RenderObjectSpec = {
       ...source,
       id: sourceId,
       data: {
@@ -602,8 +602,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
         evented: false,
         excludeFromExport: true,
       },
-    });
+    };
+    const template = await this.createFabricObject(templateSpec);
     if (!template) return null;
+
+    this.patchFabricObject(template, templateSpec);
 
     (template as any).set?.({
       selectable: false,
@@ -1015,14 +1018,14 @@ export default class CanvasService implements Service, CanvasServiceContract {
     if (spec.type === "path") {
       return this.omitPathSourceProps(props);
     }
-    if (spec.type !== "image") return props;
-    if (spec.placement) {
+    if (spec.placement && (spec.type === "image" || spec.type === "rect")) {
       return {
         ...props,
         width: spec.placement.localBounds.width,
         height: spec.placement.localBounds.height,
       };
     }
+    if (spec.type !== "image") return props;
     return this.resolveImageTargetSizeProps(obj, props);
   }
 

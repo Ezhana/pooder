@@ -672,13 +672,17 @@ function normalizeImagePlacement(value: unknown): EditorImagePlacement {
       placement.fit === "contain" || placement.fit === "stretch"
         ? placement.fit
         : "cover",
-    anchorX: normalizeFiniteNumber(placement.anchorX) ?? 0.5,
-    anchorY: normalizeFiniteNumber(placement.anchorY) ?? 0.5,
+    anchorX: normalizeUnitCoordinate(placement.anchorX),
+    anchorY: normalizeUnitCoordinate(placement.anchorY),
     zoom: normalizePositiveNumber(placement.zoom) ?? 1,
     rotation: normalizeFiniteNumber(placement.rotation) ?? 0,
     opacity: normalizeFiniteNumber(placement.opacity) ?? 1,
     clip: placement.clip === "none" ? "none" : "frame",
   };
+}
+
+function normalizeUnitCoordinate(value: unknown): number {
+  return Math.min(1, Math.max(0, normalizeFiniteNumber(value) ?? 0.5));
 }
 
 function normalizeImageSlot(value: unknown): EditorImageSlotSpec | undefined {

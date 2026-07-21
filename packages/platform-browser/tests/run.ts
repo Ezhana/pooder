@@ -2,6 +2,9 @@ import type { Service } from "@pooder/core";
 import {
   CONFIGURATION_SERVICE,
   COMMAND_SERVICE,
+  coordinateMatrix,
+  createAffinePlacement,
+  createLocalToSceneMatrix,
   INTERACTION_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
@@ -35,6 +38,7 @@ import type {
 import { ViewportSystem } from "../src/viewport-system";
 
 declare const process: {
+  env: Record<string, string | undefined>;
   exit(code: number): never;
 };
 
@@ -69,6 +73,20 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   if (actualJson !== expectedJson) {
     throw new Error(`${message} (expected ${expectedJson}, got ${actualJson})`);
   }
+}
+
+function createTestPlacement(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+) {
+  return createAffinePlacement({
+    localBounds: { left: 0, top: 0, width, height },
+    localToScene: coordinateMatrix("object-local", "scene", [
+      1, 0, 0, 1, left, top,
+    ]),
+  });
 }
 
 class FakeCanvasService {
@@ -414,8 +432,13 @@ function createCanvasServiceForReconcileTests() {
   service.viewport = {
     offset: { x: 0, y: 0 },
     scale: 1,
+    sceneToScreenMatrix: (matrix: any) => ({
+      ...matrix,
+      to: "screen",
+    }),
     updateContainer() {},
   };
+  service.applyAffinePlacement = () => {};
   service.createFabricObject = async (spec: any) => {
     const obj = new FakeFabricObject(spec.type, { src: spec.src });
     obj.set({
@@ -479,13 +502,13 @@ async function testCanvasServicePreservesViewportLayout() {
     "canvas viewport should keep provided scale",
   );
   assertDeepEqual(
-    service.getSceneOffset(),
-    { x: 112.25, y: 60.75 },
+    service.toScreenPoint({ space: "scene", x: 0, y: 0 }),
+    { x: 112.25, y: 60.75, space: "screen" },
     "canvas viewport should keep provided offset",
   );
   assertDeepEqual(
-    service.toScreenPoint({ x: 10, y: 20 }),
-    { x: 154.75, y: 145.75 },
+    service.toScreenPoint({ space: "scene", x: 10, y: 20 }),
+    { x: 154.75, y: 145.75, space: "screen" },
     "screen mapping should use the provided scale and offset together",
   );
 }
@@ -646,6 +669,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
           source: {
             id: "clip-source",
             type: "rect",
+            space: "scene",
             props: { width: 3, height: 3 },
           },
           coordinateMode: "absolute",
@@ -905,7 +929,7 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
       },
       visual: { type: "image", src: "/user.png" },
       ordering: { layerId: "art" },
-      placement: { width: 100, height: 80 },
+      placement: createTestPlacement(0, 0, 100, 80),
     },
   ]);
   const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
@@ -1062,17 +1086,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
           },
         },
       },
-      placement: {
-        frame: { x: 100, y: 120, width: 200, height: 160 },
-        transform: {
-          left: 200,
-          top: 200,
-          originX: "center",
-          originY: "center",
-          scaleX: 0.5,
-          scaleY: 0.5,
-        },
-      },
+      placement: createTestPlacement(100, 120, 200, 160),
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
     },
     {
@@ -1085,20 +1099,16 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
         objectType: "image",
       },
       visual: { type: "image", src: "data:image/png;base64,resolved" },
-      placement: {
-        frame: { x: 100, y: 120, width: 200, height: 160 },
-        width: 400,
-        height: 320,
-        transform: {
-          left: 220,
-          top: 210,
-          originX: "center",
-          originY: "center",
+      placement: createAffinePlacement({
+        localBounds: { left: 0, top: 0, width: 400, height: 320 },
+        localToScene: createLocalToSceneMatrix({
+          position: { x: 220, y: 210 },
+          pivot: { x: 200, y: 160 },
           scaleX: 0.75,
           scaleY: 0.6,
-          angle: 15,
-        },
-      },
+          rotation: 15,
+        }),
+      }),
       ordering: { layerId: "art", stack: 10, layerOrder: 0, objectOrder: 1 },
     },
   ]);
@@ -1635,10 +1645,7 @@ async function testFabricRenderGraphAdapterDoesNotSizePathFromFrame() {
         objectId: "cutline",
       },
       visual: { type: "path" },
-      placement: {
-        frame: { x: 30, y: 30, width: 531, height: 531 },
-        transform: { scaleX: 1, scaleY: 1 },
-      },
+      placement: createTestPlacement(30, 30, 531, 531),
       ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
       props: {
         fill: "transparent",
@@ -1686,10 +1693,12 @@ async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft(
         objectId: "detected-cutline",
       },
       visual: { type: "path" },
-      placement: {
-        frame: { x: 10, y: 12, width: 80, height: 40 },
-        transform: { left: 10, scaleX: 2, scaleY: 2, top: 12 },
-      },
+      placement: createAffinePlacement({
+        localBounds: { left: 0, top: 0, width: 40, height: 20 },
+        localToScene: coordinateMatrix("object-local", "scene", [
+          2, 0, 0, 2, 10, 12,
+        ]),
+      }),
       ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
       props: {
         pathData: "M0 0H40V20H0Z",
@@ -1738,9 +1747,7 @@ async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay
         objectType: "object",
       },
       visual: { type: "path" },
-      placement: {
-        frame: { x: 30, y: 30, width: 531, height: 531 },
-      },
+      placement: createTestPlacement(30, 30, 531, 531),
       ordering: {
         layerId: "front.dieline-overlay",
         layerOrder: 30,
@@ -1947,12 +1954,10 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "empty-slot",
       },
       visual: { type: "image" },
-      placement: {
-        frame: { x: 12, y: 24, width: 80, height: 60 },
-      },
+      placement: createTestPlacement(12, 24, 80, 60),
       ordering: { layerId: "art", objectOrder: 6 },
       interaction: {
-        hitRegion: { type: "frame" },
+        hitRegion: { type: "frame", space: "scene" },
         activation: { action: { commandId: "test.open" } },
       },
     },
@@ -2831,6 +2836,52 @@ async function testCanvasReconcileAppliesClipPath() {
     (canvas.objects[0] as any).__pooderEffectClipKey,
     "clip.art",
     "managed clip key should be tracked",
+  );
+}
+
+async function testCanvasReconcileAppliesPlacedRectClipPath() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "placed-art-node",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "placed-art-node",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "placed-art-subject" },
+        effects: [
+          {
+            type: "clipPath",
+            id: "clip.placed",
+            coordinateMode: "absolute",
+            source: {
+              id: "placed-clip-source",
+              type: "rect",
+              space: "scene",
+              placement: createAffinePlacement({
+                localBounds: { left: 0, top: 0, width: 5, height: 6 },
+                localToScene: coordinateMatrix("object-local", "scene", [
+                  1, 0, 0, 1, 2, 3,
+                ]),
+              }),
+              props: { fill: "#000" },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  const clipPath = canvas.objects[0]?.clipPath as any;
+  assert(clipPath, "placed clip path should be attached");
+  assertEqual(clipPath.width, 5, "placed clip should consume local bounds width");
+  assertEqual(clipPath.height, 6, "placed clip should consume local bounds height");
+  assertEqual(
+    clipPath.absolutePositioned,
+    true,
+    "placed scene clip should remain absolute-positioned",
   );
 }
 
@@ -3784,6 +3835,7 @@ async function main() {
       testCanvasReconcileAppliesInteractiveControlDefaults,
     ],
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],
+    ["applies placed graph rect clip paths", testCanvasReconcileAppliesPlacedRectClipPath],
     ["applies graph image clip paths", testCanvasReconcileAppliesImageClipPath],
     [
       "exports by render graph node ids",
@@ -3823,7 +3875,17 @@ async function main() {
     ],
   ];
 
-  for (const [name, run] of tests) {
+  const filter = String(process.env.POODER_TEST_FILTER || "")
+    .trim()
+    .toLowerCase();
+  const selectedTests = filter
+    ? tests.filter(([name]) => name.toLowerCase().includes(filter))
+    : tests;
+  if (selectedTests.length === 0) {
+    throw new Error(`No platform-browser tests match "${filter}".`);
+  }
+
+  for (const [name, run] of selectedTests) {
     await run();
     console.log(`PASS ${name}`);
   }

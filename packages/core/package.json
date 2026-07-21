@@ -21,7 +21,7 @@
     "build": "tsup src/index.ts src/internal/legacy-extension.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts src/internal/legacy-extension.ts --format cjs,esm --dts --watch",
     "test": "tsc -p tsconfig.test.json && node .test-dist/tests/run.js",
-    "test:affine": "tsc -p tsconfig.affine-test.json && node .affine-test-dist/tests/affine-placement.js"
+    "test:affine": "tsc -p tsconfig.affine-test.json && node .affine-test-dist/tests/affine-placement.js && node .affine-test-dist/tests/image-local-geometry.js"
   },
   "keywords": [],
   "author": "",

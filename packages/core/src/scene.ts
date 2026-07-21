@@ -2,7 +2,7 @@ import type { RenderEffectSpec } from "./render";
 import type { InteractionSpec } from "./interaction-service";
 import type { RenderGraphLayer, RenderGraphNode } from "./render-intent";
 import type Disposable from "./disposable";
-import type { CoordinatePoint } from "./coordinate";
+import type { AffinePlacement, CoordinatePoint } from "./coordinate";
 
 export type LayerId = string;
 export type ElementId = string;
@@ -105,6 +105,7 @@ export interface SceneElementBase {
   data?: SceneElementData;
   /** @internal Renderer-specific props belong to the legacy overlay adapter. */
   style?: SceneElementStyle;
+  placement?: AffinePlacement;
   transform?: SceneTransform;
   interaction?: InteractionSpec;
 }
@@ -159,6 +160,7 @@ export interface SceneElementPatch {
   metadata?: SceneMetadata;
   data?: SceneElementData;
   style?: SceneElementStyle;
+  placement?: AffinePlacement;
   transform?: SceneTransform;
   src?: string;
   width?: number;

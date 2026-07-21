@@ -8,5 +8,10 @@
     "skipLibCheck": true,
     "outDir": ".affine-test-dist"
   },
-  "include": ["src/coordinate.ts", "tests/affine-placement.ts"]
+  "include": [
+    "src/coordinate.ts",
+    "src/image-geometry.ts",
+    "tests/affine-placement.ts",
+    "tests/image-local-geometry.ts"
+  ]
 }

@@ -2973,7 +2973,7 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
 
   const resolved = resolveImageGeometry({
     source: { src: "/image.png", size: source },
-    frame,
+    frame: { space: "object-local", ...frame },
     fit: "cover",
     transform: {
       anchorX: 0.25,
@@ -2982,21 +2982,14 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
       rotation: 15,
       opacity: 0.8,
     },
-    clip: frame,
+    clip: { space: "object-local", ...frame },
   });
-  assertDeepEqual(resolved, {
-    width: 400,
-    height: 400,
-    left: 60,
-    top: 95,
-    scaleX: 0.6,
-    scaleY: 0.6,
-    angle: 15,
-    opacity: 0.8,
-    originX: "center",
-    originY: "center",
-    clip: frame,
-  });
+  assertEqual(resolved.imageLocalBounds.width, 400);
+  assertEqual(resolved.imageLocalBounds.height, 400);
+  assertEqual(resolved.imageLocalToObjectLocal.from, "object-local");
+  assertEqual(resolved.imageLocalToObjectLocal.to, "object-local");
+  assertEqual(resolved.opacity, 0.8);
+  assertEqual(resolved.clip?.space, "object-local");
 }
 
 async function main() {

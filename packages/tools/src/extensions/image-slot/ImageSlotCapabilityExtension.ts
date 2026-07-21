@@ -1,10 +1,20 @@
 import {
   CANVAS_SERVICE,
+  RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
+  coordinateRect,
+  createAffinePlacement,
+  createLocalToSceneMatrix,
+  invertCoordinateMatrix,
+  multiplyCoordinateMatrices,
   resolveImageFitScale,
   resolveImageGeometry,
+  transformCoordinateRect,
+  transformCoordinatePoint,
+  type AffinePlacement,
+  type Matrix2D,
   type CanvasService,
   type ExtensionContext,
   type ExtensionContributions,
@@ -12,6 +22,7 @@ import {
   type SceneHandle,
   type SceneLayoutService,
   type SceneService,
+  type RenderIntentService,
   type SessionHandle,
   type SessionService,
 } from "@pooder/core";
@@ -49,6 +60,7 @@ type ImageSlotOpenSessionResult = { ok: true } | { ok: false; reason: string };
 interface ImageSlotCanvasTransformInput {
   commit?: boolean;
   objectId?: string;
+  sceneMatrix?: Matrix2D<"object-local", "scene">;
   snap?: {
     guides?: Array<{
       axis?: string;
@@ -80,6 +92,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private sceneService?: SceneService;
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
+  private renderIntentService?: RenderIntentService;
   private sessionService?: SessionService;
   private sceneHandle: SceneHandle | null = null;
   private sceneLayoutSubscription: { dispose(): void } | null = null;
@@ -95,6 +108,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.sceneService =
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    this.renderIntentService =
+      context.services.get<RenderIntentService>(RENDER_INTENT_SERVICE);
     this.sessionService =
       context.services.getOrThrow<SessionService>(SESSION_SERVICE);
   }
@@ -108,6 +123,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
     this.sceneService = undefined;
+    this.renderIntentService = undefined;
     this.sessionService = undefined;
   }
 
@@ -353,25 +369,58 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!draft || !context || (objectId && objectId !== draft.objectId)) {
       return { ok: false, reason: "session-not-active" };
     }
-    if (!source || !transform) {
+    if (!source || (!transform && !input.sceneMatrix)) {
       return { ok: false, reason: "resource-load-failed" };
     }
     const frame = context.object.frame;
+    const objectPlacement =
+      this.resolveDocumentObjectPlacement(draft.objectId) ??
+      createFallbackObjectPlacement(context.object);
+    const imageLocalToObjectLocal = input.sceneMatrix
+      ? multiplyCoordinateMatrices(
+          invertCoordinateMatrix(objectPlacement.localToScene),
+          input.sceneMatrix,
+        )
+      : undefined;
     const fitScale = resolveImageFitScale(frame, source, draft.placement.fit);
+    const matrixValues = imageLocalToObjectLocal?.values;
+    const resolvedScaleX = matrixValues
+      ? Math.hypot(matrixValues[0], matrixValues[1])
+      : Number(transform?.scaleX);
+    const resolvedScaleY = matrixValues
+      ? Math.hypot(matrixValues[2], matrixValues[3])
+      : Number(transform?.scaleY);
     const zoomCandidates = [
-      Number(transform.scaleX) / Math.max(Math.abs(fitScale.x), 0.0001),
-      Number(transform.scaleY) / Math.max(Math.abs(fitScale.y), 0.0001),
+      resolvedScaleX / Math.max(Math.abs(fitScale.x), 0.0001),
+      resolvedScaleY / Math.max(Math.abs(fitScale.y), 0.0001),
     ].filter((value) => Number.isFinite(value) && value > 0);
     const zoom = zoomCandidates.length
       ? zoomCandidates.reduce((total, value) => total + value, 0) /
         zoomCandidates.length
       : draft.placement.zoom;
+    const imageCenter = {
+      space: "object-local" as const,
+      x: source.width / 2,
+      y: source.height / 2,
+    };
+    const localCenter = imageLocalToObjectLocal
+      ? transformCoordinatePoint(imageLocalToObjectLocal, imageCenter)
+      : transformCoordinatePoint(
+          invertCoordinateMatrix(objectPlacement.localToScene),
+          {
+            space: "scene",
+            x: Number(transform?.centerX),
+            y: Number(transform?.centerY),
+          },
+        );
+    const rotation = matrixValues
+      ? (Math.atan2(matrixValues[1], matrixValues[0]) * 180) / Math.PI
+      : Number(transform?.rotation);
     const placement = normalizePlacement({
       ...draft.placement,
-      anchorX: (Number(transform.centerX) - frame.x) / Math.max(frame.width, 1),
-      anchorY:
-        (Number(transform.centerY) - frame.y) / Math.max(frame.height, 1),
-      rotation: Number(transform.rotation),
+      anchorX: localCenter.x / Math.max(frame.width, 1),
+      anchorY: localCenter.y / Math.max(frame.height, 1),
+      rotation,
       zoom,
     });
     this.setState(
@@ -584,15 +633,26 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     const resource = draft.resource;
     if (resource?.intrinsicSize) {
       const src = resourceLocation(resource);
-      const clipFrame = resolveImageSlotClipFrame(this.document, context);
+      const objectPlacement =
+        this.resolveDocumentObjectPlacement(draft.objectId) ??
+        createFallbackObjectPlacement(context.object);
+      const objectSceneBounds = transformCoordinateRect(
+        objectPlacement.localToScene,
+        objectPlacement.localBounds,
+      );
+      const clipFrame = resolveImageSlotClipFrame(
+        this.document,
+        context,
+        objectPlacement,
+      );
       const geometry = resolveImageGeometry({
         source: { src, size: resource.intrinsicSize },
-        frame: {
-          left: context.object.frame.x,
-          top: context.object.frame.y,
+        frame: coordinateRect("object-local", {
+          left: 0,
+          top: 0,
           width: context.object.frame.width,
           height: context.object.frame.height,
-        },
+        }),
         fit: draft.placement.fit,
         transform: draft.placement,
         ...(draft.placement.clip === "frame"
@@ -606,20 +666,26 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         layerId: "image-slot.working",
         type: "image",
         src,
-        width: geometry.width,
-        height: geometry.height,
+        width: geometry.imageLocalBounds.width,
+        height: geometry.imageLocalBounds.height,
+        placement: createAffinePlacement({
+          localBounds: geometry.imageLocalBounds,
+          localToScene: multiplyCoordinateMatrices(
+            objectPlacement.localToScene,
+            geometry.imageLocalToObjectLocal,
+          ),
+          pivot: {
+            x:
+              geometry.imageLocalBounds.left +
+              geometry.imageLocalBounds.width / 2,
+            y:
+              geometry.imageLocalBounds.top +
+              geometry.imageLocalBounds.height / 2,
+          },
+        }),
         data: {
           autoFocus: true,
           imageSlotObjectId: draft.objectId,
-        },
-        transform: {
-          left: geometry.left,
-          top: geometry.top,
-          scaleX: geometry.scaleX,
-          scaleY: geometry.scaleY,
-          angle: geometry.angle,
-          originX: geometry.originX,
-          originY: geometry.originY,
         },
         style: {
           opacity: geometry.opacity,
@@ -627,7 +693,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         ...(geometry.clip
           ? {
               effects: [
-                createImageSlotClipEffect(draft.objectId, geometry.clip),
+                createImageSlotClipEffect(
+                  draft.objectId,
+                  geometry.clip,
+                  objectPlacement,
+                ),
               ],
             }
           : {}),
@@ -642,12 +712,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
                     type: "rect.snap",
                     params: {
                       id: `image-slot:${draft.objectId}:frame`,
-                      rect: {
-                        left: context.object.frame.x,
-                        top: context.object.frame.y,
-                        width: context.object.frame.width,
-                        height: context.object.frame.height,
-                      },
+                      rect: objectSceneBounds,
                       thresholdPx: 6,
                     },
                   },
@@ -678,6 +743,21 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           }),
         );
     }
+  }
+
+  private resolveDocumentObjectPlacement(
+    objectId: string,
+  ): AffinePlacement | undefined {
+    for (const layer of this.renderIntentService?.getGraph().layers ?? []) {
+      const node = layer.nodes.find(
+        (candidate) => candidate.subjectId === objectId,
+      );
+      const placement = node?.data.documentObjectPlacement as
+        | AffinePlacement
+        | undefined;
+      if (placement?.localBounds?.space === "object-local") return placement;
+    }
+    return undefined;
   }
 
   private renderSessionFrame(
@@ -833,7 +913,8 @@ function createImageSlotPlacementAction(objectId: string) {
 
 function createImageSlotClipEffect(
   objectId: string,
-  frame: { left: number; top: number; width: number; height: number },
+  frame: import("@pooder/core").CoordinateRect<"object-local">,
+  objectPlacement: AffinePlacement,
 ) {
   return {
     type: "clipPath" as const,
@@ -843,14 +924,16 @@ function createImageSlotClipEffect(
       id: `image-slot:${objectId}:clip-source`,
       type: "rect" as const,
       space: "scene" as const,
+      placement: createAffinePlacement({
+        localBounds: frame,
+        localToScene: objectPlacement.localToScene,
+        pivot: {
+          x: frame.left + frame.width / 2,
+          y: frame.top + frame.height / 2,
+        },
+      }),
       data: { type: "image-slot-clip", objectId },
       props: {
-        left: frame.left,
-        top: frame.top,
-        width: frame.width,
-        height: frame.height,
-        originX: "left",
-        originY: "top",
         fill: "#000000",
         stroke: null,
       },
@@ -861,30 +944,59 @@ function createImageSlotClipEffect(
 function resolveImageSlotClipFrame(
   document: EditorDocument,
   context: { object: EditorImageObject; surfaceId: string },
+  objectPlacement: AffinePlacement,
 ) {
-  const objectFrame = {
-    left: context.object.frame.x,
-    top: context.object.frame.y,
-    width: context.object.frame.width,
-    height: context.object.frame.height,
-  };
+  const objectFrame = objectPlacement.localBounds;
   const production = document.surfaces.find(
     (surface) => surface.id === context.surfaceId,
   )?.frames.productionFrame;
   if (!production) return objectFrame;
-  const left = Math.max(objectFrame.left, production.xMm);
-  const top = Math.max(objectFrame.top, production.yMm);
+  const productionInObject = transformCoordinateRect(
+    invertCoordinateMatrix(objectPlacement.localToScene),
+    coordinateRect("scene", {
+      left: production.xMm,
+      top: production.yMm,
+      width: production.widthMm,
+      height: production.heightMm,
+    }),
+  );
+  const left = Math.max(objectFrame.left, productionInObject.left);
+  const top = Math.max(objectFrame.top, productionInObject.top);
   const right = Math.min(
     objectFrame.left + objectFrame.width,
-    production.xMm + production.widthMm,
+    productionInObject.left + productionInObject.width,
   );
   const bottom = Math.min(
     objectFrame.top + objectFrame.height,
-    production.yMm + production.heightMm,
+    productionInObject.top + productionInObject.height,
   );
   return right > left && bottom > top
-    ? { left, top, width: right - left, height: bottom - top }
+    ? coordinateRect("object-local", {
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
+      })
     : objectFrame;
+}
+
+function createFallbackObjectPlacement(
+  object: EditorImageObject,
+): AffinePlacement {
+  const localBounds = coordinateRect("object-local", {
+    left: 0,
+    top: 0,
+    width: object.frame.width,
+    height: object.frame.height,
+  });
+  return createAffinePlacement({
+    localBounds,
+    localToScene: createLocalToSceneMatrix({
+      position: { x: object.frame.x, y: object.frame.y },
+      pivot: { x: 0, y: 0 },
+    }),
+    pivot: { x: localBounds.width / 2, y: localBounds.height / 2 },
+  });
 }
 
 function findImageSlot(
@@ -937,8 +1049,8 @@ function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {
   return {
     fit:
       value.fit === "contain" || value.fit === "stretch" ? value.fit : "cover",
-    anchorX: Number.isFinite(value.anchorX) ? value.anchorX : 0.5,
-    anchorY: Number.isFinite(value.anchorY) ? value.anchorY : 0.5,
+    anchorX: Math.min(1, Math.max(0, Number.isFinite(value.anchorX) ? value.anchorX : 0.5)),
+    anchorY: Math.min(1, Math.max(0, Number.isFinite(value.anchorY) ? value.anchorY : 0.5)),
     zoom: Number.isFinite(value.zoom) && value.zoom > 0 ? value.zoom : 1,
     rotation: Number.isFinite(value.rotation) ? value.rotation : 0,
     opacity: Number.isFinite(value.opacity)
@@ -986,31 +1098,24 @@ function isDraftOutsideFrame(
   const object = context.object;
   const geometry = resolveImageGeometry({
     source: { src: resourceLocation(draft.resource), size },
-    frame: {
-      left: object.frame.x,
-      top: object.frame.y,
+    frame: coordinateRect("object-local", {
+      left: 0,
+      top: 0,
       width: object.frame.width,
       height: object.frame.height,
-    },
+    }),
     fit: draft.placement.fit,
     transform: draft.placement,
   });
-  const radians = (geometry.angle * Math.PI) / 180;
-  const width = geometry.width * Math.abs(geometry.scaleX);
-  const height = geometry.height * Math.abs(geometry.scaleY);
-  const halfWidth =
-    (Math.abs(Math.cos(radians)) * width +
-      Math.abs(Math.sin(radians)) * height) /
-    2;
-  const halfHeight =
-    (Math.abs(Math.sin(radians)) * width +
-      Math.abs(Math.cos(radians)) * height) /
-    2;
+  const imageBounds = transformCoordinateRect(
+    geometry.imageLocalToObjectLocal,
+    geometry.imageLocalBounds,
+  );
   const epsilon = 1e-6;
   return (
-    geometry.left - halfWidth < object.frame.x - epsilon ||
-    geometry.top - halfHeight < object.frame.y - epsilon ||
-    geometry.left + halfWidth > object.frame.x + object.frame.width + epsilon ||
-    geometry.top + halfHeight > object.frame.y + object.frame.height + epsilon
+    imageBounds.left < -epsilon ||
+    imageBounds.top < -epsilon ||
+    imageBounds.left + imageBounds.width > object.frame.width + epsilon ||
+    imageBounds.top + imageBounds.height > object.frame.height + epsilon
   );
 }

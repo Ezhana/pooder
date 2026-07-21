@@ -141,6 +141,27 @@ export function multiplyCoordinateMatrices<
   ]);
 }
 
+export function invertCoordinateMatrix<
+  TFrom extends CoordinateSpace,
+  TTo extends CoordinateSpace,
+>(matrix: Matrix2D<TFrom, TTo>): Matrix2D<TTo, TFrom> {
+  const [a, b, c, d, e, f] = matrix.values;
+  const determinant = a * d - b * c;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) <= Number.EPSILON) {
+    throw new Error(
+      `Cannot invert singular ${matrix.from} -> ${matrix.to} coordinate matrix.`,
+    );
+  }
+  return coordinateMatrix(matrix.to, matrix.from, [
+    d / determinant,
+    -b / determinant,
+    -c / determinant,
+    a / determinant,
+    (c * f - d * e) / determinant,
+    (b * e - a * f) / determinant,
+  ]);
+}
+
 export function transformCoordinatePoint<
   TFrom extends CoordinateSpace,
   TTo extends CoordinateSpace,
