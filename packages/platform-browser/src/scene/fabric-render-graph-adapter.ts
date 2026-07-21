@@ -930,6 +930,7 @@ export class FabricRenderGraphAdapter implements Service {
       target,
       metadata: {
         layerId: target.data?.layerId,
+        ...this.resolveParentSceneMatrix(target),
         renderIntentId: target.data?.renderIntentId,
         subjectId: target.data?.subjectId,
         surfaceId: target.data?.surfaceId,
@@ -998,6 +999,38 @@ export class FabricRenderGraphAdapter implements Service {
       result.result.metadata,
       commit,
     );
+  }
+
+  private resolveParentSceneMatrix(
+    target: any,
+  ):
+    | { parentSceneMatrix: [number, number, number, number, number, number] }
+    | Record<string, never> {
+    const canvas = this.canvasService;
+    const rawMatrix = target?.group?.calcTransformMatrix?.();
+    if (
+      !canvas ||
+      !Array.isArray(rawMatrix) ||
+      rawMatrix.length !== 6 ||
+      rawMatrix.some((value: unknown) => !Number.isFinite(value))
+    ) {
+      return {};
+    }
+    const scale = Math.max(0.0001, canvas.getSceneScale());
+    const translation = canvas.toScenePoint({
+      x: rawMatrix[4],
+      y: rawMatrix[5],
+    });
+    return {
+      parentSceneMatrix: [
+        rawMatrix[0] / scale,
+        rawMatrix[1] / scale,
+        rawMatrix[2] / scale,
+        rawMatrix[3] / scale,
+        translation.x,
+        translation.y,
+      ],
+    };
   }
 
   private dispatchManipulationAction(

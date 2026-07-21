@@ -12,6 +12,7 @@ import {
   applyEditorDocument,
   createEditorDocumentController,
   resolveObjectSource,
+  sceneFrameToLocalFrame,
   SourceResolver,
 } from "../src";
 import { EffectSchemaRegistry, type EditorEffect } from "@pooder/document";
@@ -74,6 +75,19 @@ function createRuntime() {
         },
       },
       services: {
+        register<T extends Service>(
+          service: T,
+          identifier?: ServiceIdentifier<T>,
+        ) {
+          if (!identifier) return false;
+          services.set(identifier, service);
+          return true;
+        },
+        get<T extends Service>(
+          identifier: ServiceIdentifier<T>,
+        ): T | undefined {
+          return services.get(identifier) as T | undefined;
+        },
         getOrThrow<T extends Service>(identifier: ServiceIdentifier<T>): T {
           const service = services.get(
             identifier as ServiceIdentifier<Service>,
@@ -316,10 +330,89 @@ async function testControllerUpdatesOnlyChangedRenderIntents() {
   );
 }
 
+async function testDocumentServiceDraftIsolation() {
+  const { runtime } = createRuntime();
+  const service = createEditorDocumentController(runtime);
+  const applied = await service.apply({
+    version: 7,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "shape",
+                frame: { x: 10, y: 20, width: 30, height: 40 },
+                source: { kind: "shape", shape: "rect", params: {} },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assertEqual(applied.ok, true, "draft fixture should apply");
+  const events: string[] = [];
+  service.onDidChange((event) => events.push(event.type));
+  const draft = await service.beginDraft();
+  const invalid = await draft.mutate((document) => {
+    document.surfaces = [];
+  });
+  assertEqual(invalid.ok, false, "invalid draft mutation should fail");
+  assertEqual(
+    service.export("working")?.surfaces.length,
+    1,
+    "failed mutation must not pollute working state",
+  );
+  const updated = await draft.mutate((document) => {
+    const object = document.surfaces[0]?.layers[0]?.objects?.[0];
+    if (object?.frame) object.frame.x = 25;
+  });
+  assertEqual(
+    updated.ok,
+    true,
+    "valid draft mutation should update working state",
+  );
+  assertEqual(
+    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    10,
+    "draft mutation should not change committed state",
+  );
+  await draft.rollback();
+  assertEqual(
+    service.export("working")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    10,
+    "rollback should restore committed state",
+  );
+  assertDeepEqual(
+    events,
+    ["mutate", "rollback"],
+    "draft events should be explicit",
+  );
+}
+
+function testSceneFrameUsesInverseParentMatrix() {
+  assertDeepEqual(
+    sceneFrameToLocalFrame(
+      { left: 30, top: 50, width: 40, height: 20 },
+      [2, 0, 0, 2, 10, 10],
+    ),
+    { left: 10, top: 20, width: 20, height: 10 },
+    "scene frame should be converted through the inverse parent matrix",
+  );
+}
+
 async function main() {
   testSourceResolver();
+  testSceneFrameUsesInverseParentMatrix();
   await testApplyEditorDocument();
   await testControllerUpdatesOnlyChangedRenderIntents();
+  await testDocumentServiceDraftIsolation();
   console.log("ok");
 }
 

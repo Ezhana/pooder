@@ -60,6 +60,7 @@ export * from "./interaction-service";
 export * from "./surface-frames";
 export * from "./typed-event";
 export * from "./services";
+export type { default as Disposable } from "./disposable";
 /** @internal Temporary legacy test/extension bridge. */
 export { default as EventBus } from "./event";
 

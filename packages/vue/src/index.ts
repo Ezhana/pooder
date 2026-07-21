@@ -15,11 +15,17 @@ export type { PooderRuntimeLike } from "./runtime";
 export {
   applyEditorDocument,
   createEditorDocumentController,
+  EDITOR_DOCUMENT_SERVICE,
+  registerEditorDocumentService,
 } from "@pooder/document-core";
 export type {
   ApplyEditorDocumentOptions,
   ApplyEditorDocumentResult,
   EditorDocumentController,
   EditorDocumentRuntime,
+  EditorDocumentService,
+  EditorDocumentChangeEvent,
+  EditorDocumentMutationResult,
+  DocumentDraft,
 } from "@pooder/document-core";
 export { getLegacyRuntimeEventBridge } from "@pooder/core/internal/legacy-extension";

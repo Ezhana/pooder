@@ -2,14 +2,19 @@ import {
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
   SURFACE_FRAME_SERVICE,
+  INTERACTION_SERVICE,
   IMAGE_RESOURCE_SERVICE,
   IMAGE_GEOMETRY_DATA_KEY,
   resolveImageGeometry,
   mergeRenderIntentPatchEntries,
+  createServiceToken,
   type GeometryPoint,
   type GeometryRect,
+  type Disposable,
   type ImageResourceResolution,
   type ImageResourceService,
+  type InteractionManipulationCommitEvent,
+  type InteractionService,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDiagnostic,
   type RenderIntentDraft,
@@ -17,6 +22,7 @@ import {
   type RenderIntentPatchEntry,
   type RenderIntentService,
   type Service,
+  type ServiceContext,
   type ServiceIdentifier,
   type SurfaceFrameService,
 } from "@pooder/core";
@@ -154,6 +160,10 @@ export interface EditorDocumentRuntime {
     update(key: string, value: unknown): void;
   };
   readonly services: {
+    register?<T extends Service>(
+      service: T,
+      identifier?: ServiceIdentifier<T>,
+    ): boolean;
     get?<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined;
     getOrThrow<T extends Service>(
       identifier: ServiceIdentifier<T>,
@@ -184,23 +194,104 @@ export interface ApplyEditorDocumentResult {
   appliedSurfaceIds: string[];
 }
 
-export interface EditorDocumentController {
-  apply(value: unknown): Promise<ApplyEditorDocumentResult>;
+export type EditorDocumentSource = "committed" | "working";
+
+export type EditorDocumentMutationCallback = (
+  document: EditorDocument,
+) => EditorDocument | void | Promise<EditorDocument | void>;
+
+export type EditorDocumentMutationFailureReason =
+  | "document-not-found"
+  | "draft-inactive"
+  | "layer-not-found"
+  | "object-not-found"
+  | "mutation-failed"
+  | "validation-failed";
+
+export type EditorDocumentMutationResult =
+  | { ok: true; document: EditorDocument }
+  | {
+      ok: false;
+      reason: EditorDocumentMutationFailureReason;
+      diagnostics: EditorDocumentDiagnostic[];
+    };
+
+export interface EditorDocumentChangeEvent {
+  type: "replace" | "mutate" | "commit" | "rollback";
+  committed: EditorDocument | null;
+  working: EditorDocument | null;
+  draftId?: string;
+}
+
+export interface DocumentDraftOptions {
+  source?: EditorDocumentSource;
+}
+
+export interface DocumentDraft {
+  readonly id: string;
   export(): EditorDocument | null;
+  mutate(
+    callback: EditorDocumentMutationCallback,
+  ): Promise<EditorDocumentMutationResult>;
+  commit(): Promise<EditorDocumentMutationResult>;
+  rollback(): Promise<EditorDocumentMutationResult>;
+}
+
+export interface EditorDocumentObjectInsertOptions {
+  index?: number;
+}
+
+export interface EditorDocumentManipulationCommit {
+  objectId: string;
+  frame?: { left: number; top: number; width: number; height: number };
+  rotation?: number;
+  parentMatrix?: EditorDocumentMatrix;
+}
+
+export type EditorDocumentMatrix = readonly [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+export interface EditorDocumentService extends Service {
+  apply(document: unknown): Promise<ApplyEditorDocumentResult>;
+  export(source?: EditorDocumentSource): EditorDocument | null;
+  mutate(
+    callback: EditorDocumentMutationCallback,
+  ): Promise<EditorDocumentMutationResult>;
+  beginDraft(options?: DocumentDraftOptions): Promise<DocumentDraft>;
+  onDidChange(listener: (event: EditorDocumentChangeEvent) => void): Disposable;
+  insertObject(
+    surfaceId: string,
+    layerId: string,
+    object: EditorObject,
+    options?: EditorDocumentObjectInsertOptions,
+  ): Promise<EditorDocumentMutationResult>;
   updateObject(
     objectId: string,
     update: (current: Readonly<EditorObject>) => EditorObject,
-  ): Promise<DocumentUpdateResult>;
+  ): Promise<EditorDocumentMutationResult>;
+  removeObject(objectId: string): Promise<EditorDocumentMutationResult>;
+  commitManipulation(
+    manipulation: EditorDocumentManipulationCommit,
+  ): Promise<EditorDocumentMutationResult>;
 }
 
-export type DocumentUpdateResult =
-  | { ok: true; document: EditorDocument }
-  | { ok: false; reason: "object-not-found" }
-  | {
-      ok: false;
-      reason: "validation-failed";
-      diagnostics: EditorDocumentDiagnostic[];
-    };
+export const EDITOR_DOCUMENT_SERVICE =
+  createServiceToken<EditorDocumentService>("EditorDocumentService");
+
+/** @deprecated Use EditorDocumentService. */
+export type EditorDocumentController = Pick<
+  EditorDocumentService,
+  "apply" | "export" | "updateObject"
+>;
+
+/** @deprecated Use EditorDocumentMutationResult. */
+export type DocumentUpdateResult = EditorDocumentMutationResult;
 
 interface EffectContext {
   surface: EditorSurface;
@@ -370,57 +461,324 @@ async function applyEditorDocumentInternal(
   );
 }
 
+export class DefaultEditorDocumentService implements EditorDocumentService {
+  private committedDocument: EditorDocument | null = null;
+  private workingDocument: EditorDocument | null = null;
+  private activeDraftId: string | null = null;
+  private draftSequence = 0;
+  private readonly listeners = new Set<
+    (event: EditorDocumentChangeEvent) => void
+  >();
+  private operationQueue: Promise<void> = Promise.resolve();
+  private manipulationSubscription?: { dispose(): void };
+
+  constructor(
+    private readonly runtime: EditorDocumentRuntime,
+    private readonly options: ApplyEditorDocumentOptions = {},
+  ) {}
+
+  init(context: ServiceContext): void {
+    const interactionService =
+      context.get<InteractionService>(INTERACTION_SERVICE);
+    this.manipulationSubscription = interactionService?.onDidCommitManipulation(
+      (event) => {
+        void this.writeManipulationToDocument(event);
+      },
+    );
+  }
+
+  dispose(): void {
+    this.manipulationSubscription?.dispose();
+    this.manipulationSubscription = undefined;
+    this.listeners.clear();
+  }
+
+  async apply(value: unknown): Promise<ApplyEditorDocumentResult> {
+    return this.enqueue(async () => {
+      const result = await applyEditorDocument(
+        this.runtime,
+        value,
+        this.options,
+      );
+      if (result.ok) {
+        this.committedDocument = cloneEditorDocument(result.document);
+        this.workingDocument = cloneEditorDocument(result.document);
+        this.activeDraftId = null;
+        this.emit("replace");
+      }
+      return result;
+    });
+  }
+
+  export(source: EditorDocumentSource = "committed"): EditorDocument | null {
+    const document =
+      source === "working" ? this.workingDocument : this.committedDocument;
+    return document ? cloneEditorDocument(document) : null;
+  }
+
+  async mutate(
+    callback: EditorDocumentMutationCallback,
+  ): Promise<EditorDocumentMutationResult> {
+    return this.enqueue(() =>
+      this.mutateWorking(callback, this.activeDraftId ?? undefined),
+    );
+  }
+
+  async beginDraft(options: DocumentDraftOptions = {}): Promise<DocumentDraft> {
+    return this.enqueue(async () => {
+      if (this.activeDraftId) {
+        throw new Error(
+          `Document draft "${this.activeDraftId}" is already active.`,
+        );
+      }
+      const source = this.export(options.source ?? "committed");
+      if (!source) throw new Error("Cannot begin a draft without a document.");
+      const draftId = `document-draft-${++this.draftSequence}`;
+      this.activeDraftId = draftId;
+      this.workingDocument = source;
+      return {
+        id: draftId,
+        export: () =>
+          this.activeDraftId === draftId ? this.export("working") : null,
+        mutate: (callback) =>
+          this.enqueue(() => this.mutateDraft(draftId, callback)),
+        commit: () => this.enqueue(() => this.commitDraft(draftId)),
+        rollback: () => this.enqueue(() => this.rollbackDraft(draftId)),
+      };
+    });
+  }
+
+  onDidChange(
+    listener: (event: EditorDocumentChangeEvent) => void,
+  ): Disposable {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  insertObject(
+    surfaceId: string,
+    layerId: string,
+    object: EditorObject,
+    options: EditorDocumentObjectInsertOptions = {},
+  ): Promise<EditorDocumentMutationResult> {
+    let found = false;
+    return this.mutate((document) => {
+      for (const surface of document.surfaces) {
+        if (surface.id !== surfaceId) continue;
+        const layer = surface.layers.find((item) => item.id === layerId);
+        if (!layer) break;
+        const objects = layer.objects ?? (layer.objects = []);
+        const index = Number.isInteger(options.index)
+          ? Math.max(0, Math.min(options.index as number, objects.length))
+          : objects.length;
+        objects.splice(index, 0, cloneDocumentObject(object));
+        found = true;
+        return;
+      }
+      if (!found) throw new DocumentMutationError("layer-not-found");
+    });
+  }
+
+  updateObject(
+    objectId: string,
+    update: (current: Readonly<EditorObject>) => EditorObject,
+  ): Promise<EditorDocumentMutationResult> {
+    const id = normalizeObjectId(objectId);
+    if (!id) return Promise.resolve(mutationFailure("object-not-found"));
+    return this.mutate((document) => {
+      const object = findEditorDocumentObject(document, id);
+      if (!object) throw new DocumentMutationError("object-not-found");
+      const updated = update(cloneDocumentObject(object));
+      replaceSourceObject(document, id, cloneDocumentObject(updated));
+    });
+  }
+
+  removeObject(objectId: string): Promise<EditorDocumentMutationResult> {
+    const id = normalizeObjectId(objectId);
+    if (!id) return Promise.resolve(mutationFailure("object-not-found"));
+    return this.mutate((document) => {
+      if (!removeSourceObject(document, id)) {
+        throw new DocumentMutationError("object-not-found");
+      }
+    });
+  }
+
+  commitManipulation(
+    manipulation: EditorDocumentManipulationCommit,
+  ): Promise<EditorDocumentMutationResult> {
+    const localFrame = manipulation.frame
+      ? sceneFrameToLocalFrame(manipulation.frame, manipulation.parentMatrix)
+      : undefined;
+    return this.updateObject(manipulation.objectId, (object) => ({
+      ...object,
+      ...(localFrame
+        ? {
+            frame: {
+              x: localFrame.left,
+              y: localFrame.top,
+              width: localFrame.width,
+              height: localFrame.height,
+            },
+          }
+        : {}),
+      ...(manipulation.rotation === undefined
+        ? {}
+        : {
+            transform: {
+              ...(object.transform ?? {}),
+              angle: manipulation.rotation,
+            },
+          }),
+    }));
+  }
+
+  private async mutateDraft(
+    draftId: string,
+    callback: EditorDocumentMutationCallback,
+  ): Promise<EditorDocumentMutationResult> {
+    if (this.activeDraftId !== draftId)
+      return mutationFailure("draft-inactive");
+    return this.mutateWorking(callback, draftId);
+  }
+
+  private async mutateWorking(
+    callback: EditorDocumentMutationCallback,
+    draftId?: string,
+  ): Promise<EditorDocumentMutationResult> {
+    if (!this.workingDocument) return mutationFailure("document-not-found");
+    const candidate = cloneEditorDocument(this.workingDocument);
+    candidate.config = this.runtime.config?.export() ?? candidate.config;
+    let returned: EditorDocument | void;
+    try {
+      returned = await callback(candidate);
+    } catch (error) {
+      return error instanceof DocumentMutationError
+        ? mutationFailure(error.reason)
+        : mutationFailure("mutation-failed");
+    }
+    const next = returned ? cloneEditorDocument(returned) : candidate;
+    const result = await applyEditorDocumentInternal(
+      this.runtime,
+      next,
+      this.options,
+      "update",
+    );
+    if (!result.ok) {
+      return mutationFailure("validation-failed", result.diagnostics);
+    }
+    this.workingDocument = cloneEditorDocument(result.document);
+    if (draftId) {
+      this.emit("mutate", draftId);
+    } else {
+      this.committedDocument = cloneEditorDocument(result.document);
+      this.emit("commit");
+    }
+    return { ok: true, document: cloneEditorDocument(result.document) };
+  }
+
+  private async commitDraft(
+    draftId: string,
+  ): Promise<EditorDocumentMutationResult> {
+    if (this.activeDraftId !== draftId || !this.workingDocument) {
+      return mutationFailure("draft-inactive");
+    }
+    this.committedDocument = cloneEditorDocument(this.workingDocument);
+    this.activeDraftId = null;
+    this.emit("commit", draftId);
+    return { ok: true, document: cloneEditorDocument(this.committedDocument) };
+  }
+
+  private async rollbackDraft(
+    draftId: string,
+  ): Promise<EditorDocumentMutationResult> {
+    if (this.activeDraftId !== draftId || !this.committedDocument) {
+      return mutationFailure("draft-inactive");
+    }
+    const result = await applyEditorDocumentInternal(
+      this.runtime,
+      this.committedDocument,
+      this.options,
+      "update",
+    );
+    if (!result.ok) {
+      return mutationFailure("validation-failed", result.diagnostics);
+    }
+    this.workingDocument = cloneEditorDocument(this.committedDocument);
+    this.activeDraftId = null;
+    this.emit("rollback", draftId);
+    return { ok: true, document: cloneEditorDocument(this.committedDocument) };
+  }
+
+  private async writeManipulationToDocument(
+    event: InteractionManipulationCommitEvent,
+  ): Promise<void> {
+    const objectId = normalizeObjectId(event.input.metadata?.subjectId);
+    if (!objectId || !event.result.result.frame) return;
+    const parentMatrix = normalizeDocumentMatrix(
+      event.input.metadata?.parentSceneMatrix,
+    );
+    await this.commitManipulation({
+      objectId,
+      frame: event.result.result.frame,
+      ...(typeof event.result.result.rotation === "number"
+        ? { rotation: event.result.result.rotation }
+        : {}),
+      ...(parentMatrix ? { parentMatrix } : {}),
+    });
+  }
+
+  private emit(type: EditorDocumentChangeEvent["type"], draftId?: string) {
+    const event: EditorDocumentChangeEvent = {
+      type,
+      committed: this.export("committed"),
+      working: this.export("working"),
+      ...(draftId ? { draftId } : {}),
+    };
+    this.listeners.forEach((listener) => {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error("EditorDocumentService change listener failed.", error);
+      }
+    });
+  }
+
+  private enqueue<TResult>(
+    operation: () => Promise<TResult>,
+  ): Promise<TResult> {
+    const result = this.operationQueue.then(operation, operation);
+    this.operationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+}
+
+export function registerEditorDocumentService(
+  runtime: EditorDocumentRuntime,
+  options: ApplyEditorDocumentOptions = {},
+): EditorDocumentService {
+  const existing = runtime.services.get?.(EDITOR_DOCUMENT_SERVICE);
+  if (existing) return existing;
+  if (!runtime.services.register) {
+    throw new Error(
+      "Runtime service registration is required for EditorDocumentService.",
+    );
+  }
+  const service = new DefaultEditorDocumentService(runtime, options);
+  if (!runtime.services.register(service, EDITOR_DOCUMENT_SERVICE)) {
+    throw new Error("Failed to register EditorDocumentService.");
+  }
+  return service;
+}
+
+/** @deprecated Use registerEditorDocumentService and EDITOR_DOCUMENT_SERVICE. */
 export function createEditorDocumentController(
   runtime: EditorDocumentRuntime,
   options: ApplyEditorDocumentOptions = {},
-): EditorDocumentController {
-  let currentDocument: EditorDocument | null = null;
-
-  return {
-    async apply(value) {
-      const result = await applyEditorDocument(runtime, value, options);
-      if (result.ok) {
-        currentDocument = cloneEditorDocument(result.document);
-      }
-      return result;
-    },
-    export() {
-      return currentDocument ? cloneEditorDocument(currentDocument) : null;
-    },
-    async updateObject(objectId, update) {
-      const id = normalizeObjectId(objectId);
-      if (!id || !currentDocument)
-        return { ok: false, reason: "object-not-found" };
-
-      const nextDocument = cloneEditorDocument(currentDocument);
-      nextDocument.config = runtime.config?.export() ?? nextDocument.config;
-      const object = findEditorDocumentObject(nextDocument, id);
-      if (!object) return { ok: false, reason: "object-not-found" };
-      let updated: EditorObject;
-      try {
-        updated = update(cloneDocumentObject(object));
-      } catch {
-        return { ok: false, reason: "validation-failed", diagnostics: [] };
-      }
-      replaceSourceObject(nextDocument, id, cloneDocumentObject(updated));
-      const result = await applyEditorDocumentInternal(
-        runtime,
-        nextDocument,
-        options,
-        "update",
-      );
-      if (!result.ok) {
-        return {
-          ok: false,
-          reason: "validation-failed",
-          diagnostics: result.diagnostics,
-        };
-      }
-
-      currentDocument = cloneEditorDocument(result.document);
-      return { ok: true, document: cloneEditorDocument(currentDocument) };
-    },
-  };
+): EditorDocumentService {
+  return registerEditorDocumentService(runtime, options);
 }
 
 function toValidationOptions(
@@ -475,6 +833,108 @@ function replaceSourceObject(
       }
     }
   }
+}
+
+function removeSourceObject(
+  document: EditorDocument,
+  objectId: string,
+): boolean {
+  for (const surface of document.surfaces) {
+    for (const layer of surface.layers) {
+      const index =
+        layer.objects?.findIndex((object) => object.id === objectId) ?? -1;
+      if (index >= 0 && layer.objects) {
+        layer.objects.splice(index, 1);
+        if (!layer.objects.length) delete layer.objects;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+class DocumentMutationError extends Error {
+  constructor(readonly reason: EditorDocumentMutationFailureReason) {
+    super(reason);
+  }
+}
+
+function mutationFailure(
+  reason: EditorDocumentMutationFailureReason,
+  diagnostics: EditorDocumentDiagnostic[] = [],
+): EditorDocumentMutationResult {
+  return { ok: false, reason, diagnostics };
+}
+
+export function sceneFrameToLocalFrame(
+  frame: { left: number; top: number; width: number; height: number },
+  parentMatrix?: EditorDocumentMatrix,
+): { left: number; top: number; width: number; height: number } {
+  if (!parentMatrix) return { ...frame };
+  const inverse = invertDocumentMatrix(parentMatrix);
+  if (!inverse) return { ...frame };
+  const corners = [
+    transformDocumentPoint(inverse, frame.left, frame.top),
+    transformDocumentPoint(inverse, frame.left + frame.width, frame.top),
+    transformDocumentPoint(inverse, frame.left, frame.top + frame.height),
+    transformDocumentPoint(
+      inverse,
+      frame.left + frame.width,
+      frame.top + frame.height,
+    ),
+  ];
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return {
+    left,
+    top,
+    width: Math.max(...xs) - left,
+    height: Math.max(...ys) - top,
+  };
+}
+
+function normalizeDocumentMatrix(
+  value: unknown,
+): EditorDocumentMatrix | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 6 ||
+    value.some((item) => !Number.isFinite(item))
+  ) {
+    return undefined;
+  }
+  return value as unknown as EditorDocumentMatrix;
+}
+
+function invertDocumentMatrix(
+  matrix: EditorDocumentMatrix,
+): EditorDocumentMatrix | undefined {
+  const [a, b, c, d, e, f] = matrix;
+  const determinant = a * d - b * c;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) {
+    return undefined;
+  }
+  return [
+    d / determinant,
+    -b / determinant,
+    -c / determinant,
+    a / determinant,
+    (c * f - d * e) / determinant,
+    (b * e - a * f) / determinant,
+  ];
+}
+
+function transformDocumentPoint(
+  matrix: EditorDocumentMatrix,
+  x: number,
+  y: number,
+): { x: number; y: number } {
+  return {
+    x: matrix[0] * x + matrix[2] * y + matrix[4],
+    y: matrix[1] * x + matrix[3] * y + matrix[5],
+  };
 }
 
 function cloneObjectEffects(

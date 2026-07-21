@@ -8,14 +8,14 @@ import type {
 export interface ImageSlotDocumentController {
   updateObject(
     objectId: string,
-    update: (current: Readonly<import("@pooder/document").EditorObject>) =>
-      import("@pooder/document").EditorObject,
+    update: (
+      current: Readonly<import("@pooder/document").EditorObject>,
+    ) => import("@pooder/document").EditorObject,
   ): Promise<
     | { ok: true; document: EditorDocument }
-    | { ok: false; reason: "object-not-found" }
     | {
         ok: false;
-        reason: "validation-failed";
+        reason: string;
         diagnostics: import("@pooder/document").EditorDocumentDiagnostic[];
       }
   >;
