@@ -20,6 +20,7 @@ import {
   type RenderInvalidation,
   type RenderIntentChangeReason,
   type InteractionManipulationKind,
+  type InteractionManipulationResult,
   type InteractionService,
   type InteractionSpec,
   type RenderObjectSpec,
@@ -434,9 +435,9 @@ export class FabricRenderGraphAdapter implements Service {
   private toSceneInvalidations(event: SceneChangeSet): RenderInvalidation[] {
     const sceneStructureChanged = Boolean(
       event.scenes &&
-      (event.scenes.added.length ||
-        event.scenes.updated.length ||
-        event.scenes.removed.length),
+        (event.scenes.added.length ||
+          event.scenes.updated.length ||
+          event.scenes.removed.length),
     );
     if (sceneStructureChanged) return [{ type: "composition" }];
 
@@ -444,8 +445,8 @@ export class FabricRenderGraphAdapter implements Service {
     Object.entries(event.sceneChanges ?? {}).forEach(([sceneId, change]) => {
       const layersChanged = Boolean(
         change.layers.added.length ||
-        change.layers.updated.length ||
-        change.layers.removed.length,
+          change.layers.updated.length ||
+          change.layers.removed.length,
       );
       if (layersChanged) {
         invalidations.push({ type: "scene", sceneId });
@@ -997,6 +998,7 @@ export class FabricRenderGraphAdapter implements Service {
       target,
       spec,
       result.result.metadata,
+      result.commitTransform,
       commit,
     );
   }
@@ -1018,6 +1020,7 @@ export class FabricRenderGraphAdapter implements Service {
     }
     const scale = Math.max(0.0001, canvas.getSceneScale());
     const translation = canvas.toScenePoint({
+      space: "screen",
       x: rawMatrix[4],
       y: rawMatrix[5],
     });
@@ -1038,6 +1041,7 @@ export class FabricRenderGraphAdapter implements Service {
     target: any,
     spec: InteractionSpec,
     resultMetadata: Record<string, unknown> | undefined,
+    commitTransform: InteractionManipulationResult["commitTransform"],
     commit: boolean,
   ): void {
     const action = spec.manipulation?.[kind]?.action;
@@ -1053,6 +1057,7 @@ export class FabricRenderGraphAdapter implements Service {
             y: finiteNumber(target?.top, 0),
           };
     const center = canvas.toScenePoint({
+      space: "screen",
       x: finiteNumber(rawCenter?.x, finiteNumber(target?.left, 0)),
       y: finiteNumber(rawCenter?.y, finiteNumber(target?.top, 0)),
     });
@@ -1071,6 +1076,7 @@ export class FabricRenderGraphAdapter implements Service {
       .executeCommand(commandId, {
         ...(action.payload ?? {}),
         commit,
+        commitTransform,
         kind,
         layerId: target?.data?.layerId,
         sceneId: target?.data?.sceneId,
@@ -1158,6 +1164,7 @@ export class FabricRenderGraphAdapter implements Service {
               finiteNumber(target.height, 0) * finiteNumber(target.scaleY, 1),
           };
     const sceneBounds = canvas.toSceneRect({
+      space: "screen",
       left: finiteNumber(rawBounds.left, 0),
       top: finiteNumber(rawBounds.top, 0),
       width: finiteNumber(rawBounds.width, 0),

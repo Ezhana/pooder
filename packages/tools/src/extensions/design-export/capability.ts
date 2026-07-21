@@ -1,6 +1,6 @@
 import type { CapabilityDefinition } from "@pooder/core";
 import type {
-  CanvasRect,
+  CoordinateRect,
   SceneExportCrop,
   SceneExportOptions,
   SceneExportSourceResult,
@@ -16,8 +16,7 @@ export interface DesignExportCapabilityOptions {
   source?: SceneExportSourceSelector;
 }
 
-export interface ExportImageOptions
-  extends Omit<SceneExportOptions, "crop"> {
+export interface ExportImageOptions extends Omit<SceneExportOptions, "crop"> {
   format?: ExportImageFormat;
   multiplier?: number;
   crop?: SceneExportCrop;
@@ -30,7 +29,7 @@ export interface ExportImageResult {
   format: ExportImageFormat;
   multiplier: number;
   source: SceneExportSourceResult;
-  crop: CanvasRect;
+  crop: CoordinateRect<"scene">;
 }
 
 export interface DesignExportCapabilityApi {

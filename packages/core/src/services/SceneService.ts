@@ -851,15 +851,17 @@ export default class SceneService implements Service {
     effects?: readonly RenderEffectSpec[],
   ): RenderEffectSpec[] | undefined {
     if (!effects) return undefined;
-    return effects.map((effect) => ({
-      ...effect,
-      source: {
+    return effects.map((effect) => {
+      const source = {
         ...effect.source,
         data: this.cloneRecord(effect.source.data),
         props: this.cloneRecord(effect.source.props) ?? {},
         effects: this.cloneEffects(effect.source.effects),
-      },
-    }));
+      };
+      return effect.coordinateMode === "object"
+        ? { ...effect, coordinateMode: "object", source }
+        : { ...effect, coordinateMode: "absolute", source };
+    }) as RenderEffectSpec[];
   }
 
   private cloneTags(value?: readonly string[]): string[] | undefined {

@@ -362,7 +362,12 @@ function resolveConstraintGeometry(
   const geometrySource = context.geometrySource;
   if (!geometrySource) return null;
   return context.coordinateSpace
-    ? geometrySource.projectGeometry(source, context.coordinateSpace)
+    ? geometrySource.projectGeometry({
+        ref: source,
+        from:
+          geometrySource.getGeometry(source)?.space ?? context.coordinateSpace,
+        to: context.coordinateSpace,
+      })
     : geometrySource.getGeometry(source);
 }
 

@@ -11,6 +11,7 @@ import {
   type ExtensionContributions,
   type ExtensionDefinition,
   type RenderEffectSpec,
+  type RenderCoordinateSpace,
   type RenderObjectSpec,
   type RenderIntentCompilerContribution,
   type RenderIntentCompilerContext,
@@ -76,9 +77,8 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     this.configService = context.services.getOrThrow<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    this.sceneLayoutService = context.services.get<SceneLayoutService>(
-      SCENE_LAYOUT_SERVICE,
-    );
+    this.sceneLayoutService =
+      context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.surfaceFrameService = context.services.get<SurfaceFrameService>(
       SURFACE_FRAME_SERVICE,
     );
@@ -155,7 +155,9 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
     const clip = normalizeClipEffectPayload(context.effect.payload);
     if (!clip.enabled || !context.target.layerId) return;
     const targetId =
-      context.target.objectId || context.target.layerId || context.target.surfaceId;
+      context.target.objectId ||
+      context.target.layerId ||
+      context.target.surfaceId;
     const source = this.buildSourceSpec(
       {
         id: targetId,
@@ -243,7 +245,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   private buildSourceSpec(
     element: SceneElement,
     source: ClipSource,
-  ): RenderObjectSpec | null {
+  ): (RenderObjectSpec & { space: RenderCoordinateSpace }) | null {
     if (source.type === "path") {
       const pathData = String(source.pathData || "").trim();
       if (!pathData) return null;
@@ -299,7 +301,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   private buildDielineSourceSpec(
     element: SceneElement,
     source: Extract<ClipSource, { type: "dieline" }>,
-  ): RenderObjectSpec | null {
+  ): (RenderObjectSpec & { space: RenderCoordinateSpace }) | null {
     if (!this.canvasService || !this.configService) return null;
 
     const sceneLayout = this.sceneLayoutService?.getLayout();

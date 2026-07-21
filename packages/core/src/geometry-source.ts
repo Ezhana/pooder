@@ -1,8 +1,9 @@
 import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type { GeometryPoint, GeometryRect } from "./interaction";
+import type { CoordinateSpace } from "./coordinate";
 
-export type CoordinateSpace = "document" | "scene" | "screen";
+export type { CoordinateSpace } from "./coordinate";
 
 export interface GeometryRef {
   sourceId: string;
@@ -20,7 +21,7 @@ export type GeometrySnapshotKind =
 export interface GeometrySnapshotBase {
   kind: GeometrySnapshotKind;
   ref?: GeometryRef;
-  space?: CoordinateSpace;
+  space: CoordinateSpace;
   metadata?: Record<string, unknown>;
 }
 
@@ -82,19 +83,22 @@ export type GeometrySnapshot =
 export interface GeometryDescriptor {
   ref: GeometryRef;
   kind: GeometrySnapshotKind;
-  space?: CoordinateSpace;
+  space: CoordinateSpace;
   label?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface GeometryProjectionRequest {
+  ref: GeometryRef;
+  from: CoordinateSpace;
+  to: CoordinateSpace;
 }
 
 export interface GeometrySourceProvider {
   sourceId: string;
   getGeometry(ref: GeometryRef): GeometrySnapshot | null;
   listGeometries?(): GeometryDescriptor[];
-  projectGeometry?(
-    ref: GeometryRef,
-    space: CoordinateSpace,
-  ): GeometrySnapshot | null;
+  projectGeometry?(request: GeometryProjectionRequest): GeometrySnapshot | null;
 }
 
 export class GeometrySourceService implements Service {
@@ -137,17 +141,31 @@ export class GeometrySourceService implements Service {
     );
   }
 
-  projectGeometry(
-    ref: GeometryRef,
-    space: CoordinateSpace,
-  ): GeometrySnapshot | null {
-    const normalized = normalizeGeometryRef(ref);
+  projectGeometry(request: GeometryProjectionRequest): GeometrySnapshot | null {
+    const normalized = normalizeGeometryRef(request.ref);
     const provider = this.providers.get(normalized.sourceId);
-    const projected = provider?.projectGeometry?.(normalized, space);
-    if (projected) return cloneGeometrySnapshot(projected);
     const snapshot = provider?.getGeometry(normalized) ?? null;
     if (!snapshot) return null;
-    return cloneGeometrySnapshot({ ...snapshot, space });
+    if (snapshot.space !== request.from) {
+      throw new Error(
+        `Geometry "${normalized.sourceId}/${normalized.geometryId}" is in ` +
+          `${snapshot.space} space, not ${request.from}.`,
+      );
+    }
+    if (request.from === request.to) return cloneGeometrySnapshot(snapshot);
+    const projected = provider?.projectGeometry?.({
+      ref: normalized,
+      from: request.from,
+      to: request.to,
+    });
+    if (!projected) return null;
+    if (projected.space !== request.to) {
+      throw new Error(
+        `Geometry provider "${normalized.sourceId}" returned ${projected.space} ` +
+          `space while projecting to ${request.to}.`,
+      );
+    }
+    return cloneGeometrySnapshot(projected);
   }
 }
 

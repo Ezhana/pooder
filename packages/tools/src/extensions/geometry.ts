@@ -94,9 +94,11 @@ const isBridgeDebugEnabled = () =>
 
 function normalizePathItem(shape: paper.PathItem): paper.PathItem {
   let result: any = shape;
-  if (typeof result.resolveCrossings === "function") result = result.resolveCrossings();
+  if (typeof result.resolveCrossings === "function")
+    result = result.resolveCrossings();
   if (typeof result.reduce === "function") result = result.reduce({});
-  if (typeof result.reorient === "function") result = result.reorient(true, true);
+  if (typeof result.reorient === "function")
+    result = result.reorient(true, true);
   if (typeof result.reduce === "function") result = result.reduce({});
   return result as paper.PathItem;
 }
@@ -229,7 +231,11 @@ function fitPathItemToRect(
 
   item.translate(new paper.Point(-bounds.left, -bounds.top));
   if (fitMode === "stretch") {
-    item.scale(width / bounds.width, height / bounds.height, new paper.Point(0, 0));
+    item.scale(
+      width / bounds.width,
+      height / bounds.height,
+      new paper.Point(0, 0),
+    );
     item.translate(new paper.Point(left, top));
     return item;
   }
@@ -314,7 +320,11 @@ function createHeartBaseShape(options: GeometryOptions): paper.PathItem {
   const fitMode = getShapeFitMode(options.shapeStyle);
   const heartParams = getHeartShapeParams(options.shapeStyle);
   const rawHeart = createNormalizedHeartPath(heartParams);
-  return fitPathItemToRect(rawHeart, { left, top, width: w, height: h }, fitMode);
+  return fitPathItemToRect(
+    rawHeart,
+    { left, top, width: w, height: h },
+    fitMode,
+  );
 }
 
 const BUILTIN_SHAPE_BUILDERS: Record<BuiltinDielineShape, BuiltinShapeBuilder> =
@@ -345,7 +355,9 @@ const BUILTIN_SHAPE_BUILDERS: Record<BuiltinDielineShape, BuiltinShapeBuilder> =
     heart: createHeartBaseShape,
   };
 
-function createCustomBaseShape(options: GeometryOptions): paper.PathItem | null {
+function createCustomBaseShape(
+  options: GeometryOptions,
+): paper.PathItem | null {
   const {
     pathData,
     customSourceWidthPx,
@@ -382,12 +394,21 @@ function createCustomBaseShape(options: GeometryOptions): paper.PathItem | null 
     // coordinates directly into the target dieline frame.
     const targetLeft = x - width / 2;
     const targetTop = y - height / 2;
-    path.scale(width / sourceWidth, height / sourceHeight, new paper.Point(0, 0));
+    path.scale(
+      width / sourceWidth,
+      height / sourceHeight,
+      new paper.Point(0, 0),
+    );
     path.translate(new paper.Point(targetLeft, targetTop));
     return path;
   }
 
-  if (width > 0 && height > 0 && path.bounds.width > 0 && path.bounds.height > 0) {
+  if (
+    width > 0 &&
+    height > 0 &&
+    path.bounds.width > 0 &&
+    path.bounds.height > 0
+  ) {
     // Fallback for malformed custom-path metadata.
     path.position = center;
     path.scale(width / path.bounds.width, height / path.bounds.height);
@@ -542,8 +563,16 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
               const leftOffset = leftHit.location.offset;
               const rightOffset = rightHit.location.offset;
 
-              const distanceA = wrappedDistance(pathLength, leftOffset, rightOffset);
-              const distanceB = wrappedDistance(pathLength, rightOffset, leftOffset);
+              const distanceA = wrappedDistance(
+                pathLength,
+                leftOffset,
+                rightOffset,
+              );
+              const distanceB = wrappedDistance(
+                pathLength,
+                rightOffset,
+                leftOffset,
+              );
               const countFor = (d: number) =>
                 Math.max(8, Math.min(80, Math.ceil(d / 6)));
 
@@ -793,9 +822,10 @@ export function generateBleedZonePath(
 /**
  * Finds the lowest point (Max Y) on the Dieline geometry (Base Shape ONLY).
  */
-export function getLowestPointOnDieline(
-  options: GeometryOptions,
-): { x: number; y: number } {
+export function getLowestPointOnDieline(options: GeometryOptions): {
+  x: number;
+  y: number;
+} {
   ensurePaper(options.width * 2, options.height * 2);
   paper.project.activeLayer.removeChildren();
 
@@ -832,7 +862,9 @@ export function getNearestPointOnDieline(
   const result = {
     x: location.point.x,
     y: location.point.y,
-    normal: location.normal ? { x: location.normal.x, y: location.normal.y } : undefined
+    normal: location.normal
+      ? { x: location.normal.x, y: location.normal.y }
+      : undefined,
   };
   shape.remove();
 
@@ -860,14 +892,14 @@ export function getPathBounds(pathData: string): {
 export function createPaperPathGeometrySnapshot(options: {
   ref?: GeometryRef;
   pathData: string;
-  space?: CoordinateSpace;
+  space: CoordinateSpace;
   metadata?: Record<string, unknown>;
 }): GeometryPathSnapshot {
   const snapshot: GeometryPathSnapshot = {
     kind: "path",
     pathData: options.pathData,
     ...(options.ref ? { ref: options.ref } : {}),
-    ...(options.space ? { space: options.space } : {}),
+    space: options.space,
     ...(options.metadata ? { metadata: { ...options.metadata } } : {}),
     utilities: {
       bounds: ({ snapshot: pathSnapshot }) =>
@@ -885,11 +917,12 @@ export function createPaperPathGeometrySnapshot(options: {
             getPointAt?(offset: number): paper.Point | null;
           };
           const length = Math.max(0, pathWithLength.length || 0);
-          const point = length > 0
-            ? pathWithLength.getPointAt?.(
-                Math.max(0, Math.min(1, ratio)) * length,
-              )
-            : null;
+          const point =
+            length > 0
+              ? pathWithLength.getPointAt?.(
+                  Math.max(0, Math.min(1, ratio)) * length,
+                )
+              : null;
           return point ? { x: point.x, y: point.y } : null;
         }),
       normalAt: (point, { snapshot: pathSnapshot }) =>

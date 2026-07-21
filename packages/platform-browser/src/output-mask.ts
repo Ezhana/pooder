@@ -1,5 +1,5 @@
 import type {
-  CanvasRect,
+  CoordinateRect,
   CanvasService,
   SceneExportOutputMaskTransparentColor,
   SceneExportOutputMaskMode,
@@ -15,7 +15,7 @@ export interface OutputMaskRenderCanvas {
 }
 
 export interface RenderOutputMaskOptions {
-  crop: CanvasRect;
+  crop: CoordinateRect<"scene">;
   height: number;
   mode: SceneExportOutputMaskMode;
   multiplier: number;
@@ -359,6 +359,7 @@ export async function renderOutputMask(
     const clone = await source.clone();
     const center = getSourceCenter(source);
     const sceneCenter = options.canvasService.toScenePoint({
+      space: "screen",
       x: center.x,
       y: center.y,
     });

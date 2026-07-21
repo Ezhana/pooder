@@ -299,7 +299,7 @@ export function buildDielineGuideRenderSpecs(
 
 export function buildDielineClipSourceSpec(
   options: DielineClipSourceOptions,
-): RenderObjectSpec | null {
+): (RenderObjectSpec & { space: "screen" }) | null {
   const { state, sceneLayout, canvasWidth, canvasHeight } = options;
   const scale = sceneLayout.scale;
   const cx = sceneLayout.trimRect.centerX;

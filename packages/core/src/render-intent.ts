@@ -142,7 +142,7 @@ export interface RenderGraphNode {
   surfaceId: string;
   type: RenderObjectSpec["type"];
   visual?: RenderIntentSource;
-  coordinateSpace: RenderCoordinateSpace;
+  coordinateSpace: "scene";
   exportKeys: string[];
   frame?: RenderIntentFrame;
   transform?: RenderIntentTransform;
@@ -201,7 +201,8 @@ export interface RenderIntentCompilerContribution<
     | Promise<RenderIntentPatch[] | RenderIntentPatch | void>;
 }
 
-export interface RegisteredRenderIntentCompiler extends RenderIntentCompilerContribution {
+export interface RegisteredRenderIntentCompiler
+  extends RenderIntentCompilerContribution {
   extensionId: string;
 }
 
@@ -237,7 +238,8 @@ export type RenderIntentDiagnosticCode =
   | "render-intent-patch-base-missing"
   | "render-intent-clear-path-invalid"
   | "render-intent-field-conflict"
-  | "render-intent-missing-layer";
+  | "render-intent-missing-layer"
+  | "render-intent-non-scene-space";
 
 export interface RenderIntentDiagnostic {
   code: RenderIntentDiagnosticCode;
@@ -596,7 +598,9 @@ function collectChangedRenderIntentIds(
   const before = collectRenderIntentSnapshots(previous);
   const after = collectRenderIntentSnapshots(next);
   return Array.from(new Set([...before.keys(), ...after.keys()]))
-    .filter((intentId) => !sameJsonValue(before.get(intentId), after.get(intentId)))
+    .filter(
+      (intentId) => !sameJsonValue(before.get(intentId), after.get(intentId)),
+    )
     .sort();
 }
 
@@ -851,6 +855,18 @@ export function createRenderGraph(
     }
     surfaceIds.add(draft.subject.surfaceId);
     const layer = getOrCreateGraphLayer(layerMap, draft);
+    if (draft.coordinateSpace && draft.coordinateSpace !== "scene") {
+      diagnostics.push({
+        code: "render-intent-non-scene-space",
+        severity: "error",
+        patchId: draft.id,
+        field: "coordinateSpace",
+        message:
+          `RenderIntent "${draft.id}" uses ${draft.coordinateSpace} space. ` +
+          "Formal RenderGraph nodes must be projected to scene space first.",
+      });
+      return;
+    }
     const node = createGraphNode(draft);
     if (node) {
       layer.nodes.push(node);
@@ -967,7 +983,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     surfaceId: draft.subject.surfaceId,
     type,
     visual: source.source,
-    coordinateSpace: draft.coordinateSpace || "scene",
+    coordinateSpace: "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
     tags: normalizeIdList(draft.export?.tags),
     frame: draft.placement?.frame,

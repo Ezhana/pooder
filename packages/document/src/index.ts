@@ -87,7 +87,7 @@ export interface DocumentInteractionOperationSpec {
 }
 
 export interface DocumentInteractionSpec {
-  hitRegion?: { type: "frame" };
+  hitRegion?: { type: "frame"; space: "scene" };
   enabledWhen?: DocumentRuntimeConditionExpr;
   selection?: { enabled: boolean };
   activation?: {
@@ -231,6 +231,8 @@ export interface EditorLayer {
 
 export interface EditorObjectBase {
   id: string;
+  /** Object geometry is always relative to its containing layer/object. */
+  coordinateSpace: "parent-local";
   frame?: EditorRect;
   order?: number;
   visible?: boolean;
@@ -1029,7 +1031,7 @@ function normalizeObjectInteraction(
   if (!isRecord(value)) return undefined;
   const interaction: InteractionSpec = {};
   if (isRecord(value.hitRegion) && value.hitRegion.type === "frame") {
-    interaction.hitRegion = { type: "frame" };
+    interaction.hitRegion = { type: "frame", space: "scene" };
   }
   const enabledWhen = normalizeRuntimeCondition(value.enabledWhen);
   if (enabledWhen) interaction.enabledWhen = enabledWhen;
@@ -1197,6 +1199,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
   const interaction = normalizeObjectInteraction(value.interaction);
   const base = {
     id,
+    coordinateSpace: "parent-local" as const,
     order:
       normalizeFiniteNumber(value.order) !== undefined
         ? normalizeFiniteNumber(value.order)

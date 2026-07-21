@@ -2,6 +2,7 @@ import type { RenderEffectSpec } from "./render";
 import type { InteractionSpec } from "./interaction-service";
 import type { RenderGraphLayer, RenderGraphNode } from "./render-intent";
 import type Disposable from "./disposable";
+import type { CoordinatePoint } from "./coordinate";
 
 export type LayerId = string;
 export type ElementId = string;
@@ -14,10 +15,7 @@ export type SceneMetadata = Record<string, unknown>;
 export type SceneElementData = Record<string, unknown>;
 export type SceneElementStyle = Record<string, unknown>;
 
-export interface ScenePoint {
-  x: number;
-  y: number;
-}
+export type ScenePoint = CoordinatePoint<"scene">;
 
 export interface SceneTransform {
   left?: number;

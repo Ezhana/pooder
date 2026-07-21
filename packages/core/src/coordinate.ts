@@ -3,6 +3,120 @@ export interface Point {
   y: number;
 }
 
+/**
+ * The four coordinate spaces used by the editor. Spatial values crossing a
+ * package/service boundary must carry one of these tags.
+ */
+export type CoordinateSpace =
+  | "object-local"
+  | "parent-local"
+  | "scene"
+  | "screen";
+
+export interface CoordinatePoint<
+  TSpace extends CoordinateSpace = CoordinateSpace,
+> extends Point {
+  readonly space: TSpace;
+}
+
+export interface CoordinateDelta<
+  TSpace extends CoordinateSpace = CoordinateSpace,
+> extends Point {
+  readonly space: TSpace;
+}
+
+export interface CoordinateRect<
+  TSpace extends CoordinateSpace = CoordinateSpace,
+> {
+  readonly space: TSpace;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** Affine matrix mapping values from `from` into `to`. */
+export interface CoordinateMatrix<
+  TFrom extends CoordinateSpace = CoordinateSpace,
+  TTo extends CoordinateSpace = CoordinateSpace,
+> {
+  readonly from: TFrom;
+  readonly to: TTo;
+  readonly values: readonly [number, number, number, number, number, number];
+}
+
+export type ObjectLocalCoordinatePoint = CoordinatePoint<"object-local">;
+export type ParentLocalCoordinatePoint = CoordinatePoint<"parent-local">;
+export type SceneCoordinatePoint = CoordinatePoint<"scene">;
+export type ScreenCoordinatePoint = CoordinatePoint<"screen">;
+export type SceneCoordinateDelta = CoordinateDelta<"scene">;
+export type SceneCoordinateRect = CoordinateRect<"scene">;
+export type ScreenCoordinateRect = CoordinateRect<"screen">;
+export type SceneCoordinateMatrix = CoordinateMatrix<"scene", "scene">;
+
+export function coordinatePoint<TSpace extends CoordinateSpace>(
+  space: TSpace,
+  x: number,
+  y: number,
+): CoordinatePoint<TSpace> {
+  return { space, x: finiteCoordinate(x), y: finiteCoordinate(y) };
+}
+
+export function coordinateDelta<TSpace extends CoordinateSpace>(
+  space: TSpace,
+  x: number,
+  y: number,
+): CoordinateDelta<TSpace> {
+  return { space, x: finiteCoordinate(x), y: finiteCoordinate(y) };
+}
+
+export function coordinateRect<TSpace extends CoordinateSpace>(
+  space: TSpace,
+  rect: Omit<CoordinateRect<TSpace>, "space">,
+): CoordinateRect<TSpace> {
+  return {
+    space,
+    left: finiteCoordinate(rect.left),
+    top: finiteCoordinate(rect.top),
+    width: Math.max(0, finiteCoordinate(rect.width)),
+    height: Math.max(0, finiteCoordinate(rect.height)),
+  };
+}
+
+export function coordinateMatrix<
+  TFrom extends CoordinateSpace,
+  TTo extends CoordinateSpace,
+>(
+  from: TFrom,
+  to: TTo,
+  values: readonly [number, number, number, number, number, number],
+): CoordinateMatrix<TFrom, TTo> {
+  return {
+    from,
+    to,
+    values: values.map(finiteCoordinate) as unknown as CoordinateMatrix<
+      TFrom,
+      TTo
+    >["values"],
+  };
+}
+
+export function assertCoordinateSpace<TSpace extends CoordinateSpace>(
+  value: { readonly space: CoordinateSpace },
+  expected: TSpace,
+  label = "coordinate value",
+): asserts value is { readonly space: TSpace } {
+  if (value.space !== expected) {
+    throw new Error(
+      `${label} must be in ${expected} space; received ${value.space}.`,
+    );
+  }
+}
+
+function finiteCoordinate(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 export interface Size {
   width: number;
   height: number;
@@ -19,11 +133,7 @@ export interface Layout {
 }
 
 export class Coordinate {
-  static calculateLayout(
-    container: Size,
-    content: Size,
-    padding = 0,
-  ): Layout {
+  static calculateLayout(container: Size, content: Size, padding = 0): Layout {
     const availableWidth = Math.max(0, container.width - padding * 2);
     const availableHeight = Math.max(0, container.height - padding * 2);
 

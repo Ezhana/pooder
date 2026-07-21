@@ -1,4 +1,11 @@
-import { Coordinate, Layout, Point, Size } from "./coordinate";
+import {
+  Coordinate,
+  type CoordinatePoint,
+  type CoordinateRect,
+  type Layout,
+  type Point,
+  type Size,
+} from "@pooder/core";
 
 export class ViewportSystem {
   private _containerSize: Size = { width: 0, height: 0 };
@@ -115,6 +122,58 @@ export class ViewportSystem {
     return {
       x: (point.x - this._layout.offsetX) / this._layout.scale,
       y: (point.y - this._layout.offsetY) / this._layout.scale,
+    };
+  }
+
+  sceneToScreenPoint(
+    point: CoordinatePoint<"scene">,
+  ): CoordinatePoint<"screen"> {
+    const projected = this.toPixelPoint(point);
+    return { ...projected, space: "screen" };
+  }
+
+  screenToScenePoint(
+    point: CoordinatePoint<"screen">,
+  ): CoordinatePoint<"scene"> {
+    const projected = this.toPhysicalPoint(point);
+    return { ...projected, space: "scene" };
+  }
+
+  sceneToScreenLength(value: number): number {
+    return this.toPixel(value);
+  }
+
+  screenToSceneLength(value: number): number {
+    return this.toPhysical(value);
+  }
+
+  sceneToScreenRect(rect: CoordinateRect<"scene">): CoordinateRect<"screen"> {
+    const origin = this.sceneToScreenPoint({
+      space: "scene",
+      x: rect.left,
+      y: rect.top,
+    });
+    return {
+      space: "screen",
+      left: origin.x,
+      top: origin.y,
+      width: this.sceneToScreenLength(rect.width),
+      height: this.sceneToScreenLength(rect.height),
+    };
+  }
+
+  screenToSceneRect(rect: CoordinateRect<"screen">): CoordinateRect<"scene"> {
+    const origin = this.screenToScenePoint({
+      space: "screen",
+      x: rect.left,
+      y: rect.top,
+    });
+    return {
+      space: "scene",
+      left: origin.x,
+      top: origin.y,
+      width: this.screenToSceneLength(rect.width),
+      height: this.screenToSceneLength(rect.height),
     };
   }
 }

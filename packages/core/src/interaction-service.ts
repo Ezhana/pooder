@@ -5,7 +5,13 @@ import type {
   ConstraintSpec,
   TransformInput,
 } from "./constraint-resolver";
-import type { CoordinateSpace, GeometrySourceService } from "./geometry-source";
+import type { GeometrySourceService } from "./geometry-source";
+import {
+  coordinateDelta,
+  coordinateMatrix,
+  type CoordinateDelta,
+  type CoordinateMatrix,
+} from "./coordinate";
 import {
   evaluateRuntimeCondition,
   type RuntimeConditionEvalContext,
@@ -78,7 +84,7 @@ export interface InteractionOperationSpec {
 }
 
 export interface InteractionSpec {
-  hitRegion?: { type: "frame" };
+  hitRegion?: { type: "frame"; space: "scene" };
   enabledWhen?: RuntimeConditionExpr;
   selection?: {
     enabled: boolean;
@@ -141,7 +147,7 @@ export interface InteractionManipulationInput {
   runtimeContext: RuntimeConditionEvalContext;
   locked?: boolean;
   transform: TransformInput;
-  coordinateSpace?: CoordinateSpace;
+  coordinateSpace: "scene";
   geometrySource?: GeometrySourceService;
   target?: unknown;
   metadata?: Record<string, unknown>;
@@ -151,7 +157,18 @@ export interface InteractionManipulationInput {
 export interface InteractionManipulationResult extends ConstraintResolveResult {
   kind: InteractionManipulationKind;
   enabled: boolean;
+  commitTransform?: InteractionCommitTransform;
 }
+
+export type InteractionCommitTransform =
+  | {
+      type: "scene-delta";
+      delta: CoordinateDelta<"scene">;
+    }
+  | {
+      type: "scene-matrix";
+      matrix: CoordinateMatrix<"object-local", "scene">;
+    };
 
 export interface InteractionManipulationCommitEvent {
   kind: InteractionManipulationKind;
@@ -222,9 +239,9 @@ export class InteractionService implements Service {
     );
     const activationEnabled = Boolean(
       enabled &&
-      spec?.activation &&
-      spec.activation.enabled !== false &&
-      normalizeId(spec.activation.action.commandId),
+        spec?.activation &&
+        spec.activation.enabled !== false &&
+        normalizeId(spec.activation.action.commandId),
     );
 
     return {
@@ -340,6 +357,9 @@ export class InteractionService implements Service {
       ...resolved,
       kind,
       enabled: operation.enabled,
+      ...(input.commit && operation.enabled
+        ? { commitTransform: createCommitTransform(kind, resolved) }
+        : {}),
     };
     if (input.commit && result.enabled) {
       const event = { kind, input, result };
@@ -402,6 +422,48 @@ export class InteractionService implements Service {
     }
     return this.sessionService;
   }
+}
+
+function createCommitTransform(
+  kind: InteractionManipulationKind,
+  resolved: ConstraintResolveResult,
+): InteractionCommitTransform {
+  const before = resolved.input.frame;
+  const after = resolved.result.frame;
+  if (kind === "move") {
+    return {
+      type: "scene-delta",
+      delta: coordinateDelta(
+        "scene",
+        (after?.left ?? resolved.result.position?.x ?? 0) -
+          (before?.left ?? resolved.input.position?.x ?? 0),
+        (after?.top ?? resolved.result.position?.y ?? 0) -
+          (before?.top ?? resolved.input.position?.y ?? 0),
+      ),
+    };
+  }
+
+  const position = resolved.result.position ?? {
+    x: after?.left ?? 0,
+    y: after?.top ?? 0,
+  };
+  const scale = resolved.result.scale;
+  const scaleX = typeof scale === "number" ? scale : (scale?.x ?? 1);
+  const scaleY = typeof scale === "number" ? scale : (scale?.y ?? 1);
+  const radians = ((resolved.result.rotation ?? 0) * Math.PI) / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  return {
+    type: "scene-matrix",
+    matrix: coordinateMatrix("object-local", "scene", [
+      cosine * scaleX,
+      sine * scaleX,
+      -sine * scaleY,
+      cosine * scaleY,
+      position.x,
+      position.y,
+    ]),
+  };
 }
 
 function createSessionScope(

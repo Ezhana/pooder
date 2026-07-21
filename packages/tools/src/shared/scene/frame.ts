@@ -29,6 +29,7 @@ export function resolveSurfaceFrameRect(
   }
 
   return canvasService.toSceneRect({
+    space: "screen",
     left: layout.cutRect.left,
     top: layout.cutRect.top,
     width: layout.cutRect.width,

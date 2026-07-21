@@ -1,5 +1,5 @@
 import type {
-  CanvasRect,
+  CoordinateRect,
   CapabilityDefinition,
   SceneExportOptions,
   SceneExportSourceResult,
@@ -18,11 +18,13 @@ export interface SceneExportCapabilityResult {
   format: "png" | "jpeg";
   multiplier: number;
   source: SceneExportSourceResult;
-  crop: CanvasRect;
+  crop: CoordinateRect<"scene">;
 }
 
 export interface SceneExportCapabilityApi {
-  exportImage(options?: SceneExportOptions): Promise<SceneExportCapabilityResult>;
+  exportImage(
+    options?: SceneExportOptions,
+  ): Promise<SceneExportCapabilityResult>;
 }
 
 export function createSceneExportCapabilityDefinition(

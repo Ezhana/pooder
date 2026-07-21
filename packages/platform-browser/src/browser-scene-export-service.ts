@@ -195,6 +195,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
           ? source.getCenterPoint()
           : new Point(source.left ?? 0, source.top ?? 0);
         const sceneCenter = canvasService.toScenePoint({
+          space: "screen",
           x: center.x,
           y: center.y,
         });
@@ -263,7 +264,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
           elementIds: Array.from(exportedElementIds),
           tags: Array.from(exportedTags),
         },
-        crop: cloneRect(crop),
+        crop: { ...cloneRect(crop), space: "scene" },
       };
     } finally {
       exportCanvas.dispose();
@@ -328,7 +329,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const mode = normalizeOutputMaskMode(options.outputMask.mode || "alpha");
     const maskCanvas = await renderOutputMask({
       canvasService: this.requireCanvasService(),
-      crop: options.crop,
+      crop: { ...options.crop, space: "scene" },
       height: options.height,
       mode,
       multiplier: options.multiplier,
@@ -405,6 +406,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
           : layout.cutRect;
 
     return this.requireCanvasService().toSceneRect({
+      space: "screen",
       left: rect.left,
       top: rect.top,
       width: rect.width,
@@ -444,6 +446,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const bottom = Math.max(...bounds.map((rect) => rect.top + rect.height));
 
     return this.requireCanvasService().toSceneRect({
+      space: "screen",
       left,
       top,
       width: right - left,
