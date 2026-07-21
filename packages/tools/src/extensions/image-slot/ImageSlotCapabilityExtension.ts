@@ -21,13 +21,13 @@ import type {
   EditorImagePlacement,
   EditorImageResource,
 } from "@pooder/document";
-import type { EditorDocumentController } from "@pooder/document-core";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
   IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
   createImageSlotCapabilityDefinition,
   type ImageSlotCapabilityApi,
+  type ImageSlotDocumentController,
   type ImageSlotSessionDraft,
   type ImageSlotPlacementPreset,
   type ImageSlotViewState,
@@ -69,7 +69,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   readonly metadata = { name: "ImageSlotCapabilityExtension" };
   readonly activation = { requiresServices: [SCENE_SERVICE, SESSION_SERVICE] };
   private document: EditorDocument | null = null;
-  private controller: EditorDocumentController | null = null;
+  private controller: ImageSlotDocumentController | null = null;
   private original: ImageSlotSessionDraft | null = null;
   private state: ImageSlotViewState = { phase: "idle", draft: null };
   private readonly listeners = new Set<(state: ImageSlotViewState) => void>();
@@ -137,7 +137,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
 
   bindDocument(
     document: EditorDocument,
-    controller: EditorDocumentController,
+    controller: ImageSlotDocumentController,
   ): void {
     this.document = document;
     this.controller = controller;

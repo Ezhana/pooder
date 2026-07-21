@@ -1,11 +1,4 @@
 import {
-  applyEditorDocument,
-  createEditorDocumentController,
-  type ApplyEditorDocumentResult,
-  type EditorDocumentController,
-  type EditorDocumentRuntime,
-} from "@pooder/document-core";
-import {
   collectEditorDocumentCapabilityRequirements,
   normalizeEditorDocument,
   validateEditorDocument,
@@ -21,13 +14,15 @@ export {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
 } from "../extensions/image-slot/capability";
+import type { ImageSlotDocumentController } from "../extensions/image-slot/capability";
 
-export type KitEditorDocumentRuntime = EditorDocumentRuntime;
-export type ApplyKitEditorDocumentResult = ApplyEditorDocumentResult;
+export interface OfficialToolRuntime {
+  readonly capabilities: {
+    get<T = unknown>(id: string): T | undefined;
+  };
+}
 
-export interface KitEditorDocumentController extends EditorDocumentController {}
-
-export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
+export const OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   clip: "pooder.kit.clip",
   dieline: "pooder.kit.dieline-geometry",
   feature: "pooder.kit.feature",
@@ -35,37 +30,37 @@ export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS = {
   mirror: "pooder.kit.mirror",
 } as const;
 
-export type KitEditorDocumentEffectType =
-  keyof typeof KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS;
+export type OfficialToolDocumentEffectType =
+  keyof typeof OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS;
 
-export type KitEditorDocumentEffect<TPayload = Record<string, unknown>> =
+export type OfficialToolDocumentEffect<TPayload = Record<string, unknown>> =
   EditorEffect<TPayload> & {
-    type: KitEditorDocumentEffectType;
+    type: OfficialToolDocumentEffectType;
   };
 
-export function isKitEditorDocumentEffectType(
+export function isOfficialToolDocumentEffectType(
   type: string,
-): type is KitEditorDocumentEffectType {
+): type is OfficialToolDocumentEffectType {
   return Object.prototype.hasOwnProperty.call(
-    KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS,
+    OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
     type,
   );
 }
 
-export function resolveKitEditorDocumentEffectCapabilityId(
+export function resolveOfficialToolDocumentEffectCapabilityId(
   effect: EditorEffect,
 ): string | undefined {
   if (effect.capabilityId) return effect.capabilityId;
-  return isKitEditorDocumentEffectType(effect.type)
-    ? KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS[effect.type]
+  return isOfficialToolDocumentEffectType(effect.type)
+    ? OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS[effect.type]
     : undefined;
 }
 
-export function normalizeKitEditorDocument(value: unknown) {
+export function normalizeOfficialToolDocument(value: unknown) {
   return normalizeEditorDocument(value);
 }
 
-export function validateKitEditorDocument(
+export function validateOfficialToolDocument(
   value: unknown,
   options: Omit<
     EditorDocumentValidationOptions,
@@ -74,11 +69,11 @@ export function validateKitEditorDocument(
 ) {
   return validateEditorDocument(value, {
     ...options,
-    resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
+    resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
   });
 }
 
-export function collectKitEditorDocumentCapabilityRequirements(
+export function collectOfficialToolDocumentCapabilityRequirements(
   value: unknown,
   options: Omit<
     EditorDocumentCapabilityCollectionOptions,
@@ -88,37 +83,15 @@ export function collectKitEditorDocumentCapabilityRequirements(
   const document = normalizeEditorDocument(value);
   const result = collectEditorDocumentCapabilityRequirements(document, {
     ...options,
-    resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
+    resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
   });
   return result;
 }
 
-export async function applyKitEditorDocument(
-  runtime: KitEditorDocumentRuntime,
-  value: unknown,
-): Promise<ApplyKitEditorDocumentResult> {
-  return applyEditorDocument(runtime, value, {
-    resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
-    afterApply: refreshKitDocumentRuntimeCapabilities,
-  });
-}
-
-export function createKitEditorDocumentController(
-  runtime: KitEditorDocumentRuntime,
-): KitEditorDocumentController {
-  let controller: KitEditorDocumentController;
-  controller = createEditorDocumentController(runtime, {
-    resolveEffectCapabilityId: resolveKitEditorDocumentEffectCapabilityId,
-    afterApply: (nextRuntime, document) =>
-      refreshKitDocumentRuntimeCapabilities(nextRuntime, document, controller),
-  });
-  return controller;
-}
-
-async function refreshKitDocumentRuntimeCapabilities(
-  runtime: KitEditorDocumentRuntime,
+export async function synchronizeOfficialToolsForDocument(
+  runtime: OfficialToolRuntime,
   document: EditorDocument,
-  controller?: KitEditorDocumentController,
+  controller?: ImageSlotDocumentController,
 ): Promise<void> {
   const featureState = readObjectFeatureEffectState(document);
   runtime.capabilities
@@ -127,7 +100,7 @@ async function refreshKitDocumentRuntimeCapabilities(
         features: Record<string, unknown>[],
         options?: Record<string, unknown>,
       ): void;
-    }>(KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS.feature)
+    }>(OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS.feature)
     ?.replaceFeatures(featureState?.features ?? [], {
       markDirty: false,
       target: "both",
@@ -138,12 +111,33 @@ async function refreshKitDocumentRuntimeCapabilities(
       .get<{
         syncDocument(
           document: EditorDocument,
-          controller: EditorDocumentController,
+          controller: ImageSlotDocumentController,
         ): void;
       }>("pooder.kit.image-slot")
       ?.syncDocument(document, controller);
   }
 }
+
+/** @deprecated Use OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS. */
+export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS =
+  OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS;
+/** @deprecated Use OfficialToolDocumentEffectType. */
+export type KitEditorDocumentEffectType = OfficialToolDocumentEffectType;
+/** @deprecated Use OfficialToolDocumentEffect. */
+export type KitEditorDocumentEffect<TPayload = Record<string, unknown>> =
+  OfficialToolDocumentEffect<TPayload>;
+/** @deprecated Use isOfficialToolDocumentEffectType. */
+export const isKitEditorDocumentEffectType = isOfficialToolDocumentEffectType;
+/** @deprecated Use resolveOfficialToolDocumentEffectCapabilityId. */
+export const resolveKitEditorDocumentEffectCapabilityId =
+  resolveOfficialToolDocumentEffectCapabilityId;
+/** @deprecated Use normalizeOfficialToolDocument. */
+export const normalizeKitEditorDocument = normalizeOfficialToolDocument;
+/** @deprecated Use validateOfficialToolDocument. */
+export const validateKitEditorDocument = validateOfficialToolDocument;
+/** @deprecated Use collectOfficialToolDocumentCapabilityRequirements. */
+export const collectKitEditorDocumentCapabilityRequirements =
+  collectOfficialToolDocumentCapabilityRequirements;
 
 function readObjectFeatureEffectState(
   document: EditorDocument,

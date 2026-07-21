@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@pooder/core": "workspace:*",
+    "@pooder/document-core": "workspace:*",
     "@pooder/platform-browser": "workspace:*"
   },
   "peerDependencies": {

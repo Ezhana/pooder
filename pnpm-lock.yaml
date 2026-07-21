@@ -31,10 +31,6 @@ importers:
         version: 5.8.2
 
   packages/document:
-    dependencies:
-      '@pooder/core':
-        specifier: workspace:*
-        version: link:../core
     devDependencies:
       tsup:
         specifier: ^8.0.0
@@ -59,24 +55,21 @@ importers:
         specifier: ^5.0.0
         version: 5.8.2
 
+  packages/image-mask-contract:
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(@microsoft/api-extractor@7.55.2(@types/node@25.0.3))(postcss@8.5.6)(typescript@5.8.2)
+      typescript:
+        specifier: ^5.0.0
+        version: 5.8.2
+
   packages/kit:
     dependencies:
-      '@pooder/core':
+      '@pooder/tools':
         specifier: workspace:*
-        version: link:../core
-      '@pooder/document':
-        specifier: workspace:*
-        version: link:../document
-      '@pooder/document-core':
-        specifier: workspace:*
-        version: link:../document-core
-      paper:
-        specifier: ^0.12.18
-        version: 0.12.18
+        version: link:../tools
     devDependencies:
-      '@types/paper':
-        specifier: ^0.12.3
-        version: 0.12.3
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(@microsoft/api-extractor@7.55.2(@types/node@25.0.3))(postcss@8.5.6)(typescript@5.8.2)
@@ -103,11 +96,39 @@ importers:
         specifier: ^5.0.0
         version: 5.8.2
 
+  packages/tools:
+    dependencies:
+      '@pooder/core':
+        specifier: workspace:*
+        version: link:../core
+      '@pooder/document':
+        specifier: workspace:*
+        version: link:../document
+      '@pooder/image-mask-contract':
+        specifier: workspace:*
+        version: link:../image-mask-contract
+      paper:
+        specifier: ^0.12.18
+        version: 0.12.18
+    devDependencies:
+      '@types/paper':
+        specifier: ^0.12.3
+        version: 0.12.3
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(@microsoft/api-extractor@7.55.2(@types/node@25.0.3))(postcss@8.5.6)(typescript@5.8.2)
+      typescript:
+        specifier: ^5.0.0
+        version: 5.8.2
+
   packages/vue:
     dependencies:
       '@pooder/core':
         specifier: workspace:*
         version: link:../core
+      '@pooder/document-core':
+        specifier: workspace:*
+        version: link:../document-core
       '@pooder/platform-browser':
         specifier: workspace:*
         version: link:../platform-browser
@@ -1295,6 +1316,7 @@ packages:
   prebuild-install@7.1.3:
     resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
     engines: {node: '>=10'}
+    deprecated: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
     hasBin: true
 
   prettier@2.8.8:

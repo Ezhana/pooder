@@ -20,7 +20,7 @@ import {
   createEdgeDetectionCapability,
   createImagePlacementCapability,
   type ImagePlacementCapabilityApi,
-} from "@pooder/kit";
+} from "@pooder/tools";
 
 const runtime = new Pooder();
 
@@ -98,7 +98,7 @@ import type {
   DesignExportCapabilityApi,
   DielineGeometryCapabilityApi,
   EdgeDetectionCapabilityApi,
-} from "@pooder/kit";
+} from "@pooder/tools";
 
 async function applyDielineFromArtwork() {
   const exportImage =

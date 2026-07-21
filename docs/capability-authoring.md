@@ -17,7 +17,7 @@ legacy kit-owned `*Tool` pattern.
   headless scene graph.
 - `@pooder/platform-browser` owns browser and Fabric implementations for scene,
   render, export, canvas, and layout services.
-- `@pooder/kit` owns optional reusable capabilities. Kit capabilities may
+- `@pooder/tools` owns optional reusable capabilities. Tool capabilities may
   expose typed facades, config defaults, command bridges, and render producers,
   but must not define product toolbar items or workflow semantics.
 - Applications own product tool ids, labels, icons, activity bars, workflow
@@ -132,7 +132,7 @@ when a host integration or compatibility bridge needs command bus access.
 - A command bridge should delegate to the same typed facade implementation used
   by applications.
 - Kit legacy command bridges are centralized in
-  `packages/kit/src/extensions/legacyCommandBridge.ts`; adding a new
+  `packages/tools/src/extensions/legacyCommandBridge.ts`; adding a new
   unnamespaced command requires adding an explicit bridge entry and typed
   facade replacement.
 

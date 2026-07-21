@@ -4,7 +4,22 @@ import type {
   EditorImagePlacement,
   EditorImageResource,
 } from "@pooder/document";
-import type { EditorDocumentController } from "@pooder/document-core";
+
+export interface ImageSlotDocumentController {
+  updateObject(
+    objectId: string,
+    update: (current: Readonly<import("@pooder/document").EditorObject>) =>
+      import("@pooder/document").EditorObject,
+  ): Promise<
+    | { ok: true; document: EditorDocument }
+    | { ok: false; reason: "object-not-found" }
+    | {
+        ok: false;
+        reason: "validation-failed";
+        diagnostics: import("@pooder/document").EditorDocumentDiagnostic[];
+      }
+  >;
+}
 
 export const IMAGE_SLOT_CAPABILITY_ID = "pooder.kit.image-slot";
 export const IMAGE_SLOT_OPEN_SESSION_COMMAND_ID = "pooder.image-slot.open";
@@ -58,7 +73,7 @@ export interface ImageSlotCapabilityApi {
   /** @internal Document bridge used by the kit controller after a successful apply. */
   syncDocument(
     document: EditorDocument,
-    controller: EditorDocumentController,
+    controller: ImageSlotDocumentController,
   ): void;
   openSession(input: {
     objectId: string;

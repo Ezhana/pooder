@@ -111,7 +111,7 @@ Resume instruction for a new thread:
   workflow-neutral sessions.
 - `@pooder/platform-browser` owns the Fabric/browser implementation of core
   scene and render contracts.
-- `@pooder/kit` owns optional official capabilities such as image placement,
+- `@pooder/tools` owns optional official capabilities such as image placement,
   edge detection, dieline geometry, object mirror effects, and export helpers.
   It must not define product tools, toolbar items,
   labels, or application workflow semantics.
@@ -129,7 +129,7 @@ Resume instruction for a new thread:
 - Capability code must accept layer ids, config namespaces, and session ids from
   the caller whenever possible. Hard-coded business ids should become defaults,
   not required coupling.
-- App-specific tool ids must not leak into `@pooder/kit`.
+- App-specific tool ids must not leak into `@pooder/tools`.
 - Existing behavior should be preserved through adapter slices before removing
   old tool contributions.
 
@@ -163,7 +163,7 @@ Deliverables:
 
 Known starting points:
 
-- Current `packages/kit/src/extensions/` capability extension directories.
+- Current `packages/tools/src/extensions/` capability extension directories.
 - Internal implementation bases that still exist under those directories.
 
 Acceptance:
@@ -395,7 +395,7 @@ Deliverables:
 
 Acceptance:
 
-- Dieline workflow orchestration is no longer required in `@pooder/kit`.
+- Dieline workflow orchestration is no longer required in `@pooder/tools`.
 
 ### Slice P4.S4 - Build And Type Verification
 
@@ -494,7 +494,7 @@ Acceptance:
 - Does this slice move one concern toward its target owner?
 - Can it ship without forcing all callers to migrate at once?
 - Are layer ids, config namespaces, and workflow ids caller-controlled?
-- Does new public code avoid app-specific tool semantics in `@pooder/kit`?
+- Does new public code avoid app-specific tool semantics in `@pooder/tools`?
 - Are legacy commands or factories preserved when needed?
 - Are type/build checks enough for the slice, unless a manual walkthrough is
   explicitly requested?

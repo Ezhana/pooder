@@ -995,7 +995,10 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
 function createObjectInteractionAspect(
   object: EditorObject,
 ): InteractionSpec | undefined {
-  return object.interaction;
+  // The document package intentionally models serialized constraint sources as
+  // unknown. This runtime adapter is the boundary that narrows them to core's
+  // executable interaction contract.
+  return object.interaction as InteractionSpec | undefined;
 }
 
 function compareEffectEntries(a: EffectEntry, b: EffectEntry) {

@@ -1,11 +1,115 @@
-import type {
-  ConstraintSpec,
-  InteractionConstraintSpec,
-  InteractionOperationSpec,
-  InteractionSessionIntent,
-  InteractionSpec,
-  RuntimeConditionExpr,
-} from "@pooder/core";
+export interface DocumentConstraintSpec {
+  type: string;
+  source?: unknown;
+  mode?: string;
+  params?: Record<string, unknown>;
+}
+
+export type DocumentRuntimeConditionRef =
+  | { source: "context"; key: string }
+  | { source: "activeToolId" }
+  | {
+      source: "workflowSession";
+      field: "active" | "focused";
+      sessionId: string;
+    }
+  | {
+      source: "workflowSession";
+      field: "scopeActive";
+      scope: DocumentSessionScope;
+    }
+  | {
+      source: "workflowSession";
+      field: "anyActive";
+      scope?: DocumentSessionScope;
+    }
+  | {
+      source: "renderLayer";
+      layerId: string;
+      field: "exists" | "objectCount" | "visibleObjectCount";
+    };
+
+export type DocumentRuntimeConditionExpr =
+  | { op: "const"; value: boolean }
+  | { op: "truthy"; ref: DocumentRuntimeConditionRef }
+  | { op: "equals"; ref: DocumentRuntimeConditionRef; value: unknown }
+  | {
+      op: "in";
+      ref: DocumentRuntimeConditionRef;
+      values: readonly unknown[];
+    }
+  | {
+      op: "compare";
+      ref: DocumentRuntimeConditionRef;
+      cmp: ">" | ">=" | "==" | "!=" | "<" | "<=";
+      value: number;
+    }
+  | { op: "not"; expr: DocumentRuntimeConditionExpr }
+  | { op: "all"; exprs: readonly DocumentRuntimeConditionExpr[] }
+  | { op: "any"; exprs: readonly DocumentRuntimeConditionExpr[] };
+
+export interface DocumentSessionScope {
+  surfaceId?: string | null;
+  subjectId?: string | null;
+  channel?: string | null;
+  groupId?: string | null;
+}
+
+export interface DocumentInteractionSessionIntent {
+  channel: string;
+  groupId: string;
+  sessionId?: string;
+  mode: "exclusive" | "cooperative" | "passive";
+  scope: "subject" | "surface" | "editor";
+  leavePolicy?: "block" | "commit" | "rollback";
+}
+
+export interface DocumentInteractionConstraintSpec {
+  activeWhen?: DocumentRuntimeConditionExpr;
+  spec: DocumentConstraintSpec;
+}
+
+export interface DocumentInteractionOperationSpec {
+  enabled: boolean;
+  constraints?: DocumentInteractionConstraintSpec[];
+  action?: {
+    commandId: string;
+    payload?: Record<string, unknown>;
+  };
+}
+
+export interface DocumentInteractionSpec {
+  hitRegion?: { type: "frame" };
+  enabledWhen?: DocumentRuntimeConditionExpr;
+  selection?: { enabled: boolean };
+  activation?: {
+    enabled?: boolean;
+    trigger?: "primary-pointer" | "double-click";
+    action: {
+      commandId: string;
+      payload?: Record<string, unknown>;
+    };
+    session?: DocumentInteractionSessionIntent;
+  };
+  manipulation?: {
+    move?: DocumentInteractionOperationSpec;
+    resize?: DocumentInteractionOperationSpec;
+    rotate?: DocumentInteractionOperationSpec;
+  };
+}
+
+/** @deprecated Use DocumentConstraintSpec. */
+export type ConstraintSpec = DocumentConstraintSpec;
+/** @deprecated Use DocumentInteractionConstraintSpec. */
+export type InteractionConstraintSpec = DocumentInteractionConstraintSpec;
+/** @deprecated Use DocumentInteractionOperationSpec. */
+export type InteractionOperationSpec = DocumentInteractionOperationSpec;
+/** @deprecated Use DocumentInteractionSessionIntent. */
+export type InteractionSessionIntent = DocumentInteractionSessionIntent;
+/** @deprecated Use DocumentInteractionSpec. */
+export type InteractionSpec = DocumentInteractionSpec;
+/** @deprecated Use DocumentRuntimeConditionExpr. */
+export type RuntimeConditionExpr = DocumentRuntimeConditionExpr;
 
 export const EDITOR_DOCUMENT_VERSION = 7 as const;
 

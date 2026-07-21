@@ -8,7 +8,7 @@ to capability-first APIs.
 
 ## What Changed
 
-- Installing `@pooder/kit` no longer adds product toolbar tools for image,
+- Installing `@pooder/kit` remains an optional aggregate entry and no longer adds product toolbar tools for image,
   dieline, or feature workflows.
 - Applications own toolbar catalogs, labels, icons, activation, session policy,
   and workflow orchestration.
@@ -73,7 +73,7 @@ command bus. Command bridges are compatibility surfaces, not the preferred API
 for new app code.
 
 The supported legacy command bridge map lives in
-`packages/kit/src/extensions/legacyCommandBridge.ts`. New command bus
+`packages/tools/src/extensions/legacyCommandBridge.ts`. New command bus
 integrations must use namespaced command ids unless they are explicitly added
 to that bridge map with a typed facade replacement.
 

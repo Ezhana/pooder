@@ -16,7 +16,6 @@ import {
   type SceneLayoutService,
   type SurfaceFrameService,
 } from "@pooder/core";
-import { resolveObjectSource } from "@pooder/document-core";
 import {
   CANVAS_SERVICE,
   CanvasService,
@@ -490,18 +489,16 @@ export class FeatureTool implements ExtensionDefinition {
     width: number;
   } | null {
     const source = object.source;
-    const resolved = resolveObjectSource(source as any);
     const frame = object.frame;
     const frameWidth = this.firstPositiveNumber(frame?.width);
     const frameHeight = this.firstPositiveNumber(frame?.height);
+    const sourceSize = this.resolveFeatureSourceSize(source);
     const resolvedWidth = this.firstPositiveNumber(
-      resolved?.intrinsicSize?.width,
-      resolved?.bounds?.width,
+      sourceSize?.width,
       frameWidth,
     );
     const resolvedHeight = this.firstPositiveNumber(
-      resolved?.intrinsicSize?.height,
-      resolved?.bounds?.height,
+      sourceSize?.height,
       frameHeight,
     );
 
@@ -541,6 +538,43 @@ export class FeatureTool implements ExtensionDefinition {
       radius: this.firstPositiveNumber((source.params || {}).radius) || 0,
       shape,
       width: resolvedWidth,
+    };
+  }
+
+  private resolveFeatureSourceSize(
+    source: FeatureSourceObject["source"],
+  ): { width: number; height: number } | null {
+    if (source.kind === "path") {
+      const width = this.firstPositiveNumber(
+        source.sourceSize?.width,
+        source.sourceBounds?.width,
+      );
+      const height = this.firstPositiveNumber(
+        source.sourceSize?.height,
+        source.sourceBounds?.height,
+      );
+      return width && height ? { width, height } : null;
+    }
+    if (source.kind !== "shape") return null;
+
+    if (source.shape === "circle") {
+      const radius = this.firstPositiveNumber(source.params.radius) ?? 1;
+      return { width: radius * 2, height: radius * 2 };
+    }
+    if (source.shape === "ellipse") {
+      const width =
+        (this.firstPositiveNumber(source.params.rx) ??
+          (this.firstPositiveNumber(source.params.width) ?? 2) / 2) * 2;
+      const height =
+        (this.firstPositiveNumber(source.params.ry) ??
+          (this.firstPositiveNumber(source.params.height) ?? 2) / 2) * 2;
+      return { width, height };
+    }
+    return {
+      width: this.firstPositiveNumber(source.params.width) ??
+        (source.shape === "heart" ? 100 : 1),
+      height: this.firstPositiveNumber(source.params.height) ??
+        (source.shape === "heart" ? 90 : 1),
     };
   }
 

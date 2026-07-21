@@ -12,3 +12,14 @@ export type {
   PooderCanvasHostRenderSyncPayload,
 } from "./canvas-host";
 export type { PooderRuntimeLike } from "./runtime";
+export {
+  applyEditorDocument,
+  createEditorDocumentController,
+} from "@pooder/document-core";
+export type {
+  ApplyEditorDocumentOptions,
+  ApplyEditorDocumentResult,
+  EditorDocumentController,
+  EditorDocumentRuntime,
+} from "@pooder/document-core";
+export { getLegacyRuntimeEventBridge } from "@pooder/core/internal/legacy-extension";
