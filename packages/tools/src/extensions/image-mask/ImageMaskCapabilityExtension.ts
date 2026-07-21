@@ -8,6 +8,7 @@ import {
   IMAGE_MASK_CAPABILITY_ID,
   type ExtractAlphaMaskOptions,
   type ExtractAlphaMaskResult,
+  type ImageMaskAlphaOptions,
   type ImageMaskCapabilityApi,
   type ImageMaskCapabilityOptions,
   type ImageMaskTint,
@@ -15,8 +16,56 @@ import {
 
 const DEFAULT_MASK_TINT: ImageMaskTint = { r: 255, g: 255, b: 255 };
 
-export interface ImageMaskCapabilityExtensionOptions
-  extends ImageMaskCapabilityOptions {
+export interface NormalizedImageMaskAlphaOptions {
+  selection: "opaque" | "transparent";
+  mapping: "continuous" | "threshold";
+  threshold: number;
+  softness: number;
+  outputOpacity: number;
+}
+
+export function normalizeImageMaskAlpha(
+  alpha?: ImageMaskAlphaOptions,
+): NormalizedImageMaskAlphaOptions {
+  return {
+    selection: alpha?.selection === "transparent" ? "transparent" : "opaque",
+    mapping: alpha?.mapping === "threshold" ? "threshold" : "continuous",
+    threshold: normalizeUnitInterval(alpha?.threshold, 0.5),
+    softness: normalizeUnitInterval(alpha?.softness, 0),
+    outputOpacity: normalizeUnitInterval(alpha?.outputOpacity, 1),
+  };
+}
+
+export function mapImageMaskAlpha(
+  sourceAlpha: number,
+  options: NormalizedImageMaskAlphaOptions,
+): number {
+  const selectedAlpha =
+    options.selection === "transparent" ? 1 - sourceAlpha : sourceAlpha;
+  if (options.mapping === "continuous") {
+    return selectedAlpha * options.outputOpacity;
+  }
+  if (options.softness <= 0) {
+    return (selectedAlpha >= options.threshold ? 1 : 0) * options.outputOpacity;
+  }
+  const halfSoftness = options.softness / 2;
+  const lower = options.threshold - halfSoftness;
+  const upper = options.threshold + halfSoftness;
+  const progress = Math.max(
+    0,
+    Math.min(1, (selectedAlpha - lower) / Math.max(upper - lower, 0.000001)),
+  );
+  const smoothed = progress * progress * (3 - 2 * progress);
+  return smoothed * options.outputOpacity;
+}
+
+function normalizeUnitInterval(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(1, numeric));
+}
+
+export interface ImageMaskCapabilityExtensionOptions extends ImageMaskCapabilityOptions {
   id?: string;
 }
 
@@ -29,7 +78,8 @@ export class ImageMaskCapabilityExtension implements ExtensionDefinition {
   private readonly capabilityId: string;
 
   constructor(options: ImageMaskCapabilityExtensionOptions = {}) {
-    this.id = String(options.id || IMAGE_MASK_CAPABILITY_ID).trim() ||
+    this.id =
+      String(options.id || IMAGE_MASK_CAPABILITY_ID).trim() ||
       IMAGE_MASK_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || IMAGE_MASK_CAPABILITY_ID;
   }
@@ -58,7 +108,8 @@ export class ImageMaskCapabilityExtension implements ExtensionDefinition {
       throw new Error("image-mask-browser-required");
     }
 
-    const element = options.element || await this.loadImageElement(normalizedSource);
+    const element =
+      options.element || (await this.loadImageElement(normalizedSource));
     const size = this.getElementSize(element);
     if (!size) {
       throw new Error("image-mask-source-size-unavailable");
@@ -75,11 +126,15 @@ export class ImageMaskCapabilityExtension implements ExtensionDefinition {
     ctx.drawImage(element as CanvasImageSource, 0, 0, size.width, size.height);
     const imageData = ctx.getImageData(0, 0, size.width, size.height);
     const tint = this.normalizeTint(options.tint);
+    const alpha = normalizeImageMaskAlpha(options.alpha);
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
       data[i] = tint.r;
       data[i + 1] = tint.g;
       data[i + 2] = tint.b;
+      data[i + 3] = Math.round(
+        mapImageMaskAlpha(data[i + 3] / 255, alpha) * 255,
+      );
     }
 
     ctx.putImageData(imageData, 0, 0);

@@ -44,6 +44,8 @@ import {
   IMAGE_MASK_CAPABILITY_ID,
   ImageMaskCapabilityExtension,
   createImageMaskCapabilityDefinition,
+  mapImageMaskAlpha,
+  normalizeImageMaskAlpha,
   type ImageMaskCapabilityApi,
 } from "../src/extensions/image-mask";
 import {
@@ -4883,6 +4885,52 @@ async function testDielineGeometryCapabilityExtension() {
 }
 
 async function testImageMaskCapabilityExtension() {
+  assertEqual(
+    mapImageMaskAlpha(
+      0.2,
+      normalizeImageMaskAlpha({ selection: "transparent" }),
+    ),
+    0.8,
+    "transparent selection should invert the source alpha continuously",
+  );
+  assertEqual(
+    mapImageMaskAlpha(
+      0.2,
+      normalizeImageMaskAlpha({
+        selection: "transparent",
+        mapping: "threshold",
+        threshold: 0.7,
+      }),
+    ),
+    1,
+    "transparent threshold should select sufficiently transparent pixels",
+  );
+  assertEqual(
+    mapImageMaskAlpha(
+      0.4,
+      normalizeImageMaskAlpha({
+        selection: "transparent",
+        mapping: "threshold",
+        threshold: 0.7,
+      }),
+    ),
+    0,
+    "transparent threshold should reject pixels below the selected transparency",
+  );
+  assertEqual(
+    mapImageMaskAlpha(
+      0.5,
+      normalizeImageMaskAlpha({
+        mapping: "threshold",
+        threshold: 0.5,
+        softness: 0.2,
+        outputOpacity: 0.5,
+      }),
+    ),
+    0.25,
+    "soft threshold output should be scaled by output opacity",
+  );
+
   const runtime = new Pooder();
 
   runtime.extensions.register(new ImageMaskCapabilityExtension());

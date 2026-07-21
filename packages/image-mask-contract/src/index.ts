@@ -6,8 +6,20 @@ export interface ImageMaskTint {
   b: number;
 }
 
+export type ImageMaskAlphaSelection = "opaque" | "transparent";
+export type ImageMaskAlphaMapping = "continuous" | "threshold";
+
+export interface ImageMaskAlphaOptions {
+  selection?: ImageMaskAlphaSelection;
+  mapping?: ImageMaskAlphaMapping;
+  threshold?: number;
+  softness?: number;
+  outputOpacity?: number;
+}
+
 export interface ExtractAlphaMaskOptions {
   tint?: Partial<ImageMaskTint>;
+  alpha?: ImageMaskAlphaOptions;
   element?:
     | HTMLImageElement
     | HTMLCanvasElement
