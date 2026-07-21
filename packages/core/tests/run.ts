@@ -14,6 +14,7 @@ import {
   containsPoint,
   containsRect,
   coordinateMatrix,
+  createAffinePlacement,
   createStaticGeometrySource,
   ConstraintResolverService,
   DefaultSurfaceFrameService,
@@ -2128,9 +2129,11 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     );
 
     const committedKinds: string[] = [];
-    interaction.onDidCommitManipulation((event) =>
-      committedKinds.push(event.kind),
-    );
+    const committedPatches: unknown[] = [];
+    interaction.onDidCommitManipulation((event) => {
+      committedKinds.push(event.kind);
+      committedPatches.push(event.result.sceneTransformPatch);
+    });
     const transform = {
       frame: { left: 1, top: 2, width: 20, height: 30 },
       size: { width: 20, height: 30 },
@@ -2141,6 +2144,12 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
         spec,
         runtimeContext,
         transform,
+        coordinateSpace: "scene",
+        sourceTransform: {
+          frame: { left: 0, top: 0, width: 20, height: 30 },
+        },
+        subject: { subjectId: "image", projectionIds: ["image"] },
+        commit: true,
       }).result.frame?.left,
       10,
     );
@@ -2149,6 +2158,7 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
         spec,
         runtimeContext,
         transform,
+        coordinateSpace: "scene",
       }).result.size,
       { width: 50, height: 60 },
     );
@@ -2157,11 +2167,18 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
         spec,
         runtimeContext,
         transform,
+        coordinateSpace: "scene",
+        subject: { subjectId: "image", projectionIds: ["image"] },
         commit: true,
       }).result.rotation,
       90,
     );
-    assertDeepEqual(committedKinds, ["rotate"]);
+    assertDeepEqual(committedKinds, ["move", "rotate"]);
+    assertDeepEqual(committedPatches[0], {
+      type: "translate",
+      coordinateSpace: "scene",
+      delta: { space: "scene", x: 10, y: 2 },
+    });
 
     runtime.services
       .getOrThrow(COMMAND_SERVICE)
@@ -2248,6 +2265,71 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     assertEqual(blocked.activated, false);
     assertEqual(blocked.reason, "session-conflict");
     await existing.cancel();
+  });
+}
+
+async function testRenderGraphRecordsSubjectProjectionMemberships() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createProjection = (id: string, objectOrder: number) => ({
+      id,
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "logical-object",
+      },
+      visual: { type: "rect" as const },
+      placement: createAffinePlacement({
+        localBounds: { left: 0, top: 0, width: 10, height: 10 },
+        localToScene: coordinateMatrix("object-local", "scene", [
+          1,
+          0,
+          0,
+          1,
+          objectOrder * 10,
+          0,
+        ]),
+      }),
+      ordering: { layerId: "art", objectOrder },
+    });
+    const graph = intents.setDocumentIntents([
+      createProjection("logical-object:fill", 0),
+      createProjection("logical-object:outline", 1),
+    ]);
+    assertDeepEqual(
+      graph.projectionMemberships,
+      [
+        {
+          subjectId: "logical-object",
+          nodeIds: ["logical-object:fill", "logical-object:outline"],
+        },
+      ],
+      "RenderGraph should explicitly index every projection of a logical subject",
+    );
+
+    const interaction =
+      runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
+    const selections: unknown[] = [];
+    interaction.onDidChangeSelection((event) => selections.push(event.subject));
+    interaction.selectSubject({
+      subjectId: "logical-object",
+      surfaceId: "front",
+      projectionIds: graph.projectionMemberships[0]!.nodeIds,
+    });
+    assertDeepEqual(
+      selections,
+      [
+        {
+          subjectId: "logical-object",
+          surfaceId: "front",
+          projectionIds: ["logical-object:fill", "logical-object:outline"],
+        },
+      ],
+      "selection should expose the logical subject instead of a render target",
+    );
   });
 }
 
@@ -3197,6 +3279,10 @@ async function main() {
     [
       "keeps render intent runtime patches source scoped",
       testRenderIntentRuntimePatchesAreSourceScoped,
+    ],
+    [
+      "records logical subject projection memberships",
+      testRenderGraphRecordsSubjectProjectionMemberships,
     ],
     [
       "scopes document render intent updates by semantic diff",

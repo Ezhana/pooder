@@ -10,6 +10,7 @@ import {
   evaluateRuntimeCondition,
   coordinateMatrix,
   multiplyCoordinateMatrices,
+  transformCoordinateRect,
   type AffinePlacement,
   type CanvasService,
   type CommandService,
@@ -26,6 +27,7 @@ import {
   type RenderIntentChangeReason,
   type InteractionManipulationKind,
   type InteractionManipulationResult,
+  type InteractionSubject,
   type InteractionService,
   type InteractionSpec,
   type Matrix2D,
@@ -148,7 +150,12 @@ export class FabricRenderGraphAdapter implements Service {
     new Set<FabricRenderGraphSyncStateListener>();
   private readonly activeManipulations = new WeakMap<
     object,
-    InteractionManipulationKind
+    {
+      kind: InteractionManipulationKind;
+      sourceFrame: GeometryRect;
+      subject: InteractionSubject;
+      projectionBaselines: Map<object, { left: number; top: number }>;
+    }
   >();
 
   init(context: ServiceContext) {
@@ -205,6 +212,13 @@ export class FabricRenderGraphAdapter implements Service {
         this.handleInteractionActivation(
           event.target,
           event.kind === "double-click" ? "double-click" : "primary-pointer",
+        );
+      }),
+      this.canvasService.on("selection", (event) => {
+        this.requireInteractionService().selectSubject(
+          event.kind === "cleared"
+            ? null
+            : this.resolveInteractionSubject(event.target),
         );
       }),
     ];
@@ -843,6 +857,7 @@ export class FabricRenderGraphAdapter implements Service {
         renderLayerId: layer.id,
         renderNodeId: node.id,
         subjectId: node.subjectId,
+        projectionIds: this.resolveProjectionIds(node.subjectId),
         surfaceId: node.surfaceId,
       },
       props: {
@@ -868,6 +883,124 @@ export class FabricRenderGraphAdapter implements Service {
     return node.data?.documentLayerRole === "guide"
       ? 900_000_000 + layerIndex * 1_000_000 + nodeIndex
       : layerIndex * 1_000_000 + nodeIndex;
+  }
+
+  private resolveProjectionIds(subjectId: string): string[] {
+    const membership = this.renderIntentService
+      ?.getGraph()
+      .projectionMemberships.find((item) => item.subjectId === subjectId);
+    return membership?.nodeIds.slice() ?? [];
+  }
+
+  private resolveInteractionSubject(target: any): InteractionSubject | null {
+    if (target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) return null;
+    const graph = this.renderIntentService?.getGraph();
+    if (!graph) return null;
+    const renderNodeId = String(target.data?.renderNodeId || "").trim();
+    const declaredSubjectId = String(target.data?.subjectId || "").trim();
+    const membership = graph.projectionMemberships.find(
+      (item) =>
+        item.subjectId === declaredSubjectId ||
+        (renderNodeId && item.nodeIds.includes(renderNodeId)),
+    );
+    const subjectId = membership?.subjectId || declaredSubjectId;
+    if (!subjectId) return null;
+    return {
+      subjectId,
+      ...(String(target.data?.surfaceId || "").trim()
+        ? { surfaceId: String(target.data.surfaceId).trim() }
+        : {}),
+      projectionIds:
+        membership?.nodeIds.slice() ?? (renderNodeId ? [renderNodeId] : []),
+    };
+  }
+
+  private resolveManipulationState(
+    kind: InteractionManipulationKind,
+    target: any,
+  ):
+    | {
+        kind: InteractionManipulationKind;
+        sourceFrame: GeometryRect;
+        subject: InteractionSubject;
+        projectionBaselines: Map<object, { left: number; top: number }>;
+      }
+    | undefined {
+    if (!target || typeof target !== "object") return undefined;
+    const existing = this.activeManipulations.get(target);
+    if (existing) {
+      existing.kind = kind;
+      return existing;
+    }
+    const subject = this.resolveInteractionSubject(target);
+    const sourceFrame =
+      this.resolveDeclarativeSceneFrame(target) ??
+      this.getTargetSceneBounds(target);
+    if (!subject || !sourceFrame) return undefined;
+    const projectionIds = new Set(subject.projectionIds);
+    const projectionBaselines = new Map<
+      object,
+      { left: number; top: number }
+    >();
+    this.canvasService
+      ?.selectObjects({ subjectIds: [subject.subjectId] })
+      .filter(
+        (projection: any) =>
+          projection?.data?.renderTarget === FABRIC_RENDER_GRAPH_TARGET &&
+          (!projectionIds.size ||
+            projectionIds.has(String(projection.data?.renderNodeId || ""))),
+      )
+      .forEach((projection: any) => {
+        projectionBaselines.set(projection, {
+          left: finiteNumber(projection.left, 0),
+          top: finiteNumber(projection.top, 0),
+        });
+      });
+    const state = { kind, sourceFrame, subject, projectionBaselines };
+    this.activeManipulations.set(target, state);
+    return state;
+  }
+
+  private resolveDeclarativeSceneFrame(target: any): GeometryRect | null {
+    const placement = target?.data?.affinePlacement as
+      | AffinePlacement
+      | undefined;
+    if (!placement) return null;
+    const frame = transformCoordinateRect(
+      placement.localToScene,
+      placement.localBounds,
+    );
+    return {
+      left: frame.left,
+      top: frame.top,
+      width: frame.width,
+      height: frame.height,
+    };
+  }
+
+  private applySubjectTranslationPreview(
+    target: any,
+    state: {
+      subject: InteractionSubject;
+      projectionBaselines: Map<object, { left: number; top: number }>;
+    },
+    sceneDeltaX: number,
+    sceneDeltaY: number,
+    phase: "active" | "committing",
+  ): void {
+    const canvas = this.canvasService;
+    if (!canvas) return;
+    const screenDeltaX = canvas.toScreenLength(sceneDeltaX);
+    const screenDeltaY = canvas.toScreenLength(sceneDeltaY);
+    state.projectionBaselines.forEach((baseline, projection: any) => {
+      if (projection === target) return;
+      this.markInteractionOwnership(projection, phase);
+      projection.set?.({
+        left: baseline.left + screenDeltaX,
+        top: baseline.top + screenDeltaY,
+      });
+      projection.setCoords?.();
+    });
   }
 
   private markInteractionOwnership(
@@ -911,6 +1044,8 @@ export class FabricRenderGraphAdapter implements Service {
     }
     const spec = target.data?.interactionSpec as InteractionSpec | undefined;
     if (!spec) return;
+    const interactionState = this.resolveManipulationState(kind, target);
+    if (!interactionState) return;
     const frame = this.getTargetSceneBounds(target);
     if (!frame) return;
     const result = this.requireInteractionService().resolveManipulation(kind, {
@@ -929,9 +1064,11 @@ export class FabricRenderGraphAdapter implements Service {
           y: finiteNumber(target.scaleY, 1),
         },
       },
+      sourceTransform: { frame: interactionState.sourceFrame },
       sceneMatrix: this.resolveTargetSceneMatrix(target),
       coordinateSpace: "scene",
       target,
+      subject: interactionState.subject,
       metadata: {
         layerId: target.data?.layerId,
         ...this.resolveParentSceneMatrix(target),
@@ -943,9 +1080,6 @@ export class FabricRenderGraphAdapter implements Service {
       commit,
     });
     if (!result.enabled) return;
-    if (!commit && target && typeof target === "object") {
-      this.activeManipulations.set(target, kind);
-    }
     const resultFrame = result.result.frame;
     const updates: Record<string, number> = {};
     if (resultFrame) {
@@ -996,19 +1130,36 @@ export class FabricRenderGraphAdapter implements Service {
     }
     if (Object.keys(updates).length) target.set?.(updates);
     target.setCoords?.();
+    if (kind === "move") {
+      const previewFrame =
+        result.result.frame ?? this.getTargetSceneBounds(target);
+      if (previewFrame) {
+        this.applySubjectTranslationPreview(
+          target,
+          interactionState,
+          previewFrame.left - interactionState.sourceFrame.left,
+          previewFrame.top - interactionState.sourceFrame.top,
+          commit ? "committing" : "active",
+        );
+      }
+    }
     const committedSceneMatrix =
       commit && kind !== "move"
         ? this.resolveTargetSceneMatrix(target)
         : undefined;
-    const commitTransform = committedSceneMatrix
-      ? { type: "scene-matrix" as const, matrix: committedSceneMatrix }
-      : result.commitTransform;
+    const sceneTransformPatch = committedSceneMatrix
+      ? {
+          type: "replace-matrix" as const,
+          coordinateSpace: "scene" as const,
+          matrix: committedSceneMatrix,
+        }
+      : result.sceneTransformPatch;
     this.dispatchManipulationAction(
       kind,
       target,
       spec,
       result.result.metadata,
-      commitTransform,
+      sceneTransformPatch,
       commit,
     );
   }
@@ -1091,7 +1242,7 @@ export class FabricRenderGraphAdapter implements Service {
     target: any,
     spec: InteractionSpec,
     resultMetadata: Record<string, unknown> | undefined,
-    commitTransform: InteractionManipulationResult["commitTransform"],
+    sceneTransformPatch: InteractionManipulationResult["sceneTransformPatch"],
     commit: boolean,
   ): void {
     const action = spec.manipulation?.[kind]?.action;
@@ -1126,13 +1277,13 @@ export class FabricRenderGraphAdapter implements Service {
       .executeCommand(commandId, {
         ...(action.payload ?? {}),
         commit,
-        commitTransform,
+        sceneTransformPatch,
         kind,
         layerId: target?.data?.layerId,
         sceneId: target?.data?.sceneId,
         snap: resultMetadata?.rectSnap,
         sceneMatrix: this.resolveTargetSceneMatrix(target),
-        subjectId: target?.data?.subjectId,
+        subjectId: this.resolveInteractionSubject(target)?.subjectId,
         surfaceId: target?.data?.surfaceId,
         transform: {
           centerX: center.x,
@@ -1159,7 +1310,7 @@ export class FabricRenderGraphAdapter implements Service {
     }
     const kind =
       (target && typeof target === "object"
-        ? this.activeManipulations.get(target)
+        ? this.activeManipulations.get(target)?.kind
         : undefined) ?? "move";
     this.handleRenderGraphObjectManipulating(kind, target, true);
     if (target && typeof target === "object") {
@@ -1181,7 +1332,7 @@ export class FabricRenderGraphAdapter implements Service {
       ),
       layerId: target.data?.layerId,
       renderIntentId: target.data?.renderIntentId ?? target.data?.renderNodeId,
-      subjectId: target.data?.subjectId ?? target.data?.subject?.objectId,
+      subject: this.resolveInteractionSubject(target) ?? undefined,
       surfaceId: target.data?.surfaceId ?? target.data?.subject?.surfaceId,
       targetData: cloneRecord(target.data ?? {}),
       trigger,
@@ -1376,6 +1527,7 @@ export class FabricRenderGraphAdapter implements Service {
       renderLayerId: layer.id,
       renderNodeId: node.id,
       subjectId: node.subjectId,
+      projectionIds: this.resolveProjectionIds(node.subjectId),
       surfaceId: node.surfaceId,
       exportKeys: node.exportKeys,
       tags: node.tags,
@@ -1390,7 +1542,10 @@ export class FabricRenderGraphAdapter implements Service {
       ...layerEffects,
       ...this.normalizeActiveEffects(node.effects, conditionContext),
     ].map((effect) =>
-      this.materializeGeometryEffect(effect, readOnlyProjection ? "export" : "preview"),
+      this.materializeGeometryEffect(
+        effect,
+        readOnlyProjection ? "export" : "preview",
+      ),
     );
 
     if (node.type === "image") {

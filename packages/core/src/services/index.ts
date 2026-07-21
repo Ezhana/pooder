@@ -80,6 +80,7 @@ export type {
   RenderGraph,
   RenderGraphLayer,
   RenderGraphNode,
+  RenderGraphProjectionMembership,
   RenderIntentChangeEvent,
   RenderIntentChangeReason,
   RenderIntentCompilerContext,

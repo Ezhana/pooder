@@ -396,6 +396,57 @@ async function testDocumentServiceDraftIsolation() {
   );
 }
 
+async function testDocumentServiceCommitsSceneTranslationBySubject() {
+  const { runtime, renderIntentService } = createRuntime();
+  const service = createEditorDocumentController(runtime);
+  const applied = await service.apply({
+    version: 7,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "shape",
+                frame: { x: 10, y: 20, width: 30, height: 40 },
+                source: { kind: "shape", shape: "rect", params: {} },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assertEqual(applied.ok, true, "translation fixture should apply");
+  const previousRevision = renderIntentService.getGraph().revision;
+
+  const result = await service.commitManipulation({
+    subjectId: "shape",
+    sceneTransformPatch: {
+      type: "translate",
+      coordinateSpace: "scene",
+      delta: { space: "scene", x: 20, y: 10 },
+    },
+    parentMatrix: [2, 0, 0, 2, 0, 0],
+  });
+
+  assertEqual(result.ok, true, "scene translation should commit");
+  assertDeepEqual(
+    service.export()?.surfaces[0]?.layers[0]?.objects?.[0]?.frame,
+    { x: 20, y: 25, width: 30, height: 40 },
+    "scene delta should be converted to parent-local document coordinates",
+  );
+  assert(
+    renderIntentService.getGraph().revision > previousRevision,
+    "document commit should regenerate the RenderGraph",
+  );
+}
+
 function testSceneFrameUsesInverseParentMatrix() {
   assertDeepEqual(
     sceneFrameToLocalFrame(
@@ -413,6 +464,7 @@ async function main() {
   await testApplyEditorDocument();
   await testControllerUpdatesOnlyChangedRenderIntents();
   await testDocumentServiceDraftIsolation();
+  await testDocumentServiceCommitsSceneTranslationBySubject();
   console.log("ok");
 }
 

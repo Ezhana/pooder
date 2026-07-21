@@ -149,6 +149,16 @@ export interface RenderGraphNode {
   sortKey: RenderGraphSortKey;
 }
 
+/**
+ * Authoritative one-to-many mapping from a logical subject to its independent
+ * render projections. Backends may materialize every node differently, but
+ * selection and interaction must resolve through this membership first.
+ */
+export interface RenderGraphProjectionMembership {
+  subjectId: string;
+  nodeIds: string[];
+}
+
 export interface RenderGraphLayer {
   id: string;
   surfaceId: string;
@@ -164,6 +174,7 @@ export interface RenderGraph {
   revision: number;
   surfaceIds: string[];
   layers: RenderGraphLayer[];
+  projectionMemberships: RenderGraphProjectionMembership[];
   diagnostics: RenderIntentDiagnostic[];
 }
 
@@ -192,8 +203,7 @@ export interface RenderIntentCompilerContribution<
     | Promise<RenderIntentPatch[] | RenderIntentPatch | void>;
 }
 
-export interface RegisteredRenderIntentCompiler
-  extends RenderIntentCompilerContribution {
+export interface RegisteredRenderIntentCompiler extends RenderIntentCompilerContribution {
   extensionId: string;
 }
 
@@ -886,13 +896,32 @@ export function createRenderGraph(
       nodes: layer.nodes.sort(compareGraphNodes),
     }))
     .sort(compareGraphLayers);
+  const projectionMemberships = collectProjectionMemberships(layers);
 
   return {
     revision,
     surfaceIds: Array.from(surfaceIds.values()),
     layers,
+    projectionMemberships,
     diagnostics,
   };
+}
+
+function collectProjectionMemberships(
+  layers: readonly RenderGraphLayer[],
+): RenderGraphProjectionMembership[] {
+  const memberships = new Map<string, string[]>();
+  layers.forEach((layer) => {
+    layer.nodes.forEach((node) => {
+      const nodeIds = memberships.get(node.subjectId) ?? [];
+      nodeIds.push(node.id);
+      memberships.set(node.subjectId, nodeIds);
+    });
+  });
+  return Array.from(memberships, ([subjectId, nodeIds]) => ({
+    subjectId,
+    nodeIds,
+  })).sort((left, right) => left.subjectId.localeCompare(right.subjectId));
 }
 
 function normalizeIdList(values: readonly string[] | undefined): string[] {
@@ -1100,10 +1129,7 @@ function mergePatch(
 ): { draft: RenderIntentDraft; diagnostics: RenderIntentDiagnostic[] } {
   const clearResult = applyPatchClear(base, patch, entry);
   const clearedBase = clearResult.draft;
-  const placement = mergeOptionalRecord(
-    clearedBase.placement,
-    patch.placement,
-  );
+  const placement = mergeOptionalRecord(clearedBase.placement, patch.placement);
   const transformedPlacement =
     placement && patch.placementTransform
       ? {
@@ -1150,14 +1176,7 @@ function createPivotTransform(
     coordinateMatrix("object-local", "object-local", [1, 0, 0, 1, x, y]),
     multiplyCoordinateMatrices(
       transform,
-      coordinateMatrix("object-local", "object-local", [
-        1,
-        0,
-        0,
-        1,
-        -x,
-        -y,
-      ]),
+      coordinateMatrix("object-local", "object-local", [1, 0, 0, 1, -x, -y]),
     ),
   );
 }

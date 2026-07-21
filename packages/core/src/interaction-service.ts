@@ -38,6 +38,12 @@ import { SessionConflictError } from "./workflow-session";
 export type InteractionActivationTrigger = "primary-pointer" | "double-click";
 export type InteractionManipulationKind = "move" | "resize" | "rotate";
 
+export interface InteractionSubject {
+  readonly subjectId: string;
+  readonly surfaceId?: string;
+  readonly projectionIds: readonly string[];
+}
+
 export interface InteractionSessionIntent {
   channel: string;
   groupId: string;
@@ -130,6 +136,7 @@ export interface InteractionActivationInput {
   layerId?: string;
   renderIntentId?: string;
   subjectId?: string;
+  subject?: InteractionSubject;
   surfaceId?: string;
   targetData?: Record<string, unknown>;
 }
@@ -148,34 +155,47 @@ export interface InteractionManipulationInput {
   runtimeContext: RuntimeConditionEvalContext;
   locked?: boolean;
   transform: TransformInput;
+  /** Canonical declarative transform before this interaction began. */
+  sourceTransform?: TransformInput;
   sceneMatrix?: Matrix2D<"object-local", "scene">;
   coordinateSpace: "scene";
   geometrySource?: GeometrySourceService;
   target?: unknown;
   metadata?: Record<string, unknown>;
+  subject?: InteractionSubject;
   commit?: boolean;
 }
 
 export interface InteractionManipulationResult extends ConstraintResolveResult {
   kind: InteractionManipulationKind;
   enabled: boolean;
-  commitTransform?: InteractionCommitTransform;
+  sceneTransformPatch?: SceneTransformPatch;
 }
 
-export type InteractionCommitTransform =
+export type SceneTransformPatch =
   | {
-      type: "scene-delta";
+      type: "translate";
+      coordinateSpace: "scene";
       delta: CoordinateDelta<"scene">;
     }
   | {
-      type: "scene-matrix";
+      type: "replace-matrix";
+      coordinateSpace: "scene";
       matrix: CoordinateMatrix<"object-local", "scene">;
     };
 
+/** @deprecated Use SceneTransformPatch. */
+export type InteractionCommitTransform = SceneTransformPatch;
+
 export interface InteractionManipulationCommitEvent {
   kind: InteractionManipulationKind;
+  subject: InteractionSubject;
   input: InteractionManipulationInput;
   result: InteractionManipulationResult;
+}
+
+export interface InteractionSelectionChangeEvent {
+  subject: InteractionSubject | null;
 }
 
 export type InteractionManipulationCommitListener = (
@@ -184,6 +204,7 @@ export type InteractionManipulationCommitListener = (
 
 export interface InteractionServiceEventMap {
   manipulationCommit: InteractionManipulationCommitEvent;
+  selectionChange: InteractionSelectionChangeEvent;
 }
 
 export class InteractionService implements Service {
@@ -191,6 +212,7 @@ export class InteractionService implements Service {
   private constraintResolver?: ConstraintResolverService;
   private sessionService?: SessionService;
   private readonly events = new TypedEventEmitter<InteractionServiceEventMap>();
+  private selectedSubject: InteractionSubject | null = null;
 
   constructor(
     services: {
@@ -241,9 +263,9 @@ export class InteractionService implements Service {
     );
     const activationEnabled = Boolean(
       enabled &&
-        spec?.activation &&
-        spec.activation.enabled !== false &&
-        normalizeId(spec.activation.action.commandId),
+      spec?.activation &&
+      spec.activation.enabled !== false &&
+      normalizeId(spec.activation.action.commandId),
     );
 
     return {
@@ -264,6 +286,7 @@ export class InteractionService implements Service {
     input: InteractionActivationInput,
   ): Promise<InteractionActivationResult<TResult>> {
     const state = this.resolveState(input.spec, input.runtimeContext, false);
+    const subjectId = normalizeId(input.subject?.subjectId ?? input.subjectId);
     const activation = input.spec.activation;
     if (!state.activationEnabled || !activation) {
       return { activated: false, reason: "disabled" };
@@ -281,13 +304,13 @@ export class InteractionService implements Service {
       sessionId =
         normalizeId(activation.session.sessionId) ||
         normalizeId(actionPayload.sessionId) ||
-        `${channel}:${normalizeId(input.subjectId) || "editor"}`;
+        `${channel}:${subjectId || "editor"}`;
       sessionContext = {
         sessionId,
         scope: createSessionScope(activation.session, {
           channel,
-          subjectId: normalizeId(input.subjectId),
-          surfaceId: normalizeId(input.surfaceId),
+          subjectId,
+          surfaceId: normalizeId(input.subject?.surfaceId ?? input.surfaceId),
         }),
         interactionMode: activation.session.mode,
         leavePolicy: activation.session.leavePolicy ?? "block",
@@ -303,8 +326,10 @@ export class InteractionService implements Service {
           renderIntentId: normalizeId(input.renderIntentId) || undefined,
           session: sessionContext,
           sessionId,
-          subjectId: normalizeId(input.subjectId) || undefined,
-          surfaceId: normalizeId(input.surfaceId) || undefined,
+          subjectId: subjectId || undefined,
+          surfaceId:
+            normalizeId(input.subject?.surfaceId ?? input.surfaceId) ||
+            undefined,
           targetData: cloneRecord(input.targetData),
           trigger: input.trigger,
         });
@@ -361,16 +386,22 @@ export class InteractionService implements Service {
       enabled: operation.enabled,
       ...(input.commit && operation.enabled
         ? {
-            commitTransform: createCommitTransform(
+            sceneTransformPatch: createSceneTransformPatch(
               kind,
               resolved,
+              input.sourceTransform,
               input.sceneMatrix,
             ),
           }
         : {}),
     };
     if (input.commit && result.enabled) {
-      const event = { kind, input, result };
+      const subject = normalizeInteractionSubject(
+        input.subject,
+        input.metadata,
+      );
+      if (!subject) return result;
+      const event = { kind, subject, input, result };
       this.events.emit("manipulationCommit", event);
     }
     return result;
@@ -382,6 +413,28 @@ export class InteractionService implements Service {
     return this.events.on("manipulationCommit", listener);
   }
 
+  selectSubject(subject: InteractionSubject | null): void {
+    const normalized = normalizeInteractionSubject(subject);
+    if (sameInteractionSubject(this.selectedSubject, normalized)) return;
+    this.selectedSubject = normalized;
+    this.events.emit("selectionChange", { subject: normalized });
+  }
+
+  getSelectedSubject(): InteractionSubject | null {
+    return this.selectedSubject
+      ? {
+          ...this.selectedSubject,
+          projectionIds: [...this.selectedSubject.projectionIds],
+        }
+      : null;
+  }
+
+  onDidChangeSelection(
+    listener: (event: InteractionSelectionChangeEvent) => void,
+  ): Disposable {
+    return this.events.on("selectionChange", listener);
+  }
+
   on<TKey extends keyof InteractionServiceEventMap>(
     type: TKey,
     listener: (event: InteractionServiceEventMap[TKey]) => void,
@@ -390,6 +443,7 @@ export class InteractionService implements Service {
   }
 
   dispose(): void {
+    this.selectedSubject = null;
     this.events.clear();
   }
 
@@ -432,16 +486,18 @@ export class InteractionService implements Service {
   }
 }
 
-function createCommitTransform(
+function createSceneTransformPatch(
   kind: InteractionManipulationKind,
   resolved: ConstraintResolveResult,
+  sourceTransform?: TransformInput,
   sceneMatrix?: Matrix2D<"object-local", "scene">,
-): InteractionCommitTransform {
-  const before = resolved.input.frame;
+): SceneTransformPatch {
+  const before = sourceTransform?.frame ?? resolved.input.frame;
   const after = resolved.result.frame;
   if (kind === "move") {
     return {
-      type: "scene-delta",
+      type: "translate",
+      coordinateSpace: "scene",
       delta: coordinateDelta(
         "scene",
         (after?.left ?? resolved.result.position?.x ?? 0) -
@@ -452,7 +508,13 @@ function createCommitTransform(
     };
   }
 
-  if (sceneMatrix) return { type: "scene-matrix", matrix: sceneMatrix };
+  if (sceneMatrix) {
+    return {
+      type: "replace-matrix",
+      coordinateSpace: "scene",
+      matrix: sceneMatrix,
+    };
+  }
 
   const position = resolved.result.position ?? {
     x: after?.left ?? 0,
@@ -465,7 +527,8 @@ function createCommitTransform(
   const cosine = Math.cos(radians);
   const sine = Math.sin(radians);
   return {
-    type: "scene-matrix",
+    type: "replace-matrix",
+    coordinateSpace: "scene",
     matrix: coordinateMatrix("object-local", "scene", [
       cosine * scaleX,
       sine * scaleX,
@@ -475,6 +538,35 @@ function createCommitTransform(
       position.y,
     ]),
   };
+}
+
+function normalizeInteractionSubject(
+  subject: InteractionSubject | undefined | null,
+  metadata?: Record<string, unknown>,
+): InteractionSubject | null {
+  const subjectId = normalizeId(subject?.subjectId ?? metadata?.subjectId);
+  if (!subjectId) return null;
+  const projectionIds = Array.from(
+    new Set(
+      (subject?.projectionIds ?? [])
+        .map((projectionId) => normalizeId(projectionId))
+        .filter(Boolean),
+    ),
+  );
+  return {
+    subjectId,
+    ...(normalizeId(subject?.surfaceId ?? metadata?.surfaceId)
+      ? { surfaceId: normalizeId(subject?.surfaceId ?? metadata?.surfaceId) }
+      : {}),
+    projectionIds,
+  };
+}
+
+function sameInteractionSubject(
+  left: InteractionSubject | null,
+  right: InteractionSubject | null,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function createSessionScope(

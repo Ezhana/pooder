@@ -84,7 +84,12 @@ function createTestPlacement(
   return createAffinePlacement({
     localBounds: { left: 0, top: 0, width, height },
     localToScene: coordinateMatrix("object-local", "scene", [
-      1, 0, 0, 1, left, top,
+      1,
+      0,
+      0,
+      1,
+      left,
+      top,
     ]),
   });
 }
@@ -983,8 +988,9 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
   scene.dispose();
   await adapter.flush();
   assertEqual(
-    canvas.reconcileCalls.at(-1)?.items.find((item) => item.key === "user-image")
-      ?.spec.id,
+    canvas.reconcileCalls
+      .at(-1)
+      ?.items.find((item) => item.key === "user-image")?.spec.id,
     "user-image",
     "committed document image should inherit the same canonical target",
   );
@@ -1550,18 +1556,19 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
       }),
   );
   assert(
-    states.some((state) =>
-      state.causes.some(
-        (cause) =>
-          cause.type === "interaction-preview" &&
-          cause.sessionId === "image:front",
-      ) &&
-      state.invalidations.some(
-        (invalidation) =>
-          invalidation.type === "scene-elements" &&
-          invalidation.sceneId === "image:front:scene" &&
-          invalidation.elementIds.includes("snap-line"),
-      ),
+    states.some(
+      (state) =>
+        state.causes.some(
+          (cause) =>
+            cause.type === "interaction-preview" &&
+            cause.sessionId === "image:front",
+        ) &&
+        state.invalidations.some(
+          (invalidation) =>
+            invalidation.type === "scene-elements" &&
+            invalidation.sceneId === "image:front:scene" &&
+            invalidation.elementIds.includes("snap-line"),
+        ),
     ),
     "adapter should preserve interaction preview provenance and element invalidation",
   );
@@ -1695,9 +1702,11 @@ async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft(
       visual: { type: "path" },
       placement: createAffinePlacement({
         localBounds: { left: 0, top: 0, width: 40, height: 20 },
-        localToScene: coordinateMatrix("object-local", "scene", [
-          2, 0, 0, 2, 10, 12,
-        ]),
+        localToScene: coordinateMatrix(
+          "object-local",
+          "scene",
+          [2, 0, 0, 2, 10, 12],
+        ),
       }),
       ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
       props: {
@@ -2317,6 +2326,126 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  const intents = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  const interaction =
+    runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
+  const interactionSpec = { manipulation: { move: { enabled: true } } };
+  intents.setDocumentIntents([
+    {
+      id: "subject:fill",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "subject",
+      },
+      visual: { type: "rect" },
+      placement: createTestPlacement(10, 20, 10, 10),
+      ordering: { layerId: "art", objectOrder: 0 },
+      interaction: interactionSpec,
+    },
+    {
+      id: "subject:outline",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "subject",
+      },
+      visual: { type: "rect" },
+      placement: createTestPlacement(50, 20, 10, 10),
+      ordering: { layerId: "art", objectOrder: 1 },
+      interaction: interactionSpec,
+    },
+  ]);
+  await adapter.flush();
+
+  const createTarget = (
+    renderNodeId: string,
+    placement: ReturnType<typeof createTestPlacement>,
+    left: number,
+  ) => ({
+    left,
+    top: 20,
+    width: 10,
+    height: 10,
+    scaleX: 1,
+    scaleY: 1,
+    data: {
+      affinePlacement: placement,
+      interactionSpec,
+      renderKey: renderNodeId,
+      renderNodeId,
+      renderTarget: "render-graph",
+      subjectId: "subject",
+      surfaceId: "front",
+    },
+    getBoundingRect() {
+      return {
+        left: this.left,
+        top: this.top,
+        width: this.width,
+        height: this.height,
+      };
+    },
+    set(values: Record<string, unknown>) {
+      Object.assign(this, values);
+    },
+    setCoords() {},
+  });
+  const active = createTarget(
+    "subject:fill",
+    createTestPlacement(10, 20, 10, 10),
+    15,
+  );
+  const sibling = createTarget(
+    "subject:outline",
+    createTestPlacement(50, 20, 10, 10),
+    50,
+  );
+  canvas.objects = [active, sibling];
+
+  canvas.emit("selection", { kind: "created", target: active });
+  assertDeepEqual(
+    interaction.getSelectedSubject(),
+    {
+      subjectId: "subject",
+      surfaceId: "front",
+      projectionIds: ["subject:fill", "subject:outline"],
+    },
+    "Fabric selection should resolve to the logical subject membership",
+  );
+
+  let committedPatch: unknown;
+  interaction.onDidCommitManipulation((event) => {
+    committedPatch = event.result.sceneTransformPatch;
+  });
+  canvas.emitCanvasEvent("object:moving", { target: active });
+  assertEqual(
+    sibling.left,
+    55,
+    "temporary dragging should translate every derived subject projection",
+  );
+  canvas.emitCanvasEvent("object:modified", { target: active });
+  assertDeepEqual(
+    committedPatch,
+    {
+      type: "translate",
+      coordinateSpace: "scene",
+      delta: { space: "scene", x: 5, y: 0 },
+    },
+    "commit should emit a scene-space transform patch from the canonical projection",
+  );
+
+  await runtime.dispose();
+}
+
 async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
   const stale = new FakeFabricObject("rect", {
@@ -2426,32 +2555,35 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
   image.left = 137;
   image.top = 142;
 
-  await service.reconcileRenderGraphDrawList([
-    workingImage,
-    {
-      key: "snap-guide",
-      layerId: "image.session.controls",
-      origin: {
-        type: "scene-element",
-        sceneId: "image-session",
-        elementId: "snap-guide",
-      },
-      order: 1,
-      spec: {
-        id: "snap-guide",
-        type: "path",
-        props: { pathData: "M100 0L100 200" },
-      },
-    },
-  ], {
-    invalidations: [
+  await service.reconcileRenderGraphDrawList(
+    [
+      workingImage,
       {
-        type: "scene-elements",
-        sceneId: "image-session",
-        elementIds: ["snap-guide"],
+        key: "snap-guide",
+        layerId: "image.session.controls",
+        origin: {
+          type: "scene-element",
+          sceneId: "image-session",
+          elementId: "snap-guide",
+        },
+        order: 1,
+        spec: {
+          id: "snap-guide",
+          type: "path",
+          props: { pathData: "M100 0L100 200" },
+        },
       },
     ],
-  });
+    {
+      invalidations: [
+        {
+          type: "scene-elements",
+          sceneId: "image-session",
+          elementIds: ["snap-guide"],
+        },
+      ],
+    },
+  );
 
   assertEqual(
     image.left,
@@ -2558,9 +2690,7 @@ async function testCanvasReconcileReplacesInvalidatedRenderIntentImage() {
   await service.reconcileRenderGraphDrawList(
     [createTemplateItem("/template-two.png")],
     {
-      invalidations: [
-        { type: "render-intents", intentIds: ["template-slot"] },
-      ],
+      invalidations: [{ type: "render-intents", intentIds: ["template-slot"] }],
     },
   );
 
@@ -2862,9 +2992,11 @@ async function testCanvasReconcileAppliesPlacedRectClipPath() {
               space: "scene",
               placement: createAffinePlacement({
                 localBounds: { left: 0, top: 0, width: 5, height: 6 },
-                localToScene: coordinateMatrix("object-local", "scene", [
-                  1, 0, 0, 1, 2, 3,
-                ]),
+                localToScene: coordinateMatrix(
+                  "object-local",
+                  "scene",
+                  [1, 0, 0, 1, 2, 3],
+                ),
               }),
               props: { fill: "#000" },
             },
@@ -2876,8 +3008,16 @@ async function testCanvasReconcileAppliesPlacedRectClipPath() {
 
   const clipPath = canvas.objects[0]?.clipPath as any;
   assert(clipPath, "placed clip path should be attached");
-  assertEqual(clipPath.width, 5, "placed clip should consume local bounds width");
-  assertEqual(clipPath.height, 6, "placed clip should consume local bounds height");
+  assertEqual(
+    clipPath.width,
+    5,
+    "placed clip should consume local bounds width",
+  );
+  assertEqual(
+    clipPath.height,
+    6,
+    "placed clip should consume local bounds height",
+  );
   assertEqual(
     clipPath.absolutePositioned,
     true,
@@ -3803,6 +3943,10 @@ async function main() {
       testFabricRenderGraphAdapterConstrainsDragging,
     ],
     [
+      "moves every projection of a logical subject",
+      testFabricRenderGraphAdapterMovesLogicalSubjectProjections,
+    ],
+    [
       "reconciles stale objects and clip cleanup",
       testCanvasReconcileRemovesStaleObjectsAndClearsClip,
     ],
@@ -3835,7 +3979,10 @@ async function main() {
       testCanvasReconcileAppliesInteractiveControlDefaults,
     ],
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],
-    ["applies placed graph rect clip paths", testCanvasReconcileAppliesPlacedRectClipPath],
+    [
+      "applies placed graph rect clip paths",
+      testCanvasReconcileAppliesPlacedRectClipPath,
+    ],
     ["applies graph image clip paths", testCanvasReconcileAppliesImageClipPath],
     [
       "exports by render graph node ids",

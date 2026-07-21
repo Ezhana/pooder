@@ -32,6 +32,7 @@ import {
   type Service,
   type ServiceContext,
   type ServiceIdentifier,
+  type SceneTransformPatch,
   type SurfaceFrameService,
 } from "@pooder/core";
 import {
@@ -251,7 +252,9 @@ export interface EditorDocumentObjectInsertOptions {
 }
 
 export interface EditorDocumentManipulationCommit {
-  objectId: string;
+  subjectId: string;
+  sceneTransformPatch: SceneTransformPatch;
+  /** Scene-space fallback for matrix decomposition during resize/rotate. */
   frame?: { left: number; top: number; width: number; height: number };
   rotation?: number;
   parentMatrix?: EditorDocumentMatrix;
@@ -615,10 +618,19 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   commitManipulation(
     manipulation: EditorDocumentManipulationCommit,
   ): Promise<EditorDocumentMutationResult> {
+    if (manipulation.sceneTransformPatch.type === "translate") {
+      const localDelta = sceneDeltaToLocalDelta(
+        manipulation.sceneTransformPatch.delta,
+        manipulation.parentMatrix,
+      );
+      return this.updateObject(manipulation.subjectId, (object) =>
+        translateDocumentObject(object, localDelta),
+      );
+    }
     const localFrame = manipulation.frame
       ? sceneFrameToLocalFrame(manipulation.frame, manipulation.parentMatrix)
       : undefined;
-    return this.updateObject(manipulation.objectId, (object) => ({
+    return this.updateObject(manipulation.subjectId, (object) => ({
       ...object,
       ...(localFrame
         ? {
@@ -721,14 +733,18 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private async writeManipulationToDocument(
     event: InteractionManipulationCommitEvent,
   ): Promise<void> {
-    const objectId = normalizeObjectId(event.input.metadata?.subjectId);
-    if (!objectId || !event.result.result.frame) return;
+    const subjectId = normalizeObjectId(event.subject.subjectId);
+    const sceneTransformPatch = event.result.sceneTransformPatch;
+    if (!subjectId || !sceneTransformPatch) return;
     const parentMatrix = normalizeDocumentMatrix(
       event.input.metadata?.parentSceneMatrix,
     );
     await this.commitManipulation({
-      objectId,
-      frame: event.result.result.frame,
+      subjectId,
+      sceneTransformPatch,
+      ...(event.result.result.frame
+        ? { frame: event.result.result.frame }
+        : {}),
       ...(typeof event.result.result.rotation === "number"
         ? { rotation: event.result.result.rotation }
         : {}),
@@ -762,6 +778,45 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     );
     return result;
   }
+}
+
+function translateDocumentObject(
+  object: EditorObject,
+  delta: { x: number; y: number },
+): EditorObject {
+  const frame = object.frame;
+  if (!frame) return object;
+  const transform = object.transform;
+  return {
+    ...object,
+    frame: { ...frame, x: frame.x + delta.x, y: frame.y + delta.y },
+    ...(Number.isFinite(transform?.left) || Number.isFinite(transform?.top)
+      ? {
+          transform: {
+            ...(transform ?? {}),
+            ...(Number.isFinite(transform?.left)
+              ? { left: Number(transform?.left) + delta.x }
+              : {}),
+            ...(Number.isFinite(transform?.top)
+              ? { top: Number(transform?.top) + delta.y }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function sceneDeltaToLocalDelta(
+  delta: { x: number; y: number },
+  parentMatrix?: EditorDocumentMatrix,
+): { x: number; y: number } {
+  if (!parentMatrix) return { x: delta.x, y: delta.y };
+  const inverse = invertDocumentMatrix(parentMatrix);
+  if (!inverse) return { x: delta.x, y: delta.y };
+  return {
+    x: inverse[0] * delta.x + inverse[2] * delta.y,
+    y: inverse[1] * delta.x + inverse[3] * delta.y,
+  };
 }
 
 export function registerEditorDocumentService(
@@ -994,9 +1049,11 @@ function createPathAffinePlacement(
 
 function createFrameAffinePlacement(
   object: EditorObject,
-  parentLocalToScene = coordinateMatrix("parent-local", "scene", [
-    1, 0, 0, 1, 0, 0,
-  ]),
+  parentLocalToScene = coordinateMatrix(
+    "parent-local",
+    "scene",
+    [1, 0, 0, 1, 0, 0],
+  ),
 ): AffinePlacement {
   const frame = object.frame ?? { x: 0, y: 0, width: 0, height: 0 };
   const transform = object.transform ?? {};
@@ -1095,9 +1152,11 @@ function createBaseRenderIntentDrafts(
       const resolveFramePlacement = (object: EditorObject): AffinePlacement => {
         const cached = placementsById.get(object.id);
         if (cached) return cached;
-        let parentLocalToScene = coordinateMatrix("parent-local", "scene", [
-          1, 0, 0, 1, 0, 0,
-        ]);
+        let parentLocalToScene = coordinateMatrix(
+          "parent-local",
+          "scene",
+          [1, 0, 0, 1, 0, 0],
+        );
         const parent = object.parentObjectId
           ? objectsById.get(object.parentObjectId)
           : undefined;

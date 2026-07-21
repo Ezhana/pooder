@@ -6,7 +6,7 @@ selection, activation/session/command dispatch, and manipulation constraints.
 Capabilities must not make document objects interactive by writing renderer
 flags such as `evented` or `selectable`.
 
-This contract is available only in `EditorDocument` v6. v5 documents and the
+This contract is available only in `EditorDocument` v7. Older documents and the
 former `interaction.drag`, `interaction.transform`, and `action.command`
 fields fail validation; they are not migrated.
 
@@ -61,6 +61,24 @@ derives renderer hit testing, selection, movement, resize controls, and rotate
 controls from it. Pointer activation calls the service directly. Fabric
 `moving`, `scaling`, and `rotating` map to Core `move`, `resize`, and `rotate`
 operations; every operation uses the same extensible `ConstraintResolverService`.
+
+## Logical subjects and render projections
+
+Interaction identity is the logical `subjectId`, not a backend render object.
+A subject may compile into multiple independent `RenderGraphNode` projections.
+`RenderGraph.projectionMemberships` is the authoritative one-to-many index;
+selection, activation, and manipulation resolve a backend hit through that
+membership before entering Core.
+
+During a drag, the browser adapter applies one absolute scene-space preview
+delta to every projection in the membership. These changes belong only to the
+derived renderer state and are always calculated from the declarative
+placement baseline, never accumulated from screen coordinates.
+
+On commit, `InteractionService` emits a standard `SceneTransformPatch` for the
+logical subject. `EditorDocumentService` converts the scene delta through the
+parent transform, mutates the document once, and recompiles the RenderGraph.
+The browser platform does not inspect or mutate `EditorObject` variants.
 
 `activation` defaults to enabled. `selection` and each manipulation operation
 default to disabled. Any enabled manipulation operation implies selection and
