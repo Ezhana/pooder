@@ -1,98 +1,113 @@
-import type { InjectionKey } from "vue";
-import { inject } from "vue";
+import { inject, type InjectionKey } from "vue";
 import { Pooder } from "@pooder/core";
-import type {
-  CapabilityRegistryChangeEvent,
-  ConfigurationDefinitionsChangeEvent,
-  ExtensionDefinition,
-  ExtensionStateSnapshot,
-  RegisteredCapabilityDefinition,
-  RegisterServiceOptions,
-  Service,
-  ServiceIdentifier,
-} from "@pooder/core";
+import {
+  registerEditorDocumentService,
+  type ApplyEditorDocumentOptions,
+  type EditorDocumentService,
+} from "@pooder/document-core";
+import type { EditorDocument } from "@pooder/document";
 
-export interface PooderRuntimeLike {
-  readonly services: {
-    register<T extends Service>(
-      service: T,
-      identifier?: ServiceIdentifier<T>,
-      options?: RegisterServiceOptions,
-    ): boolean;
-    registerAsync<T extends Service>(
-      service: T,
-      identifier?: ServiceIdentifier<T>,
-      options?: RegisterServiceOptions,
-    ): Promise<boolean>;
-    unregister(
-      serviceOrIdentifier: Service | ServiceIdentifier<Service>,
-      identifier?: ServiceIdentifier<Service>,
-    ): boolean;
-    unregisterAsync(
-      serviceOrIdentifier: Service | ServiceIdentifier<Service>,
-      identifier?: ServiceIdentifier<Service>,
-    ): Promise<boolean>;
-    get<T extends Service>(identifier: ServiceIdentifier<T>): T | undefined;
-    getOrThrow<T extends Service>(
-      identifier: ServiceIdentifier<T>,
-      errorMessage?: string,
-    ): T;
-    has(identifier: ServiceIdentifier<Service>): boolean;
-  };
-  readonly extensions: {
-    register(extension: ExtensionDefinition): ExtensionStateSnapshot;
-    registerMany(
-      extensions: Iterable<ExtensionDefinition>,
-    ): ExtensionStateSnapshot[];
-    flushActivation(): Promise<ExtensionStateSnapshot[]>;
-    getState(id: string): ExtensionStateSnapshot | undefined;
-    listStates(): ExtensionStateSnapshot[];
-    unregister(id: string): Promise<boolean>;
-  };
-  readonly commands: {
-    execute<T = unknown>(id: string, ...args: any[]): Promise<T>;
-  };
-  readonly capabilities: {
-    get<T = unknown>(id: string): T | undefined;
-    getOrThrow<T = unknown>(id: string, errorMessage?: string): T;
-    getDefinition<T = unknown>(
-      id: string,
-    ): RegisteredCapabilityDefinition<T> | undefined;
-    list(): RegisteredCapabilityDefinition[];
-    has(id: string): boolean;
-    onDidChange(
-      callback: (event: CapabilityRegistryChangeEvent) => void,
-    ): { dispose(): void };
-  };
-  readonly config: {
-    export(): Record<string, any>;
-    get<T = unknown>(key: string, defaultValue?: T): T;
-    getDefinition(id: string): any;
-    import(data: Record<string, any>): void;
-    listDefinitions(): any;
-    onAnyChange(
-      callback: (event: { key: string; value: any; oldValue: any }) => void,
-    ): { dispose(): void };
-    onDefinitionsChange(
-      callback: (event: ConfigurationDefinitionsChangeEvent) => void,
-    ): { dispose(): void };
-    onDidChange(
-      key: string,
-      callback: (event: { key: string; value: any; oldValue: any }) => void,
-    ): { dispose(): void };
-    update(key: string, value: any): void;
-  };
+export interface PooderConfigurationChangeEvent {
+  key: string;
+  value: unknown;
+  oldValue: unknown;
 }
 
-export const POODER_RUNTIME_KEY: InjectionKey<PooderRuntimeLike> = Symbol(
-  "PooderRuntime",
-);
-
-export function createPooderRuntime(): PooderRuntimeLike {
-  return new Pooder();
+export interface PooderDisposable {
+  dispose(): void;
 }
 
-export function usePooderRuntime(): PooderRuntimeLike {
+export interface PooderConfigurationApi {
+  export(): Record<string, unknown>;
+  get<T = unknown>(key: string, defaultValue?: T): T;
+  import(data: Record<string, unknown>): void;
+  onAnyChange(
+    callback: (event: PooderConfigurationChangeEvent) => void,
+  ): PooderDisposable;
+  onDidChange(
+    key: string,
+    callback: (event: PooderConfigurationChangeEvent) => void,
+  ): PooderDisposable;
+  update(key: string, value: unknown): void;
+}
+
+export interface PooderRuntime {
+  readonly config: PooderConfigurationApi;
+  readonly document: EditorDocumentService | null;
+  dispose(): Promise<void>;
+}
+
+export interface InstallPooderDocumentOptions extends Omit<
+  ApplyEditorDocumentOptions,
+  "afterApply"
+> {
+  afterApply?: (
+    runtime: PooderRuntime,
+    document: EditorDocument,
+    service: EditorDocumentService,
+  ) => Promise<void> | void;
+}
+
+const runtimeCores = new WeakMap<PooderRuntime, Pooder>();
+const runtimeDocuments = new WeakMap<PooderRuntime, EditorDocumentService>();
+
+export const POODER_RUNTIME_KEY: InjectionKey<PooderRuntime> =
+  Symbol("PooderRuntime");
+
+export function createPooderRuntime(): PooderRuntime {
+  const core = new Pooder();
+  const runtime: PooderRuntime = {
+    config: {
+      export: () => core.config.export(),
+      get: <T = unknown>(key: string, defaultValue?: T) =>
+        core.config.get(key, defaultValue),
+      import: (data) => core.config.import(data),
+      onAnyChange: (callback) => core.config.onAnyChange(callback),
+      onDidChange: (key, callback) => core.config.onDidChange(key, callback),
+      update: (key, value) => core.config.update(key, value),
+    },
+    get document() {
+      return runtimeDocuments.get(runtime) ?? null;
+    },
+    dispose: () => core.dispose(),
+  };
+  runtimeCores.set(runtime, core);
+  return runtime;
+}
+
+export function installPooderDocument(
+  runtime: PooderRuntime,
+  options: InstallPooderDocumentOptions = {},
+): EditorDocumentService {
+  const existing = runtimeDocuments.get(runtime);
+  if (existing) return existing;
+  const core = resolvePooderRuntimeCore(runtime);
+  let service: EditorDocumentService;
+  service = registerEditorDocumentService(core, {
+    effectSchemaRegistry: options.effectSchemaRegistry,
+    resolveEffectCapabilityId: options.resolveEffectCapabilityId,
+    validators: options.validators,
+    afterApply: async (_runtime, document) => {
+      await options.afterApply?.(runtime, document, service);
+    },
+  });
+  runtimeDocuments.set(runtime, service);
+  return service;
+}
+
+export function getPooderDocument(
+  runtime: PooderRuntime,
+): EditorDocumentService {
+  const service = runtimeDocuments.get(runtime);
+  if (!service) {
+    throw new Error(
+      "[@pooder/vue] EditorDocumentService is not installed for this runtime.",
+    );
+  }
+  return service;
+}
+
+export function usePooderRuntime(): PooderRuntime {
   const runtime = inject(POODER_RUNTIME_KEY, null);
   if (!runtime) {
     throw new Error(
@@ -100,4 +115,20 @@ export function usePooderRuntime(): PooderRuntimeLike {
     );
   }
   return runtime;
+}
+
+export function usePooderDocument(): EditorDocumentService {
+  return getPooderDocument(usePooderRuntime());
+}
+
+/** @internal Browser/editor adapters only. */
+function resolvePooderRuntimeCore(runtime: PooderRuntime): Pooder {
+  const core = runtimeCores.get(runtime);
+  if (!core) throw new Error("[@pooder/vue] Unknown Pooder runtime facade.");
+  return core;
+}
+
+/** @internal Browser/editor adapters only. */
+export function getPooderRuntimeCore(runtime: PooderRuntime): unknown {
+  return resolvePooderRuntimeCore(runtime);
 }

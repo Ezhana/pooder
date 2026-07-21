@@ -4,21 +4,12 @@ import dts from "vite-plugin-dts";
 import { resolve } from "path";
 
 export default defineConfig({
-  resolve: {
-    alias: [
-      {
-        find: /^@pooder\/core$/,
-        replacement: resolve(__dirname, "../core/src/index.ts"),
-      },
-      {
-        find: /^@pooder\/platform-browser$/,
-        replacement: resolve(__dirname, "../platform-browser/src/index.ts"),
-      },
-    ],
-  },
+  root: __dirname,
   plugins: [
     vue(),
     dts({
+      entryRoot: "src",
+      include: ["src"],
       insertTypesEntry: true,
       pathsToAliases: false,
     }),
@@ -26,15 +17,22 @@ export default defineConfig({
   build: {
     minify: false,
     lib: {
-      entry: resolve(__dirname, "src/index.ts"),
+      entry: {
+        index: resolve(__dirname, "src/index.ts"),
+        editor: resolve(__dirname, "src/editor.ts"),
+      },
+      cssFileName: "vue",
+      formats: ["es", "cjs"],
       name: "PooderVue",
-      fileName: (format) => `index.${format}.js`,
+      fileName: (format, entryName) =>
+        format === "es" ? `${entryName}.mjs` : `${entryName}.cjs`,
     },
     rollupOptions: {
       external: [
         "vue",
         "@pooder/core",
         "@pooder/core/internal/legacy-extension",
+        "@pooder/document",
         "@pooder/document-core",
         "@pooder/platform-browser",
       ],

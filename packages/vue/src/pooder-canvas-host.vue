@@ -9,15 +9,20 @@ import { onMounted, onUnmounted, ref } from "vue";
 import {
   attachBrowserHost,
   type BrowserHostAttachment,
+  type BrowserHostRuntime,
 } from "@pooder/platform-browser";
-import { usePooderRuntime, type PooderRuntimeLike } from "./runtime";
+import {
+  getPooderRuntimeCore,
+  usePooderRuntime,
+  type PooderRuntime,
+} from "./runtime";
 import type {
   PooderCanvasHostReadyPayload,
   PooderCanvasHostRenderSyncPayload,
 } from "./canvas-host";
 
 const props = defineProps<{
-  runtime?: PooderRuntimeLike;
+  runtime?: PooderRuntime;
 }>();
 
 const emit = defineEmits<{
@@ -33,7 +38,7 @@ let browserHost: BrowserHostAttachment | null = null;
 let renderSyncFrame = 0;
 let stopRenderSyncStateChange: null | (() => void) = null;
 
-function getRuntime(): PooderRuntimeLike {
+function getRuntime(): PooderRuntime {
   return props.runtime ?? injectedRuntime!;
 }
 
@@ -66,10 +71,13 @@ onMounted(() => {
   }
 
   const runtime = getRuntime();
-  browserHost = attachBrowserHost(runtime as any, {
-    canvas: canvas.value,
-    container: container.value,
-  });
+  browserHost = attachBrowserHost(
+    getPooderRuntimeCore(runtime) as BrowserHostRuntime,
+    {
+      canvas: canvas.value,
+      container: container.value,
+    },
+  );
 
   const host = browserHost;
   stopRenderSyncStateChange = host.fabricRenderGraphAdapter.onSyncStateChange(

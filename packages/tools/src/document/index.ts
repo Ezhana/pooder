@@ -26,11 +26,9 @@ export {
 } from "../extensions/image-slot/capability";
 import type { ImageSlotDocumentController } from "../extensions/image-slot/capability";
 
-export interface OfficialToolRuntime {
-  readonly capabilities: {
-    get<T = unknown>(id: string): T | undefined;
-  };
-}
+export type OfficialToolCapabilityResolver = <T = unknown>(
+  id: string,
+) => T | null | undefined;
 
 export type OfficialToolDocumentEffectType =
   keyof typeof OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS;
@@ -97,32 +95,31 @@ export function collectOfficialToolDocumentCapabilityRequirements(
 }
 
 export async function synchronizeOfficialToolsForDocument(
-  runtime: OfficialToolRuntime,
+  getCapability: OfficialToolCapabilityResolver,
   document: EditorDocument,
   controller?: ImageSlotDocumentController,
 ): Promise<void> {
   const featureState = readObjectFeatureEffectState(document);
-  runtime.capabilities
-    .get<{
-      replaceFeatures(
-        features: Record<string, unknown>[],
-        options?: Record<string, unknown>,
-      ): void;
-    }>(OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS.feature)
-    ?.replaceFeatures(featureState?.features ?? [], {
+  getCapability<{
+    replaceFeatures(
+      features: Record<string, unknown>[],
+      options?: Record<string, unknown>,
+    ): void;
+  }>(OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS.feature)?.replaceFeatures(
+    featureState?.features ?? [],
+    {
       markDirty: false,
       target: "both",
-    });
+    },
+  );
 
   if (controller) {
-    runtime.capabilities
-      .get<{
-        syncDocument(
-          document: EditorDocument,
-          controller: ImageSlotDocumentController,
-        ): void;
-      }>("pooder.kit.image-slot")
-      ?.syncDocument(document, controller);
+    getCapability<{
+      syncDocument(
+        document: EditorDocument,
+        controller: ImageSlotDocumentController,
+      ): void;
+    }>("pooder.kit.image-slot")?.syncDocument(document, controller);
   }
 }
 

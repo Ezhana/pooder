@@ -4,10 +4,10 @@
 
 <script setup lang="ts">
 import { provide } from "vue";
-import { POODER_RUNTIME_KEY, type PooderRuntimeLike } from "./runtime";
+import { POODER_RUNTIME_KEY, type PooderRuntime } from "./runtime";
 
 const props = defineProps<{
-  runtime: PooderRuntimeLike;
+  runtime: PooderRuntime;
 }>();
 
 provide(POODER_RUNTIME_KEY, props.runtime);
