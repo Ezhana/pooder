@@ -8,6 +8,7 @@ export {
   POODER_RUNTIME_KEY,
   usePooderDocument,
   usePooderRuntime,
+  usePooderSessions,
 } from "./runtime";
 export type {
   InstallPooderDocumentOptions,
@@ -15,11 +16,15 @@ export type {
   PooderConfigurationChangeEvent,
   PooderDisposable,
   PooderRuntime,
+  PooderSessionApi,
 } from "./runtime";
 export type {
   ApplyEditorDocumentResult,
   DocumentDraft,
+  EditorDocumentSession,
+  EditorDocumentSessionDerive,
   EditorDocumentChangeEvent,
   EditorDocumentMutationResult,
   EditorDocumentService,
+  OpenEditorDocumentSessionInput,
 } from "@pooder/document-core";

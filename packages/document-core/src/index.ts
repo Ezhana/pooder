@@ -2,6 +2,7 @@ import {
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
   SURFACE_FRAME_SERVICE,
+  SESSION_SERVICE,
   INTERACTION_SERVICE,
   IMAGE_RESOURCE_SERVICE,
   IMAGE_GEOMETRY_DATA_KEY,
@@ -33,6 +34,10 @@ import {
   type ServiceContext,
   type ServiceIdentifier,
   type SceneTransformPatch,
+  type SessionHandle,
+  type SessionScope,
+  type SessionValidationResult,
+  type SessionService,
   type SurfaceFrameService,
 } from "@pooder/core";
 import {
@@ -247,6 +252,44 @@ export interface DocumentDraft {
   rollback(): Promise<EditorDocumentMutationResult>;
 }
 
+export type EditorDocumentSessionDerive<TDraft> = (
+  draft: Readonly<TDraft>,
+  /** Fresh clone of the committed document captured when the session opened. */
+  document: EditorDocument,
+) => EditorDocument | void | Promise<EditorDocument | void>;
+
+export interface OpenEditorDocumentSessionInput<TDraft> {
+  /** Stable application id. Generated when omitted. */
+  sessionId?: string;
+  /** Logical transaction scope. Document sessions with the same scope conflict. */
+  scope?: Omit<SessionScope, "channel" | "groupId"> & {
+    channel?: string | null;
+  };
+  initialDraft: TDraft;
+  derive: EditorDocumentSessionDerive<TDraft>;
+  validate?(
+    draft: Readonly<TDraft>,
+    working: EditorDocument,
+  ):
+    | boolean
+    | SessionValidationResult
+    | Promise<boolean | SessionValidationResult>;
+  /** Same-scope policy. Defaults to `reject`. Document transactions are single-writer. */
+  concurrency?: "reject" | "replace";
+}
+
+export interface EditorDocumentSession<TDraft> {
+  readonly id: string;
+  readonly scope: SessionScope;
+  readonly draft: TDraft;
+  update(
+    update: TDraft | ((draft: TDraft) => TDraft),
+  ): Promise<EditorDocumentMutationResult>;
+  validate(): Promise<SessionValidationResult>;
+  commit(): Promise<EditorDocumentMutationResult>;
+  rollback(): Promise<EditorDocumentMutationResult>;
+}
+
 export interface EditorDocumentObjectInsertOptions {
   index?: number;
 }
@@ -276,6 +319,12 @@ export interface EditorDocumentService extends Service {
     callback: EditorDocumentMutationCallback,
   ): Promise<EditorDocumentMutationResult>;
   beginDraft(options?: DocumentDraftOptions): Promise<DocumentDraft>;
+  openSession<TDraft>(
+    input: OpenEditorDocumentSessionInput<TDraft>,
+  ): Promise<EditorDocumentSession<TDraft>>;
+  getSession<TDraft = unknown>(
+    sessionId: string,
+  ): EditorDocumentSession<TDraft> | undefined;
   onDidChange(listener: (event: EditorDocumentChangeEvent) => void): Disposable;
   insertObject(
     surfaceId: string,
@@ -477,12 +526,19 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private committedDocument: EditorDocument | null = null;
   private workingDocument: EditorDocument | null = null;
   private activeDraftId: string | null = null;
+  private activeDraftSnapshot: EditorDocument | null = null;
   private draftSequence = 0;
   private readonly listeners = new Set<
     (event: EditorDocumentChangeEvent) => void
   >();
   private operationQueue: Promise<void> = Promise.resolve();
   private manipulationSubscription?: { dispose(): void };
+  private sessionSubscription?: { dispose(): void };
+  private readonly documentSessions = new Map<
+    string,
+    EditorDocumentSession<unknown>
+  >();
+  private sessionSequence = 0;
 
   constructor(
     private readonly runtime: EditorDocumentRuntime,
@@ -497,11 +553,19 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         void this.writeManipulationToDocument(event);
       },
     );
+    this.sessionSubscription = context
+      .get<SessionService>(SESSION_SERVICE)
+      ?.onDidTerminate((event) => {
+        this.documentSessions.delete(event.descriptor.sessionId);
+      });
   }
 
   dispose(): void {
     this.manipulationSubscription?.dispose();
     this.manipulationSubscription = undefined;
+    this.sessionSubscription?.dispose();
+    this.sessionSubscription = undefined;
+    this.documentSessions.clear();
     this.listeners.clear();
   }
 
@@ -516,6 +580,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         this.committedDocument = cloneEditorDocument(result.document);
         this.workingDocument = cloneEditorDocument(result.document);
         this.activeDraftId = null;
+        this.activeDraftSnapshot = null;
         this.emit("replace");
       }
       return result;
@@ -547,7 +612,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       if (!source) throw new Error("Cannot begin a draft without a document.");
       const draftId = `document-draft-${++this.draftSequence}`;
       this.activeDraftId = draftId;
-      this.workingDocument = source;
+      this.activeDraftSnapshot = cloneEditorDocument(source);
+      this.workingDocument = cloneEditorDocument(source);
       return {
         id: draftId,
         export: () =>
@@ -558,6 +624,101 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         rollback: () => this.enqueue(() => this.rollbackDraft(draftId)),
       };
     });
+  }
+
+  async openSession<TDraft>(
+    input: OpenEditorDocumentSessionInput<TDraft>,
+  ): Promise<EditorDocumentSession<TDraft>> {
+    const sessionId =
+      normalizeObjectId(input.sessionId) ||
+      `document-session-${++this.sessionSequence}`;
+    const existing = this.documentSessions.get(sessionId);
+    if (existing) return existing as EditorDocumentSession<TDraft>;
+
+    const sessionService = this.runtime.services.getOrThrow<SessionService>(
+      SESSION_SERVICE,
+      "SessionService is required to open an editor document session.",
+    );
+    const sessionSnapshot = this.export("committed");
+    if (!sessionSnapshot) {
+      throw new Error("Cannot open an editor document session without a document.");
+    }
+    const scope: SessionScope = {
+      surfaceId: input.scope?.surfaceId ?? null,
+      subjectId: input.scope?.subjectId ?? null,
+      channel: input.scope?.channel ?? "document",
+      groupId: "editor-document",
+    };
+    let documentDraft: DocumentDraft | undefined;
+    let rollbackResult: EditorDocumentMutationResult | undefined;
+
+    const handle = await sessionService.open<TDraft, EditorDocumentMutationResult>({
+      descriptor: {
+        sessionId,
+        ownerId: "editor-document-service",
+        scope,
+        interactionMode: "exclusive",
+        leavePolicy: "block",
+      },
+      initialDraft: cloneSessionDraft(input.initialDraft),
+      concurrency: input.concurrency ?? "reject",
+      lifecycle: {
+        begin: async (context) => {
+          documentDraft = await this.beginDraft();
+          const result = await documentDraft.mutate(() =>
+            input.derive(
+              context.getDraft(),
+              cloneEditorDocument(sessionSnapshot),
+            ),
+          );
+          if (!result.ok) {
+            await documentDraft.rollback();
+            throw new EditorDocumentSessionMutationError(result);
+          }
+        },
+        validate: async (context) => {
+          const working = this.export("working");
+          if (!working) return { ok: false, detail: "document-not-found" };
+          return input.validate?.(context.getDraft(), working) ?? true;
+        },
+        commit: async () => {
+          const result = await requireDocumentDraft(documentDraft).commit();
+          if (!result.ok) throw new EditorDocumentSessionMutationError(result);
+          return result;
+        },
+        rollback: async () => {
+          rollbackResult = await requireDocumentDraft(documentDraft).rollback();
+          if (!rollbackResult.ok) {
+            throw new EditorDocumentSessionMutationError(rollbackResult);
+          }
+        },
+        cancel: async () => {
+          rollbackResult = await requireDocumentDraft(documentDraft).rollback();
+          if (!rollbackResult.ok) {
+            throw new EditorDocumentSessionMutationError(rollbackResult);
+          }
+        },
+      },
+    });
+    handle.setDirty(true);
+
+    const session = this.createDocumentSession(
+      handle,
+      input,
+      sessionSnapshot,
+      () => requireDocumentDraft(documentDraft),
+      () => rollbackResult,
+    );
+    this.documentSessions.set(sessionId, session as EditorDocumentSession<unknown>);
+    return session;
+  }
+
+  getSession<TDraft = unknown>(
+    sessionId: string,
+  ): EditorDocumentSession<TDraft> | undefined {
+    return this.documentSessions.get(normalizeObjectId(sessionId)) as
+      | EditorDocumentSession<TDraft>
+      | undefined;
   }
 
   onDidChange(
@@ -685,6 +846,12 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       "update",
     );
     if (!result.ok) {
+      await applyEditorDocumentInternal(
+        this.runtime,
+        this.workingDocument,
+        this.options,
+        "update",
+      );
       return mutationFailure("validation-failed", result.diagnostics);
     }
     this.workingDocument = cloneEditorDocument(result.document);
@@ -705,6 +872,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     }
     this.committedDocument = cloneEditorDocument(this.workingDocument);
     this.activeDraftId = null;
+    this.activeDraftSnapshot = null;
     this.emit("commit", draftId);
     return { ok: true, document: cloneEditorDocument(this.committedDocument) };
   }
@@ -712,22 +880,24 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private async rollbackDraft(
     draftId: string,
   ): Promise<EditorDocumentMutationResult> {
-    if (this.activeDraftId !== draftId || !this.committedDocument) {
+    if (this.activeDraftId !== draftId || !this.activeDraftSnapshot) {
       return mutationFailure("draft-inactive");
     }
+    const snapshot = cloneEditorDocument(this.activeDraftSnapshot);
     const result = await applyEditorDocumentInternal(
       this.runtime,
-      this.committedDocument,
+      snapshot,
       this.options,
       "update",
     );
     if (!result.ok) {
       return mutationFailure("validation-failed", result.diagnostics);
     }
-    this.workingDocument = cloneEditorDocument(this.committedDocument);
+    this.workingDocument = cloneEditorDocument(snapshot);
     this.activeDraftId = null;
+    this.activeDraftSnapshot = null;
     this.emit("rollback", draftId);
-    return { ok: true, document: cloneEditorDocument(this.committedDocument) };
+    return { ok: true, document: cloneEditorDocument(snapshot) };
   }
 
   private async writeManipulationToDocument(
@@ -750,6 +920,59 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         : {}),
       ...(parentMatrix ? { parentMatrix } : {}),
     });
+  }
+
+  private createDocumentSession<TDraft>(
+    handle: SessionHandle<TDraft, EditorDocumentMutationResult>,
+    input: OpenEditorDocumentSessionInput<TDraft>,
+    sessionSnapshot: EditorDocument,
+    getDocumentDraft: () => DocumentDraft,
+    getRollbackResult: () => EditorDocumentMutationResult | undefined,
+  ): EditorDocumentSession<TDraft> {
+    const service = this;
+    return {
+      get id() {
+        return handle.descriptor.sessionId;
+      },
+      get scope() {
+        return handle.descriptor.scope;
+      },
+      get draft() {
+        return handle.getDraft();
+      },
+      async update(update) {
+        const current = handle.getDraft();
+        const next =
+          typeof update === "function"
+            ? (update as (draft: TDraft) => TDraft)(current)
+            : update;
+        const candidate = cloneSessionDraft(next);
+        const result = await getDocumentDraft().mutate(() =>
+          input.derive(candidate, cloneEditorDocument(sessionSnapshot)),
+        );
+        if (result.ok) handle.updateDraft(candidate);
+        return result;
+      },
+      validate: () => handle.validate(),
+      async commit() {
+        const result = await handle.commit();
+        if (!result.ok) {
+          return mutationFailure(
+            "validation-failed",
+            validationDetailToDiagnostics(result.validation.detail),
+          );
+        }
+        service.documentSessions.delete(handle.descriptor.sessionId);
+        return result.result;
+      },
+      async rollback() {
+        await handle.rollback();
+        service.documentSessions.delete(handle.descriptor.sessionId);
+        return (
+          getRollbackResult() ?? mutationFailure("draft-inactive")
+        );
+      },
+    };
   }
 
   private emit(type: EditorDocumentChangeEvent["type"], draftId?: string) {
@@ -921,6 +1144,38 @@ class DocumentMutationError extends Error {
   constructor(readonly reason: EditorDocumentMutationFailureReason) {
     super(reason);
   }
+}
+
+class EditorDocumentSessionMutationError extends Error {
+  constructor(readonly result: EditorDocumentMutationResult) {
+    super(result.ok ? "document-session-mutation-failed" : result.reason);
+  }
+}
+
+function requireDocumentDraft(draft: DocumentDraft | undefined): DocumentDraft {
+  if (!draft) throw new Error("Editor document session draft is unavailable.");
+  return draft;
+}
+
+function cloneSessionDraft<T>(draft: T): T {
+  if (draft === undefined || draft === null) return draft;
+  if (typeof globalThis.structuredClone === "function") {
+    return globalThis.structuredClone(draft);
+  }
+  return JSON.parse(JSON.stringify(draft)) as T;
+}
+
+function validationDetailToDiagnostics(
+  detail: unknown,
+): EditorDocumentDiagnostic[] {
+  if (!Array.isArray(detail)) return [];
+  return detail.filter(
+    (entry): entry is EditorDocumentDiagnostic =>
+      typeof entry === "object" &&
+      entry !== null &&
+      "severity" in entry &&
+      "message" in entry,
+  );
 }
 
 function mutationFailure(

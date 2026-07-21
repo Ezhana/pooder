@@ -3,7 +3,9 @@ import { Pooder } from "@pooder/core";
 import {
   registerEditorDocumentService,
   type ApplyEditorDocumentOptions,
+  type EditorDocumentSession,
   type EditorDocumentService,
+  type OpenEditorDocumentSessionInput,
 } from "@pooder/document-core";
 import type { EditorDocument } from "@pooder/document";
 
@@ -31,9 +33,19 @@ export interface PooderConfigurationApi {
   update(key: string, value: unknown): void;
 }
 
+export interface PooderSessionApi {
+  open<TDraft>(
+    input: OpenEditorDocumentSessionInput<TDraft>,
+  ): Promise<EditorDocumentSession<TDraft>>;
+  get<TDraft = unknown>(
+    sessionId: string,
+  ): EditorDocumentSession<TDraft> | undefined;
+}
+
 export interface PooderRuntime {
   readonly config: PooderConfigurationApi;
   readonly document: EditorDocumentService | null;
+  readonly sessions: PooderSessionApi;
   dispose(): Promise<void>;
 }
 
@@ -68,6 +80,12 @@ export function createPooderRuntime(): PooderRuntime {
     },
     get document() {
       return runtimeDocuments.get(runtime) ?? null;
+    },
+    sessions: {
+      open: <TDraft>(input: OpenEditorDocumentSessionInput<TDraft>) =>
+        getPooderDocument(runtime).openSession(input),
+      get: <TDraft = unknown>(sessionId: string) =>
+        getPooderDocument(runtime).getSession<TDraft>(sessionId),
     },
     dispose: () => core.dispose(),
   };
@@ -119,6 +137,10 @@ export function usePooderRuntime(): PooderRuntime {
 
 export function usePooderDocument(): EditorDocumentService {
   return getPooderDocument(usePooderRuntime());
+}
+
+export function usePooderSessions(): PooderSessionApi {
+  return usePooderRuntime().sessions;
 }
 
 /** @internal Browser/editor adapters only. */

@@ -527,6 +527,22 @@ export default class SessionService implements Service {
       return existing.handle as SessionHandle<TDraft, TResult>;
     }
 
+    const sameScopeSessions = [...this.sessions.values()].filter((record) =>
+      scopesEqual(record.descriptor.scope, descriptor.scope),
+    );
+    const concurrency = input.concurrency ?? "parallel";
+    if (concurrency === "reject" && sameScopeSessions.length) {
+      throw new SessionConflictError(
+        sameScopeSessions[0]!.descriptor.sessionId,
+        "same-scope-session-active",
+      );
+    }
+    if (concurrency === "replace") {
+      for (const session of sameScopeSessions) {
+        await session.handle.rollback();
+      }
+    }
+
     const conflicts = [...this.sessions.values()].filter((record) =>
       sessionsConflict(record.descriptor, descriptor),
     );
@@ -803,6 +819,12 @@ function sessionsConflict(
     left.scope.groupId === right.scope.groupId &&
     (left.interactionMode === "exclusive" ||
       right.interactionMode === "exclusive"),
+  );
+}
+
+function scopesEqual(left: SessionScope, right: SessionScope): boolean {
+  return (["surfaceId", "subjectId", "channel", "groupId"] as const).every(
+    (key) => left[key] === right[key],
   );
 }
 
