@@ -1,8 +1,12 @@
 import {
   Coordinate,
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
+  type CoordinateSpace,
   type CoordinatePoint,
   type CoordinateRect,
   type Layout,
+  type Matrix2D,
   type Point,
   type Size,
 } from "@pooder/core";
@@ -145,6 +149,35 @@ export class ViewportSystem {
 
   screenToSceneLength(value: number): number {
     return this.toPhysical(value);
+  }
+
+  sceneToScreenMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "scene">,
+  ): Matrix2D<TFrom, "screen"> {
+    const sceneToScreen = coordinateMatrix("scene", "screen", [
+      this._layout.scale,
+      0,
+      0,
+      this._layout.scale,
+      this._layout.offsetX,
+      this._layout.offsetY,
+    ]);
+    return multiplyCoordinateMatrices(sceneToScreen, matrix);
+  }
+
+  screenToSceneMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "screen">,
+  ): Matrix2D<TFrom, "scene"> {
+    const scale = this._layout.scale || 1;
+    const screenToScene = coordinateMatrix("screen", "scene", [
+      1 / scale,
+      0,
+      0,
+      1 / scale,
+      -this._layout.offsetX / scale,
+      -this._layout.offsetY / scale,
+    ]);
+    return multiplyCoordinateMatrices(screenToScene, matrix);
   }
 
   sceneToScreenRect(rect: CoordinateRect<"scene">): CoordinateRect<"screen"> {

@@ -8,6 +8,9 @@ import {
   SCENE_LAYOUT_SERVICE,
   SURFACE_FRAME_SERVICE,
   evaluateRuntimeCondition,
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
+  type AffinePlacement,
   type CanvasService,
   type CommandService,
   type GeometryRect,
@@ -23,6 +26,7 @@ import {
   type InteractionManipulationResult,
   type InteractionService,
   type InteractionSpec,
+  type Matrix2D,
   type RenderObjectSpec,
   type SceneElement,
   type SceneLayer,
@@ -818,8 +822,7 @@ export class FabricRenderGraphAdapter implements Service {
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
     >,
   ): RenderObjectSpec | null {
-    if (node.interaction?.hitRegion?.type !== "frame" || !node.frame)
-      return null;
+    if (node.interaction?.hitRegion?.type !== "frame") return null;
     const state = this.requireInteractionService().resolveState(
       node.interaction,
       conditionContext,
@@ -829,6 +832,7 @@ export class FabricRenderGraphAdapter implements Service {
       id: `${node.id}:frame-hit-target`,
       type: "rect",
       space: node.coordinateSpace,
+      placement: node.placement,
       data: {
         ...node.data,
         frameHitTarget: true,
@@ -840,12 +844,8 @@ export class FabricRenderGraphAdapter implements Service {
         surfaceId: node.surfaceId,
       },
       props: {
-        left: node.frame.x,
-        top: node.frame.y,
-        width: node.frame.width,
-        height: node.frame.height,
-        originX: "left",
-        originY: "top",
+        width: node.placement.localBounds.width,
+        height: node.placement.localBounds.height,
         fill: "rgba(0,0,0,0)",
         stroke: null,
         selectable: state.selectionEnabled,
@@ -927,6 +927,7 @@ export class FabricRenderGraphAdapter implements Service {
           y: finiteNumber(target.scaleY, 1),
         },
       },
+      sceneMatrix: this.resolveTargetSceneMatrix(target),
       coordinateSpace: "scene",
       target,
       metadata: {
@@ -993,12 +994,19 @@ export class FabricRenderGraphAdapter implements Service {
     }
     if (Object.keys(updates).length) target.set?.(updates);
     target.setCoords?.();
+    const committedSceneMatrix =
+      commit && kind !== "move"
+        ? this.resolveTargetSceneMatrix(target)
+        : undefined;
+    const commitTransform = committedSceneMatrix
+      ? { type: "scene-matrix" as const, matrix: committedSceneMatrix }
+      : result.commitTransform;
     this.dispatchManipulationAction(
       kind,
       target,
       spec,
       result.result.metadata,
-      result.commitTransform,
+      commitTransform,
       commit,
     );
   }
@@ -1034,6 +1042,46 @@ export class FabricRenderGraphAdapter implements Service {
         translation.y,
       ],
     };
+  }
+
+  private resolveTargetSceneMatrix(
+    target: any,
+  ): Matrix2D<"object-local", "scene"> | undefined {
+    const canvas = this.canvasService;
+    const placement = target?.data?.affinePlacement as
+      | AffinePlacement
+      | undefined;
+    const rawMatrix = target?.calcTransformMatrix?.();
+    if (
+      !canvas ||
+      !placement ||
+      !Array.isArray(rawMatrix) ||
+      rawMatrix.length !== 6 ||
+      rawMatrix.some((value: unknown) => !Number.isFinite(value))
+    ) {
+      return undefined;
+    }
+    const bounds = placement.localBounds;
+    const localToFabricCenter = coordinateMatrix(
+      "object-local",
+      "object-local",
+      [
+        1,
+        0,
+        0,
+        1,
+        -(bounds.left + bounds.width / 2),
+        -(bounds.top + bounds.height / 2),
+      ],
+    );
+    const fabricCenterToScreen = coordinateMatrix(
+      "object-local",
+      "screen",
+      rawMatrix as [number, number, number, number, number, number],
+    );
+    return canvas.toSceneMatrix(
+      multiplyCoordinateMatrices(fabricCenterToScreen, localToFabricCenter),
+    );
   }
 
   private dispatchManipulationAction(
@@ -1298,7 +1346,6 @@ export class FabricRenderGraphAdapter implements Service {
           : selectable;
     const commonProps = {
       ...node.props,
-      ...this.resolvePlacementProps(node),
       selectable,
       evented,
       hasControls: !readOnlyProjection && controlsEnabled,
@@ -1339,6 +1386,7 @@ export class FabricRenderGraphAdapter implements Service {
         type: "image",
         src,
         space: node.coordinateSpace,
+        placement: node.placement,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1350,6 +1398,7 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "path",
         space: node.coordinateSpace,
+        placement: node.placement,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1361,6 +1410,7 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "rect",
         space: node.coordinateSpace,
+        placement: node.placement,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1371,6 +1421,7 @@ export class FabricRenderGraphAdapter implements Service {
       id: node.id,
       type: "text",
       space: node.coordinateSpace,
+      placement: node.placement,
       data: commonData,
       ...(effects.length ? { effects } : {}),
       props: commonProps,
@@ -1474,67 +1525,6 @@ export class FabricRenderGraphAdapter implements Service {
       .map((effect) => ({ ...effect }));
   }
 
-  private resolvePlacementProps(
-    node: RenderGraphNode,
-  ): Record<string, unknown> {
-    const frame = node.frame;
-    const transform = node.transform ?? {};
-    const hasTransformLeft = Number.isFinite(transform.left);
-    const hasTransformTop = Number.isFinite(transform.top);
-
-    if (node.type === "image" && frame) {
-      const resolvedWidth = Number(node.width);
-      const resolvedHeight = Number(node.height);
-      if (resolvedWidth > 0 && resolvedHeight > 0) {
-        return {
-          ...transform,
-          left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
-          top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
-          originX: transform.originX ?? "center",
-          originY: transform.originY ?? "center",
-          width: resolvedWidth,
-          height: resolvedHeight,
-        };
-      }
-      return {
-        ...transform,
-        left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
-        top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
-        originX: hasTransformLeft ? transform.originX : "center",
-        originY: hasTransformTop ? transform.originY : "center",
-        width: frame.width,
-        height: frame.height,
-        scaleX: normalizeFrameImageScale(transform.scaleX),
-        scaleY: normalizeFrameImageScale(transform.scaleY),
-      };
-    }
-
-    if (!frame) {
-      return { ...transform };
-    }
-
-    const placement = {
-      left: hasTransformLeft ? transform.left : frame.x,
-      top: hasTransformTop ? transform.top : frame.y,
-      originX: transform.originX ?? "left",
-      originY: transform.originY ?? "top",
-    };
-
-    if (node.type === "path") {
-      return {
-        ...transform,
-        ...placement,
-      };
-    }
-
-    return {
-      ...transform,
-      ...placement,
-      width: frame.width,
-      height: frame.height,
-    };
-  }
-
   private requireRenderIntentService(): RenderIntentService {
     if (!this.renderIntentService) {
       throw new Error(
@@ -1552,11 +1542,6 @@ export class FabricRenderGraphAdapter implements Service {
     }
     return this.canvasService;
   }
-}
-
-function normalizeFrameImageScale(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed < 0 ? -1 : 1;
 }
 
 function finiteNumber(value: unknown, fallback: number): number {

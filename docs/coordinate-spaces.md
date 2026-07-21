@@ -36,3 +36,31 @@ inside one coordinate-space implementation.
 There is no implicit fallback when spatial values cross these boundaries. Use
 the constructors and conversion APIs from `@pooder/core` instead of casting or
 copying a value with a different space label.
+
+## Canonical affine placement
+
+Every formal render node uses one placement contract:
+
+```ts
+interface AffinePlacement {
+  localBounds: CoordinateRect<"object-local">;
+  localToScene: Matrix2D<"object-local", "scene">;
+  pivot: CoordinatePoint<"object-local">;
+}
+```
+
+`localBounds` describes geometry only. Its `left` and `top` may be non-zero and
+must never be interpreted as scene position. `localToScene` is the sole
+placement fact and stays intact through RenderIntent and RenderGraph; nesting is
+flattened by matrix multiplication. A document object may name a
+`parentObjectId`; its frame and transform are then interpreted in that parent's
+local space. Rotation, non-uniform and negative scale,
+skew, and translation are therefore preserved without decomposition. `pivot`
+is an editing anchor in local coordinates, not an additional transform.
+
+The document compiler is the compatibility boundary that converts persisted
+parent-local frame/transform fields into `AffinePlacement`. Platform adapters do
+not infer origins from visual type. Fabric receives the normalized matrix after
+one explicit conversion from declared local bounds to Fabric's center and one
+viewport projection. Reapplying a viewport always starts from
+`localToScene`, never from Fabric's previously projected screen transform.

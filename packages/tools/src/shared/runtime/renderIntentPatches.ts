@@ -49,6 +49,7 @@ export function patchRenderObjectSpecs(
         channel: options.channel,
       },
       effects: spec.effects,
+      placement: spec.placement,
       props: { ...(spec.props || {}) },
       data: {
         ...(spec.data || {}),

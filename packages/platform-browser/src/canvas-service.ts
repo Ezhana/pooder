@@ -7,11 +7,14 @@ import {
   Rect,
   Text,
   controlsUtils,
+  util,
 } from "fabric";
 import {
   Service,
   TypedEventEmitter,
   evaluateRuntimeCondition,
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
   type CanvasObjectLike,
   type CanvasObjectSelector,
   type CanvasServiceEventMap,
@@ -20,6 +23,8 @@ import {
   type CanvasViewportLayout,
   type CoordinatePoint,
   type CoordinateRect,
+  type CoordinateSpace,
+  type Matrix2D,
   type RenderCoordinateSpace,
   type RenderEffectSpec,
   type RenderInvalidation,
@@ -372,6 +377,18 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   toScenePoint(point: CoordinatePoint<"screen">): CoordinatePoint<"scene"> {
     return this.viewport.screenToScenePoint(point);
+  }
+
+  toScreenMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "scene">,
+  ): Matrix2D<TFrom, "screen"> {
+    return this.viewport.sceneToScreenMatrix(matrix);
+  }
+
+  toSceneMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "screen">,
+  ): Matrix2D<TFrom, "scene"> {
+    return this.viewport.screenToSceneMatrix(matrix);
   }
 
   toScreenLength(value: number): number {
@@ -898,7 +915,35 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const nextData = this.resolveFabricObjectData(obj, spec, extraData);
     const props = this.resolveObjectFabricProps(obj, spec);
     obj.set({ ...props, data: nextData });
+    this.applyAffinePlacement(obj, spec);
     obj.setCoords();
+  }
+
+  private applyAffinePlacement(
+    object: FabricObject,
+    spec: RenderObjectSpec,
+  ): void {
+    const placement = spec.placement;
+    if (!placement) return;
+    const bounds = placement.localBounds;
+    const fabricCenterToLocal = coordinateMatrix(
+      "object-local",
+      "object-local",
+      [
+        1,
+        0,
+        0,
+        1,
+        bounds.left + bounds.width / 2,
+        bounds.top + bounds.height / 2,
+      ],
+    );
+    const fabricCenterToScene = multiplyCoordinateMatrices(
+      placement.localToScene,
+      fabricCenterToLocal,
+    );
+    const fabricCenterToScreen = this.toScreenMatrix(fabricCenterToScene);
+    util.applyTransformToObject(object, [...fabricCenterToScreen.values]);
   }
 
   private patchFabricRenderMetadata(obj: any, metadata: Record<string, any>) {
@@ -915,6 +960,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       ...(spec.data || {}),
       ...(extraData || {}),
       id: spec.id,
+      ...(spec.placement ? { affinePlacement: spec.placement } : {}),
     };
     nextData.renderSourceKey = this.getSpecRenderSourceKey(spec);
     return nextData;
@@ -970,6 +1016,13 @@ export default class CanvasService implements Service, CanvasServiceContract {
       return this.omitPathSourceProps(props);
     }
     if (spec.type !== "image") return props;
+    if (spec.placement) {
+      return {
+        ...props,
+        width: spec.placement.localBounds.width,
+        height: spec.placement.localBounds.height,
+      };
+    }
     return this.resolveImageTargetSizeProps(obj, props);
   }
 
@@ -1027,11 +1080,21 @@ export default class CanvasService implements Service, CanvasServiceContract {
     props: Record<string, any>,
   ): Record<string, any> {
     const space: RenderCoordinateSpace = spec.space || "scene";
+    if (spec.placement && spec.layout) {
+      throw new Error(
+        `RenderObjectSpec "${spec.id}" cannot combine affine placement with layout.`,
+      );
+    }
     const next: Record<string, any> = {
       selectable: false,
       evented: false,
       ...this.resolveRenderPatternProps(this.resolveLayoutProps(spec, props)),
     };
+    if (spec.placement) {
+      return this.removeUndefinedFabricProps(
+        this.resolveInteractiveControlProps(next),
+      );
+    }
     if (space !== "scene") {
       return this.removeUndefinedFabricProps(
         this.resolveInteractiveControlProps(next),

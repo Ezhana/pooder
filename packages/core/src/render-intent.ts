@@ -1,6 +1,12 @@
 import { TypedEventEmitter } from "./typed-event";
 import type Disposable from "./disposable";
 import type { Service } from "./service";
+import {
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
+  type AffinePlacement,
+  type Matrix2D,
+} from "./coordinate";
 import type {
   RenderCoordinateSpace,
   RenderEffectSpec,
@@ -41,30 +47,7 @@ export interface RenderIntentVisualAspect extends RenderIntentSource {
   replacement?: RenderIntentSource;
 }
 
-export interface RenderIntentFrame {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface RenderIntentTransform {
-  left?: number;
-  top?: number;
-  scaleX?: number;
-  scaleY?: number;
-  angle?: number;
-  originX?: "left" | "center" | "right";
-  originY?: "top" | "center" | "bottom";
-}
-
-export interface RenderIntentPlacementAspect {
-  frame?: RenderIntentFrame;
-  transform?: RenderIntentTransform;
-  width?: number;
-  height?: number;
-  fit?: "cover" | "contain" | "stretch";
-}
+export type RenderIntentPlacementAspect = AffinePlacement;
 
 export interface RenderIntentExportAspect {
   keys?: readonly string[];
@@ -101,6 +84,8 @@ export type RenderIntentPatch = Partial<
   Omit<RenderIntentDraft, "id" | "subject" | "ordering">
 > & {
   id: string;
+  /** Local-space post-transform composed onto the canonical placement. */
+  placementTransform?: Matrix2D<"object-local", "object-local">;
   subject?: Partial<RenderIntentSubject>;
   ordering?: Partial<RenderIntentOrderingAspect>;
   clear?: readonly RenderIntentPatchClearPath[];
@@ -144,10 +129,7 @@ export interface RenderGraphNode {
   visual?: RenderIntentSource;
   coordinateSpace: "scene";
   exportKeys: string[];
-  frame?: RenderIntentFrame;
-  transform?: RenderIntentTransform;
-  width?: number;
-  height?: number;
+  placement: AffinePlacement;
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
@@ -239,6 +221,7 @@ export type RenderIntentDiagnosticCode =
   | "render-intent-clear-path-invalid"
   | "render-intent-field-conflict"
   | "render-intent-missing-layer"
+  | "render-intent-missing-placement"
   | "render-intent-non-scene-space";
 
 export interface RenderIntentDiagnostic {
@@ -282,7 +265,9 @@ const PATCH_PHASE_ORDER: Record<string, number> = {
 
 const CRITICAL_PATCH_FIELDS = [
   "visual.replacement",
-  "placement.frame",
+  "placement.localBounds",
+  "placement.localToScene",
+  "placementTransform",
   "ordering.layerId",
   "export.visibleWhen",
 ] as const;
@@ -867,6 +852,16 @@ export function createRenderGraph(
       });
       return;
     }
+    if (draft.visual?.type && !draft.placement) {
+      diagnostics.push({
+        code: "render-intent-missing-placement",
+        severity: "error",
+        patchId: draft.id,
+        field: "placement",
+        message: `RenderIntent "${draft.id}" must provide an affine placement.`,
+      });
+      return;
+    }
     const node = createGraphNode(draft);
     if (node) {
       layer.nodes.push(node);
@@ -964,7 +959,7 @@ function getOrCreateGraphLayer(
 function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   const source = resolveVisualSource(draft);
   const type = draft.visual?.type;
-  if (!type) return null;
+  if (!type || !draft.placement) return null;
 
   const channel =
     draft.ordering.channel ??
@@ -986,10 +981,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     coordinateSpace: "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
     tags: normalizeIdList(draft.export?.tags),
-    frame: draft.placement?.frame,
-    transform: draft.placement?.transform,
-    width: draft.placement?.width,
-    height: draft.placement?.height,
+    placement: cloneRecord(draft.placement),
     props: {
       ...(draft.props ?? {}),
     },
@@ -1076,12 +1068,26 @@ function mergePatch(
 ): { draft: RenderIntentDraft; diagnostics: RenderIntentDiagnostic[] } {
   const clearResult = applyPatchClear(base, patch, entry);
   const clearedBase = clearResult.draft;
+  const placement = mergeOptionalRecord(
+    clearedBase.placement,
+    patch.placement,
+  );
+  const transformedPlacement =
+    placement && patch.placementTransform
+      ? {
+          ...placement,
+          localToScene: multiplyCoordinateMatrices(
+            placement.localToScene,
+            createPivotTransform(placement, patch.placementTransform),
+          ),
+        }
+      : placement;
   return {
     draft: {
       ...clearedBase,
       subject: { ...clearedBase.subject, ...(patch.subject ?? {}) },
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
-      placement: mergeOptionalRecord(clearedBase.placement, patch.placement),
+      placement: transformedPlacement,
       effects: mergeOptionalEffects(clearedBase.effects, patch.effects),
       interaction: mergeInteractionAspect(
         clearedBase.interaction,
@@ -1095,6 +1101,27 @@ function mergePatch(
     },
     diagnostics: clearResult.diagnostics,
   };
+}
+
+function createPivotTransform(
+  placement: AffinePlacement,
+  transform: Matrix2D<"object-local", "object-local">,
+): Matrix2D<"object-local", "object-local"> {
+  const { x, y } = placement.pivot;
+  return multiplyCoordinateMatrices(
+    coordinateMatrix("object-local", "object-local", [1, 0, 0, 1, x, y]),
+    multiplyCoordinateMatrices(
+      transform,
+      coordinateMatrix("object-local", "object-local", [
+        1,
+        0,
+        0,
+        1,
+        -x,
+        -y,
+      ]),
+    ),
+  );
 }
 
 function applyPatchClear(

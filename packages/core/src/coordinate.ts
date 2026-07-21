@@ -45,6 +45,19 @@ export interface CoordinateMatrix<
   readonly values: readonly [number, number, number, number, number, number];
 }
 
+export type Matrix2D<
+  TFrom extends CoordinateSpace = CoordinateSpace,
+  TTo extends CoordinateSpace = CoordinateSpace,
+> = CoordinateMatrix<TFrom, TTo>;
+
+/** Canonical placement for every visual rendered into the scene. */
+export interface AffinePlacement {
+  readonly localBounds: CoordinateRect<"object-local">;
+  readonly localToScene: Matrix2D<"object-local", "scene">;
+  /** Editing pivot expressed in object-local coordinates. */
+  readonly pivot: CoordinatePoint<"object-local">;
+}
+
 export type ObjectLocalCoordinatePoint = CoordinatePoint<"object-local">;
 export type ParentLocalCoordinatePoint = CoordinatePoint<"parent-local">;
 export type SceneCoordinatePoint = CoordinatePoint<"scene">;
@@ -99,6 +112,134 @@ export function coordinateMatrix<
       TTo
     >["values"],
   };
+}
+
+export function identityCoordinateMatrix<
+  TSpace extends CoordinateSpace,
+>(space: TSpace): Matrix2D<TSpace, TSpace> {
+  return coordinateMatrix(space, space, [1, 0, 0, 1, 0, 0]);
+}
+
+/** Returns `outer(inner(point))`. */
+export function multiplyCoordinateMatrices<
+  TFrom extends CoordinateSpace,
+  TMiddle extends CoordinateSpace,
+  TTo extends CoordinateSpace,
+>(
+  outer: Matrix2D<TMiddle, TTo>,
+  inner: Matrix2D<TFrom, TMiddle>,
+): Matrix2D<TFrom, TTo> {
+  const [a1, b1, c1, d1, e1, f1] = outer.values;
+  const [a2, b2, c2, d2, e2, f2] = inner.values;
+  return coordinateMatrix(inner.from, outer.to, [
+    a1 * a2 + c1 * b2,
+    b1 * a2 + d1 * b2,
+    a1 * c2 + c1 * d2,
+    b1 * c2 + d1 * d2,
+    a1 * e2 + c1 * f2 + e1,
+    b1 * e2 + d1 * f2 + f1,
+  ]);
+}
+
+export function transformCoordinatePoint<
+  TFrom extends CoordinateSpace,
+  TTo extends CoordinateSpace,
+>(
+  matrix: Matrix2D<TFrom, TTo>,
+  point: CoordinatePoint<TFrom>,
+): CoordinatePoint<TTo> {
+  assertCoordinateSpace(point, matrix.from, "matrix input point");
+  const [a, b, c, d, e, f] = matrix.values;
+  return coordinatePoint(
+    matrix.to,
+    a * point.x + c * point.y + e,
+    b * point.x + d * point.y + f,
+  );
+}
+
+export function transformCoordinateRect<
+  TFrom extends CoordinateSpace,
+  TTo extends CoordinateSpace,
+>(
+  matrix: Matrix2D<TFrom, TTo>,
+  rect: CoordinateRect<TFrom>,
+): CoordinateRect<TTo> {
+  assertCoordinateSpace(rect, matrix.from, "matrix input rect");
+  const points = [
+    coordinatePoint(matrix.from, rect.left, rect.top),
+    coordinatePoint(matrix.from, rect.left + rect.width, rect.top),
+    coordinatePoint(matrix.from, rect.left, rect.top + rect.height),
+    coordinatePoint(
+      matrix.from,
+      rect.left + rect.width,
+      rect.top + rect.height,
+    ),
+  ].map((point) => transformCoordinatePoint(matrix, point));
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return coordinateRect(matrix.to, {
+    left,
+    top,
+    width: Math.max(...xs) - left,
+    height: Math.max(...ys) - top,
+  });
+}
+
+export function createAffinePlacement(options: {
+  localBounds: Omit<CoordinateRect<"object-local">, "space">;
+  localToScene: Matrix2D<"object-local", "scene">;
+  pivot?: Omit<CoordinatePoint<"object-local">, "space">;
+}): AffinePlacement {
+  const localBounds = coordinateRect("object-local", options.localBounds);
+  return {
+    localBounds,
+    localToScene: coordinateMatrix(
+      "object-local",
+      "scene",
+      options.localToScene.values,
+    ),
+    pivot: coordinatePoint(
+      "object-local",
+      options.pivot?.x ?? localBounds.left + localBounds.width / 2,
+      options.pivot?.y ?? localBounds.top + localBounds.height / 2,
+    ),
+  };
+}
+
+export function createLocalToSceneMatrix(options: {
+  position: Omit<CoordinatePoint<"scene">, "space">;
+  pivot: Omit<CoordinatePoint<"object-local">, "space">;
+  scaleX?: number;
+  scaleY?: number;
+  rotation?: number;
+  skewX?: number;
+  skewY?: number;
+}): Matrix2D<"object-local", "scene"> {
+  const scaleX = finiteCoordinate(options.scaleX ?? 1);
+  const scaleY = finiteCoordinate(options.scaleY ?? 1);
+  const rotation = (finiteCoordinate(options.rotation ?? 0) * Math.PI) / 180;
+  const skewX = Math.tan(
+    (finiteCoordinate(options.skewX ?? 0) * Math.PI) / 180,
+  );
+  const skewY = Math.tan(
+    (finiteCoordinate(options.skewY ?? 0) * Math.PI) / 180,
+  );
+  const cosine = Math.cos(rotation);
+  const sine = Math.sin(rotation);
+  const a = scaleX * (cosine - sine * skewY);
+  const b = scaleX * (sine + cosine * skewY);
+  const c = scaleY * (cosine * skewX - sine);
+  const d = scaleY * (sine * skewX + cosine);
+  return coordinateMatrix("object-local", "scene", [
+    a,
+    b,
+    c,
+    d,
+    finiteCoordinate(options.position.x) - a * options.pivot.x - c * options.pivot.y,
+    finiteCoordinate(options.position.y) - b * options.pivot.x - d * options.pivot.y,
+  ]);
 }
 
 export function assertCoordinateSpace<TSpace extends CoordinateSpace>(

@@ -165,6 +165,8 @@ export interface EditorTransform {
   scaleX?: number;
   scaleY?: number;
   angle?: number;
+  skewX?: number;
+  skewY?: number;
   originX?: "left" | "center" | "right";
   originY?: "top" | "center" | "bottom";
 }
@@ -233,6 +235,8 @@ export interface EditorObjectBase {
   id: string;
   /** Object geometry is always relative to its containing layer/object. */
   coordinateSpace: "parent-local";
+  /** Optional containing object. This object's frame remains parent-local. */
+  parentObjectId?: string;
   frame?: EditorRect;
   order?: number;
   visible?: boolean;
@@ -787,7 +791,15 @@ function normalizeSurfaceFrames(
 function normalizeTransform(value: unknown): EditorTransform | undefined {
   if (!isRecord(value)) return undefined;
   const transform: EditorTransform = {};
-  const numericKeys = ["left", "top", "scaleX", "scaleY", "angle"] as const;
+  const numericKeys = [
+    "left",
+    "top",
+    "scaleX",
+    "scaleY",
+    "angle",
+    "skewX",
+    "skewY",
+  ] as const;
   numericKeys.forEach((key) => {
     const parsed = normalizeFiniteNumber(value[key]);
     if (parsed !== undefined) transform[key] = parsed;
@@ -1200,6 +1212,7 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
   const base = {
     id,
     coordinateSpace: "parent-local" as const,
+    parentObjectId: normalizeId(value.parentObjectId) || undefined,
     order:
       normalizeFiniteNumber(value.order) !== undefined
         ? normalizeFiniteNumber(value.order)
@@ -1527,6 +1540,43 @@ function validateRawEffectEnvelopes(
         );
       });
     });
+  });
+}
+
+function validateObjectParentReferences(
+  diagnostics: EditorDocumentDiagnostic[],
+  layer: EditorLayer,
+  layerPath: string,
+): void {
+  const objects = layer.objects ?? [];
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  objects.forEach((object, objectIndex) => {
+    if (!object.parentObjectId) return;
+    const path = `${layerPath}.objects[${objectIndex}].parentObjectId`;
+    if (!byId.has(object.parentObjectId)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "object-parent-missing",
+        message: `Object "${object.id}" references missing parent "${object.parentObjectId}" in its layer.`,
+        path,
+      });
+      return;
+    }
+    const visited = new Set([object.id]);
+    let current: EditorObject | undefined = object;
+    while (current?.parentObjectId) {
+      if (visited.has(current.parentObjectId)) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "object-parent-cycle",
+          message: `Object "${object.id}" participates in a parent cycle.`,
+          path,
+        });
+        return;
+      }
+      visited.add(current.parentObjectId);
+      current = byId.get(current.parentObjectId);
+    }
   });
 }
 
@@ -2000,6 +2050,7 @@ export function validateEditorDocument(
           }),
         );
       });
+      validateObjectParentReferences(diagnostics, layer, layerPath);
     });
   });
 

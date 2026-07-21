@@ -5,11 +5,16 @@ import {
   INTERACTION_SERVICE,
   IMAGE_RESOURCE_SERVICE,
   IMAGE_GEOMETRY_DATA_KEY,
+  coordinateMatrix,
+  createAffinePlacement,
+  createLocalToSceneMatrix,
+  multiplyCoordinateMatrices,
   resolveImageGeometry,
   mergeRenderIntentPatchEntries,
   createServiceToken,
   type GeometryPoint,
   type GeometryRect,
+  type AffinePlacement,
   type Disposable,
   type ImageResourceResolution,
   type ImageResourceService,
@@ -48,6 +53,7 @@ import {
   type EditorObject,
   type EditorObjectEffect,
   type EditorSurface,
+  type EditorTransform,
   type ObjectSource,
 } from "@pooder/document";
 
@@ -945,37 +951,97 @@ function cloneObjectEffects(
     : undefined;
 }
 
-function createScaledPathTransform(
-  object: EditorObject,
+function createPathAffinePlacement(
+  framePlacement: AffinePlacement,
   bounds:
     | { left: number; top: number; width: number; height: number }
     | undefined,
   contentBounds:
     | { left: number; top: number; width: number; height: number }
     | undefined,
-) {
-  const transform = { ...(object.transform ?? {}) };
-  const frame = object.frame;
+): AffinePlacement {
+  const frame = framePlacement.localBounds;
   if (!frame || !bounds || bounds.width <= 0 || bounds.height <= 0) {
-    return transform;
+    return framePlacement;
   }
 
   const pathBounds = contentBounds ?? bounds;
   const sourceScaleX = frame.width / bounds.width;
   const sourceScaleY = frame.height / bounds.height;
-  const baseScaleX = Number(transform.scaleX);
-  const baseScaleY = Number(transform.scaleY);
-  return {
-    ...transform,
-    left: Number.isFinite(Number(transform.left))
-      ? transform.left
-      : frame.x + (pathBounds.left - bounds.left) * sourceScaleX,
-    top: Number.isFinite(Number(transform.top))
-      ? transform.top
-      : frame.y + (pathBounds.top - bounds.top) * sourceScaleY,
-    scaleX: (Number.isFinite(baseScaleX) ? baseScaleX : 1) * sourceScaleX,
-    scaleY: (Number.isFinite(baseScaleY) ? baseScaleY : 1) * sourceScaleY,
+  const pathToFrame = coordinateMatrix("object-local", "object-local", [
+    sourceScaleX,
+    0,
+    0,
+    sourceScaleY,
+    -bounds.left * sourceScaleX,
+    -bounds.top * sourceScaleY,
+  ]);
+  return createAffinePlacement({
+    localBounds: pathBounds,
+    localToScene: multiplyCoordinateMatrices(
+      framePlacement.localToScene,
+      pathToFrame,
+    ),
+    pivot: {
+      x: bounds.left + framePlacement.pivot.x / sourceScaleX,
+      y: bounds.top + framePlacement.pivot.y / sourceScaleY,
+    },
+  });
+}
+
+function createFrameAffinePlacement(
+  object: EditorObject,
+  parentLocalToScene = coordinateMatrix("parent-local", "scene", [
+    1, 0, 0, 1, 0, 0,
+  ]),
+): AffinePlacement {
+  const frame = object.frame ?? { x: 0, y: 0, width: 0, height: 0 };
+  const transform = object.transform ?? {};
+  const pivot = {
+    x: frame.width * originFactorX(transform.originX),
+    y: frame.height * originFactorY(transform.originY),
   };
+  return createAffinePlacement({
+    localBounds: {
+      left: 0,
+      top: 0,
+      width: frame.width,
+      height: frame.height,
+    },
+    pivot,
+    localToScene: multiplyCoordinateMatrices(
+      parentLocalToScene,
+      coordinateMatrix(
+        "object-local",
+        "parent-local",
+        createLocalToSceneMatrix({
+          position: {
+            x: finiteOr(transform.left, frame.x + pivot.x),
+            y: finiteOr(transform.top, frame.y + pivot.y),
+          },
+          pivot,
+          scaleX: finiteOr(transform.scaleX, 1),
+          scaleY: finiteOr(transform.scaleY, 1),
+          rotation: finiteOr(transform.angle, 0),
+          skewX: finiteOr(transform.skewX, 0),
+          skewY: finiteOr(transform.skewY, 0),
+        }).values,
+      ),
+    ),
+  });
+}
+
+function originFactorX(value: EditorTransform["originX"]): number {
+  return value === "right" ? 1 : value === "center" ? 0.5 : 0;
+}
+
+function originFactorY(value: EditorTransform["originY"]): number {
+  return value === "bottom" ? 1 : value === "center" ? 0.5 : 0;
+}
+
+function finiteOr(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
 }
 
 function createResult(
@@ -1019,13 +1085,45 @@ function createBaseRenderIntentDrafts(
   const drafts: RenderIntentDraft[] = [];
   document.surfaces.forEach((surface) => {
     surface.layers.forEach((layer) => {
+      const objects = layer.objects ?? [];
+      const objectsById = new Map(objects.map((object) => [object.id, object]));
+      const placementsById = new Map<string, AffinePlacement>();
+      const resolving = new Set<string>();
+      const resolveFramePlacement = (object: EditorObject): AffinePlacement => {
+        const cached = placementsById.get(object.id);
+        if (cached) return cached;
+        let parentLocalToScene = coordinateMatrix("parent-local", "scene", [
+          1, 0, 0, 1, 0, 0,
+        ]);
+        const parent = object.parentObjectId
+          ? objectsById.get(object.parentObjectId)
+          : undefined;
+        if (parent && !resolving.has(parent.id)) {
+          resolving.add(object.id);
+          const parentPlacement = resolveFramePlacement(parent);
+          resolving.delete(object.id);
+          parentLocalToScene = coordinateMatrix(
+            "parent-local",
+            "scene",
+            parentPlacement.localToScene.values,
+          );
+        }
+        const placement = createFrameAffinePlacement(
+          object,
+          parentLocalToScene,
+        );
+        placementsById.set(object.id, placement);
+        return placement;
+      };
       layer.objects?.forEach((object, index) => {
+        const framePlacement = resolveFramePlacement(object);
         const draft = createObjectRenderIntentDraft(
           surface,
           layer,
           object,
           index,
           resolvedImages.get(object.id),
+          framePlacement,
         );
         if (draft) drafts.push(draft);
       });
@@ -1040,6 +1138,7 @@ function createObjectRenderIntentDraft(
   object: EditorObject,
   index: number,
   imageResolution?: ImageResourceResolution,
+  framePlacement: AffinePlacement = createFrameAffinePlacement(object),
 ): RenderIntentDraft | null {
   if (!object.frame) return null;
   const objectOrder = object.order ?? index;
@@ -1060,12 +1159,7 @@ function createObjectRenderIntentDraft(
       objectId: object.id,
       objectType: object.source.kind,
     },
-    placement: {
-      frame: object.frame,
-      transform: normalizeRenderIntentTransform(object),
-      width: object.frame.width,
-      height: object.frame.height,
-    },
+    placement: framePlacement,
     ordering: {
       layerId: layer.id,
       layerOrder,
@@ -1081,7 +1175,6 @@ function createObjectRenderIntentDraft(
     ...(interaction ? { interaction } : {}),
     props: {
       ...(object.style ?? {}),
-      ...(object.transform ?? {}),
     },
     data: {
       id: object.id,
@@ -1121,14 +1214,11 @@ function createObjectRenderIntentDraft(
   if (visual.pathData) {
     return {
       ...base,
-      placement: {
-        ...base.placement,
-        transform: createScaledPathTransform(
-          object,
-          visual.bounds,
-          visual.contentBounds,
-        ),
-      },
+      placement: createPathAffinePlacement(
+        framePlacement,
+        visual.bounds,
+        visual.contentBounds,
+      ),
       visual: { type: "path" },
       props: {
         ...base.props,
@@ -1214,24 +1304,37 @@ function createImageRenderIntentDraft(
           createEditorImageClipEffect(object.id, geometry.clip),
         ]
       : base.effects,
-    placement: {
-      ...base.placement,
-      ...(geometry
-        ? {
+    placement: geometry
+      ? createAffinePlacement({
+          localBounds: {
+            left: 0,
+            top: 0,
             width: geometry.width,
             height: geometry.height,
-            transform: {
-              left: geometry.left,
-              top: geometry.top,
-              scaleX: geometry.scaleX,
-              scaleY: geometry.scaleY,
-              angle: geometry.angle,
-              originX: geometry.originX,
-              originY: geometry.originY,
-            },
-          }
-        : {}),
-    },
+          },
+          pivot: { x: geometry.width / 2, y: geometry.height / 2 },
+          localToScene: multiplyCoordinateMatrices(
+            base.placement!.localToScene,
+            coordinateMatrix(
+              "object-local",
+              "object-local",
+              createLocalToSceneMatrix({
+                position: {
+                  x: geometry.left - object.frame.x,
+                  y: geometry.top - object.frame.y,
+                },
+                pivot: {
+                  x: geometry.width / 2,
+                  y: geometry.height / 2,
+                },
+                scaleX: geometry.scaleX,
+                scaleY: geometry.scaleY,
+                rotation: geometry.angle,
+              }).values,
+            ),
+          ),
+        })
+      : base.placement,
     props: {
       ...base.props,
       source: object.source,
@@ -1331,16 +1434,6 @@ async function resolveDocumentImageResources(
     ),
   );
   return new Map(await Promise.all(entries));
-}
-
-function normalizeRenderIntentTransform(object: EditorObject) {
-  return {
-    ...(object.transform ?? {}),
-    left: object.transform?.left ?? object.frame?.x ?? 0,
-    top: object.transform?.top ?? object.frame?.y ?? 0,
-    originX: object.transform?.originX ?? "left",
-    originY: object.transform?.originY ?? "top",
-  };
 }
 
 function resolveLayerStack(layer: EditorLayer): number {

@@ -1,5 +1,7 @@
 import {
   RENDER_INTENT_SERVICE,
+  coordinateMatrix,
+  type Matrix2D,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
@@ -8,7 +10,6 @@ import {
   type RenderIntentCompilerContext,
   type RenderIntentPatch,
   type RenderIntentService,
-  type RenderIntentTransform,
 } from "@pooder/core";
 import type {
   EditorDocument,
@@ -112,12 +113,7 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
     const state = normalizeMirrorState(context.effect.payload);
     return {
       id: context.target.objectId,
-      placement: {
-        transform: applyMirrorStateToTransform(
-          normalizeObjectTransform(object),
-          state,
-        ),
-      },
+      placementTransform: createMirrorTransform(state),
       data: {
         mirror: state,
       },
@@ -190,9 +186,10 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
 
     this.renderIntentService?.patchIntent(MIRROR_RUNTIME_PATCH_SOURCE, {
       id: objectId,
-      placement: {
-        transform: applyMirrorStateToTransform(node.transform ?? {}, state),
-      },
+      placementTransform: createMirrorTransform(
+        state,
+        readMirrorStateFromNode(node),
+      ),
       data: {
         mirror: state,
       },
@@ -217,30 +214,23 @@ function normalizeObjectId(input: MirrorObjectSelector): string {
   return String(input?.objectId || "").trim();
 }
 
-function applyMirrorStateToTransform(
-  transform: RenderIntentTransform,
+function createMirrorTransform(
   state: MirrorState,
-): RenderIntentTransform {
-  return {
-    ...transform,
-    scaleX: signedScale(transform.scaleX, state.horizontal),
-    scaleY: signedScale(transform.scaleY, state.vertical),
-  };
-}
-
-function signedScale(value: unknown, mirrored: boolean): number {
-  const parsed = Number(value);
-  const magnitude = Number.isFinite(parsed) ? Math.abs(parsed) : 1;
-  return mirrored ? -magnitude : magnitude;
+  current: MirrorState = { horizontal: false, vertical: false },
+): Matrix2D<"object-local", "object-local"> {
+  const flipX = state.horizontal !== current.horizontal;
+  const flipY = state.vertical !== current.vertical;
+  const scaleX = flipX ? -1 : 1;
+  const scaleY = flipY ? -1 : 1;
+  return coordinateMatrix("object-local", "object-local", [
+    scaleX, 0, 0, scaleY, 0, 0,
+  ]);
 }
 
 function readMirrorStateFromNode(node: RenderGraphNode): MirrorState {
   const mirror = node.data?.mirror;
   if (isMirrorState(mirror)) return mirror;
-  return {
-    horizontal: Number(node.transform?.scaleX) < 0,
-    vertical: Number(node.transform?.scaleY) < 0,
-  };
+  return { horizontal: false, vertical: false };
 }
 
 function isMirrorState(value: unknown): value is MirrorState {
@@ -264,14 +254,4 @@ function findDocumentObject(
     }
   }
   return undefined;
-}
-
-function normalizeObjectTransform(object: EditorObject): RenderIntentTransform {
-  return {
-    ...(object.transform ?? {}),
-    left: object.transform?.left ?? object.frame?.x ?? 0,
-    top: object.transform?.top ?? object.frame?.y ?? 0,
-    originX: object.transform?.originX ?? "left",
-    originY: object.transform?.originY ?? "top",
-  };
 }

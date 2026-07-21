@@ -11,6 +11,7 @@ import {
   coordinateMatrix,
   type CoordinateDelta,
   type CoordinateMatrix,
+  type Matrix2D,
 } from "./coordinate";
 import {
   evaluateRuntimeCondition,
@@ -147,6 +148,7 @@ export interface InteractionManipulationInput {
   runtimeContext: RuntimeConditionEvalContext;
   locked?: boolean;
   transform: TransformInput;
+  sceneMatrix?: Matrix2D<"object-local", "scene">;
   coordinateSpace: "scene";
   geometrySource?: GeometrySourceService;
   target?: unknown;
@@ -358,7 +360,13 @@ export class InteractionService implements Service {
       kind,
       enabled: operation.enabled,
       ...(input.commit && operation.enabled
-        ? { commitTransform: createCommitTransform(kind, resolved) }
+        ? {
+            commitTransform: createCommitTransform(
+              kind,
+              resolved,
+              input.sceneMatrix,
+            ),
+          }
         : {}),
     };
     if (input.commit && result.enabled) {
@@ -427,6 +435,7 @@ export class InteractionService implements Service {
 function createCommitTransform(
   kind: InteractionManipulationKind,
   resolved: ConstraintResolveResult,
+  sceneMatrix?: Matrix2D<"object-local", "scene">,
 ): InteractionCommitTransform {
   const before = resolved.input.frame;
   const after = resolved.result.frame;
@@ -442,6 +451,8 @@ function createCommitTransform(
       ),
     };
   }
+
+  if (sceneMatrix) return { type: "scene-matrix", matrix: sceneMatrix };
 
   const position = resolved.result.position ?? {
     x: after?.left ?? 0,

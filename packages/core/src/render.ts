@@ -2,9 +2,11 @@ import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type { Unit } from "./coordinate";
 import type {
+  AffinePlacement,
   CoordinatePoint,
   CoordinateRect,
   CoordinateSpace,
+  Matrix2D,
 } from "./coordinate";
 import type { DielineShape, DielineShapeStyle } from "./dieline-shape";
 import type { SessionScope } from "./workflow-session";
@@ -59,6 +61,7 @@ export interface RenderObjectSpec {
   data?: Record<string, any>;
   src?: string;
   space?: RenderCoordinateSpace;
+  placement?: AffinePlacement;
   exportKeys?: readonly string[];
   layout?: RenderObjectLayoutSpec;
   effects?: RenderEffectSpec[];
@@ -519,6 +522,12 @@ export interface CanvasService extends Service {
   getSceneScale(): number;
   toScreenPoint(point: CoordinatePoint<"scene">): CoordinatePoint<"screen">;
   toScenePoint(point: CoordinatePoint<"screen">): CoordinatePoint<"scene">;
+  toScreenMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "scene">,
+  ): Matrix2D<TFrom, "screen">;
+  toSceneMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "screen">,
+  ): Matrix2D<TFrom, "scene">;
   toScreenLength(value: number): number;
   toSceneLength(value: number): number;
   toScreenRect(rect: CoordinateRect<"scene">): CoordinateRect<"screen">;

@@ -8,6 +8,8 @@ import {
   ExtensionContributions,
   ExtensionDefinition,
   ConfigurationService,
+  createAffinePlacement,
+  coordinateMatrix,
   type ExtensionActivationSpec,
   type RenderIntentCompilerContribution,
   type RenderIntentCompilerContext,
@@ -380,10 +382,17 @@ export class FeatureTool implements ExtensionDefinition {
             stack: 760,
           },
           visual: { type: "rect" as const },
-          placement: {
-            width: DEFAULT_RECT_SIZE,
-            height: DEFAULT_RECT_SIZE,
-          },
+          placement: createAffinePlacement({
+            localBounds: {
+              left: 0,
+              top: 0,
+              width: DEFAULT_RECT_SIZE,
+              height: DEFAULT_RECT_SIZE,
+            },
+            localToScene: coordinateMatrix("object-local", "scene", [
+              1, 0, 0, 1, 0, 0,
+            ]),
+          }),
           props: {
             fill: "rgba(255,255,255,0.85)",
             stroke: "#111827",
