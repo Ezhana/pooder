@@ -40,6 +40,20 @@ export interface PooderSessionApi {
   get<TDraft = unknown>(
     sessionId: string,
   ): EditorDocumentSession<TDraft> | undefined;
+  onDidChange(
+    listener: (event: PooderSessionChangeEvent) => void,
+  ): PooderDisposable;
+}
+
+export interface PooderSessionChangeEvent {
+  sessionId: string;
+  reason: string;
+  state: {
+    dirty: boolean;
+    focused: boolean;
+    phase: string;
+  };
+  detail?: unknown;
 }
 
 export interface PooderRuntime {
@@ -86,6 +100,19 @@ export function createPooderRuntime(): PooderRuntime {
         getPooderDocument(runtime).openSession(input),
       get: <TDraft = unknown>(sessionId: string) =>
         getPooderDocument(runtime).getSession<TDraft>(sessionId),
+      onDidChange: (listener) =>
+        core.sessions.onDidChange((event) =>
+          listener({
+            sessionId: event.snapshot.descriptor.sessionId,
+            reason: event.reason,
+            state: {
+              dirty: event.snapshot.dirty,
+              focused: event.snapshot.focused,
+              phase: event.snapshot.phase,
+            },
+            detail: event.snapshot.draft,
+          }),
+        ),
     },
     dispose: () => core.dispose(),
   };

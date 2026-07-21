@@ -31,7 +31,6 @@ export default defineConfig({
       external: [
         "vue",
         "@pooder/core",
-        "@pooder/core/internal/legacy-extension",
         "@pooder/document",
         "@pooder/document-core",
         "@pooder/platform-browser",
@@ -40,7 +39,6 @@ export default defineConfig({
         globals: {
           vue: "Vue",
           "@pooder/core": "PooderCore",
-          "@pooder/core/internal/legacy-extension": "PooderCoreLegacyExtension",
           "@pooder/document-core": "PooderDocumentCore",
           "@pooder/platform-browser": "PooderPlatformBrowser",
         },

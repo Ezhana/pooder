@@ -566,11 +566,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     const sceneId = `image-slot:${object.id}:scene`;
     this.sceneService.getSceneHandle(sceneId)?.dispose();
     const projections = object.slot?.sessionProjections ?? [];
-    const documentEntries = (placement: "underlay" | "overlay") =>
+    const renderGraphEntries = (placement: "underlay" | "overlay") =>
       projections
         .filter((projection) => projection.placement === placement)
         .map((projection) => ({
-          source: "document" as const,
+          source: "render-graph" as const,
           interaction: "disabled" as const,
           filter: ({
             node,
@@ -599,10 +599,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       },
       composition: {
         entries: [
-          ...documentEntries("underlay"),
+          ...renderGraphEntries("underlay"),
           { source: "local", layerIds: ["image-slot.underlay"] },
           { source: "local", layerIds: ["image-slot.working"] },
-          ...documentEntries("overlay"),
+          ...renderGraphEntries("overlay"),
           { source: "local", layerIds: ["image-slot.overlay"] },
           { source: "local", layerIds: ["image-slot.controls"] },
         ],
@@ -666,6 +666,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         id: `image-slot:${draft.objectId}:working`,
         layerId: "image-slot.working",
         type: "image",
+        renderGraphProjection: {
+          subjectId: draft.objectId,
+          type: "image",
+        },
         src,
         width: geometry.imageLocalBounds.width,
         height: geometry.imageLocalBounds.height,

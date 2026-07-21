@@ -66,6 +66,7 @@ import {
   type FeatureCapabilityOptions,
   type FeatureCompletionResult,
   type FeatureOperation,
+  type FeatureWorkingChangeEvent,
   type ReplaceFeaturesOptions,
 } from "./capability";
 import { createLegacyCommandBridge } from "../legacyCommandBridge";
@@ -138,6 +139,8 @@ export class FeatureTool implements ExtensionDefinition {
   private sessionDielineEffects: RenderEffectSpec[] = [];
   private renderSeq = 0;
   private readonly subscriptions = new SubscriptionBag();
+  private readonly workingChangeListeners =
+    new Set<(event: FeatureWorkingChangeEvent) => void>();
   private readonly capabilityId: string;
   private readonly configNamespace: string;
   private readonly markerLayerId: string;
@@ -237,6 +240,7 @@ export class FeatureTool implements ExtensionDefinition {
     this.sceneLayoutService = undefined;
     this.surfaceFrameService = undefined;
     this.context = undefined;
+    this.workingChangeListeners.clear();
   }
 
   private updateVisibility() {
@@ -641,6 +645,12 @@ export class FeatureTool implements ExtensionDefinition {
       getFeatures: () => this.getCommittedFeatures(),
       getMarkerRenderSpecs: () => this.markerSpecs.map((spec) => ({ ...spec })),
       getWorkingFeatures: () => this.cloneFeatures(this.workingFeatures),
+      onWorkingChange: (listener) => {
+        this.workingChangeListeners.add(listener);
+        return {
+          dispose: () => this.workingChangeListeners.delete(listener),
+        };
+      },
       projectPlacements: (placements, geometry, scale) =>
         projectPlacedFeatures(placements, geometry, scale),
       refresh: () => {
@@ -740,9 +750,10 @@ export class FeatureTool implements ExtensionDefinition {
   }
 
   private emitWorkingChange() {
-    this.context?.eventBus.emit("feature:working:change", {
+    const event = {
       features: this.cloneFeatures(this.workingFeatures),
-    });
+    };
+    this.workingChangeListeners.forEach((listener) => listener(event));
   }
 
   private async refreshGeometry() {

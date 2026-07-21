@@ -18,11 +18,12 @@ const placement = {
 
 const emptySlot: EditorImageObject = {
   id: "artwork",
+  coordinateSpace: "parent-local",
   frame: { x: 0, y: 0, width: 100, height: 100 },
   source: { kind: "image" },
   placement,
   slot: { accepts: ["image/*"] },
-  interaction: { hitRegion: { type: "frame" } },
+  interaction: { hitRegion: { type: "frame", space: "scene" } },
 };
 
 const document: EditorDocument = {

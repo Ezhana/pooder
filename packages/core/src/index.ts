@@ -150,7 +150,7 @@ type RuntimeSessionsApi = {
 };
 
 export class Pooder {
-  /** @internal Temporary bridge for extensions wrapped by defineLegacyExtension(). */
+  /** @internal Host-service event channel. */
   readonly eventBus: EventBus = new EventBus();
   private readonly serviceRegistry: ServiceRegistry = new ServiceRegistry();
   private readonly serviceEvents = new TypedEventEmitter<{
@@ -241,7 +241,6 @@ export class Pooder {
       CORE_SERVICE_TOKENS.INTERACTION,
     );
     const context: ExtensionContext = {
-      eventBus: this.eventBus,
       services: {
         get: <T extends Service>(identifier: ServiceIdentifier<T>) =>
           this.serviceRegistry.get(identifier),

@@ -213,8 +213,8 @@ export interface RenderIntentCompilerQuery {
 }
 
 export type RenderIntentChangeReason =
-  | { type: "document-replaced" }
-  | { type: "document-updated"; intentIds: string[] }
+  | { type: "base-replaced" }
+  | { type: "base-updated"; intentIds: string[] }
   | {
       type: "runtime-patch";
       operation: "upsert" | "remove" | "clear";
@@ -388,7 +388,7 @@ export class RenderIntentService implements Service {
 
   setDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
     this.baseIntents = intents.map(cloneDraft);
-    return this.recompile({ type: "document-replaced" });
+    return this.recompile({ type: "base-replaced" });
   }
 
   updateDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
@@ -406,7 +406,7 @@ export class RenderIntentService implements Service {
     );
     const intentIds = collectChangedRenderIntentIds(previous, this.graph);
     if (intentIds.length) {
-      this.emitChange({ type: "document-updated", intentIds });
+      this.emitChange({ type: "base-updated", intentIds });
     }
     return this.getGraph();
   }

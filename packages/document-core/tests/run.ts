@@ -325,7 +325,7 @@ async function testControllerUpdatesOnlyChangedRenderIntents() {
   assertEqual(updated.ok, true, "controller object update should succeed");
   assertDeepEqual(
     reasons,
-    [{ type: "document-updated", intentIds: ["first"] }],
+    [{ type: "base-updated", intentIds: ["first"] }],
     "controller updates should publish only changed render intents",
   );
 }

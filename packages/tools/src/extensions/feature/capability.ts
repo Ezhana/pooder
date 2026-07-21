@@ -1,5 +1,8 @@
-import type { CapabilityDefinition } from "@pooder/core";
-import type { RenderObjectSpec } from "@pooder/core";
+import type {
+  CapabilityDefinition,
+  Disposable,
+  RenderObjectSpec,
+} from "@pooder/core";
 import type { ConstraintFeature } from "../constraints";
 import type {
   FeaturePlacement,
@@ -40,6 +43,10 @@ export interface FeatureCompletionResult {
   issues?: FeatureCompletionIssue[];
 }
 
+export interface FeatureWorkingChangeEvent {
+  features: ConstraintFeature[];
+}
+
 export interface FeatureCapabilityApi {
   getFeatures(): ConstraintFeature[];
   getWorkingFeatures(): ConstraintFeature[];
@@ -69,6 +76,9 @@ export interface FeatureCapabilityApi {
     scale: number,
   ): ConstraintFeature[];
   getMarkerRenderSpecs(): RenderObjectSpec[];
+  onWorkingChange(
+    listener: (event: FeatureWorkingChangeEvent) => void,
+  ): Disposable;
   refresh(): void;
 }
 

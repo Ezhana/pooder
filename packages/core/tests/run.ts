@@ -1598,7 +1598,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       composition: {
         entries: [
           { source: "local", layerIds: ["underlay"] },
-          { source: "document", interaction: "disabled" },
+          { source: "render-graph", interaction: "disabled" },
           { source: "local", layerIds: ["controls"] },
         ],
       },
@@ -2571,7 +2571,7 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
     assertDeepEqual(
       changes.map((event) => event.reason),
       [
-        { type: "document-replaced" },
+        { type: "base-replaced" },
         {
           type: "runtime-patch",
           operation: "upsert",
@@ -2638,8 +2638,8 @@ async function testRenderIntentDocumentUpdatesAreScoped() {
     ]);
     assertDeepEqual(
       changes.map((event) => event.reason),
-      [{ type: "document-updated", intentIds: ["first"] }],
-      "document updates should invalidate only semantically changed intents",
+      [{ type: "base-updated", intentIds: ["first"] }],
+      "base updates should invalidate only semantically changed intents",
     );
 
     changes.length = 0;

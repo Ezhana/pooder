@@ -787,6 +787,9 @@ export default class SceneService implements Service {
       style: this.cloneRecord(element.style),
       placement: this.clonePlacement(element.placement),
       transform: this.cloneRecord(element.transform),
+      renderGraphProjection: element.renderGraphProjection
+        ? { ...element.renderGraphProjection }
+        : undefined,
     };
   }
 
@@ -1006,12 +1009,12 @@ function normalizeComposition(
   }
   return {
     entries: composition.entries.map((entry) => {
-      if (entry.source === "document") {
+      if (entry.source === "render-graph") {
         if (entry.interaction !== "disabled") {
-          throw new Error("Document projections must disable interaction.");
+          throw new Error("RenderGraph projections must disable interaction.");
         }
         return {
-          source: "document" as const,
+          source: "render-graph" as const,
           interaction: "disabled" as const,
           ...(entry.filter ? { filter: entry.filter } : {}),
         };
@@ -1037,7 +1040,7 @@ function cloneComposition(
 ): SceneSnapshot["composition"] {
   return {
     entries: composition.entries.map((entry) =>
-      entry.source === "document"
+      entry.source === "render-graph"
         ? { ...entry }
         : { ...entry, layerIds: [...entry.layerIds] },
     ),

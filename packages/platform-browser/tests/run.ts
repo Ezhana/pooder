@@ -705,6 +705,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
         objectId: "bg",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 10, 10),
       ordering: { layerId: "bg", stack: 0, layerOrder: 0 },
       props: { width: 10, height: 10 },
     },
@@ -717,6 +718,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
         objectId: "art",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 5, 5),
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
       props: { width: 5, height: 5 },
       effects: [
@@ -742,6 +744,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
         objectId: "hidden-export",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 7, 8),
       ordering: { layerId: "art", stack: 10, layerOrder: 1 },
       export: { visible: false, tags: ["mockup"] },
       props: { width: 7, height: 8 },
@@ -802,6 +805,7 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
         objectId: "document-node",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 20, 20),
       ordering: { layerId: "document", stack: 0 },
       props: { width: 20, height: 20 },
       interaction: { selection: { enabled: true } },
@@ -824,7 +828,7 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     composition: {
       entries: [
         { source: "local", layerIds: ["underlay"] },
-        { source: "document", interaction: "disabled" },
+        { source: "render-graph", interaction: "disabled" },
         { source: "local", layerIds: ["controls"] },
       ],
     },
@@ -1013,7 +1017,7 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
     layerId: "working",
     type: "image",
     src: "/user.png",
-    data: { imageSlotObjectId: "user-image" },
+    renderGraphProjection: { subjectId: "user-image", type: "image" },
   });
   await adapter.flush();
   const workingItems = canvas.reconcileCalls.at(-1)?.items ?? [];
@@ -1538,7 +1542,7 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
     states.some(
       (state) =>
         state.syncing &&
-        state.causes.some((cause) => cause.type === "document-apply") &&
+        state.causes.some((cause) => cause.type === "base-replaced") &&
         state.invalidations.some(
           (invalidation) => invalidation.type === "full",
         ),

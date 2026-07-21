@@ -111,6 +111,7 @@ export class DielineTool implements ExtensionDefinition {
   private surfaceFrameService?: SurfaceFrameService;
   private geometrySource?: GeometrySourceService;
   private geometrySourceDisposable?: { dispose(): void };
+  private canvasResizeDisposable?: { dispose(): void };
   private imageSessionOverlayDisposable?: { dispose(): void };
   private context?: ExtensionContext;
   private specs: RenderObjectSpec[] = [];
@@ -228,12 +229,17 @@ export class DielineTool implements ExtensionDefinition {
       }
     });
 
-    context.eventBus.on("canvas:resized", this.onCanvasResized);
+    this.canvasResizeDisposable?.dispose();
+    this.canvasResizeDisposable = this.canvasService.on(
+      "resized",
+      this.onCanvasResized,
+    );
     this.updateDieline();
   }
 
-  deactivate(context: ExtensionContext) {
-    context.eventBus.off("canvas:resized", this.onCanvasResized);
+  deactivate() {
+    this.canvasResizeDisposable?.dispose();
+    this.canvasResizeDisposable = undefined;
     this.renderSeq += 1;
     this.specs = [];
     clearRenderIntentSource(this.renderIntentService, this.id);

@@ -3387,7 +3387,7 @@ async function testImagePlacementSessionUsesEditableWorkingObject() {
   );
   const projectedNodeIds =
     sessionRoot?.composition.entries.flatMap((entry) =>
-      entry.source === "document"
+      entry.source === "render-graph"
         ? renderGraph.layers.flatMap((layer) =>
             layer.nodes
               .filter((node) => entry.filter?.({ layer, node }) ?? true)
@@ -5585,6 +5585,7 @@ async function testFeatureCapabilityDefinition() {
     getFeatures: () => committedFeatures,
     getMarkerRenderSpecs: () => [],
     getWorkingFeatures: () => workingFeatures,
+    onWorkingChange: () => ({ dispose() {} }),
     projectPlacements: (placements, _geometry, scale) =>
       placements.map((placement) => ({
         ...placement.feature,

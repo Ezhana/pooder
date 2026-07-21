@@ -1,10 +1,8 @@
 import PooderCanvasHost from "./pooder-canvas-host.vue";
 import type { ExtensionDefinition, Pooder } from "@pooder/core";
-import { getLegacyRuntimeEventBridge } from "@pooder/core/internal/legacy-extension";
 
 import {
   getPooderRuntimeCore,
-  type PooderDisposable,
   type PooderRuntime,
 } from "./runtime";
 
@@ -64,14 +62,4 @@ export function requirePooderCapability<TFacade>(
     id,
     errorMessage,
   );
-}
-
-export function onPooderEditorEvent(
-  runtime: PooderRuntime,
-  event: string,
-  listener: (payload: unknown) => void,
-): PooderDisposable {
-  const bridge = getLegacyRuntimeEventBridge(getEditorRuntimeCore(runtime));
-  bridge.on(event, listener);
-  return { dispose: () => bridge.off(event, listener) };
 }
