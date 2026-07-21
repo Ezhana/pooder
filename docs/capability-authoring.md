@@ -17,9 +17,15 @@ legacy kit-owned `*Tool` pattern.
   headless scene graph.
 - `@pooder/platform-browser` owns browser and Fabric implementations for scene,
   render, export, canvas, and layout services.
-- `@pooder/tools` owns optional reusable capabilities. Tool capabilities may
-  expose typed facades, config defaults, command bridges, and render producers,
-  but must not define product toolbar items or workflow semantics.
+- Individual Tool packages own optional reusable capabilities. Each package
+  owns its capability and command ids, typed facade, factory, tests, and any
+  persisted Document schema. Tool capabilities may expose config defaults,
+  command bridges, and render producers, but must not define product toolbar
+  items or workflow semantics.
+- `@pooder/tools` is a migration aggregate for implementations that predate the
+  package contract; new Tools must not be added to that monolith.
+- `@pooder/kit` explicitly re-exports factories only and is never a Tool
+  dependency.
 - Applications own product tool ids, labels, icons, activity bars, workflow
   ordering, and orchestration.
 
@@ -147,3 +153,5 @@ when a host integration or compatibility bridge needs command bus access.
   predicates where visibility is needed.
 - Tests cover facade registration, layer/config option normalization, and any
   scene mutations performed by the capability.
+- The package passes the dependency, removal, and standalone criteria in
+  [Tool Package Contract](./tool-package-contract.md).

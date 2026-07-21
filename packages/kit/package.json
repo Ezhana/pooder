@@ -1,7 +1,7 @@
 {
   "name": "@pooder/kit",
   "version": "10.0.0",
-  "description": "Optional aggregate install entry for official Pooder tools",
+  "description": "Optional factory-only aggregate for official Pooder Tools",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -10,16 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
-    },
-    "./document": {
-      "types": "./dist/document.d.ts",
-      "import": "./dist/document.mjs",
-      "require": "./dist/document.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/document.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts src/document.ts --format cjs,esm --dts --watch"
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch"
   },
   "keywords": [],
   "author": "",

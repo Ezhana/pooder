@@ -9,8 +9,7 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@pooder/tools": ["../tools/src/index.ts"],
-      "@pooder/tools/document": ["../tools/src/document/index.ts"]
+      "@pooder/tools": ["../tools/src/index.ts"]
     }
   },
   "include": ["src"]

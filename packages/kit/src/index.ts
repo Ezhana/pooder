@@ -1,5 +1,16 @@
 /**
- * Optional aggregate entry point for the official Pooder tool packages.
- * Applications should prefer direct tool-package dependencies.
+ * Optional factory-only aggregate for official Pooder Tool packages.
+ * Applications should prefer direct Tool package dependencies.
  */
-export * from "@pooder/tools";
+export {
+  createClipCapability,
+  createConfigurableVisualCapability,
+  createDesignExportCapability,
+  createDielineGeometryCapability,
+  createEdgeDetectionCapability,
+  createFeatureCapability,
+  createImageMaskCapability,
+  createImageSlotCapability,
+  createMirrorCapability,
+  createSceneExportCapability,
+} from "@pooder/tools";

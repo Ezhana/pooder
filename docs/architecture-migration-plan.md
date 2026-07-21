@@ -8,7 +8,7 @@ architecture.
 
 ## Current Progress
 
-Current milestone: capability-first migration complete.
+Current milestone: Tool package boundary extraction.
 
 Completed:
 
@@ -92,10 +92,16 @@ Completed:
   workflow composition, and legacy kit migration notes are documented in
   `docs/capability-authoring.md`, `docs/app-workflow-composition.md`, and
   `docs/legacy-kit-migration.md`.
+- P7.S1 the normative Tool package contract and an executable package-boundary
+  check have been added. Kit is now a factory-only aggregate and no longer
+  exposes a Document entry point.
 
 Next recommended slice:
 
-- None. The planned capability-first migration slices are complete.
+- P7.S2 extract one low-coupling capability from the compatibility
+  `@pooder/tools` aggregate into an independently buildable Tool package. Use
+  that extraction to prove the package template before moving coupled geometry
+  capabilities.
 
 Resume instruction for a new thread:
 
@@ -111,10 +117,14 @@ Resume instruction for a new thread:
   workflow-neutral sessions.
 - `@pooder/platform-browser` owns the Fabric/browser implementation of core
   scene and render contracts.
-- `@pooder/tools` owns optional official capabilities such as image placement,
-  edge detection, dieline geometry, object mirror effects, and export helpers.
-  It must not define product tools, toolbar items,
-  labels, or application workflow semantics.
+- Individual Tool packages own optional official capabilities such as image
+  placement, edge detection, dieline geometry, object mirror effects, and
+  export helpers. Each Tool owns its ids, facade, factory, tests, and optional
+  Document schema. The `@pooder/tools` package is a migration aggregate, not
+  the target ownership boundary.
+- `@pooder/kit` explicitly aggregates Tool factories only. It owns no ids,
+  facade types, Storefront constants, Document validator, Document Controller,
+  or runtime adapter.
 - Applications own product tools and workflows. For storefront customization,
   `image`, `whiteInk`, `dieline`, and `feature` are app-level concepts composed
   from core services and kit capabilities.
@@ -129,9 +139,12 @@ Resume instruction for a new thread:
 - Capability code must accept layer ids, config namespaces, and session ids from
   the caller whenever possible. Hard-coded business ids should become defaults,
   not required coupling.
-- App-specific tool ids must not leak into `@pooder/tools`.
+- App-specific tool ids must not leak into any Tool package.
 - Existing behavior should be preserved through adapter slices before removing
   old tool contributions.
+
+The normative boundary and acceptance checklist live in
+`docs/tool-package-contract.md`.
 
 ## Phase 0 - Planning And Coupling Inventory
 

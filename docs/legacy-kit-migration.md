@@ -8,12 +8,15 @@ to capability-first APIs.
 
 ## What Changed
 
-- Installing `@pooder/kit` remains an optional aggregate entry and no longer adds product toolbar tools for image,
-  dieline, or feature workflows.
+- Installing `@pooder/kit` remains an optional factory-only aggregate and no
+  longer adds product toolbar tools for image, dieline, or feature workflows.
 - Applications own toolbar catalogs, labels, icons, activation, session policy,
   and workflow orchestration.
-- Kit exposes typed capabilities and compatibility command bridges where they
-  are still part of the public surface.
+- Tool packages expose typed facades and compatibility command bridges where
+  they are still part of the public surface. Kit exports only their factories.
+- The deprecated `@pooder/kit/document` entry has been removed. Compose Tool
+  schemas with `@pooder/document` and use the Document Controller supplied by
+  the document integration layer.
 - Former storefront-oriented default layer ids are available only through the
   explicit `KIT_LEGACY_LAYER_PRESET`.
 

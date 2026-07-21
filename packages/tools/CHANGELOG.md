@@ -4,8 +4,9 @@
 
 ### Major Changes
 
-- Moved official capability implementations out of `@pooder/kit`. The Kit
-  package is now an optional aggregate entry that re-exports this package.
+- Moved official capability implementations out of `@pooder/kit`. Kit now
+  explicitly re-exports factories only; `@pooder/tools` remains a migration
+  aggregate while implementations move to standalone Tool packages.
 - Removed the Document runtime adapter dependency. Tool/document integration is
   expressed through document contracts and capability ports.
 
