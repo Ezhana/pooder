@@ -2070,6 +2070,10 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       manipulation: {
         move: {
           enabled: true,
+          action: {
+            commandId: "interaction.transform",
+            payload: { operationOwner: "test" },
+          },
           constraints: [
             {
               activeWhen: { op: "const" as const, value: true },
@@ -2130,46 +2134,147 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
 
     const committedKinds: string[] = [];
     const committedPatches: unknown[] = [];
+    let manipulationActionPayload: any;
+    runtime.services
+      .getOrThrow(COMMAND_SERVICE)
+      .registerCommand("interaction.transform", (payload) => {
+        manipulationActionPayload = payload;
+      });
     interaction.onDidCommitManipulation((event) => {
       committedKinds.push(event.kind);
-      committedPatches.push(event.result.sceneTransformPatch);
+      committedPatches.push(event.result.documentPatch);
     });
     const transform = {
       frame: { left: 1, top: 2, width: 20, height: 30 },
       size: { width: 20, height: 30 },
       rotation: 12,
     };
-    assertEqual(
-      interaction.resolveManipulation("move", {
-        spec,
-        runtimeContext,
-        transform,
+    const moveCommit = interaction.commitManipulation("move", {
+      spec,
+      runtimeContext,
+      transform,
+      coordinateSpace: "scene",
+      sourceTransform: {
+        frame: { left: 0, top: 0, width: 20, height: 30 },
+      },
+      sourceSceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 0, 0],
+      ),
+      sceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 1, 2],
+      ),
+      subject: {
+        subjectId: "image",
+        projectionTargets: ["image.fill", "image.outline"].map(
+          (projectionId) => ({
+            projectionId,
+            geometryRef: {
+              sourceId: "render-intent",
+              geometryId: projectionId,
+            },
+          }),
+        ),
+      },
+    });
+    assertEqual(moveCommit.result.frame?.left, 10);
+    assertEqual(moveCommit.phase, "commit");
+    assertEqual(moveCommit.coordinateSpace, "scene");
+    assertEqual(manipulationActionPayload.commit, true);
+    assertDeepEqual(
+      manipulationActionPayload.sceneMatrix,
+      moveCommit.sceneMatrix,
+      "manipulation actions should receive the absolute scene matrix",
+    );
+    const staleBoundsMove = interaction.previewManipulation("move", {
+      spec: { manipulation: { move: { enabled: true } } },
+      runtimeContext,
+      transform: {
+        frame: { left: 0, top: 0, width: 20, height: 30 },
+      },
+      sourceTransform: {
+        frame: { left: 0, top: 0, width: 20, height: 30 },
+      },
+      sourceSceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 0, 0],
+      ),
+      sceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 5, 7],
+      ),
+      coordinateSpace: "scene",
+      subject: {
+        subjectId: "stale-bounds-image",
+        projectionTargets: [
+          {
+            projectionId: "stale-bounds-image",
+            geometryRef: {
+              sourceId: "render-intent",
+              geometryId: "missing-projection",
+            },
+          },
+        ],
+      },
+    });
+    assertDeepEqual(
+      staleBoundsMove.projectionPatches[0]?.transform,
+      {
+        type: "translate",
         coordinateSpace: "scene",
-        sourceTransform: {
-          frame: { left: 0, top: 0, width: 20, height: 30 },
-        },
-        subject: { subjectId: "image", projectionIds: ["image"] },
-        commit: true,
-      }).result.frame?.left,
-      10,
+        delta: { space: "scene", x: 5, y: 7 },
+      },
+      "move should use the live scene matrix when Fabric bounds are stale",
     );
     assertDeepEqual(
-      interaction.resolveManipulation("resize", {
-        spec,
-        runtimeContext,
-        transform,
-        coordinateSpace: "scene",
-      }).result.size,
-      { width: 50, height: 60 },
+      moveCommit.projectionPatches.map((patch) => patch.target.projectionId),
+      ["image.fill", "image.outline"],
+      "one logical operation should emit one patch per projection target",
     );
+    const resizePreview = interaction.previewManipulation("resize", {
+      spec,
+      runtimeContext,
+      transform,
+      coordinateSpace: "scene",
+      subject: {
+        subjectId: "image",
+        projectionTargets: [
+          {
+            projectionId: "image",
+            geometryRef: {
+              sourceId: "render-intent",
+              geometryId: "image",
+            },
+          },
+        ],
+      },
+    });
+    assertDeepEqual(resizePreview.result.size, { width: 50, height: 60 });
+    assertEqual(resizePreview.phase, "preview");
+    assertEqual(resizePreview.documentPatch, undefined);
     assertEqual(
-      interaction.resolveManipulation("rotate", {
+      interaction.commitManipulation("rotate", {
         spec,
         runtimeContext,
         transform,
         coordinateSpace: "scene",
-        subject: { subjectId: "image", projectionIds: ["image"] },
-        commit: true,
+        subject: {
+          subjectId: "image",
+          projectionTargets: [
+            {
+              projectionId: "image",
+              geometryRef: {
+                sourceId: "render-intent",
+                geometryId: "image",
+              },
+            },
+          ],
+        },
       }).result.rotation,
       90,
     );
@@ -2317,7 +2422,12 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
     interaction.selectSubject({
       subjectId: "logical-object",
       surfaceId: "front",
-      projectionIds: graph.projectionMemberships[0]!.nodeIds,
+      projectionTargets: graph.layers.flatMap((layer) =>
+        layer.nodes.map((node) => ({
+          projectionId: node.id,
+          geometryRef: node.previewGeometryRef,
+        })),
+      ),
     });
     assertDeepEqual(
       selections,
@@ -2325,7 +2435,24 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
         {
           subjectId: "logical-object",
           surfaceId: "front",
-          projectionIds: ["logical-object:fill", "logical-object:outline"],
+          projectionTargets: [
+            {
+              projectionId: "logical-object:fill",
+              geometryRef: {
+                sourceId: "render-intent",
+                geometryId: "logical-object:fill",
+                purpose: "preview",
+              },
+            },
+            {
+              projectionId: "logical-object:outline",
+              geometryRef: {
+                sourceId: "render-intent",
+                geometryId: "logical-object:outline",
+                purpose: "preview",
+              },
+            },
+          ],
         },
       ],
       "selection should expose the logical subject instead of a render target",

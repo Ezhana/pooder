@@ -734,7 +734,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     event: InteractionManipulationCommitEvent,
   ): Promise<void> {
     const subjectId = normalizeObjectId(event.subject.subjectId);
-    const sceneTransformPatch = event.result.sceneTransformPatch;
+    const sceneTransformPatch = event.result.documentPatch;
     if (!subjectId || !sceneTransformPatch) return;
     const parentMatrix = normalizeDocumentMatrix(
       event.input.metadata?.parentSceneMatrix,

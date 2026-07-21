@@ -70,15 +70,33 @@ A subject may compile into multiple independent `RenderGraphNode` projections.
 selection, activation, and manipulation resolve a backend hit through that
 membership before entering Core.
 
-During a drag, the browser adapter applies one absolute scene-space preview
-delta to every projection in the membership. These changes belong only to the
-derived renderer state and are always calculated from the declarative
-placement baseline, never accumulated from screen coordinates.
+`InteractionService.previewManipulation()` and
+`InteractionService.commitManipulation()` are separate lifecycle boundaries.
+Both return the same `InteractionManipulationResult` shape with an explicit
+`phase`, `coordinateSpace: "scene"`, and one entry in `projectionPatches` per
+projection target. Each target carries its own `GeometryRef`, so the operation
+does not assume a renderer-specific geometry source. Move, resize, and rotate
+therefore share one operation-result contract;
+the platform adapter only locates each named backend projection and applies its
+patch. It does not retain a second subject-membership or projection-baseline
+list.
 
-On commit, `InteractionService` emits a standard `SceneTransformPatch` for the
-logical subject. `EditorDocumentService` converts the scene delta through the
-parent transform, mutates the document once, and recompiles the RenderGraph.
-The browser platform does not inspect or mutate `EditorObject` variants.
+Every preview patch is derived from the projection's declarative
+`AffinePlacement` through the runtime `GeometrySourceService`, never
+accumulated from screen coordinates. The `ConstraintResolverService` and
+`InteractionService` are required to use that same service instance, so
+constraint geometry and projection geometry cannot disagree.
+
+On commit, the result additionally contains a scene-space `documentPatch` and
+`InteractionService` emits it for the logical subject. `EditorDocumentService`
+converts the patch through the parent transform, mutates the document once,
+and recompiles the RenderGraph. The browser platform does not inspect or mutate
+`EditorObject` variants.
+
+A viewport or surface-layout change is an authoritative preview barrier. The
+browser adapter drops its active gesture handle and performs a full declarative
+reconcile, allowing every temporary backend object position to be reconstructed
+from the Document/RenderGraph under the new viewport transform.
 
 `activation` defaults to enabled. `selection` and each manipulation operation
 default to disabled. Any enabled manipulation operation implies selection and

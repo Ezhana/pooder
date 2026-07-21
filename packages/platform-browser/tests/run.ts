@@ -5,6 +5,7 @@ import {
   coordinateMatrix,
   createAffinePlacement,
   createLocalToSceneMatrix,
+  GEOMETRY_SOURCE_SERVICE,
   INTERACTION_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
@@ -12,6 +13,7 @@ import {
   SESSION_SERVICE,
   SURFACE_FRAME_SERVICE,
   type RenderIntentService,
+  type GeometrySourceService,
   type InteractionService,
   type SceneService,
   type SessionService,
@@ -2411,20 +2413,50 @@ async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
   );
   canvas.objects = [active, sibling];
 
+  const liveProjectionGeometry = runtime.services
+    .getOrThrow<GeometrySourceService>(GEOMETRY_SOURCE_SERVICE)
+    .getSnapshot({
+      sourceId: "render-graph",
+      geometryId: "subject:fill",
+      purpose: "preview",
+    }).value;
+  assertDeepEqual(
+    liveProjectionGeometry?.localToScene.values,
+    active.data.affinePlacement.localToScene.values,
+    "live projection geometry should preserve its declarative affine placement",
+  );
+
   canvas.emit("selection", { kind: "created", target: active });
   assertDeepEqual(
     interaction.getSelectedSubject(),
     {
       subjectId: "subject",
       surfaceId: "front",
-      projectionIds: ["subject:fill", "subject:outline"],
+      projectionTargets: [
+        {
+          projectionId: "subject:fill",
+          geometryRef: {
+            sourceId: "render-intent",
+            geometryId: "subject:fill",
+            purpose: "preview",
+          },
+        },
+        {
+          projectionId: "subject:outline",
+          geometryRef: {
+            sourceId: "render-intent",
+            geometryId: "subject:outline",
+            purpose: "preview",
+          },
+        },
+      ],
     },
     "Fabric selection should resolve to the logical subject membership",
   );
 
   let committedPatch: unknown;
   interaction.onDidCommitManipulation((event) => {
-    committedPatch = event.result.sceneTransformPatch;
+    committedPatch = event.result.documentPatch;
   });
   canvas.emitCanvasEvent("object:moving", { target: active });
   assertEqual(

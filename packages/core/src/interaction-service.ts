@@ -5,10 +5,12 @@ import type {
   ConstraintSpec,
   TransformInput,
 } from "./constraint-resolver";
-import type { GeometrySourceService } from "./geometry-source";
+import type { GeometryRef, GeometrySourceService } from "./geometry-source";
 import {
   coordinateDelta,
   coordinateMatrix,
+  invertCoordinateMatrix,
+  multiplyCoordinateMatrices,
   type CoordinateDelta,
   type CoordinateMatrix,
   type Matrix2D,
@@ -23,6 +25,7 @@ import { TypedEventEmitter } from "./typed-event";
 import {
   COMMAND_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
   SESSION_SERVICE,
 } from "./services/tokens";
 import type CommandService from "./services/CommandService";
@@ -37,11 +40,17 @@ import { SessionConflictError } from "./workflow-session";
 
 export type InteractionActivationTrigger = "primary-pointer" | "double-click";
 export type InteractionManipulationKind = "move" | "resize" | "rotate";
+export type InteractionOperationPhase = "preview" | "commit";
 
 export interface InteractionSubject {
   readonly subjectId: string;
   readonly surfaceId?: string;
-  readonly projectionIds: readonly string[];
+  readonly projectionTargets: readonly InteractionProjectionTarget[];
+}
+
+export interface InteractionProjectionTarget {
+  readonly projectionId: string;
+  readonly geometryRef: GeometryRef;
 }
 
 export interface InteractionSessionIntent {
@@ -157,19 +166,36 @@ export interface InteractionManipulationInput {
   transform: TransformInput;
   /** Canonical declarative transform before this interaction began. */
   sourceTransform?: TransformInput;
+  /** Declarative matrix of the projection that initiated the operation. */
+  sourceSceneMatrix?: Matrix2D<"object-local", "scene">;
   sceneMatrix?: Matrix2D<"object-local", "scene">;
   coordinateSpace: "scene";
-  geometrySource?: GeometrySourceService;
   target?: unknown;
   metadata?: Record<string, unknown>;
-  subject?: InteractionSubject;
-  commit?: boolean;
+  projectionId?: string;
+  subject: InteractionSubject;
 }
 
 export interface InteractionManipulationResult extends ConstraintResolveResult {
   kind: InteractionManipulationKind;
+  phase: InteractionOperationPhase;
   enabled: boolean;
-  sceneTransformPatch?: SceneTransformPatch;
+  coordinateSpace: "scene";
+  subject: InteractionSubject;
+  projectionPatches: readonly InteractionProjectionPatch[];
+  /** Absolute matrix of the projection that initiated the operation. */
+  sceneMatrix?: Matrix2D<"object-local", "scene">;
+  /** Present only for commit results; this is the logical Document mutation. */
+  documentPatch?: SceneTransformPatch;
+}
+
+export interface InteractionProjectionPatch {
+  target: {
+    kind: "projection";
+    projectionId: string;
+  };
+  coordinateSpace: "scene";
+  transform: SceneTransformPatch;
 }
 
 export type SceneTransformPatch =
@@ -210,6 +236,7 @@ export interface InteractionServiceEventMap {
 export class InteractionService implements Service {
   private commandService?: CommandService;
   private constraintResolver?: ConstraintResolverService;
+  private geometrySource?: GeometrySourceService;
   private sessionService?: SessionService;
   private readonly events = new TypedEventEmitter<InteractionServiceEventMap>();
   private selectedSubject: InteractionSubject | null = null;
@@ -218,11 +245,13 @@ export class InteractionService implements Service {
     services: {
       commandService?: CommandService;
       constraintResolver?: ConstraintResolverService;
+      geometrySource?: GeometrySourceService;
       sessionService?: SessionService;
     } = {},
   ) {
     this.commandService = services.commandService;
     this.constraintResolver = services.constraintResolver;
+    this.geometrySource = services.geometrySource;
     this.sessionService = services.sessionService;
   }
 
@@ -230,6 +259,8 @@ export class InteractionService implements Service {
     this.commandService = context.get(COMMAND_SERVICE) ?? this.commandService;
     this.constraintResolver =
       context.get(CONSTRAINT_RESOLVER_SERVICE) ?? this.constraintResolver;
+    this.geometrySource =
+      context.get(GEOMETRY_SOURCE_SERVICE) ?? this.geometrySource;
     this.sessionService = context.get(SESSION_SERVICE) ?? this.sessionService;
   }
 
@@ -363,10 +394,26 @@ export class InteractionService implements Service {
     };
   }
 
-  resolveManipulation(
+  previewManipulation(
     kind: InteractionManipulationKind,
     input: InteractionManipulationInput,
   ): InteractionManipulationResult {
+    return this.resolveManipulation(kind, input, "preview");
+  }
+
+  commitManipulation(
+    kind: InteractionManipulationKind,
+    input: InteractionManipulationInput,
+  ): InteractionManipulationResult {
+    return this.resolveManipulation(kind, input, "commit");
+  }
+
+  private resolveManipulation(
+    kind: InteractionManipulationKind,
+    input: InteractionManipulationInput,
+    phase: InteractionOperationPhase,
+  ): InteractionManipulationResult {
+    const subject = requireInteractionSubject(input.subject);
     const operation = this.resolveState(
       input.spec,
       input.runtimeContext,
@@ -376,32 +423,55 @@ export class InteractionService implements Service {
       transform: input.transform,
       constraints: operation.enabled ? operation.constraints : [],
       coordinateSpace: input.coordinateSpace,
-      geometrySource: input.geometrySource,
+      geometrySource: this.requireGeometrySource(),
       target: input.target,
       metadata: input.metadata,
     });
+    const documentPatch = operation.enabled
+      ? createSceneTransformPatch(
+          kind,
+          resolved,
+          input.sourceTransform,
+          input.sourceSceneMatrix,
+          input.sceneMatrix,
+        )
+      : undefined;
+    const projectionPatches =
+      operation.enabled && documentPatch
+        ? createProjectionPatches(
+            kind,
+            subject,
+            documentPatch,
+            input.sourceSceneMatrix,
+            input.sceneMatrix,
+            this.requireGeometrySource(),
+          )
+        : [];
+    const primaryProjectionId = normalizeId(input.projectionId);
+    const primaryMatrixPatch = projectionPatches.find(
+      (patch) =>
+        patch.transform.type === "replace-matrix" &&
+        (!primaryProjectionId ||
+          patch.target.projectionId === primaryProjectionId),
+    );
+    const resultSceneMatrix =
+      primaryMatrixPatch?.transform.type === "replace-matrix"
+        ? primaryMatrixPatch.transform.matrix
+        : input.sceneMatrix;
     const result: InteractionManipulationResult = {
       ...resolved,
       kind,
+      phase,
       enabled: operation.enabled,
-      ...(input.commit && operation.enabled
-        ? {
-            sceneTransformPatch: createSceneTransformPatch(
-              kind,
-              resolved,
-              input.sourceTransform,
-              input.sceneMatrix,
-            ),
-          }
-        : {}),
+      coordinateSpace: "scene",
+      subject,
+      projectionPatches,
+      ...(resultSceneMatrix ? { sceneMatrix: resultSceneMatrix } : {}),
+      ...(phase === "commit" && documentPatch ? { documentPatch } : {}),
     };
-    if (input.commit && result.enabled) {
-      const subject = normalizeInteractionSubject(
-        input.subject,
-        input.metadata,
-      );
-      if (!subject) return result;
-      const event = { kind, subject, input, result };
+    this.dispatchManipulationAction(kind, input, result);
+    if (phase === "commit" && result.enabled) {
+      const event = { kind, subject: result.subject, input, result };
       this.events.emit("manipulationCommit", event);
     }
     return result;
@@ -424,7 +494,9 @@ export class InteractionService implements Service {
     return this.selectedSubject
       ? {
           ...this.selectedSubject,
-          projectionIds: [...this.selectedSubject.projectionIds],
+          projectionTargets: this.selectedSubject.projectionTargets.map(
+            cloneProjectionTarget,
+          ),
         }
       : null;
   }
@@ -471,11 +543,64 @@ export class InteractionService implements Service {
     return this.commandService;
   }
 
+  private dispatchManipulationAction(
+    kind: InteractionManipulationKind,
+    input: InteractionManipulationInput,
+    result: InteractionManipulationResult,
+  ): void {
+    const action = input.spec.manipulation?.[kind]?.action;
+    const commandId = normalizeId(action?.commandId);
+    if (!result.enabled || !action || !commandId) return;
+    void this.requireCommandService()
+      .executeCommand(commandId, {
+        ...cloneRecord(action.payload),
+        commit: result.phase === "commit",
+        coordinateSpace: result.coordinateSpace,
+        documentPatch: result.documentPatch,
+        kind,
+        metadata: cloneRecord(result.result.metadata),
+        phase: result.phase,
+        projectionPatches: result.projectionPatches,
+        sceneMatrix: result.sceneMatrix,
+        sceneTransformPatch: result.documentPatch,
+        snap: result.result.metadata?.rectSnap,
+        subject: result.subject,
+        subjectId: result.subject.subjectId,
+        surfaceId: result.subject.surfaceId,
+        transform: result.result,
+      })
+      .catch((error) => {
+        console.error(
+          `Interaction manipulation action "${commandId}" failed.`,
+          error,
+        );
+      });
+  }
+
   private requireConstraintResolver(): ConstraintResolverService {
     if (!this.constraintResolver) {
       throw new Error("InteractionService requires ConstraintResolverService.");
     }
     return this.constraintResolver;
+  }
+
+  private requireGeometrySource(): GeometrySourceService {
+    const resolverGeometry =
+      this.requireConstraintResolver().getGeometrySource();
+    if (
+      resolverGeometry &&
+      this.geometrySource &&
+      resolverGeometry !== this.geometrySource
+    ) {
+      throw new Error(
+        "InteractionService and ConstraintResolverService must share GeometrySourceService.",
+      );
+    }
+    const geometrySource = resolverGeometry ?? this.geometrySource;
+    if (!geometrySource) {
+      throw new Error("InteractionService requires GeometrySourceService.");
+    }
+    return geometrySource;
   }
 
   private requireSessionService(): SessionService {
@@ -490,20 +615,40 @@ function createSceneTransformPatch(
   kind: InteractionManipulationKind,
   resolved: ConstraintResolveResult,
   sourceTransform?: TransformInput,
+  sourceSceneMatrix?: Matrix2D<"object-local", "scene">,
   sceneMatrix?: Matrix2D<"object-local", "scene">,
 ): SceneTransformPatch {
   const before = sourceTransform?.frame ?? resolved.input.frame;
   const after = resolved.result.frame;
   if (kind === "move") {
+    const matrixDelta =
+      sourceSceneMatrix && sceneMatrix
+        ? {
+            x: sceneMatrix.values[4] - sourceSceneMatrix.values[4],
+            y: sceneMatrix.values[5] - sourceSceneMatrix.values[5],
+          }
+        : null;
+    const constraintCorrection = {
+      x:
+        (after?.left ?? resolved.result.position?.x ?? 0) -
+        (resolved.input.frame?.left ?? resolved.input.position?.x ?? 0),
+      y:
+        (after?.top ?? resolved.result.position?.y ?? 0) -
+        (resolved.input.frame?.top ?? resolved.input.position?.y ?? 0),
+    };
     return {
       type: "translate",
       coordinateSpace: "scene",
       delta: coordinateDelta(
         "scene",
-        (after?.left ?? resolved.result.position?.x ?? 0) -
-          (before?.left ?? resolved.input.position?.x ?? 0),
-        (after?.top ?? resolved.result.position?.y ?? 0) -
-          (before?.top ?? resolved.input.position?.y ?? 0),
+        matrixDelta
+          ? matrixDelta.x + constraintCorrection.x
+          : (after?.left ?? resolved.result.position?.x ?? 0) -
+              (before?.left ?? resolved.input.position?.x ?? 0),
+        matrixDelta
+          ? matrixDelta.y + constraintCorrection.y
+          : (after?.top ?? resolved.result.position?.y ?? 0) -
+              (before?.top ?? resolved.input.position?.y ?? 0),
       ),
     };
   }
@@ -540,26 +685,176 @@ function createSceneTransformPatch(
   };
 }
 
+function createProjectionPatches(
+  kind: InteractionManipulationKind,
+  subject: InteractionSubject,
+  documentPatch: SceneTransformPatch,
+  sourceSceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
+  sceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
+  geometrySource: GeometrySourceService,
+): InteractionProjectionPatch[] {
+  const projectionTargets =
+    normalizeInteractionSubject(subject)?.projectionTargets ?? [];
+  if (kind === "move") {
+    return projectionTargets.map((projectionTarget) => ({
+      target: {
+        kind: "projection",
+        projectionId: projectionTarget.projectionId,
+      },
+      coordinateSpace: "scene",
+      transform: createProjectionTransformFromDocumentPatch(
+        projectionTarget,
+        documentPatch,
+        geometrySource,
+      ),
+    }));
+  }
+
+  if (!sourceSceneMatrix || !sceneMatrix) {
+    return projectionTargets.map((projectionTarget) => ({
+      target: {
+        kind: "projection",
+        projectionId: projectionTarget.projectionId,
+      },
+      coordinateSpace: "scene",
+      transform: createProjectionTransformFromDocumentPatch(
+        projectionTarget,
+        documentPatch,
+        geometrySource,
+      ),
+    }));
+  }
+
+  let sceneDelta: Matrix2D<"scene", "scene">;
+  try {
+    sceneDelta = multiplyCoordinateMatrices(
+      sceneMatrix,
+      invertCoordinateMatrix(sourceSceneMatrix),
+    );
+  } catch {
+    return projectionTargets.map((projectionTarget) => ({
+      target: {
+        kind: "projection",
+        projectionId: projectionTarget.projectionId,
+      },
+      coordinateSpace: "scene",
+      transform: documentPatch,
+    }));
+  }
+
+  return projectionTargets.map((projectionTarget) => {
+    const snapshot = geometrySource.getSnapshot({
+      ...projectionTarget.geometryRef,
+      purpose: "preview",
+    }).value;
+    const matrix = snapshot
+      ? multiplyCoordinateMatrices(
+          sceneDelta,
+          coordinateMatrix(
+            "object-local",
+            "scene",
+            snapshot.localToScene.values,
+          ),
+        )
+      : sceneMatrix;
+    return {
+      target: {
+        kind: "projection",
+        projectionId: projectionTarget.projectionId,
+      },
+      coordinateSpace: "scene",
+      transform: {
+        type: "replace-matrix",
+        coordinateSpace: "scene",
+        matrix,
+      },
+    };
+  });
+}
+
+function createProjectionTransformFromDocumentPatch(
+  projectionTarget: InteractionProjectionTarget,
+  documentPatch: SceneTransformPatch,
+  geometrySource: GeometrySourceService,
+): SceneTransformPatch {
+  if (documentPatch.type === "replace-matrix") return documentPatch;
+  const snapshot = geometrySource.getSnapshot({
+    ...projectionTarget.geometryRef,
+    purpose: "preview",
+  }).value;
+  if (!snapshot) return documentPatch;
+  const translation = coordinateMatrix("scene", "scene", [
+    1,
+    0,
+    0,
+    1,
+    documentPatch.delta.x,
+    documentPatch.delta.y,
+  ]);
+  return {
+    type: "replace-matrix",
+    coordinateSpace: "scene",
+    matrix: multiplyCoordinateMatrices(
+      translation,
+      coordinateMatrix("object-local", "scene", snapshot.localToScene.values),
+    ),
+  };
+}
+
 function normalizeInteractionSubject(
   subject: InteractionSubject | undefined | null,
   metadata?: Record<string, unknown>,
 ): InteractionSubject | null {
   const subjectId = normalizeId(subject?.subjectId ?? metadata?.subjectId);
   if (!subjectId) return null;
-  const projectionIds = Array.from(
-    new Set(
-      (subject?.projectionIds ?? [])
-        .map((projectionId) => normalizeId(projectionId))
-        .filter(Boolean),
-    ),
+  const projectionTargets = Array.from(
+    new Map(
+      (subject?.projectionTargets ?? [])
+        .map((target) => cloneProjectionTarget(target))
+        .filter(
+          (target) =>
+            target.projectionId &&
+            target.geometryRef.sourceId &&
+            target.geometryRef.geometryId,
+        )
+        .map((target) => [target.projectionId, target]),
+    ).values(),
   );
   return {
     subjectId,
     ...(normalizeId(subject?.surfaceId ?? metadata?.surfaceId)
       ? { surfaceId: normalizeId(subject?.surfaceId ?? metadata?.surfaceId) }
       : {}),
-    projectionIds,
+    projectionTargets,
   };
+}
+
+function cloneProjectionTarget(
+  target: InteractionProjectionTarget,
+): InteractionProjectionTarget {
+  return {
+    projectionId: normalizeId(target?.projectionId),
+    geometryRef: {
+      sourceId: normalizeId(target?.geometryRef?.sourceId),
+      geometryId: normalizeId(target?.geometryRef?.geometryId),
+      ...(target?.geometryRef?.purpose
+        ? { purpose: target.geometryRef.purpose }
+        : {}),
+      ...(target?.geometryRef?.variant
+        ? { variant: target.geometryRef.variant }
+        : {}),
+    },
+  };
+}
+
+function requireInteractionSubject(
+  subject: InteractionSubject,
+): InteractionSubject {
+  const normalized = normalizeInteractionSubject(subject);
+  if (!normalized) {
+    throw new Error("Interaction operation requires a logical subjectId.");
+  }
+  return normalized;
 }
 
 function sameInteractionSubject(

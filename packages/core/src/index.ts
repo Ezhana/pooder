@@ -185,6 +185,7 @@ export class Pooder {
   private readonly interactionService = new InteractionService({
     commandService: this.commandService,
     constraintResolver: this.constraintResolverService,
+    geometrySource: this.geometrySourceService,
     sessionService: this.sessionService,
   });
   private readonly extensionManager: ExtensionManager;

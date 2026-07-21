@@ -92,6 +92,10 @@ export class ConstraintResolverService implements Service {
     this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
   }
 
+  getGeometrySource(): GeometrySourceService | undefined {
+    return this.geometrySource;
+  }
+
   registerConstraint(type: string, resolver: ConstraintHandler): Disposable {
     const normalized = normalizeType(type);
     if (this.handlers.has(normalized)) {

@@ -108,8 +108,9 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.sceneService =
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
-    this.renderIntentService =
-      context.services.get<RenderIntentService>(RENDER_INTENT_SERVICE);
+    this.renderIntentService = context.services.get<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
     this.sessionService =
       context.services.getOrThrow<SessionService>(SESSION_SERVICE);
   }
@@ -425,7 +426,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     });
     this.setState(
       { phase: "active", draft: { ...draft, placement } },
-      { renderScene: false },
+      { renderScene: input.commit === true },
     );
     this.renderSnapGuides(
       input.commit ? undefined : input.snap,
@@ -1049,8 +1050,14 @@ function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {
   return {
     fit:
       value.fit === "contain" || value.fit === "stretch" ? value.fit : "cover",
-    anchorX: Math.min(1, Math.max(0, Number.isFinite(value.anchorX) ? value.anchorX : 0.5)),
-    anchorY: Math.min(1, Math.max(0, Number.isFinite(value.anchorY) ? value.anchorY : 0.5)),
+    anchorX: Math.min(
+      1,
+      Math.max(0, Number.isFinite(value.anchorX) ? value.anchorX : 0.5),
+    ),
+    anchorY: Math.min(
+      1,
+      Math.max(0, Number.isFinite(value.anchorY) ? value.anchorY : 0.5),
+    ),
     zoom: Number.isFinite(value.zoom) && value.zoom > 0 ? value.zoom : 1,
     rotation: Number.isFinite(value.rotation) ? value.rotation : 0,
     opacity: Number.isFinite(value.opacity)
