@@ -12,11 +12,6 @@ import type {
   GeometrySnapshot,
   GeometrySourceService,
 } from "./geometry-source";
-import {
-  containsGeometryPoint,
-  findNearestGeometryPoint,
-  getGeometryBounds,
-} from "./geometry-source";
 
 export interface TransformInput {
   position?: GeometryPoint;
@@ -39,7 +34,7 @@ export interface TransformResult {
   metadata?: Record<string, unknown>;
 }
 
-export type ConstraintSource = GeometryRef | GeometrySnapshot;
+export type ConstraintSource = GeometryRef;
 
 export interface ConstraintSpec {
   type: string;
@@ -221,14 +216,26 @@ function resolvePathNearestPoint(
   const geometry = resolveConstraintGeometry(constraint, context);
   const position = getResultPosition(result);
   if (!geometry || !position) return result;
-  const nearest = findNearestGeometryPoint(geometry, position);
+  const geometrySource = context.geometrySource;
+  if (!geometrySource || !constraint.source) return result;
+  const nearest = geometrySource.nearestPoint(
+    constraint.source,
+    position,
+    context.coordinateSpace,
+  );
   if (!nearest) return result;
   const next = moveResultToPosition(result, nearest);
   if (
     constraint.type === "path.follow" &&
     constraint.params?.contain === true
   ) {
-    return containsGeometryPoint(geometry, nearest) ? next : result;
+    return geometrySource.contains(
+      constraint.source,
+      nearest,
+      context.coordinateSpace,
+    )
+      ? next
+      : result;
   }
   return next;
 }
@@ -349,7 +356,12 @@ function resolveConstraintRect(
   const geometry = resolveConstraintGeometry(constraint, context);
   if (!geometry) return null;
   if (geometry.kind === "rect") return normalizeRectLike(geometry.rect);
-  return getGeometryBounds(geometry);
+  return constraint.source
+    ? (context.geometrySource?.getBounds(
+        constraint.source,
+        context.coordinateSpace,
+      ) ?? null)
+    : null;
 }
 
 function resolveConstraintGeometry(
@@ -358,17 +370,11 @@ function resolveConstraintGeometry(
 ): GeometrySnapshot | null {
   const source = constraint.source;
   if (!source) return null;
-  if (isGeometrySnapshot(source)) return source;
   const geometrySource = context.geometrySource;
   if (!geometrySource) return null;
   return context.coordinateSpace
-    ? geometrySource.projectGeometry({
-        ref: source,
-        from:
-          geometrySource.getGeometry(source)?.space ?? context.coordinateSpace,
-        to: context.coordinateSpace,
-      })
-    : geometrySource.getGeometry(source);
+    ? geometrySource.project({ ref: source, to: context.coordinateSpace })
+    : geometrySource.getSnapshot(source);
 }
 
 function collectSnapPoints(
@@ -556,12 +562,6 @@ function toComparableTransform(result: TransformResult) {
     rotation: result.rotation,
     scale: result.scale,
   };
-}
-
-function isGeometrySnapshot(
-  value: ConstraintSource,
-): value is GeometrySnapshot {
-  return typeof (value as GeometrySnapshot).kind === "string";
 }
 
 function normalizeType(type: unknown, throwIfEmpty = true): string {

@@ -15,7 +15,7 @@ import {
   type CommandService,
   type GeometryRect,
   type GeometrySourceService,
-  type GeometrySourceProvider,
+  type GeometrySource,
   type RenderEffectSpec,
   type RenderGraph,
   type RenderGraphLayer,
@@ -439,9 +439,9 @@ export class FabricRenderGraphAdapter implements Service {
   private toSceneInvalidations(event: SceneChangeSet): RenderInvalidation[] {
     const sceneStructureChanged = Boolean(
       event.scenes &&
-        (event.scenes.added.length ||
-          event.scenes.updated.length ||
-          event.scenes.removed.length),
+      (event.scenes.added.length ||
+        event.scenes.updated.length ||
+        event.scenes.removed.length),
     );
     if (sceneStructureChanged) return [{ type: "composition" }];
 
@@ -449,8 +449,8 @@ export class FabricRenderGraphAdapter implements Service {
     Object.entries(event.sceneChanges ?? {}).forEach(([sceneId, change]) => {
       const layersChanged = Boolean(
         change.layers.added.length ||
-          change.layers.updated.length ||
-          change.layers.removed.length,
+        change.layers.updated.length ||
+        change.layers.removed.length,
       );
       if (layersChanged) {
         invalidations.push({ type: "scene", sceneId });
@@ -1227,17 +1227,23 @@ export class FabricRenderGraphAdapter implements Service {
     };
   }
 
-  private createRenderGraphGeometrySource(): GeometrySourceProvider {
+  private createRenderGraphGeometrySource(): GeometrySource {
     return {
       sourceId: "render-graph",
-      getGeometry: (ref) => {
+      getSnapshot: (ref) => {
         const rect = this.resolveLiveObjectFrame(ref.geometryId);
         return rect
           ? {
               kind: "rect",
               ref,
               space: "scene",
+              bounds: rect,
               rect,
+              localToScene: coordinateMatrix(
+                "scene",
+                "scene",
+                [1, 0, 0, 1, 0, 0],
+              ),
             }
           : null;
       },

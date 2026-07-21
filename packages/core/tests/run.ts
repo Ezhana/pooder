@@ -13,14 +13,12 @@ import {
   computeDragInteraction,
   containsPoint,
   containsRect,
-  containsGeometryPoint,
-  createStaticGeometrySourceProvider,
+  coordinateMatrix,
+  createStaticGeometrySource,
   ConstraintResolverService,
   DefaultSurfaceFrameService,
   GeometrySourceService,
   createRectSnapLines,
-  findNearestGeometryPoint,
-  getGeometryBounds,
   intersectRects,
   mergeRenderIntentPatchDraft,
   normalizeRect,
@@ -1768,63 +1766,126 @@ async function testGeometrySourceServiceRegistry() {
       GEOMETRY_SOURCE_SERVICE,
     );
     const disposable = geometry.registerSource(
-      createStaticGeometrySourceProvider({
+      createStaticGeometrySource({
         sourceId: "static",
         geometries: [
           {
             kind: "rect",
             ref: { sourceId: "static", geometryId: "bounds" },
-            space: "document",
+            space: "parent-local",
+            bounds: { left: 10, top: 20, width: 30, height: 40 },
             rect: { left: 10, top: 20, width: 30, height: 40 },
+            localToScene: coordinateMatrix(
+              "parent-local",
+              "scene",
+              [1, 0, 0, 1, 5, 10],
+            ),
           },
           {
             kind: "pointSet",
             ref: { sourceId: "static", geometryId: "points" },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 100, height: 100 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
             points: [
               { x: 0, y: 0 },
               { x: 100, y: 100 },
             ],
           },
+          {
+            kind: "rect",
+            ref: {
+              sourceId: "static",
+              geometryId: "representation",
+              purpose: "preview",
+            },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 10, height: 10 },
+            rect: { left: 0, top: 0, width: 10, height: 10 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
+          },
+          {
+            kind: "rect",
+            ref: {
+              sourceId: "static",
+              geometryId: "representation",
+              purpose: "export",
+            },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 20, height: 20 },
+            rect: { left: 0, top: 0, width: 20, height: 20 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
+          },
         ],
       }),
     );
 
-    const rect = geometry.getGeometry({
+    const rect = geometry.getSnapshot({
       sourceId: "static",
       geometryId: "bounds",
     });
     assert(rect, "geometry source should resolve registered geometry");
     assertDeepEqual(
-      getGeometryBounds(rect),
+      geometry.getBounds(rect.ref),
       { left: 10, top: 20, width: 30, height: 40 },
       "geometry utility should read rect bounds",
     );
     assertDeepEqual(
-      findNearestGeometryPoint(rect, { x: 100, y: 0 }),
+      geometry.nearestPoint(rect.ref, { x: 100, y: 0 }),
       { x: 40, y: 20 },
       "geometry utility should clamp nearest rect point",
     );
     assertEqual(
-      containsGeometryPoint(rect, { x: 15, y: 25 }),
+      geometry.contains(rect.ref, { x: 15, y: 25 }),
       true,
       "geometry utility should test point containment",
     );
     assertEqual(
-      geometry.projectGeometry(
-        { sourceId: "static", geometryId: "bounds" },
-        "scene",
-      )?.space,
+      geometry.project({
+        ref: { sourceId: "static", geometryId: "bounds" },
+        to: "scene",
+      })?.space,
       "scene",
       "default projection should produce the requested coordinate space",
     );
     assertEqual(
       geometry.listGeometries("static").length,
-      2,
+      4,
       "geometry source should list registered descriptors",
+    );
+    assertEqual(
+      geometry.getBounds({
+        sourceId: "static",
+        geometryId: "representation",
+        purpose: "preview",
+      })?.width,
+      10,
+      "preview geometry should resolve independently",
+    );
+    assertEqual(
+      geometry.getBounds({
+        sourceId: "static",
+        geometryId: "representation",
+        purpose: "export",
+      })?.width,
+      20,
+      "export geometry should resolve independently",
     );
     disposable.dispose();
     assertEqual(
-      geometry.getGeometry({ sourceId: "static", geometryId: "bounds" }),
+      geometry.getSnapshot({ sourceId: "static", geometryId: "bounds" }),
       null,
       "disposing a source should unregister it",
     );
@@ -1840,12 +1901,19 @@ async function testConstraintResolverServiceBuiltins() {
       CONSTRAINT_RESOLVER_SERVICE,
     );
     geometry.registerSource(
-      createStaticGeometrySourceProvider({
+      createStaticGeometrySource({
         sourceId: "static",
         geometries: [
           {
             kind: "polygon",
             ref: { sourceId: "static", geometryId: "diamond" },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 100, height: 100 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
             points: [
               { x: 50, y: 0 },
               { x: 100, y: 50 },

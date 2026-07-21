@@ -1,10 +1,13 @@
 import paper from "paper";
-import type {
-  CoordinateSpace,
-  GeometryPathSnapshot,
-  GeometryPoint,
-  GeometryRect,
-  GeometryRef,
+import {
+  coordinateMatrix,
+  type CoordinateSpace,
+  type GeometryBackend,
+  type GeometryPathSnapshot,
+  type GeometryPoint,
+  type GeometryRect,
+  type GeometryRef,
+  type Matrix2D,
 } from "@pooder/core";
 import { pickExitIndex, scoreOutsideAbove } from "./bridgeSelection";
 import {
@@ -890,47 +893,93 @@ export function getPathBounds(pathData: string): {
 }
 
 export function createPaperPathGeometrySnapshot(options: {
-  ref?: GeometryRef;
+  ref: GeometryRef;
   pathData: string;
   space: CoordinateSpace;
+  localToScene?: Matrix2D<CoordinateSpace, "scene">;
   metadata?: Record<string, unknown>;
 }): GeometryPathSnapshot {
-  const snapshot: GeometryPathSnapshot = {
-    kind: "path",
-    pathData: options.pathData,
-    ...(options.ref ? { ref: options.ref } : {}),
-    space: options.space,
-    ...(options.metadata ? { metadata: { ...options.metadata } } : {}),
-    utilities: {
-      bounds: ({ snapshot: pathSnapshot }) =>
-        getPaperPathBounds(pathSnapshot.pathData),
-      nearestPoint: (point, { snapshot: pathSnapshot }) =>
-        getPaperPathNearestPoint(pathSnapshot.pathData, point)?.point ?? null,
-      contains: (point, { snapshot: pathSnapshot }) =>
-        withPaperPath(pathSnapshot.pathData, (path) =>
-          path.contains(new paper.Point(point.x, point.y)),
-        ) ?? false,
-      sample: (ratio, { snapshot: pathSnapshot }) =>
-        withPaperPath(pathSnapshot.pathData, (path) => {
-          const pathWithLength = path as paper.PathItem & {
-            length?: number;
-            getPointAt?(offset: number): paper.Point | null;
-          };
-          const length = Math.max(0, pathWithLength.length || 0);
-          const point =
-            length > 0
-              ? pathWithLength.getPointAt?.(
-                  Math.max(0, Math.min(1, ratio)) * length,
-                )
-              : null;
-          return point ? { x: point.x, y: point.y } : null;
-        }),
-      normalAt: (point, { snapshot: pathSnapshot }) =>
-        getPaperPathNearestPoint(pathSnapshot.pathData, point)?.normal ?? null,
-    },
+  const bounds = getPaperPathBounds(options.pathData) ?? {
+    left: 0,
+    top: 0,
+    width: 0,
+    height: 0,
   };
-  const bounds = getPaperPathBounds(options.pathData);
-  return bounds ? { ...snapshot, bounds } : snapshot;
+  const localToScene =
+    options.localToScene ??
+    (options.space === "scene"
+      ? coordinateMatrix("scene", "scene", [1, 0, 0, 1, 0, 0])
+      : undefined);
+  if (!localToScene) {
+    throw new Error("localToScene is required for non-scene Paper geometry.");
+  }
+  return {
+    kind: "path",
+    backendId: PAPER_PATH_GEOMETRY_BACKEND_ID,
+    pathData: options.pathData,
+    ref: options.ref,
+    space: options.space,
+    bounds,
+    localToScene,
+    ...(options.metadata ? { metadata: { ...options.metadata } } : {}),
+  };
+}
+
+export const PAPER_PATH_GEOMETRY_BACKEND_ID = "paper.path";
+
+export function createPaperPathGeometryBackend(): GeometryBackend {
+  return {
+    backendId: PAPER_PATH_GEOMETRY_BACKEND_ID,
+    nearestPoint: (snapshot, point) =>
+      getPaperPathNearestPoint(snapshot.pathData, point)?.point ?? null,
+    normalAt: (snapshot, point) =>
+      getPaperPathNearestPoint(snapshot.pathData, point)?.normal ?? null,
+    contains: (snapshot, point) =>
+      withPaperPath(snapshot.pathData, (path) =>
+        path.contains(new paper.Point(point.x, point.y)),
+      ) ?? false,
+    sample: (snapshot, ratio) =>
+      withPaperPath(snapshot.pathData, (path) => {
+        const pathWithLength = path as paper.PathItem & {
+          length?: number;
+          getPointAt?(offset: number): paper.Point | null;
+        };
+        const length = Math.max(0, pathWithLength.length || 0);
+        const point =
+          length > 0
+            ? pathWithLength.getPointAt?.(
+                Math.max(0, Math.min(1, ratio)) * length,
+              )
+            : null;
+        return point ? { x: point.x, y: point.y } : null;
+      }),
+    project: (snapshot, to) => projectPaperPathSnapshot(snapshot, to),
+  };
+}
+
+function projectPaperPathSnapshot(
+  snapshot: GeometryPathSnapshot,
+  to: CoordinateSpace,
+): GeometryPathSnapshot | null {
+  if (to === snapshot.space) return snapshot;
+  if (to !== "scene") return null;
+  return withPaperPath(snapshot.pathData, (path) => {
+    const [a, b, c, d, tx, ty] = snapshot.localToScene.values;
+    path.transform(new paper.Matrix(a, c, b, d, tx, ty));
+    const pathData = path.pathData;
+    return {
+      ...snapshot,
+      pathData,
+      space: "scene",
+      bounds: {
+        left: path.bounds.x,
+        top: path.bounds.y,
+        width: path.bounds.width,
+        height: path.bounds.height,
+      },
+      localToScene: coordinateMatrix("scene", "scene", [1, 0, 0, 1, 0, 0]),
+    };
+  });
 }
 
 function getPaperPathBounds(pathData: string): GeometryRect | null {

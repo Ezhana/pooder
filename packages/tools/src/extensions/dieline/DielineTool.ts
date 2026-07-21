@@ -10,6 +10,7 @@ import {
   ExtensionContext,
   ConfigurationService,
   SceneService,
+  coordinateMatrix,
   type RenderIntentCompilerContribution,
   type RenderIntentCompilerContext,
   type RenderIntentPatch,
@@ -18,7 +19,7 @@ import {
   type GeometryRef,
   type CapabilityRegistryService,
   type GeometrySourceService,
-  type GeometrySourceProvider,
+  type GeometrySource,
   type SceneLayoutService,
   type SurfaceFrameService,
 } from "@pooder/core";
@@ -190,7 +191,7 @@ export class DielineTool implements ExtensionDefinition {
     );
     this.geometrySourceDisposable?.dispose();
     this.geometrySourceDisposable = this.geometrySource?.registerSource(
-      this.createGeometrySourceProvider(),
+      this.createGeometrySource(),
     );
     this.imageSessionOverlayDisposable?.dispose();
     this.imageSessionOverlayDisposable = context.services
@@ -482,10 +483,10 @@ export class DielineTool implements ExtensionDefinition {
     } ${rect.top + rect.height} L ${rect.left} ${rect.top + rect.height} Z`;
   }
 
-  private createGeometrySourceProvider(): GeometrySourceProvider {
+  private createGeometrySource(): GeometrySource {
     return {
       sourceId: "dieline",
-      getGeometry: (ref) => this.getGeometrySnapshot(ref),
+      getSnapshot: (ref) => this.getGeometrySnapshot(ref),
       listGeometries: () =>
         (this.surfaceFrameService?.listSurfaceIds() ?? []).map((surfaceId) => ({
           ref: {
@@ -494,7 +495,7 @@ export class DielineTool implements ExtensionDefinition {
             variant: surfaceId,
           },
           kind: "rect" as const,
-          space: "screen" as const,
+          space: "scene" as const,
           metadata: { surfaceId },
         })),
     };
@@ -503,20 +504,23 @@ export class DielineTool implements ExtensionDefinition {
   private getGeometrySnapshot(ref: GeometryRef) {
     const surfaceId = ref.variant || this.getSurfaceId();
     const geometry = this.getGeometryForSurface(surfaceId);
-    return geometry
-      ? {
-          kind: "rect" as const,
-          ref,
-          space: "screen" as const,
-          rect: {
-            left: geometry.x - geometry.width / 2,
-            top: geometry.y - geometry.height / 2,
-            width: geometry.width,
-            height: geometry.height,
-          },
-          metadata: { surfaceId, geometry },
-        }
-      : null;
+    if (!geometry || !this.canvasService) return null;
+    const rect = this.canvasService.toSceneRect({
+      space: "screen",
+      left: geometry.x - geometry.width / 2,
+      top: geometry.y - geometry.height / 2,
+      width: geometry.width,
+      height: geometry.height,
+    });
+    return {
+      kind: "rect" as const,
+      ref,
+      space: "scene" as const,
+      bounds: rect,
+      rect,
+      localToScene: coordinateMatrix("scene", "scene", [1, 0, 0, 1, 0, 0]),
+      metadata: { surfaceId, geometry },
+    };
   }
 
   private getGeometryForSurface(surfaceId: string): DielineGeometry | null {

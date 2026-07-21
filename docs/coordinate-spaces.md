@@ -25,9 +25,9 @@ inside one coordinate-space implementation.
   conversion. Canvas and renderer adapters only delegate to it.
 - An interaction commit exposes either a tagged `scene-delta` or an
   `object-local` to `scene` matrix. Command payloads receive the same value.
-- A `GeometrySourceProvider` declares the space of every snapshot and
-  descriptor. Projection requests declare `from` and `to`; relabeling geometry
-  without a projection is forbidden.
+- A `GeometrySource` declares the space, bounds, and `localToScene` matrix of
+  every snapshot. Geometry is accessed through `GeometryRef`; projection
+  transforms values to the requested space and never merely relabels them.
 - Frame hit regions and scene export crops are explicitly `scene`.
 - Clip sources declare their space. Object-relative clips use `object-local`;
   absolute clips retain their declared space and the browser adapter performs
