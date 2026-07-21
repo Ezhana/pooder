@@ -1,4 +1,4 @@
-import type { CapabilityDefinition } from "@pooder/core";
+import type { CapabilityDefinition, ResolvedObjectImage } from "@pooder/core";
 import type { MaskMode } from "../maskOps";
 import type { ImageTraceOptions } from "../tracer";
 
@@ -29,11 +29,23 @@ export interface DetectEdgeResult {
   imageHeight?: number;
 }
 
+export interface DetectObjectEdgeOptions extends DetectEdgeOptions {
+  multiplier?: number;
+}
+
+export interface DetectObjectEdgeResult extends DetectEdgeResult {
+  sourceImage: ResolvedObjectImage;
+}
+
 export interface EdgeDetectionCapabilityApi {
   detectEdge(
     imageUrl: string,
     options?: DetectEdgeOptions,
   ): Promise<DetectEdgeResult>;
+  detectObject(
+    objectId: string,
+    options?: DetectObjectEdgeOptions,
+  ): Promise<DetectObjectEdgeResult>;
 }
 
 function normalizeTraceOptions(
@@ -111,7 +123,10 @@ export function createEdgeDetectionCapabilityDefinition(
         "mutating dieline state.",
       tags: ["kit", "edge", "dieline"],
     },
-    commands: [{ id: "detectEdge", title: "Detect Edge" }],
+    commands: [
+      { id: "detectEdge", title: "Detect Edge" },
+      { id: "detectObject", title: "Detect Object Edge" },
+    ],
     facade,
   };
 }

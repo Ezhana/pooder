@@ -1,7 +1,7 @@
 import {
   CAPABILITY_REGISTRY_SERVICE,
   EDITOR_INTERACTION_SESSION_GROUP_ID,
-  IMAGE_GEOMETRY_DATA_KEY,
+  OBJECT_IMAGE_RESOLVER_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
@@ -13,14 +13,12 @@ import {
   coordinateRect,
   createAffinePlacement,
   createLocalToSceneMatrix,
-  multiplyCoordinateMatrices,
-  normalizeImageGeometryDescriptor,
-  resolveImageGeometry,
   type AffinePlacement,
   type ExtensionActivationSpec,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
+  type ObjectImageResolverService,
   type RenderGraphNode,
   type RenderIntentCompilerContext,
   type RenderIntentCompilerContribution,
@@ -69,10 +67,6 @@ import {
   type ProductionMaskSource,
   type ProductionMaskViewState,
 } from "./capability";
-import {
-  createSourceSizeCache,
-  type SourceSize,
-} from "./imaging/sourceSizeCache";
 import {
   POODER_PRODUCTION_MASK_LAYER_PRESET,
   PRODUCTION_MASK_COVER_LAYER_ID,
@@ -286,9 +280,6 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   private document: EditorDocument | null = null;
   private documentController: ProductionMaskDocumentController | null = null;
   private selectedEffectId: string | null = null;
-  private sourceSizeCache = createSourceSizeCache((src) =>
-    this.loadImageSize(src),
-  );
   private previewMaskBySource = new Map<string, string>();
   private pendingPreviewMaskBySource = new Map<string, Promise<string>>();
   private canvasService?: CanvasService;
@@ -297,6 +288,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   private sceneService?: SceneService;
   private sessionService?: SessionService;
   private renderIntentService?: RenderIntentService;
+  private objectImageResolver?: ObjectImageResolverService;
   private imageMask?: ImageMaskCapabilityApi;
   private sessionHandle?: SessionHandle<
     ProductionMaskSessionDraft,
@@ -340,6 +332,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       requiresServices: [
         CANVAS_SERVICE,
         RENDER_INTENT_SERVICE,
+        OBJECT_IMAGE_RESOLVER_SERVICE,
         SCENE_SERVICE,
         SCENE_LAYOUT_SERVICE,
         SESSION_SERVICE,
@@ -363,6 +356,10 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
+    this.objectImageResolver =
+      context.services.getOrThrow<ObjectImageResolverService>(
+        OBJECT_IMAGE_RESOLVER_SERVICE,
+      );
     this.imageMask = context.services
       .get<CapabilityRegistryService>(CAPABILITY_REGISTRY_SERVICE)
       ?.getFacade<ImageMaskCapabilityApi>(IMAGE_MASK_CAPABILITY_ID);
@@ -388,7 +385,6 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   async deactivate(): Promise<void> {
     await this.sessionHandle?.cancel();
     this.subscriptions.disposeAll();
-    this.sourceSizeCache.clear();
     this.previewMaskBySource.clear();
     this.pendingPreviewMaskBySource.clear();
     this.clearRenderedMask();
@@ -398,6 +394,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     this.sceneService = undefined;
     this.sessionService = undefined;
     this.renderIntentService = undefined;
+    this.objectImageResolver = undefined;
     this.imageMask = undefined;
     this.document = null;
     this.documentController = null;
@@ -584,12 +581,6 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   ): ProductionMaskOperationResult {
     const sourceUrl = resourceLocation(resource);
     if (!sourceUrl) return { ok: false, reason: "source-empty" };
-    if (resource.intrinsicSize) {
-      this.sourceSizeCache.rememberSourceSize(
-        sourceUrl,
-        resource.intrinsicSize,
-      );
-    }
     return this.updateDraft((draft) => ({
       ...draft,
       descriptor: {
@@ -855,41 +846,23 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   private async createReferenceSnapshot(
     descriptor: ProductionMaskDescriptor,
   ): Promise<ImageSnapshot | null> {
-    const node = this.getReferenceNode(descriptor);
-    if (!node) return null;
-    const geometry = normalizeImageGeometryDescriptor(
-      node.data[IMAGE_GEOMETRY_DATA_KEY],
-    );
-    const sourceUrl =
-      descriptor.payload.alignment === "reference-frame"
-        ? node.visual?.src?.trim() || geometry?.source.src || ""
-        : geometry?.source.src || node.visual?.src?.trim() || "";
-    if (!sourceUrl) return null;
-    const sourceSize =
-      (descriptor.payload.alignment === "reference-source"
-        ? geometry?.source.size
-        : undefined) ?? (await this.ensureSourceSize(sourceUrl));
-    if (!sourceSize) return null;
-    let placement = node.placement;
-    if (descriptor.payload.alignment !== "reference-frame" && geometry) {
-      const objectPlacement = node.data.documentObjectPlacement as
-        | AffinePlacement
-        | undefined;
-      if (objectPlacement) {
-        const resolved = resolveImageGeometry({
-          ...geometry,
-          source: { ...geometry.source, size: sourceSize },
-        });
-        placement = createAffinePlacement({
-          localBounds: resolved.imageLocalBounds,
-          localToScene: multiplyCoordinateMatrices(
-            objectPlacement.localToScene,
-            resolved.imageLocalToObjectLocal,
-          ),
-        });
-      }
+    const objectId = descriptor.payload.reference.objectId;
+    if (!objectId || !this.objectImageResolver) return null;
+    try {
+      const resolved = await this.objectImageResolver.resolve({
+        objectId,
+        representation: "committed-visual",
+        format: "png",
+        multiplier: 2,
+      });
+      return {
+        id: resolved.objectId,
+        placement: resolved.placement,
+        src: resolved.url,
+      };
+    } catch {
+      return null;
     }
-    return { id: node.subjectId, placement, src: sourceUrl };
   }
 
   private sourceUrl(
@@ -898,38 +871,6 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   ): string {
     if (!source || source.type === "reference-object") return reference.src;
     return resourceLocation(source.resource);
-  }
-
-  private async ensureSourceSize(
-    sourceUrl: string,
-  ): Promise<SourceSize | null> {
-    return this.sourceSizeCache.ensureImageSize(sourceUrl);
-  }
-
-  private async loadImageSize(sourceUrl: string): Promise<SourceSize | null> {
-    try {
-      const image = await this.loadImageElement(sourceUrl);
-      const width = Number(image.naturalWidth || image.width || 0);
-      const height = Number(image.naturalHeight || image.height || 0);
-      return width > 0 && height > 0 ? { width, height } : null;
-    } catch {
-      return null;
-    }
-  }
-
-  private loadImageElement(sourceUrl: string): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-      if (typeof Image === "undefined") {
-        reject(new Error("production-mask-image-load-unavailable"));
-        return;
-      }
-      const image = new Image();
-      image.crossOrigin = "anonymous";
-      image.onload = () => resolve(image);
-      image.onerror = () =>
-        reject(new Error("production-mask-image-load-failed"));
-      image.src = sourceUrl;
-    });
   }
 
   private maskCacheKey(
@@ -957,7 +898,6 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         tint,
       })
       .then((result) => {
-        this.sourceSizeCache.rememberSourceSize(sourceUrl, result);
         this.previewMaskBySource.set(cacheKey, result.url);
         return result.url;
       })

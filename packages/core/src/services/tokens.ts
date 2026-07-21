@@ -19,6 +19,7 @@ import type {
 } from "../render";
 import type { DefaultSurfaceFrameService } from "../surface-frames";
 import type { ImageResourceService } from "../image-resource";
+import type { ObjectImageResolverService } from "../object-image";
 
 export const CAPABILITY_REGISTRY_SERVICE =
   createServiceToken<CapabilityRegistryService>("CapabilityRegistryService");
@@ -58,6 +59,8 @@ export const INTERACTION_SERVICE =
 export const IMAGE_RESOURCE_SERVICE = createServiceToken<ImageResourceService>(
   "ImageResourceService",
 );
+export const OBJECT_IMAGE_RESOLVER_SERVICE =
+  createServiceToken<ObjectImageResolverService>("ObjectImageResolverService");
 
 export const CORE_SERVICE_TOKENS = {
   CAPABILITY_REGISTRY: CAPABILITY_REGISTRY_SERVICE,
@@ -76,4 +79,5 @@ export const CORE_SERVICE_TOKENS = {
   CONSTRAINT_RESOLVER: CONSTRAINT_RESOLVER_SERVICE,
   INTERACTION: INTERACTION_SERVICE,
   IMAGE_RESOURCE: IMAGE_RESOURCE_SERVICE,
+  OBJECT_IMAGE_RESOLVER: OBJECT_IMAGE_RESOLVER_SERVICE,
 } as const;

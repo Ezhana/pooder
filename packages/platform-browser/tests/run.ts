@@ -21,6 +21,7 @@ import {
 import type { SurfaceSceneFrames } from "@pooder/core";
 import {
   attachBrowserHost,
+  BrowserObjectImageResolverService,
   BrowserSceneExportService,
   CANVAS_SERVICE,
   CanvasService,
@@ -530,9 +531,11 @@ function testViewportProjectionRoundTripsWithoutResizeDrift() {
     width: 35,
     height: 45,
   };
-  const canonicalMatrix = coordinateMatrix("object-local", "scene", [
-    1.5, 0.25, -0.5, 0.75, 18, -9,
-  ]);
+  const canonicalMatrix = coordinateMatrix(
+    "object-local",
+    "scene",
+    [1.5, 0.25, -0.5, 0.75, 18, -9],
+  );
   const layouts = [
     { scale: 2, offsetX: 100, offsetY: 50, width: 400, height: 300 },
     { scale: 3.5, offsetX: -20, offsetY: 80, width: 700, height: 525 },
@@ -549,9 +552,17 @@ function testViewportProjectionRoundTripsWithoutResizeDrift() {
 
     const screenRect = viewport.sceneToScreenRect(canonicalRect);
     const sceneRect = viewport.screenToSceneRect(screenRect);
-    assertClose(sceneRect.left, canonicalRect.left, `viewport rect left ${index}`);
+    assertClose(
+      sceneRect.left,
+      canonicalRect.left,
+      `viewport rect left ${index}`,
+    );
     assertClose(sceneRect.top, canonicalRect.top, `viewport rect top ${index}`);
-    assertClose(sceneRect.width, canonicalRect.width, `viewport rect width ${index}`);
+    assertClose(
+      sceneRect.width,
+      canonicalRect.width,
+      `viewport rect width ${index}`,
+    );
     assertClose(
       sceneRect.height,
       canonicalRect.height,
@@ -4025,9 +4036,132 @@ async function testSceneExportAllowsHiddenOutputMaskSource() {
   );
 }
 
+async function testObjectImageResolverCachesCommittedVisuals() {
+  let notifyRenderChange: (() => void) | undefined;
+  let effects: unknown[] = [{}];
+  let exportCalls = 0;
+  let lastExportOptions: Record<string, unknown> | undefined;
+  const renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          nodes: [
+            {
+              data: {
+                imageGeometry: {
+                  fit: "cover",
+                  frame: { height: 50, left: 0, top: 0, width: 80 },
+                  source: {
+                    size: { height: 200, width: 300 },
+                    src: "https://example.com/original.png",
+                  },
+                },
+              },
+              effects,
+              exportKeys: ["image-slot"],
+              id: "render-image-slot",
+              placement: createTestPlacement(10, 20, 80, 50),
+              props: {},
+              subjectId: "image-slot",
+              type: "image",
+            },
+          ],
+        },
+      ],
+    }),
+    onDidChange: (listener: () => void) => {
+      notifyRenderChange = listener;
+      return { dispose() {} };
+    },
+  };
+  const sceneExportService = {
+    exportImage: async (options: Record<string, unknown>) => {
+      exportCalls += 1;
+      lastExportOptions = options;
+      return {
+        crop: { height: 50, left: 10, top: 20, width: 80 },
+        format: "png" as const,
+        height: 100,
+        url: `data:image/png;base64,resolved-${exportCalls}`,
+        width: 160,
+      };
+    },
+  };
+  const resolver = new BrowserObjectImageResolverService();
+  resolver.init({
+    eventBus: {} as any,
+    get: () => undefined,
+    getOrThrow: (token: unknown) =>
+      token === RENDER_INTENT_SERVICE
+        ? (renderIntentService as any)
+        : (sceneExportService as any),
+    has: () => true,
+  });
+
+  const first = await resolver.resolve({ objectId: "image-slot" });
+  const second = await resolver.resolve({ objectId: "image-slot" });
+  assertEqual(first.url, second.url, "resolved visuals should be cached");
+  assertEqual(exportCalls, 1, "cached visual should not be exported twice");
+  assertEqual(
+    (lastExportOptions?.preserveClipPaths as boolean) ?? false,
+    true,
+    "committed visual export should preserve clipping",
+  );
+  assertDeepEqual(
+    first.sceneBounds,
+    { height: 50, left: 10, top: 20, width: 80 },
+    "resolved visual should retain its scene-space bounds",
+  );
+
+  const original = await resolver.resolve({
+    objectId: "image-slot",
+    representation: "original-resource",
+  });
+  assertEqual(
+    original.url,
+    "https://example.com/original.png",
+    "original representation should retain the editable resource",
+  );
+  assertEqual(
+    original.derived,
+    false,
+    "original resource should not be derived",
+  );
+  assertEqual(exportCalls, 1, "original resource should bypass scene export");
+
+  notifyRenderChange?.();
+  const refreshed = await resolver.resolve({ objectId: "image-slot" });
+  assertEqual(exportCalls, 2, "render changes should invalidate visual cache");
+  assertEqual(
+    refreshed.revision,
+    1,
+    "resolved revision should track invalidation",
+  );
+
+  effects = [];
+  notifyRenderChange?.();
+  const unchanged = await resolver.resolve({ objectId: "image-slot" });
+  assertEqual(
+    unchanged.url,
+    "https://example.com/original.png",
+    "an unprocessed committed visual should reuse its original resource",
+  );
+  assertEqual(
+    unchanged.derived,
+    false,
+    "identity resolution should not be derived",
+  );
+  assertEqual(exportCalls, 2, "identity resolution should bypass scene export");
+  resolver.dispose();
+}
+
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["applies alpha mask data", testOutputMaskAlphaHelpers],
+    [
+      "resolves and caches committed object visuals",
+      testObjectImageResolverCachesCommittedVisuals,
+    ],
     ["fills outline output masks", testOutputMaskOutlineHelpers],
     [
       "preserves outline output mask frame shapes",
