@@ -389,9 +389,34 @@ async function testDocumentServiceDraftIsolation() {
     10,
     "rollback should restore committed state",
   );
+  const commitDraft = await service.beginDraft();
+  const commitMutation = await commitDraft.mutate((document) => {
+    const object = document.surfaces[0]?.layers[0]?.objects?.[0];
+    if (object?.frame) object.frame.x = 35;
+  });
+  assertEqual(commitMutation.ok, true, "commit draft mutation should succeed");
+  await commitDraft.commit();
+  assertEqual(
+    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    35,
+    "commit should atomically promote working state",
+  );
+
+  const committedBeforeInvalidApply = service.export("committed");
+  const invalidApply = await service.apply({
+    version: 7,
+    config: {},
+    surfaces: [],
+  });
+  assertEqual(invalidApply.ok, false, "invalid document apply should fail");
+  assertDeepEqual(
+    service.export("committed"),
+    committedBeforeInvalidApply,
+    "validation failure must preserve the complete committed document",
+  );
   assertDeepEqual(
     events,
-    ["mutate", "rollback"],
+    ["mutate", "rollback", "mutate", "commit"],
     "draft events should be explicit",
   );
 }

@@ -3,6 +3,7 @@ import {
   coordinatePoint,
   createAffinePlacement,
   createLocalToSceneMatrix,
+  invertCoordinateMatrix,
   multiplyCoordinateMatrices,
   transformCoordinatePoint,
   transformCoordinateRect,
@@ -42,6 +43,44 @@ assertPoint(
   { x: 118, y: 67 },
   "three-level nesting",
 );
+
+// Every affine parent/child combination must compose in the same order as
+// applying the child first and then its parent, and remain invertible.
+const affineCases = [
+  [1, 0, 0, 1, 0, 0],
+  [1, 0, 0, 1, 17, -9],
+  [2, 0, 0, 0.5, 0, 0],
+  [0, 1, -1, 0, 3, 4],
+  [1, 0.25, -0.5, 1, 8, 6],
+  [-1, 0, 0, 1, 12, 0],
+] as const;
+for (const [parentIndex, parentValues] of affineCases.entries()) {
+  const parent = coordinateMatrix("parent-local", "scene", parentValues);
+  for (const [childIndex, childValues] of affineCases.entries()) {
+    const child = coordinateMatrix(
+      "object-local",
+      "parent-local",
+      childValues,
+    );
+    const composed = multiplyCoordinateMatrices(parent, child);
+    const localPoint = coordinatePoint("object-local", 7, -3);
+    const sequential = transformCoordinatePoint(
+      parent,
+      transformCoordinatePoint(child, localPoint),
+    );
+    const flattened = transformCoordinatePoint(composed, localPoint);
+    assertPoint(
+      flattened,
+      sequential,
+      `parent-child matrix[${parentIndex},${childIndex}]`,
+    );
+    assertPoint(
+      transformCoordinatePoint(invertCoordinateMatrix(composed), flattened),
+      localPoint,
+      `parent-child inverse[${parentIndex},${childIndex}]`,
+    );
+  }
+}
 
 // Non-uniform scale is applied before rotation without decomposition loss.
 const scaledThenRotated = createLocalToSceneMatrix({

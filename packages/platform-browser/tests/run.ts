@@ -520,6 +520,56 @@ async function testCanvasServicePreservesViewportLayout() {
   );
 }
 
+function testViewportProjectionRoundTripsWithoutResizeDrift() {
+  const viewport = new ViewportSystem();
+  const canonicalPoint = { space: "scene" as const, x: 12.5, y: -7.25 };
+  const canonicalRect = {
+    space: "scene" as const,
+    left: -10,
+    top: 20,
+    width: 35,
+    height: 45,
+  };
+  const canonicalMatrix = coordinateMatrix("object-local", "scene", [
+    1.5, 0.25, -0.5, 0.75, 18, -9,
+  ]);
+  const layouts = [
+    { scale: 2, offsetX: 100, offsetY: 50, width: 400, height: 300 },
+    { scale: 3.5, offsetX: -20, offsetY: 80, width: 700, height: 525 },
+    { scale: 0.75, offsetX: 12, offsetY: -4, width: 150, height: 112.5 },
+    { scale: 2, offsetX: 100, offsetY: 50, width: 400, height: 300 },
+  ];
+
+  for (const [index, layout] of layouts.entries()) {
+    viewport.setLayout(layout);
+    const screenPoint = viewport.sceneToScreenPoint(canonicalPoint);
+    const scenePoint = viewport.screenToScenePoint(screenPoint);
+    assertClose(scenePoint.x, canonicalPoint.x, `viewport point x ${index}`);
+    assertClose(scenePoint.y, canonicalPoint.y, `viewport point y ${index}`);
+
+    const screenRect = viewport.sceneToScreenRect(canonicalRect);
+    const sceneRect = viewport.screenToSceneRect(screenRect);
+    assertClose(sceneRect.left, canonicalRect.left, `viewport rect left ${index}`);
+    assertClose(sceneRect.top, canonicalRect.top, `viewport rect top ${index}`);
+    assertClose(sceneRect.width, canonicalRect.width, `viewport rect width ${index}`);
+    assertClose(
+      sceneRect.height,
+      canonicalRect.height,
+      `viewport rect height ${index}`,
+    );
+
+    const screenMatrix = viewport.sceneToScreenMatrix(canonicalMatrix);
+    const sceneMatrix = viewport.screenToSceneMatrix(screenMatrix);
+    canonicalMatrix.values.forEach((value, matrixIndex) =>
+      assertClose(
+        sceneMatrix.values[matrixIndex],
+        value,
+        `viewport matrix ${index}:${matrixIndex}`,
+      ),
+    );
+  }
+}
+
 function testAttachRegistersRenderGraphAdapter() {
   const { registered, runtime } = createRuntime();
   const canvasService = new FakeCanvasService();
@@ -3110,6 +3160,91 @@ async function testCanvasReconcileAppliesImageClipPath() {
   );
 }
 
+async function testSceneExportUsesThePreviewClipContract() {
+  const clipEffect = {
+    type: "clipPath" as const,
+    id: "clip.contract",
+    coordinateMode: "absolute" as const,
+    source: {
+      id: "clip-source",
+      type: "rect" as const,
+      space: "scene" as const,
+      props: { width: 50, height: 40 },
+    },
+  };
+  const capturedSpecs: any[] = [];
+  const createExportCanvas = () => ({
+    add() {},
+    dispose() {},
+    renderAll() {},
+    toDataURL() {
+      return "data:image/png;base64,contract";
+    },
+  });
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    async createDetachedRenderObject(spec: unknown) {
+      capturedSpecs.push(spec);
+      return {};
+    },
+  };
+  service.geometrySource = {};
+  service.renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          id: "artwork",
+          visible: true,
+          nodes: [
+            {
+              id: "shape",
+              visible: true,
+              exportKeys: ["shape"],
+              tags: ["contract"],
+              props: {},
+              effects: [clipEffect],
+            },
+          ],
+        },
+      ],
+    }),
+  };
+  service.renderGraphAdapter = {
+    createExportRenderObjectSpec: () => ({
+      id: "shape",
+      type: "rect",
+      props: { width: 100, height: 80 },
+      effects: [clipEffect],
+    }),
+  };
+  service.createExportCanvas = createExportCanvas;
+
+  await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+  });
+  assertDeepEqual(
+    capturedSpecs[0]?.effects,
+    [clipEffect],
+    "export should consume the same clip effect contract as preview",
+  );
+
+  await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+    preserveClipPaths: false,
+  });
+  assertDeepEqual(
+    capturedSpecs[1]?.effects,
+    [],
+    "clip removal should require an explicit export option",
+  );
+}
+
 async function testSceneExportMatchesRenderGraphNodeIds() {
   const source = {
     data: {
@@ -3907,6 +4042,10 @@ async function main() {
       testCanvasServicePreservesViewportLayout,
     ],
     [
+      "round-trips scene and screen projections without resize drift",
+      testViewportProjectionRoundTripsWithoutResizeDrift,
+    ],
+    [
       "builds graph adapter draw list",
       testFabricRenderGraphAdapterBuildsDrawList,
     ],
@@ -4017,6 +4156,10 @@ async function main() {
     ],
     ["applies graph image clip paths", testCanvasReconcileAppliesImageClipPath],
     [
+      "uses the preview clip contract during export",
+      testSceneExportUsesThePreviewClipContract,
+    ],
+    [
       "exports by render graph node ids",
       testSceneExportMatchesRenderGraphNodeIds,
     ],
@@ -4057,9 +4200,19 @@ async function main() {
   const filter = String(process.env.POODER_TEST_FILTER || "")
     .trim()
     .toLowerCase();
-  const selectedTests = filter
-    ? tests.filter(([name]) => name.toLowerCase().includes(filter))
-    : tests;
+  const foundationNames = new Set([
+    "round-trips scene and screen projections without resize drift",
+    "applies graph clip paths",
+    "applies placed graph rect clip paths",
+    "applies graph image clip paths",
+    "uses the preview clip contract during export",
+  ]);
+  const selectedTests =
+    filter === "foundation"
+      ? tests.filter(([name]) => foundationNames.has(name))
+      : filter
+        ? tests.filter(([name]) => name.toLowerCase().includes(filter))
+        : tests;
   if (selectedTests.length === 0) {
     throw new Error(`No platform-browser tests match "${filter}".`);
   }

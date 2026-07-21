@@ -66,6 +66,7 @@ __snapshots__
 *.temp
 .test-dist
 .affine-test-dist
+.foundation-test-dist
 
 # --- 某些框架特定 ---
 .svelte-kit
