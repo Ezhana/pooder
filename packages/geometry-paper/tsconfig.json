@@ -4,15 +4,13 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "lib": ["esnext", "dom"],
-    "baseUrl": ".",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": true,
     "noEmit": true,
     "paths": {
-      "@pooder/core": ["../core/src/index.ts"],
-      "@pooder/geometry-paper": ["../geometry-paper/src/index.ts"]
+      "@pooder/core": ["../core/src/index.ts"]
     }
   },
   "include": ["src"]

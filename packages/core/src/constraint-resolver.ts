@@ -222,7 +222,7 @@ function resolvePathNearestPoint(
     constraint.source,
     position,
     context.coordinateSpace,
-  );
+  ).value;
   if (!nearest) return result;
   const next = moveResultToPosition(result, nearest);
   if (
@@ -233,7 +233,7 @@ function resolvePathNearestPoint(
       constraint.source,
       nearest,
       context.coordinateSpace,
-    )
+    ).value
       ? next
       : result;
   }
@@ -360,7 +360,7 @@ function resolveConstraintRect(
     ? (context.geometrySource?.getBounds(
         constraint.source,
         context.coordinateSpace,
-      ) ?? null)
+      ).value ?? null)
     : null;
 }
 
@@ -373,8 +373,8 @@ function resolveConstraintGeometry(
   const geometrySource = context.geometrySource;
   if (!geometrySource) return null;
   return context.coordinateSpace
-    ? geometrySource.project({ ref: source, to: context.coordinateSpace })
-    : geometrySource.getSnapshot(source);
+    ? geometrySource.project({ ref: source, to: context.coordinateSpace }).value
+    : geometrySource.getSnapshot(source).value;
 }
 
 function collectSnapPoints(

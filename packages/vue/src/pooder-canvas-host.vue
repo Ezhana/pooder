@@ -8,6 +8,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import {
   attachBrowserHost,
+  registerBrowserGeometryBackend,
   type BrowserHostAttachment,
   type BrowserHostRuntime,
 } from "@pooder/platform-browser";
@@ -35,6 +36,8 @@ const container = ref<HTMLDivElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 
 let browserHost: BrowserHostAttachment | null = null;
+let geometryBackendDisposable: { dispose(): void } | null = null;
+let unmounted = false;
 let renderSyncFrame = 0;
 let stopRenderSyncStateChange: null | (() => void) = null;
 
@@ -65,12 +68,20 @@ function emitRenderSyncChange(payload: PooderCanvasHostRenderSyncPayload) {
   });
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!container.value || !canvas.value) {
     return;
   }
 
   const runtime = getRuntime();
+  geometryBackendDisposable = await registerBrowserGeometryBackend(
+    getPooderRuntimeCore(runtime) as BrowserHostRuntime,
+  );
+  if (unmounted) {
+    geometryBackendDisposable.dispose();
+    geometryBackendDisposable = null;
+    return;
+  }
   browserHost = attachBrowserHost(
     getPooderRuntimeCore(runtime) as BrowserHostRuntime,
     {
@@ -103,6 +114,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  unmounted = true;
   stopRenderSyncStateChange?.();
   stopRenderSyncStateChange = null;
   if (renderSyncFrame) {
@@ -111,6 +123,8 @@ onUnmounted(() => {
   }
   browserHost?.dispose();
   browserHost = null;
+  geometryBackendDisposable?.dispose();
+  geometryBackendDisposable = null;
 });
 </script>
 

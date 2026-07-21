@@ -1,14 +1,16 @@
-import paper from "paper";
 import {
   coordinateMatrix,
   type CoordinateSpace,
-  type GeometryBackend,
   type GeometryPathSnapshot,
   type GeometryPoint,
   type GeometryRect,
   type GeometryRef,
   type Matrix2D,
 } from "@pooder/core";
+import {
+  paper as paperRuntime,
+  SVG_PATH_GEOMETRY_FORMAT,
+} from "@pooder/geometry-paper";
 import { pickExitIndex, scoreOutsideAbove } from "./bridgeSelection";
 import {
   DEFAULT_DIELINE_SHAPE,
@@ -85,10 +87,10 @@ export function resolveFeaturePosition(
  * Initializes paper.js project if not already initialized.
  */
 function ensurePaper(width: number, height: number) {
-  if (!paper.project) {
-    paper.setup(new paper.Size(width, height));
+  if (!paperRuntime.project) {
+    paperRuntime.setup(new paperRuntime.Size(width, height));
   } else {
-    paper.view.viewSize = new paper.Size(width, height);
+    paperRuntime.view.viewSize = new paperRuntime.Size(width, height);
   }
 }
 
@@ -122,7 +124,7 @@ function getExitHit(args: {
 }) {
   const { mainShape, x, bridgeBottom, toY, eps, delta, overlap, op } = args;
 
-  const ray = new paper.Path.Line({
+  const ray = new paperRuntime.Path.Line({
     from: [x, bridgeBottom],
     to: [x, toY],
     insert: false,
@@ -136,8 +138,8 @@ function getExitHit(args: {
 
   validHits.sort((a, b) => b.point.y - a.point.y);
   const flags = validHits.map((h) => {
-    const above = h.point.add(new paper.Point(0, -delta));
-    const below = h.point.add(new paper.Point(0, delta));
+    const above = h.point.add(new paperRuntime.Point(0, -delta));
+    const below = h.point.add(new paperRuntime.Point(0, delta));
     return {
       insideAbove: mainShape.contains(above),
       insideBelow: mainShape.contains(below),
@@ -174,12 +176,16 @@ function selectOuterChain(args: {
 
   const scoreA = scoreOutsideAbove(
     pointsA.map((p) => ({
-      outsideAbove: !mainShape.contains(p.add(new paper.Point(0, -delta))),
+      outsideAbove: !mainShape.contains(
+        p.add(new paperRuntime.Point(0, -delta)),
+      ),
     })),
   );
   const scoreB = scoreOutsideAbove(
     pointsB.map((p) => ({
-      outsideAbove: !mainShape.contains(p.add(new paper.Point(0, -delta))),
+      outsideAbove: !mainShape.contains(
+        p.add(new paperRuntime.Point(0, -delta)),
+      ),
     })),
   );
 
@@ -228,27 +234,27 @@ function fitPathItemToRect(
     bounds.width <= 0 ||
     bounds.height <= 0
   ) {
-    item.position = new paper.Point(left + width / 2, top + height / 2);
+    item.position = new paperRuntime.Point(left + width / 2, top + height / 2);
     return item;
   }
 
-  item.translate(new paper.Point(-bounds.left, -bounds.top));
+  item.translate(new paperRuntime.Point(-bounds.left, -bounds.top));
   if (fitMode === "stretch") {
     item.scale(
       width / bounds.width,
       height / bounds.height,
-      new paper.Point(0, 0),
+      new paperRuntime.Point(0, 0),
     );
-    item.translate(new paper.Point(left, top));
+    item.translate(new paperRuntime.Point(left, top));
     return item;
   }
 
   const uniformScale = Math.min(width / bounds.width, height / bounds.height);
-  item.scale(uniformScale, uniformScale, new paper.Point(0, 0));
+  item.scale(uniformScale, uniformScale, new paperRuntime.Point(0, 0));
   const scaledWidth = bounds.width * uniformScale;
   const scaledHeight = bounds.height * uniformScale;
   item.translate(
-    new paper.Point(
+    new paperRuntime.Point(
       left + (width - scaledWidth) / 2,
       top + (height - scaledHeight) / 2,
     ),
@@ -278,37 +284,37 @@ function createNormalizedHeartPath(params: {
   const xPeakL = 0.5 - halfSpread;
   const xPeakR = 0.5 + halfSpread;
 
-  const heartPath = new paper.Path({ insert: false });
-  heartPath.moveTo(new paper.Point(0.5, notchY));
+  const heartPath = new paperRuntime.Path({ insert: false });
+  heartPath.moveTo(new paperRuntime.Point(0.5, notchY));
   heartPath.cubicCurveTo(
-    new paper.Point(0.5 - notchCtrlX, notchCtrlY),
-    new paper.Point(xPeakL + lobeCtrlX, topY),
-    new paper.Point(xPeakL, topY),
+    new paperRuntime.Point(0.5 - notchCtrlX, notchCtrlY),
+    new paperRuntime.Point(xPeakL + lobeCtrlX, topY),
+    new paperRuntime.Point(xPeakL, topY),
   );
   heartPath.cubicCurveTo(
-    new paper.Point(xPeakL - lobeCtrlX, topY),
-    new paper.Point(0, sideCtrlY),
-    new paper.Point(0, shoulderY),
+    new paperRuntime.Point(xPeakL - lobeCtrlX, topY),
+    new paperRuntime.Point(0, sideCtrlY),
+    new paperRuntime.Point(0, shoulderY),
   );
   heartPath.cubicCurveTo(
-    new paper.Point(0, lowerCtrlY),
-    new paper.Point(tipCtrlX, 1),
-    new paper.Point(0.5, 1),
+    new paperRuntime.Point(0, lowerCtrlY),
+    new paperRuntime.Point(tipCtrlX, 1),
+    new paperRuntime.Point(0.5, 1),
   );
   heartPath.cubicCurveTo(
-    new paper.Point(1 - tipCtrlX, 1),
-    new paper.Point(1, lowerCtrlY),
-    new paper.Point(1, shoulderY),
+    new paperRuntime.Point(1 - tipCtrlX, 1),
+    new paperRuntime.Point(1, lowerCtrlY),
+    new paperRuntime.Point(1, shoulderY),
   );
   heartPath.cubicCurveTo(
-    new paper.Point(1, sideCtrlY),
-    new paper.Point(xPeakR + lobeCtrlX, topY),
-    new paper.Point(xPeakR, topY),
+    new paperRuntime.Point(1, sideCtrlY),
+    new paperRuntime.Point(xPeakR + lobeCtrlX, topY),
+    new paperRuntime.Point(xPeakR, topY),
   );
   heartPath.cubicCurveTo(
-    new paper.Point(xPeakR - lobeCtrlX, topY),
-    new paper.Point(0.5 + notchCtrlX, notchCtrlY),
-    new paper.Point(0.5, notchY),
+    new paperRuntime.Point(xPeakR - lobeCtrlX, topY),
+    new paperRuntime.Point(0.5 + notchCtrlX, notchCtrlY),
+    new paperRuntime.Point(0.5, notchY),
   );
   heartPath.closed = true;
   return heartPath;
@@ -334,7 +340,7 @@ const BUILTIN_SHAPE_BUILDERS: Record<BuiltinDielineShape, BuiltinShapeBuilder> =
   {
     rect: (options) => {
       const { x, y, width, height, radius } = options;
-      return new paper.Path.Rectangle({
+      return new paperRuntime.Path.Rectangle({
         point: [x - width / 2, y - height / 2],
         size: [Math.max(0, width), Math.max(0, height)],
         radius: Math.max(0, radius),
@@ -343,15 +349,15 @@ const BUILTIN_SHAPE_BUILDERS: Record<BuiltinDielineShape, BuiltinShapeBuilder> =
     circle: (options) => {
       const { x, y, width, height } = options;
       const r = Math.min(width, height) / 2;
-      return new paper.Path.Circle({
-        center: new paper.Point(x, y),
+      return new paperRuntime.Path.Circle({
+        center: new paperRuntime.Point(x, y),
         radius: Math.max(0, r),
       });
     },
     ellipse: (options) => {
       const { x, y, width, height } = options;
-      return new paper.Path.Ellipse({
-        center: new paper.Point(x, y),
+      return new paperRuntime.Path.Ellipse({
+        center: new paperRuntime.Point(x, y),
         radius: [Math.max(0, width / 2), Math.max(0, height / 2)],
       });
     },
@@ -374,12 +380,12 @@ function createCustomBaseShape(
     return null;
   }
 
-  const center = new paper.Point(x, y);
+  const center = new paperRuntime.Point(x, y);
   const hasMultipleSubPaths = ((pathData.match(/[Mm]/g) || []).length ?? 0) > 1;
   const path: paper.PathItem = hasMultipleSubPaths
-    ? new paper.CompoundPath(pathData)
+    ? new paperRuntime.CompoundPath(pathData)
     : (() => {
-        const single = new paper.Path();
+        const single = new paperRuntime.Path();
         single.pathData = pathData;
         return single;
       })();
@@ -400,9 +406,9 @@ function createCustomBaseShape(
     path.scale(
       width / sourceWidth,
       height / sourceHeight,
-      new paper.Point(0, 0),
+      new paperRuntime.Point(0, 0),
     );
-    path.translate(new paper.Point(targetLeft, targetTop));
+    path.translate(new paperRuntime.Point(targetLeft, targetTop));
     return path;
   }
 
@@ -435,13 +441,13 @@ function resolveBridgeBasePath(
   shape: paper.PathItem,
   anchor: paper.Point,
 ): paper.Path | null {
-  if (shape instanceof paper.Path) {
+  if (shape instanceof paperRuntime.Path) {
     return shape;
   }
 
-  if (shape instanceof paper.CompoundPath) {
+  if (shape instanceof paperRuntime.CompoundPath) {
     const children = (shape.children || []).filter(
-      (child): child is paper.Path => child instanceof paper.Path,
+      (child): child is paper.Path => child instanceof paperRuntime.Path,
     );
     if (!children.length) return null;
     let best = children[0];
@@ -475,7 +481,7 @@ function createFeatureItem(
     const w = feature.width || 10;
     const h = feature.height || 10;
     const r = feature.radius || 0;
-    item = new paper.Path.Rectangle({
+    item = new paperRuntime.Path.Rectangle({
       point: [center.x - w / 2, center.y - h / 2],
       size: [w, h],
       radius: r,
@@ -483,7 +489,7 @@ function createFeatureItem(
   } else {
     // Circle
     const r = feature.radius || 5;
-    item = new paper.Path.Circle({
+    item = new paperRuntime.Path.Circle({
       center: center,
       radius: r,
     });
@@ -516,7 +522,7 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
 
     edgeFeatures.forEach((f) => {
       const pos = resolveFeaturePosition(f, options);
-      const center = new paper.Point(pos.x, pos.y);
+      const center = new paperRuntime.Point(pos.x, pos.y);
       const item = createFeatureItem(f, center);
 
       // Handle Bridge logic: Create a connection shape to the main body
@@ -632,14 +638,14 @@ function getPerimeterShape(options: GeometryOptions): paper.PathItem {
                     ? -Math.max(overlap * 2, delta)
                     : overlap;
                 const topPoints = topBase.map((p) =>
-                  p.add(new paper.Point(0, capShiftY)),
+                  p.add(new paperRuntime.Point(0, capShiftY)),
                 );
 
                 const bridgeBottomY = bridgeBottom + overlap * 2;
-                const bridgePoly = new paper.Path({ insert: false });
+                const bridgePoly = new paperRuntime.Path({ insert: false });
                 for (const p of topPoints) bridgePoly.add(p);
-                bridgePoly.add(new paper.Point(xRight, bridgeBottomY));
-                bridgePoly.add(new paper.Point(xLeft, bridgeBottomY));
+                bridgePoly.add(new paperRuntime.Point(xRight, bridgeBottomY));
+                bridgePoly.add(new paperRuntime.Point(xLeft, bridgeBottomY));
                 bridgePoly.closed = true;
 
                 const unitedItem = item.unite(bridgePoly);
@@ -732,7 +738,7 @@ function applySurfaceFeatures(
 
   for (const f of surfaceFeatures) {
     const pos = resolveFeaturePosition(f, options);
-    const center = new paper.Point(pos.x, pos.y);
+    const center = new paperRuntime.Point(pos.x, pos.y);
     const item = createFeatureItem(f, center);
 
     try {
@@ -763,7 +769,7 @@ export function generateDielinePath(options: GeometryOptions): string {
   const paperWidth = options.canvasWidth || options.width * 2 || 2000;
   const paperHeight = options.canvasHeight || options.height * 2 || 2000;
   ensurePaper(paperWidth, paperHeight);
-  paper.project.activeLayer.removeChildren();
+  paperRuntime.project.activeLayer.removeChildren();
 
   const perimeter = getPerimeterShape(options);
   const finalShape = applySurfaceFeatures(perimeter, options.features, options);
@@ -787,7 +793,7 @@ export function generateBleedZonePath(
   const paperHeight =
     originalOptions.canvasHeight || originalOptions.height * 2 || 2000;
   ensurePaper(paperWidth, paperHeight);
-  paper.project.activeLayer.removeChildren();
+  paperRuntime.project.activeLayer.removeChildren();
 
   // 1. Generate Original Shape
   const pOriginal = getPerimeterShape(originalOptions);
@@ -830,7 +836,7 @@ export function getLowestPointOnDieline(options: GeometryOptions): {
   y: number;
 } {
   ensurePaper(options.width * 2, options.height * 2);
-  paper.project.activeLayer.removeChildren();
+  paperRuntime.project.activeLayer.removeChildren();
 
   const shape = createBaseShape(options);
   const bounds = shape.bounds;
@@ -853,13 +859,13 @@ export function getNearestPointOnDieline(
   options: GeometryOptions,
 ): { x: number; y: number; normal?: { x: number; y: number } } {
   ensurePaper(options.width * 2, options.height * 2);
-  paper.project.activeLayer.removeChildren();
+  paperRuntime.project.activeLayer.removeChildren();
 
   // We constrain to the BASE shape, not including other features,
   // because usually you want to snap to the main edge.
   const shape = createBaseShape(options);
 
-  const p = new paper.Point(point.x, point.y);
+  const p = new paperRuntime.Point(point.x, point.y);
   const location = shape.getNearestLocation(p);
 
   const result = {
@@ -880,7 +886,7 @@ export function getPathBounds(pathData: string): {
   width: number;
   height: number;
 } {
-  const path = new paper.Path();
+  const path = new paperRuntime.Path();
   path.pathData = pathData;
   const bounds = path.bounds;
   path.remove();
@@ -892,19 +898,14 @@ export function getPathBounds(pathData: string): {
   };
 }
 
-export function createPaperPathGeometrySnapshot(options: {
+export function createSvgPathGeometrySnapshot(options: {
   ref: GeometryRef;
   pathData: string;
   space: CoordinateSpace;
+  bounds: GeometryRect;
   localToScene?: Matrix2D<CoordinateSpace, "scene">;
   metadata?: Record<string, unknown>;
 }): GeometryPathSnapshot {
-  const bounds = getPaperPathBounds(options.pathData) ?? {
-    left: 0,
-    top: 0,
-    width: 0,
-    height: 0,
-  };
   const localToScene =
     options.localToScene ??
     (options.space === "scene"
@@ -915,72 +916,18 @@ export function createPaperPathGeometrySnapshot(options: {
   }
   return {
     kind: "path",
-    backendId: PAPER_PATH_GEOMETRY_BACKEND_ID,
+    format: SVG_PATH_GEOMETRY_FORMAT,
     pathData: options.pathData,
     ref: options.ref,
     space: options.space,
-    bounds,
+    bounds: { ...options.bounds },
     localToScene,
     ...(options.metadata ? { metadata: { ...options.metadata } } : {}),
   };
 }
 
-export const PAPER_PATH_GEOMETRY_BACKEND_ID = "paper.path";
-
-export function createPaperPathGeometryBackend(): GeometryBackend {
-  return {
-    backendId: PAPER_PATH_GEOMETRY_BACKEND_ID,
-    nearestPoint: (snapshot, point) =>
-      getPaperPathNearestPoint(snapshot.pathData, point)?.point ?? null,
-    normalAt: (snapshot, point) =>
-      getPaperPathNearestPoint(snapshot.pathData, point)?.normal ?? null,
-    contains: (snapshot, point) =>
-      withPaperPath(snapshot.pathData, (path) =>
-        path.contains(new paper.Point(point.x, point.y)),
-      ) ?? false,
-    sample: (snapshot, ratio) =>
-      withPaperPath(snapshot.pathData, (path) => {
-        const pathWithLength = path as paper.PathItem & {
-          length?: number;
-          getPointAt?(offset: number): paper.Point | null;
-        };
-        const length = Math.max(0, pathWithLength.length || 0);
-        const point =
-          length > 0
-            ? pathWithLength.getPointAt?.(
-                Math.max(0, Math.min(1, ratio)) * length,
-              )
-            : null;
-        return point ? { x: point.x, y: point.y } : null;
-      }),
-    project: (snapshot, to) => projectPaperPathSnapshot(snapshot, to),
-  };
-}
-
-function projectPaperPathSnapshot(
-  snapshot: GeometryPathSnapshot,
-  to: CoordinateSpace,
-): GeometryPathSnapshot | null {
-  if (to === snapshot.space) return snapshot;
-  if (to !== "scene") return null;
-  return withPaperPath(snapshot.pathData, (path) => {
-    const [a, b, c, d, tx, ty] = snapshot.localToScene.values;
-    path.transform(new paper.Matrix(a, c, b, d, tx, ty));
-    const pathData = path.pathData;
-    return {
-      ...snapshot,
-      pathData,
-      space: "scene",
-      bounds: {
-        left: path.bounds.x,
-        top: path.bounds.y,
-        width: path.bounds.width,
-        height: path.bounds.height,
-      },
-      localToScene: coordinateMatrix("scene", "scene", [1, 0, 0, 1, 0, 0]),
-    };
-  });
-}
+/** @deprecated Use createSvgPathGeometrySnapshot. */
+export const createPaperPathGeometrySnapshot = createSvgPathGeometrySnapshot;
 
 function getPaperPathBounds(pathData: string): GeometryRect | null {
   return withPaperPath(pathData, (path) => ({
@@ -996,7 +943,9 @@ function getPaperPathNearestPoint(
   point: GeometryPoint,
 ): { point: GeometryPoint; normal?: GeometryPoint } | null {
   return withPaperPath(pathData, (path) => {
-    const location = path.getNearestLocation(new paper.Point(point.x, point.y));
+    const location = path.getNearestLocation(
+      new paperRuntime.Point(point.x, point.y),
+    );
     if (!location?.point) return null;
     return {
       point: { x: location.point.x, y: location.point.y },
@@ -1017,9 +966,9 @@ function withPaperPath<T>(
   ensurePaper(1000, 1000);
   const hasMultipleSubPaths = ((pathData.match(/[Mm]/g) || []).length ?? 0) > 1;
   const path: paper.PathItem = hasMultipleSubPaths
-    ? new paper.CompoundPath(pathData)
+    ? new paperRuntime.CompoundPath(pathData)
     : (() => {
-        const item = new paper.Path();
+        const item = new paperRuntime.Path();
         item.pathData = pathData;
         return item;
       })();

@@ -1,10 +1,12 @@
 import type {
+  GeometrySourceService,
   Service,
   ServiceIdentifier,
   SurfaceFrameService,
 } from "@pooder/core";
-import { SURFACE_FRAME_SERVICE } from "@pooder/core";
+import { GEOMETRY_SOURCE_SERVICE, SURFACE_FRAME_SERVICE } from "@pooder/core";
 import { IMAGE_RESOURCE_SERVICE } from "@pooder/core";
+import { loadPaperGeometryBackend } from "@pooder/geometry-paper";
 import { BrowserSceneExportService } from "./browser-scene-export-service";
 import CanvasService from "./canvas-service";
 import { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
@@ -40,6 +42,20 @@ export interface BrowserHostAttachment {
   readonly imageResourceService: BrowserImageResourceService;
   readonly sceneLayoutService: SceneLayoutService;
   dispose(): void;
+}
+
+export async function registerBrowserGeometryBackend(
+  runtime: BrowserHostRuntime,
+): Promise<{ dispose(): void }> {
+  const geometrySource = runtime.services.get<GeometrySourceService>(
+    GEOMETRY_SOURCE_SERVICE,
+  );
+  if (!geometrySource) {
+    throw new Error(
+      "[@pooder/platform-browser] GeometrySourceService is not registered.",
+    );
+  }
+  return loadPaperGeometryBackend(geometrySource);
 }
 
 type ResizeObserverLike = {

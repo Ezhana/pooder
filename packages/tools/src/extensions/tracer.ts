@@ -3,7 +3,7 @@
  * Converts raster images (URL/Base64) to SVG Path Data using Marching Squares algorithm.
  */
 
-import paper from "paper";
+import { paper as paperRuntime } from "@pooder/geometry-paper";
 import {
   circularMorphology,
   createMask,
@@ -999,8 +999,8 @@ export class ImageTracer {
   }
 
   private static ensurePaper() {
-    if (!paper.project) {
-      paper.setup(new paper.Size(100, 100));
+    if (!paperRuntime.project) {
+      paperRuntime.setup(new paperRuntime.Size(100, 100));
     }
   }
 
@@ -1010,7 +1010,7 @@ export class ImageTracer {
     this.ensurePaper();
 
     // Create Path
-    const path = new paper.Path({
+    const path = new paperRuntime.Path({
       segments: points.map((p) => [p.x, p.y]),
       closed: true,
     });
@@ -1035,9 +1035,9 @@ export class ImageTracer {
     }
 
     this.ensurePaper();
-    const compound = new paper.CompoundPath({ insert: false });
+    const compound = new paperRuntime.CompoundPath({ insert: false });
     for (const points of normalizedContours) {
-      const child = new paper.Path({
+      const child = new paperRuntime.Path({
         segments: points.map((p) => [p.x, p.y]),
         closed: true,
         insert: false,

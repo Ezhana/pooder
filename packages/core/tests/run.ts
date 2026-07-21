@@ -1828,6 +1828,19 @@ async function testGeometrySourceServiceRegistry() {
               [1, 0, 0, 1, 0, 0],
             ),
           },
+          {
+            kind: "path",
+            format: "svg-path",
+            pathData: "M 0 0 L 10 0",
+            ref: { sourceId: "static", geometryId: "unhandled-path" },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 10, height: 0 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
+          },
         ],
       }),
     );
@@ -1835,20 +1848,20 @@ async function testGeometrySourceServiceRegistry() {
     const rect = geometry.getSnapshot({
       sourceId: "static",
       geometryId: "bounds",
-    });
+    }).value;
     assert(rect, "geometry source should resolve registered geometry");
     assertDeepEqual(
-      geometry.getBounds(rect.ref),
+      geometry.getBounds(rect.ref).value,
       { left: 10, top: 20, width: 30, height: 40 },
       "geometry utility should read rect bounds",
     );
     assertDeepEqual(
-      geometry.nearestPoint(rect.ref, { x: 100, y: 0 }),
+      geometry.nearestPoint(rect.ref, { x: 100, y: 0 }).value,
       { x: 40, y: 20 },
       "geometry utility should clamp nearest rect point",
     );
     assertEqual(
-      geometry.contains(rect.ref, { x: 15, y: 25 }),
+      geometry.contains(rect.ref, { x: 15, y: 25 }).value,
       true,
       "geometry utility should test point containment",
     );
@@ -1856,13 +1869,13 @@ async function testGeometrySourceServiceRegistry() {
       geometry.project({
         ref: { sourceId: "static", geometryId: "bounds" },
         to: "scene",
-      })?.space,
+      }).value?.space,
       "scene",
       "default projection should produce the requested coordinate space",
     );
     assertEqual(
       geometry.listGeometries("static").length,
-      4,
+      5,
       "geometry source should list registered descriptors",
     );
     assertEqual(
@@ -1870,7 +1883,7 @@ async function testGeometrySourceServiceRegistry() {
         sourceId: "static",
         geometryId: "representation",
         purpose: "preview",
-      })?.width,
+      }).value?.width,
       10,
       "preview geometry should resolve independently",
     );
@@ -1879,13 +1892,35 @@ async function testGeometrySourceServiceRegistry() {
         sourceId: "static",
         geometryId: "representation",
         purpose: "export",
-      })?.width,
+      }).value?.width,
       20,
       "export geometry should resolve independently",
     );
+    assertEqual(
+      geometry.nearestPoint(
+        { sourceId: "static", geometryId: "unhandled-path" },
+        { x: 5, y: 5 },
+      ).diagnostics[0]?.code,
+      "geometry-backend-missing",
+      "path queries without a backend should return an explicit diagnostic",
+    );
+    const headlessBackend = geometry.registerBackend({
+      backendId: "test.headless",
+      supports: (snapshot) => snapshot.format === "svg-path",
+      nearestPoint: (_snapshot, point) => ({ x: point.x, y: 0 }),
+    });
+    assertDeepEqual(
+      geometry.nearestPoint(
+        { sourceId: "static", geometryId: "unhandled-path" },
+        { x: 5, y: 5 },
+      ).value,
+      { x: 5, y: 0 },
+      "headless environments should be able to inject a pure computation backend",
+    );
+    headlessBackend.dispose();
     disposable.dispose();
     assertEqual(
-      geometry.getSnapshot({ sourceId: "static", geometryId: "bounds" }),
+      geometry.getSnapshot({ sourceId: "static", geometryId: "bounds" }).value,
       null,
       "disposing a source should unregister it",
     );

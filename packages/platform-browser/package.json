@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@pooder/core": "workspace:*",
+    "@pooder/geometry-paper": "workspace:*",
     "fabric": "^7.0.0"
   },
   "devDependencies": {

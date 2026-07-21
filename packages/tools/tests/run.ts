@@ -74,10 +74,8 @@ import {
   normalizePointInGeometry,
   resolveFeaturePosition,
 } from "../src/extensions/featureCoordinates";
-import {
-  createPaperPathGeometryBackend,
-  createPaperPathGeometrySnapshot,
-} from "../src/extensions/geometry";
+import { createPaperPathGeometrySnapshot } from "../src/extensions/geometry";
+import { loadPaperGeometryBackend } from "@pooder/geometry-paper";
 import {
   FEATURE_CAPABILITY_ID,
   createFeatureCapabilityDefinition,
@@ -161,9 +159,10 @@ async function testPaperPathGeometryProviderUtilities() {
     pathData: "M 0 0 L 100 0 L 100 100 Z",
     ref: { sourceId: "paper", geometryId: "triangle" },
     space: "scene",
+    bounds: { left: 0, top: 0, width: 100, height: 100 },
   });
   const geometry = new GeometrySourceService();
-  geometry.registerBackend(createPaperPathGeometryBackend());
+  await loadPaperGeometryBackend(geometry);
   geometry.registerSource(
     createStaticGeometrySource({
       sourceId: "paper",
@@ -171,26 +170,26 @@ async function testPaperPathGeometryProviderUtilities() {
     }),
   );
   assertDeepEqual(
-    geometry.getBounds(snapshot.ref),
+    geometry.getBounds(snapshot.ref).value,
     { left: 0, top: 0, width: 100, height: 100 },
     "paper path geometry should expose bounds through core utilities",
   );
   assertDeepEqual(
-    geometry.nearestPoint(snapshot.ref, { x: 50, y: 10 }),
+    geometry.nearestPoint(snapshot.ref, { x: 50, y: 10 }).value,
     { x: 50, y: 0 },
     "paper path geometry should expose nearest point through core utilities",
   );
   assertEqual(
-    geometry.contains(snapshot.ref, { x: 90, y: 10 }),
+    geometry.contains(snapshot.ref, { x: 90, y: 10 }).value,
     true,
     "paper path geometry should expose containment through core utilities",
   );
   assertDeepEqual(
-    geometry.sample(snapshot.ref, 0),
+    geometry.sample(snapshot.ref, 0).value,
     { x: 0, y: 0 },
     "paper path geometry should expose sampling through core utilities",
   );
-  const normal = geometry.normalAt(snapshot.ref, { x: 50, y: 10 });
+  const normal = geometry.normalAt(snapshot.ref, { x: 50, y: 10 }).value;
   assert(
     Boolean(normal && Number.isFinite(normal.x) && Number.isFinite(normal.y)),
     "paper path geometry should expose normals through core utilities",

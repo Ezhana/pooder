@@ -42,6 +42,7 @@
   "dependencies": {
     "@pooder/core": "workspace:*",
     "@pooder/document": "workspace:*",
+    "@pooder/geometry-paper": "workspace:*",
     "@pooder/image-mask-contract": "workspace:*",
     "paper": "^0.12.18"
   }

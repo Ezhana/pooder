@@ -11,7 +11,8 @@
     "outDir": ".test-dist",
     "rootDir": "..",
     "paths": {
-      "@pooder/core": ["../core/src/index.ts"]
+      "@pooder/core": ["../core/src/index.ts"],
+      "@pooder/geometry-paper": ["../geometry-paper/src/index.ts"]
     }
   },
   "include": ["tests/**/*.ts", "src/**/*.ts"]
