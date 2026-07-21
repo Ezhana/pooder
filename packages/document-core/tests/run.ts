@@ -14,7 +14,7 @@ import {
   resolveObjectSource,
   SourceResolver,
 } from "../src";
-import type { EditorEffect } from "@pooder/document";
+import { EffectSchemaRegistry, type EditorEffect } from "@pooder/document";
 
 declare const process: {
   exit(code: number): never;
@@ -212,7 +212,16 @@ async function testApplyEditorDocument() {
         },
       ],
     },
-    { resolveEffectCapabilityId: resolveTestEffectCapabilityId },
+    {
+      effectSchemaRegistry: new EffectSchemaRegistry([
+        {
+          effectType: "custom",
+          capabilityId: "test.effect",
+          validate: () => [],
+        },
+      ]),
+      resolveEffectCapabilityId: resolveTestEffectCapabilityId,
+    },
   );
 
   assertEqual(result.ok, true, "document should apply");

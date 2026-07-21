@@ -15,11 +15,16 @@
       "types": "./dist/document/index.d.ts",
       "import": "./dist/document/index.mjs",
       "require": "./dist/document/index.js"
+    },
+    "./effect-schemas": {
+      "types": "./dist/document/effect-schemas.d.ts",
+      "import": "./dist/document/effect-schemas.mjs",
+      "require": "./dist/document/effect-schemas.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/document/index.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts src/document/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts src/document/index.ts src/document/effect-schemas.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts src/document/index.ts src/document/effect-schemas.ts --format cjs,esm --dts --watch",
     "test": "tsc -p tsconfig.test.json && node -r ./.test-dist/kit/tests/setup-paper.js .test-dist/kit/tests/run.js",
     "test:contract:compile": "tsc -p tsconfig.contract.json"
   },

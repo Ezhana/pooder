@@ -21,12 +21,14 @@ import {
   type SurfaceFrameService,
 } from "@pooder/core";
 import {
+  EffectSchemaRegistry,
   cloneEditorDocument,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
   isGenericEditorEffect,
   normalizeEditorDocument,
   validateEditorDocument,
+  validateEditorDocumentEffectSchemas,
   type EditorDocument,
   type EditorDocumentCapabilityCollectionOptions,
   type EditorDocumentDiagnostic,
@@ -165,6 +167,7 @@ export interface EditorDocumentRuntime {
 }
 
 export interface ApplyEditorDocumentOptions {
+  effectSchemaRegistry?: EffectSchemaRegistry;
   resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
   validators?: EditorDocumentValidationOptions["validators"];
   afterApply?: (
@@ -236,18 +239,50 @@ async function applyEditorDocumentInternal(
   const validationOptions = toValidationOptions(options);
   const collectionOptions = toCollectionOptions(options);
   const document = normalizeEditorDocument(value);
-  const diagnostics = validateEditorDocument(value, validationOptions);
-  if (hasErrors(diagnostics)) {
+  const documentSchemaDiagnostics = validateEditorDocument(
+    value,
+    validationOptions,
+  );
+  if (hasErrors(documentSchemaDiagnostics)) {
+    return createResult(false, document, documentSchemaDiagnostics, []);
+  }
+  const effectSchemaDiagnostics = validateEditorDocumentEffectSchemas(
+    value,
+    options.effectSchemaRegistry ?? new EffectSchemaRegistry(),
+  );
+  const diagnostics = [
+    ...documentSchemaDiagnostics,
+    ...effectSchemaDiagnostics,
+  ];
+  if (hasErrors(effectSchemaDiagnostics)) {
     return createResult(false, document, diagnostics, []);
   }
+
+  const capabilityResult = collectEditorDocumentCapabilityRequirements(
+    document,
+    {
+      ...collectionOptions,
+      availableCapabilityIds: collectAvailableCapabilityIds(
+        runtime,
+        document,
+        collectionOptions,
+      ),
+    },
+  );
+  const allDiagnostics = [...diagnostics, ...capabilityResult.diagnostics];
+  if (hasErrors(allDiagnostics)) {
+    return createResult(false, document, allDiagnostics, []);
+  }
+
   if (!runtime.config) {
     return createResult(
       false,
       document,
       [
-        ...diagnostics,
+        ...allDiagnostics,
         {
           severity: "error",
+          stage: "runtime-capability",
           code: "runtime-config-required",
           message:
             "ConfigurationService runtime facade is required to apply an EditorDocument.",
@@ -268,22 +303,6 @@ async function applyEditorDocumentInternal(
         document.surfaces.map((surface) => [surface.id, surface.frames]),
       ),
     );
-
-  const capabilityResult = collectEditorDocumentCapabilityRequirements(
-    document,
-    {
-      ...collectionOptions,
-      availableCapabilityIds: collectAvailableCapabilityIds(
-        runtime,
-        document,
-        collectionOptions,
-      ),
-    },
-  );
-  const allDiagnostics = [...diagnostics, ...capabilityResult.diagnostics];
-  if (hasErrors(allDiagnostics)) {
-    return createResult(false, document, allDiagnostics, []);
-  }
 
   const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
     RENDER_INTENT_SERVICE,
@@ -416,7 +435,9 @@ function toCollectionOptions(
   options: ApplyEditorDocumentOptions,
 ): EditorDocumentCapabilityCollectionOptions {
   return {
-    resolveEffectCapabilityId: options.resolveEffectCapabilityId,
+    resolveEffectCapabilityId: (effect) =>
+      options.resolveEffectCapabilityId?.(effect) ||
+      options.effectSchemaRegistry?.resolveCapabilityId(effect.type),
   };
 }
 
@@ -424,7 +445,11 @@ function resolveEffectCapabilityId(
   effect: EditorEffect,
   options: ApplyEditorDocumentOptions,
 ): string | undefined {
-  return effect.capabilityId || options.resolveEffectCapabilityId?.(effect);
+  return (
+    effect.capabilityId ||
+    options.resolveEffectCapabilityId?.(effect) ||
+    options.effectSchemaRegistry?.resolveCapabilityId(effect.type)
+  );
 }
 
 function normalizeObjectId(value: unknown): string {

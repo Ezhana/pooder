@@ -1,3 +1,5 @@
+export * from "./effect-schema";
+
 export interface DocumentConstraintSpec {
   type: string;
   source?: DocumentGeometryRef;
@@ -123,6 +125,10 @@ export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
 export type EditorDocumentRequirePolicy = "strict" | "warn" | "ignore";
 export type EditorDocumentDiagnosticSeverity = "error" | "warning";
+export type EditorDocumentDiagnosticStage =
+  | "document-schema"
+  | "effect-schema"
+  | "runtime-capability";
 export type EditorEffectPhase =
   | "document"
   | "layout"
@@ -352,6 +358,7 @@ export type EditorObjectEffect = EditorEffect | EditorBuiltinObjectEffect;
 
 export interface EditorDocumentDiagnostic {
   severity: EditorDocumentDiagnosticSeverity;
+  stage?: EditorDocumentDiagnosticStage;
   code: string;
   message: string;
   path: string;
@@ -1493,6 +1500,70 @@ function validateObjectEffects(
   });
 }
 
+function validateRawEffectEnvelopes(
+  diagnostics: EditorDocumentDiagnostic[],
+  input: Record<string, unknown>,
+) {
+  const surfaces = Array.isArray(input.surfaces) ? input.surfaces : [];
+  surfaces.forEach((surface, surfaceIndex) => {
+    if (!isRecord(surface)) return;
+    const surfacePath = `surfaces[${surfaceIndex}]`;
+    validateRawEffectArray(diagnostics, surface.effects, surfacePath);
+    const layers = Array.isArray(surface.layers) ? surface.layers : [];
+    layers.forEach((layer, layerIndex) => {
+      if (!isRecord(layer)) return;
+      const layerPath = `${surfacePath}.layers[${layerIndex}]`;
+      validateRawEffectArray(diagnostics, layer.effects, layerPath);
+      const objects = Array.isArray(layer.objects) ? layer.objects : [];
+      objects.forEach((object, objectIndex) => {
+        if (!isRecord(object)) return;
+        validateRawEffectArray(
+          diagnostics,
+          object.effects,
+          `${layerPath}.objects[${objectIndex}]`,
+        );
+      });
+    });
+  });
+}
+
+function validateRawEffectArray(
+  diagnostics: EditorDocumentDiagnostic[],
+  value: unknown,
+  ownerPath: string,
+) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "effects-invalid",
+      message: "Effects must be an array.",
+      path: `${ownerPath}.effects`,
+    });
+    return;
+  }
+  value.forEach((effect, effectIndex) => {
+    const path = `${ownerPath}.effects[${effectIndex}]`;
+    if (!isRecord(effect)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "effect-invalid",
+        message: "Effect must be an object.",
+        path,
+      });
+      return;
+    }
+    if (!normalizeId(effect.type)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "effect-type-required",
+        message: "Effect type is required.",
+        path: `${path}.type`,
+      });
+    }
+  });
+}
+
 function validateObjectInteraction(
   diagnostics: EditorDocumentDiagnostic[],
   value: unknown,
@@ -1774,6 +1845,7 @@ export function validateEditorDocument(
 
   validateDocumentConfig(diagnostics, input);
   validateV7ImageObjects(diagnostics, input);
+  validateRawEffectEnvelopes(diagnostics, input);
 
   runValidators(diagnostics, options.validators, {
     document,
@@ -1951,7 +2023,10 @@ export function validateEditorDocument(
     });
   });
 
-  return diagnostics;
+  return diagnostics.map((diagnostic) => ({
+    ...diagnostic,
+    stage: "document-schema",
+  }));
 }
 
 function collectEffects(
@@ -2039,5 +2114,14 @@ export function collectEditorDocumentCapabilityRequirements(
     }
   });
 
-  return { requirements, diagnostics };
+  return {
+    requirements,
+    diagnostics: diagnostics.map((diagnostic) => ({
+      ...diagnostic,
+      stage: "runtime-capability",
+    })),
+  };
 }
+
+export const checkEditorDocumentRuntimeCapabilities =
+  collectEditorDocumentCapabilityRequirements;

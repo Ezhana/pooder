@@ -1,5 +1,6 @@
 import {
   EDITOR_DOCUMENT_VERSION,
+  EffectSchemaRegistry,
   cloneEditorDocument,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
@@ -7,6 +8,7 @@ import {
   isGenericEditorEffect,
   normalizeEditorDocument,
   validateEditorDocument,
+  validateEditorDocumentEffectSchemas,
   visitEditorDocumentObjects,
   type EditorDocument,
   type EditorEffect,
@@ -789,6 +791,103 @@ function testEffectsValidateWithoutCapabilityResolver() {
   );
 }
 
+function testValidationStagesRemainIndependent() {
+  const documentDiagnostics = validateEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [{ id: "layer", effects: [{ payload: {} }] }],
+      },
+    ],
+  });
+  assertEqual(
+    documentDiagnostics[0]?.stage,
+    "document-schema",
+    "invalid effect envelopes should identify the document schema stage",
+  );
+
+  const invalidPayloadDocument = {
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 1, height: 1, unit: "px" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "layer",
+            effects: [{ type: "custom", payload: { count: "invalid" } }],
+          },
+        ],
+      },
+    ],
+  };
+  const registry = new EffectSchemaRegistry([
+    {
+      effectType: "custom",
+      capabilityId: "test.custom",
+      validate: (payload) =>
+        typeof (payload as Record<string, unknown> | undefined)?.count ===
+        "number"
+          ? []
+          : [
+              {
+                code: "custom-count-invalid",
+                message: "count must be a number.",
+                path: "count",
+              },
+            ],
+    },
+  ]);
+
+  assertDeepEqual(
+    validateEditorDocument(invalidPayloadDocument),
+    [],
+    "document schema validation should not validate effect payloads",
+  );
+  const effectDiagnostics = validateEditorDocumentEffectSchemas(
+    invalidPayloadDocument,
+    registry,
+  );
+  assertEqual(
+    effectDiagnostics[0]?.stage,
+    "effect-schema",
+    "effect payload failures should identify the effect schema stage",
+  );
+
+  const runtimeResult = collectEditorDocumentCapabilityRequirements(
+    normalizeEditorDocument({
+      ...invalidPayloadDocument,
+      surfaces: [
+        {
+          ...invalidPayloadDocument.surfaces[0],
+          layers: [
+            {
+              id: "layer",
+              effects: [{ type: "custom", payload: { count: 1 } }],
+            },
+          ],
+        },
+      ],
+    }),
+    {
+      availableCapabilityIds: [],
+      resolveEffectCapabilityId: (effect) =>
+        registry.resolveCapabilityId(effect.type),
+    },
+  );
+  assertEqual(
+    runtimeResult.diagnostics[0]?.stage,
+    "runtime-capability",
+    "missing runtime capabilities should identify the runtime stage",
+  );
+}
+
 function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
@@ -1002,6 +1101,7 @@ function main() {
   testCustomValidatorDiagnostics();
   testStructuralValidationDoesNotResolveCapabilities();
   testEffectsValidateWithoutCapabilityResolver();
+  testValidationStagesRemainIndependent();
   testObjectInteractionNormalizesSeparatelyFromGenericEffects();
   testRequirePolicyDiagnostics();
   testCloneAndRecursiveObjectAccessors();

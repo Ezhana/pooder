@@ -2,6 +2,7 @@ import {
   collectEditorDocumentCapabilityRequirements,
   normalizeEditorDocument,
   validateEditorDocument,
+  validateEditorDocumentEffectSchemas,
   type EditorDocument,
   type EditorDocumentCapabilityCollectionOptions,
   type EditorDocumentDiagnostic,
@@ -10,6 +11,15 @@ import {
   type EditorObject,
   type ObjectSource,
 } from "@pooder/document";
+import {
+  OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
+  createOfficialToolEffectSchemaRegistry,
+} from "./effect-schemas";
+export {
+  OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
+  OFFICIAL_TOOL_EFFECT_SCHEMAS,
+  createOfficialToolEffectSchemaRegistry,
+} from "./effect-schemas";
 export {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
@@ -21,14 +31,6 @@ export interface OfficialToolRuntime {
     get<T = unknown>(id: string): T | undefined;
   };
 }
-
-export const OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS = {
-  clip: "pooder.kit.clip",
-  dieline: "pooder.kit.dieline-geometry",
-  feature: "pooder.kit.feature",
-  "configurable-visual": "pooder.kit.configurable-visual",
-  mirror: "pooder.kit.mirror",
-} as const;
 
 export type OfficialToolDocumentEffectType =
   keyof typeof OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS;
@@ -64,7 +66,19 @@ export function validateOfficialToolDocument(
   value: unknown,
   options: EditorDocumentValidationOptions = {},
 ) {
-  return validateEditorDocument(value, options);
+  const documentDiagnostics = validateEditorDocument(value, options);
+  if (
+    documentDiagnostics.some((diagnostic) => diagnostic.severity === "error")
+  ) {
+    return documentDiagnostics;
+  }
+  return [
+    ...documentDiagnostics,
+    ...validateEditorDocumentEffectSchemas(
+      value,
+      createOfficialToolEffectSchemaRegistry(),
+    ),
+  ];
 }
 
 export function collectOfficialToolDocumentCapabilityRequirements(
