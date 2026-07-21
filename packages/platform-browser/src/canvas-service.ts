@@ -949,6 +949,54 @@ export default class CanvasService implements Service, CanvasServiceContract {
     util.applyTransformToObject(object, [...fabricCenterToScreen.values]);
   }
 
+  async createDetachedRenderObject(
+    spec: RenderObjectSpec,
+    sceneToTarget: Matrix2D<"scene", "screen">,
+  ): Promise<FabricObject | undefined> {
+    const object = await this.createFabricObject(spec);
+    if (!object) return undefined;
+    object.set(this.resolveObjectFabricProps(object, spec));
+    const placement = spec.placement;
+    if (placement) {
+      const bounds = placement.localBounds;
+      const centerToLocal = coordinateMatrix(
+        "object-local",
+        "object-local",
+        [
+          1,
+          0,
+          0,
+          1,
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2,
+        ],
+      );
+      const centerToTarget = multiplyCoordinateMatrices(
+        sceneToTarget,
+        multiplyCoordinateMatrices(placement.localToScene, centerToLocal),
+      );
+      util.applyTransformToObject(object, [...centerToTarget.values]);
+    }
+    object.set({ selectable: false, evented: false, visible: true });
+    for (const effect of spec.effects ?? []) {
+      if (effect.type !== "clipPath") continue;
+      const clipPath = await this.createDetachedRenderObject(
+        { ...effect.source, effects: [] },
+        sceneToTarget,
+      );
+      if (!clipPath) continue;
+      clipPath.set({
+        selectable: false,
+        evented: false,
+        excludeFromExport: true,
+        absolutePositioned: effect.coordinateMode !== "object",
+      } as any);
+      object.set({ clipPath } as any);
+    }
+    object.setCoords();
+    return object;
+  }
+
   private patchFabricRenderMetadata(obj: any, metadata: Record<string, any>) {
     obj.set({ data: { ...(obj.data || {}), ...metadata } });
   }

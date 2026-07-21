@@ -14,6 +14,8 @@ import {
   type CanvasService,
   type CommandService,
   type GeometryRect,
+  type GeometryRef,
+  type GeometrySnapshot,
   type GeometrySourceService,
   type GeometrySource,
   type RenderEffectSpec,
@@ -1328,7 +1330,10 @@ export class FabricRenderGraphAdapter implements Service {
     >,
     layerEffects: RenderEffectSpec[] = [],
     readOnlyProjection = false,
+    geometryRef: GeometryRef = node.previewGeometryRef,
   ): RenderObjectSpec | null {
+    const geometry = this.resolveGeometryProjection(geometryRef);
+    if (!geometry) return null;
     const hasDeclarativeInteraction = Boolean(node.interaction);
     const interactionState = this.requireInteractionService().resolveState(
       node.interaction,
@@ -1353,6 +1358,7 @@ export class FabricRenderGraphAdapter implements Service {
           : selectable;
     const commonProps = {
       ...node.props,
+      ...(geometry.pathData ? { pathData: geometry.pathData } : {}),
       selectable,
       evented,
       hasControls: !readOnlyProjection && controlsEnabled,
@@ -1383,7 +1389,9 @@ export class FabricRenderGraphAdapter implements Service {
     const effects = [
       ...layerEffects,
       ...this.normalizeActiveEffects(node.effects, conditionContext),
-    ];
+    ].map((effect) =>
+      this.materializeGeometryEffect(effect, readOnlyProjection ? "export" : "preview"),
+    );
 
     if (node.type === "image") {
       const src = node.visual?.src;
@@ -1393,7 +1401,9 @@ export class FabricRenderGraphAdapter implements Service {
         type: "image",
         src,
         space: node.coordinateSpace,
-        placement: node.placement,
+        placement: geometry.placement,
+        previewGeometryRef: node.previewGeometryRef,
+        exportGeometryRef: node.exportGeometryRef,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1405,7 +1415,9 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "path",
         space: node.coordinateSpace,
-        placement: node.placement,
+        placement: geometry.placement,
+        previewGeometryRef: node.previewGeometryRef,
+        exportGeometryRef: node.exportGeometryRef,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1417,7 +1429,9 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "rect",
         space: node.coordinateSpace,
-        placement: node.placement,
+        placement: geometry.placement,
+        previewGeometryRef: node.previewGeometryRef,
+        exportGeometryRef: node.exportGeometryRef,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1428,11 +1442,128 @@ export class FabricRenderGraphAdapter implements Service {
       id: node.id,
       type: "text",
       space: node.coordinateSpace,
-      placement: node.placement,
+      placement: geometry.placement,
+      previewGeometryRef: node.previewGeometryRef,
+      exportGeometryRef: node.exportGeometryRef,
       data: commonData,
       ...(effects.length ? { effects } : {}),
       props: commonProps,
     };
+  }
+
+  createExportRenderObjectSpec(
+    layer: RenderGraphLayer,
+    node: RenderGraphNode,
+  ): RenderObjectSpec | null {
+    const conditionContext = this.buildRuntimeConditionContext(
+      this.requireRenderIntentService().getGraph(),
+    );
+    return this.toRenderObjectSpec(
+      layer,
+      node,
+      conditionContext,
+      this.normalizeActiveEffects(layer.effects, conditionContext),
+      true,
+      node.exportGeometryRef,
+    );
+  }
+
+  private resolveGeometryProjection(ref: GeometryRef): {
+    placement: AffinePlacement;
+    pathData?: string;
+    snapshot: GeometrySnapshot;
+  } | null {
+    const source = this.geometrySource;
+    if (!source) return null;
+    const resolved = source.getSnapshot(ref);
+    const snapshot = resolved.value;
+    if (!snapshot) {
+      resolved.diagnostics.forEach((diagnostic) =>
+        console.warn(`[FabricRenderGraphAdapter] ${diagnostic.message}`),
+      );
+      return null;
+    }
+    const pathData = this.geometryPathData(snapshot);
+    const localToScene = coordinateMatrix(
+      "object-local",
+      "scene",
+      snapshot.localToScene.values,
+    );
+    return {
+      snapshot,
+      ...(pathData ? { pathData } : {}),
+      placement: {
+        localBounds: {
+          space: "object-local",
+          left: snapshot.bounds.left,
+          top: snapshot.bounds.top,
+          width: snapshot.bounds.width,
+          height: snapshot.bounds.height,
+        },
+        localToScene,
+        pivot: {
+          space: "object-local",
+          x: snapshot.bounds.left + snapshot.bounds.width / 2,
+          y: snapshot.bounds.top + snapshot.bounds.height / 2,
+        },
+      },
+    };
+  }
+
+  private geometryPathData(snapshot: GeometrySnapshot): string | undefined {
+    if (snapshot.kind === "path") return snapshot.pathData;
+    if (snapshot.kind === "rect") {
+      const { left, top, width, height } = snapshot.rect;
+      return `M${left} ${top}H${left + width}V${top + height}H${left}Z`;
+    }
+    if (snapshot.kind === "polygon") {
+      const [first, ...rest] = snapshot.points;
+      return first
+        ? `M${first.x} ${first.y}${rest.map((point) => `L${point.x} ${point.y}`).join("")}Z`
+        : undefined;
+    }
+    if (snapshot.kind !== "compound") return undefined;
+    const children = snapshot.children
+      .map((ref) => this.geometrySource?.getSnapshot(ref).value)
+      .filter((child): child is GeometrySnapshot => Boolean(child));
+    const paths = children
+      .map((child) => this.geometryPathData(child))
+      .filter((path): path is string => Boolean(path));
+    return paths.length === children.length ? paths.join(" ") : undefined;
+  }
+
+  private materializeGeometryEffect(
+    effect: RenderEffectSpec,
+    purpose: "preview" | "export",
+  ): RenderEffectSpec {
+    if (effect.type !== "clipPath") return effect;
+    const ref =
+      purpose === "export"
+        ? effect.exportGeometryRef
+        : effect.previewGeometryRef;
+    if (!ref) return effect;
+    const geometry = this.resolveGeometryProjection(ref);
+    if (!geometry) return effect;
+    const pathData = this.geometryPathData(geometry.snapshot);
+    if (!pathData) return effect;
+    const source = {
+      id: `${effect.id ?? "clipPath"}:${purpose}:geometry`,
+      type: "path" as const,
+      placement: geometry.placement,
+      previewGeometryRef: effect.previewGeometryRef,
+      exportGeometryRef: effect.exportGeometryRef,
+      props: {
+        pathData,
+        fill: "#000000",
+        stroke: null,
+        selectable: false,
+        evented: false,
+        excludeFromExport: true,
+      },
+    };
+    return effect.coordinateMode === "object"
+      ? { ...effect, source: { ...source, space: "object-local" } }
+      : { ...effect, source: { ...source, space: "scene" } };
   }
 
   private getRenderableScenes(): SceneRecord[] {

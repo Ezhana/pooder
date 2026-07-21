@@ -153,31 +153,31 @@ export function attachBrowserHost(
     );
   }
 
-  const registeredExport = runtime.services.register(
-    browserSceneExportService,
-    SCENE_EXPORT_SERVICE,
-  );
-  if (!registeredExport) {
-    runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
-    runtime.services.unregister(canvasService, CANVAS_SERVICE);
-    throw new Error(
-      "[@pooder/platform-browser] Failed to register BrowserSceneExportService.",
-    );
-  }
-
   const registeredSceneAdapter = runtime.services.register(
     fabricRenderGraphAdapter,
     FABRIC_RENDER_GRAPH_ADAPTER,
   );
   if (!registeredSceneAdapter) {
-    runtime.services.unregister(
-      browserSceneExportService,
-      SCENE_EXPORT_SERVICE,
-    );
     runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
     runtime.services.unregister(canvasService, CANVAS_SERVICE);
     throw new Error(
       "[@pooder/platform-browser] Failed to register FabricRenderGraphAdapter.",
+    );
+  }
+
+  const registeredExport = runtime.services.register(
+    browserSceneExportService,
+    SCENE_EXPORT_SERVICE,
+  );
+  if (!registeredExport) {
+    runtime.services.unregister(
+      fabricRenderGraphAdapter,
+      FABRIC_RENDER_GRAPH_ADAPTER,
+    );
+    runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
+    runtime.services.unregister(canvasService, CANVAS_SERVICE);
+    throw new Error(
+      "[@pooder/platform-browser] Failed to register BrowserSceneExportService.",
     );
   }
 
@@ -246,14 +246,14 @@ export function attachBrowserHost(
       resizeObserver.disconnect();
       viewportDisposables.forEach((disposable) => disposable?.dispose());
       runtime.services.unregister(
+        browserSceneExportService,
+        SCENE_EXPORT_SERVICE,
+      );
+      runtime.services.unregister(
         fabricRenderGraphAdapter,
         FABRIC_RENDER_GRAPH_ADAPTER,
       );
       runtime.services.unregister(imageResourceService, IMAGE_RESOURCE_SERVICE);
-      runtime.services.unregister(
-        browserSceneExportService,
-        SCENE_EXPORT_SERVICE,
-      );
       runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
       runtime.services.unregister(canvasService, CANVAS_SERVICE);
     },

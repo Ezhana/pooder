@@ -31,6 +31,7 @@ import {
 } from "./services";
 import { ExtensionContext } from "./context";
 import { TypedEventEmitter } from "./typed-event";
+import { createRenderIntentGeometrySource } from "./render-intent";
 
 export interface RuntimeServiceChangeEvent {
   readonly type: "registered" | "unregistered";
@@ -196,6 +197,9 @@ export class Pooder {
   readonly sessions: RuntimeSessionsApi;
 
   constructor() {
+    this.geometrySourceService.registerSource(
+      createRenderIntentGeometrySource(this.renderIntentService),
+    );
     this.registerService(
       this.capabilityRegistryService,
       CORE_SERVICE_TOKENS.CAPABILITY_REGISTRY,

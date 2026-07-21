@@ -21,6 +21,7 @@ export interface RenderOutputMaskOptions {
   multiplier: number;
   sceneScale: number;
   source: FabricObject;
+  sourceInTargetSpace?: boolean;
   transparentColor?: SceneExportOutputMaskTransparentColor;
   width: number;
 }
@@ -357,26 +358,34 @@ export async function renderOutputMask(
   try {
     const source = options.source as any;
     const clone = await source.clone();
-    const center = getSourceCenter(source);
-    const sceneCenter = options.canvasService.toScenePoint({
-      space: "screen",
-      x: center.x,
-      y: center.y,
-    });
-
-    clone.set({
-      clipPath: undefined,
-      originX: "center",
-      originY: "center",
-      left: (sceneCenter.x - options.crop.left) * options.multiplier,
-      top: (sceneCenter.y - options.crop.top) * options.multiplier,
-      scaleX: ((source.scaleX || 1) / scaleBase) * options.multiplier,
-      scaleY: ((source.scaleY || 1) / scaleBase) * options.multiplier,
-      angle: source.angle || 0,
-      selectable: false,
-      evented: false,
-      visible: true,
-    });
+    if (options.sourceInTargetSpace) {
+      clone.set({
+        clipPath: undefined,
+        selectable: false,
+        evented: false,
+        visible: true,
+      });
+    } else {
+      const center = getSourceCenter(source);
+      const sceneCenter = options.canvasService.toScenePoint({
+        space: "screen",
+        x: center.x,
+        y: center.y,
+      });
+      clone.set({
+        clipPath: undefined,
+        originX: "center",
+        originY: "center",
+        left: (sceneCenter.x - options.crop.left) * options.multiplier,
+        top: (sceneCenter.y - options.crop.top) * options.multiplier,
+        scaleX: ((source.scaleX || 1) / scaleBase) * options.multiplier,
+        scaleY: ((source.scaleY || 1) / scaleBase) * options.multiplier,
+        angle: source.angle || 0,
+        selectable: false,
+        evented: false,
+        visible: true,
+      });
+    }
     prepareShapeMaskClone(clone, options.mode);
     clone.setCoords?.();
     maskCanvas.add(clone);

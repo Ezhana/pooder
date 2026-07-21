@@ -18,6 +18,11 @@ import type {
   InteractionOperationSpec,
   InteractionSpec,
 } from "./interaction-service";
+import type {
+  GeometryRef,
+  GeometrySource,
+  GeometrySnapshot,
+} from "./geometry-source";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
 export type RenderIntentChannel =
@@ -69,6 +74,8 @@ export interface RenderIntentDraft {
   id: string;
   subject: RenderIntentSubject;
   visual?: RenderIntentVisualAspect;
+  previewGeometryRef?: GeometryRef;
+  exportGeometryRef?: GeometryRef;
   placement?: RenderIntentPlacementAspect;
   effects?: RenderEffectSpec[];
   interaction?: InteractionSpec;
@@ -127,6 +134,8 @@ export interface RenderGraphNode {
   surfaceId: string;
   type: RenderObjectSpec["type"];
   visual?: RenderIntentSource;
+  previewGeometryRef: GeometryRef;
+  exportGeometryRef: GeometryRef;
   coordinateSpace: "scene";
   exportKeys: string[];
   placement: AffinePlacement;
@@ -920,6 +929,8 @@ function createDraftFromPatch(
       stack: ordering.stack,
     },
     visual: patch.visual,
+    previewGeometryRef: patch.previewGeometryRef,
+    exportGeometryRef: patch.exportGeometryRef,
     placement: patch.placement,
     effects: patch.effects,
     interaction: patch.interaction,
@@ -971,6 +982,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   const id = source.kind === "replacement" ? `image:${draft.id}` : draft.id;
   const subjectId =
     draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.surfaceId;
+  const defaultGeometryId = draft.id;
   return {
     id,
     subjectId,
@@ -978,6 +990,20 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     surfaceId: draft.subject.surfaceId,
     type,
     visual: source.source,
+    previewGeometryRef: cloneRecord(
+      draft.previewGeometryRef ?? {
+        sourceId: "render-intent",
+        geometryId: defaultGeometryId,
+        purpose: "preview",
+      },
+    ),
+    exportGeometryRef: cloneRecord(
+      draft.exportGeometryRef ?? {
+        sourceId: "render-intent",
+        geometryId: defaultGeometryId,
+        purpose: "export",
+      },
+    ),
     coordinateSpace: "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
     tags: normalizeIdList(draft.export?.tags),
@@ -1050,6 +1076,12 @@ function mergeDraft(
     ...patch,
     subject: { ...base.subject, ...patch.subject },
     visual: mergeOptionalRecord(base.visual, patch.visual),
+    previewGeometryRef: cloneRecord(
+      patch.previewGeometryRef ?? base.previewGeometryRef,
+    ),
+    exportGeometryRef: cloneRecord(
+      patch.exportGeometryRef ?? base.exportGeometryRef,
+    ),
     placement: mergeOptionalRecord(base.placement, patch.placement),
     effects: mergeOptionalEffects(base.effects, patch.effects),
     interaction: mergeInteractionAspect(base.interaction, patch.interaction),
@@ -1087,6 +1119,12 @@ function mergePatch(
       ...clearedBase,
       subject: { ...clearedBase.subject, ...(patch.subject ?? {}) },
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
+      previewGeometryRef: cloneRecord(
+        patch.previewGeometryRef ?? clearedBase.previewGeometryRef,
+      ),
+      exportGeometryRef: cloneRecord(
+        patch.exportGeometryRef ?? clearedBase.exportGeometryRef,
+      ),
       placement: transformedPlacement,
       effects: mergeOptionalEffects(clearedBase.effects, patch.effects),
       interaction: mergeInteractionAspect(
@@ -1304,6 +1342,69 @@ function cloneGraph(graph: RenderGraph): RenderGraph {
 function cloneRecord<T>(value: T): T {
   if (value === undefined || value === null) return value;
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * Compatibility source for declarative render intents. It is the only place
+ * where legacy visual props are translated into the geometry contract; render
+ * backends consume the resulting refs/snapshots instead of inspecting props.
+ */
+export function createRenderIntentGeometrySource(
+  service: Pick<RenderIntentService, "getGraph">,
+): GeometrySource {
+  const findNode = (geometryId: string) => {
+    for (const layer of service.getGraph().layers) {
+      const node = layer.nodes.find(
+        (candidate) =>
+          candidate.id === geometryId ||
+          String(candidate.data.renderIntentId || "") === geometryId,
+      );
+      if (node) return node;
+    }
+    return undefined;
+  };
+
+  return {
+    sourceId: "render-intent",
+    getSnapshot(ref): GeometrySnapshot | null {
+      const node = findNode(ref.geometryId);
+      if (!node) return null;
+      const bounds = {
+        left: node.placement.localBounds.left,
+        top: node.placement.localBounds.top,
+        width: node.placement.localBounds.width,
+        height: node.placement.localBounds.height,
+      };
+      const base = {
+        ref,
+        space: "object-local" as const,
+        bounds,
+        localToScene: node.placement.localToScene,
+        metadata: {
+          renderIntentId: String(node.data.renderIntentId || node.id),
+          subjectId: node.subjectId,
+        },
+      };
+      if (node.type === "path") {
+        const pathData = String(
+          node.props.pathData ?? node.props.path ?? "",
+        ).trim();
+        return pathData
+          ? { ...base, kind: "path", format: "svg-path", pathData }
+          : null;
+      }
+      return { ...base, kind: "rect", rect: bounds };
+    },
+    listGeometries: () =>
+      service.getGraph().layers.flatMap((layer) =>
+        layer.nodes.map((node) => ({
+          ref: node.previewGeometryRef,
+          kind: node.type === "path" ? ("path" as const) : ("rect" as const),
+          space: "object-local" as const,
+          metadata: { layerId: layer.id, renderIntentId: node.id },
+        })),
+      ),
+  };
 }
 
 function normalizeId(value: string, label: string): string {

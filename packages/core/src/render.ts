@@ -10,6 +10,7 @@ import type {
 } from "./coordinate";
 import type { DielineShape, DielineShapeStyle } from "./dieline-shape";
 import type { SessionScope } from "./workflow-session";
+import type { GeometryRef } from "./geometry-source";
 
 export type RenderObjectType = "rect" | "image" | "path" | "text";
 
@@ -57,6 +58,8 @@ export interface RenderObjectSpec {
   id: string;
   subjectId?: string;
   type: RenderObjectType;
+  previewGeometryRef?: GeometryRef;
+  exportGeometryRef?: GeometryRef;
   props: RenderProps;
   data?: Record<string, any>;
   src?: string;
@@ -157,6 +160,10 @@ type RenderClipPathEffectBase = {
   type: "clipPath";
   id?: string;
   activeWhen?: RuntimeConditionExpr;
+  /** Authoritative geometry used by interactive renderers. */
+  previewGeometryRef?: GeometryRef;
+  /** Authoritative geometry used by export renderers. */
+  exportGeometryRef?: GeometryRef;
 };
 
 export type RenderClipPathEffectSpec =
