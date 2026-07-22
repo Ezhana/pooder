@@ -36,11 +36,24 @@ export interface TransformResult {
 
 export type ConstraintSource = GeometryRef;
 
+/**
+ * Describes why constraints are being resolved. Direct callers default to
+ * commit semantics so their result is safe to persist.
+ */
+export type ConstraintResolvePhase = "preview" | "commit";
+
+export type ConstraintApplicationMode = "evaluate" | "apply";
+
+export type ConstraintApplicationPolicy = Partial<
+  Record<ConstraintResolvePhase, ConstraintApplicationMode>
+>;
+
 export interface ConstraintSpec {
   type: string;
   source?: ConstraintSource;
   mode?: string;
   params?: Record<string, unknown>;
+  application?: ConstraintApplicationPolicy;
 }
 
 export interface ConstraintDiagnostic {
@@ -55,6 +68,7 @@ export interface ConstraintResolveInput {
   constraints?: readonly ConstraintSpec[];
   coordinateSpace?: CoordinateSpace;
   geometrySource?: GeometrySourceService;
+  phase?: ConstraintResolvePhase;
   target?: unknown;
   metadata?: Record<string, unknown>;
 }
@@ -69,6 +83,7 @@ export interface ConstraintHandlerContext {
   resolver: ConstraintResolverService;
   geometrySource?: GeometrySourceService;
   coordinateSpace?: CoordinateSpace;
+  phase: ConstraintResolvePhase;
   input: ConstraintResolveInput;
   diagnostics: ConstraintDiagnostic[];
 }
@@ -120,6 +135,7 @@ export class ConstraintResolverService implements Service {
       resolver: this,
       geometrySource: input.geometrySource ?? this.geometrySource,
       coordinateSpace: input.coordinateSpace,
+      phase: input.phase ?? "commit",
       input,
       diagnostics,
     };
@@ -136,10 +152,14 @@ export class ConstraintResolverService implements Service {
         });
         return current;
       }
-      return normalizeTransformResult(
+      const candidate = normalizeTransformResult(
         handler(current, constraint, context),
         initial,
       );
+      return resolveConstraintApplicationMode(constraint, context.phase) ===
+        "evaluate"
+        ? retainConstraintEvaluation(current, candidate)
+        : candidate;
     }, initial);
 
     return {
@@ -152,6 +172,23 @@ export class ConstraintResolverService implements Service {
       constraints,
     };
   }
+}
+
+function resolveConstraintApplicationMode(
+  constraint: ConstraintSpec,
+  phase: ConstraintResolvePhase,
+): ConstraintApplicationMode {
+  return constraint.application?.[phase] ?? "apply";
+}
+
+function retainConstraintEvaluation(
+  current: TransformResult,
+  candidate: TransformResult,
+): TransformResult {
+  return {
+    ...current,
+    ...(candidate.metadata ? { metadata: { ...candidate.metadata } } : {}),
+  };
 }
 
 export function registerBuiltinConstraints(
@@ -296,12 +333,12 @@ function resolveRectSnap(
       includeCenters: constraint.params?.includeCenters !== false,
     },
   });
-  const moved = moveResultToPosition(result, {
+  const resolved = moveResultToPosition(result, {
     x: snap.frame.left,
     y: snap.frame.top,
   });
   return {
-    ...moved,
+    ...resolved,
     metadata: {
       ...result.metadata,
       rectSnap: {

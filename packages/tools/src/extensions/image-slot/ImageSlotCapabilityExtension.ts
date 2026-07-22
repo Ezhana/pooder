@@ -19,6 +19,7 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
+  type InteractionOperationPhase,
   type SceneHandle,
   type SceneLayoutService,
   type SceneService,
@@ -58,14 +59,12 @@ const DEFAULT_PLACEMENT: EditorImagePlacement = {
 type ImageSlotOpenSessionResult = { ok: true } | { ok: false; reason: string };
 
 interface ImageSlotCanvasTransformInput {
-  commit?: boolean;
   objectId?: string;
+  phase?: InteractionOperationPhase;
+  /** Constraint-resolved absolute matrix supplied by InteractionService. */
   sceneMatrix?: Matrix2D<"object-local", "scene">;
-  snap?: {
-    guides?: Array<{
-      axis?: string;
-      position?: number;
-    }>;
+  metadata?: {
+    rectSnap?: ImageSlotRectSnapFeedback;
   };
   transform?: {
     centerX?: number;
@@ -74,6 +73,13 @@ interface ImageSlotCanvasTransformInput {
     scaleX?: number;
     scaleY?: number;
   };
+}
+
+interface ImageSlotRectSnapFeedback {
+  guides?: Array<{
+    axis?: string;
+    position?: number;
+  }>;
 }
 
 export class ImageSlotCapabilityExtension implements ExtensionDefinition {
@@ -367,6 +373,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         : null;
     const source = draft?.resource?.intrinsicSize;
     const transform = input.transform;
+    const phase = input.phase ?? "preview";
     if (!draft || !context || (objectId && objectId !== draft.objectId)) {
       return { ok: false, reason: "session-not-active" };
     }
@@ -426,10 +433,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     });
     this.setState(
       { phase: "active", draft: { ...draft, placement } },
-      { renderScene: input.commit === true },
+      { renderScene: phase === "commit" },
     );
     this.renderSnapGuides(
-      input.commit ? undefined : input.snap,
+      phase === "commit" ? undefined : input.metadata?.rectSnap,
       draft.objectId,
       frame,
     );
@@ -715,6 +722,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
                 {
                   spec: {
                     type: "rect.snap",
+                    application: {
+                      preview: "evaluate",
+                      commit: "apply",
+                    },
                     params: {
                       id: `image-slot:${draft.objectId}:frame`,
                       rect: objectSceneBounds,
@@ -827,7 +838,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   }
 
   private renderSnapGuides(
-    snap: ImageSlotCanvasTransformInput["snap"] | undefined,
+    snap: ImageSlotRectSnapFeedback | undefined,
     objectId: string,
     frame: { x: number; y: number; width: number; height: number },
   ): void {

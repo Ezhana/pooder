@@ -1,6 +1,7 @@
 import type Disposable from "./disposable";
 import type {
   ConstraintResolveResult,
+  ConstraintResolvePhase,
   ConstraintResolverService,
   ConstraintSpec,
   TransformInput,
@@ -40,7 +41,7 @@ import { SessionConflictError } from "./workflow-session";
 
 export type InteractionActivationTrigger = "primary-pointer" | "double-click";
 export type InteractionManipulationKind = "move" | "resize" | "rotate";
-export type InteractionOperationPhase = "preview" | "commit";
+export type InteractionOperationPhase = ConstraintResolvePhase;
 
 export interface InteractionSubject {
   readonly subjectId: string;
@@ -183,7 +184,7 @@ export interface InteractionManipulationResult extends ConstraintResolveResult {
   coordinateSpace: "scene";
   subject: InteractionSubject;
   projectionPatches: readonly InteractionProjectionPatch[];
-  /** Absolute matrix of the projection that initiated the operation. */
+  /** Constraint-resolved absolute matrix of the initiating projection. */
   sceneMatrix?: Matrix2D<"object-local", "scene">;
   /** Present only for commit results; this is the logical Document mutation. */
   documentPatch?: SceneTransformPatch;
@@ -424,6 +425,7 @@ export class InteractionService implements Service {
       constraints: operation.enabled ? operation.constraints : [],
       coordinateSpace: input.coordinateSpace,
       geometrySource: this.requireGeometrySource(),
+      phase,
       target: input.target,
       metadata: input.metadata,
     });
@@ -457,7 +459,12 @@ export class InteractionService implements Service {
     const resultSceneMatrix =
       primaryMatrixPatch?.transform.type === "replace-matrix"
         ? primaryMatrixPatch.transform.matrix
-        : input.sceneMatrix;
+        : createCanonicalSceneMatrix(
+            resolved,
+            documentPatch,
+            input.sourceSceneMatrix,
+            input.sceneMatrix,
+          );
     const result: InteractionManipulationResult = {
       ...resolved,
       kind,
@@ -554,7 +561,6 @@ export class InteractionService implements Service {
     void this.requireCommandService()
       .executeCommand(commandId, {
         ...cloneRecord(action.payload),
-        commit: result.phase === "commit",
         coordinateSpace: result.coordinateSpace,
         documentPatch: result.documentPatch,
         kind,
@@ -563,7 +569,6 @@ export class InteractionService implements Service {
         projectionPatches: result.projectionPatches,
         sceneMatrix: result.sceneMatrix,
         sceneTransformPatch: result.documentPatch,
-        snap: result.result.metadata?.rectSnap,
         subject: result.subject,
         subjectId: result.subject.subjectId,
         surfaceId: result.subject.surfaceId,
@@ -683,6 +688,58 @@ function createSceneTransformPatch(
       position.y,
     ]),
   };
+}
+
+/**
+ * Produces the canonical matrix consumed by manipulation actions. Projection
+ * patches normally provide it, but actions must not fall back to the raw
+ * renderer matrix when a projection snapshot is temporarily unavailable.
+ */
+function createCanonicalSceneMatrix(
+  resolved: ConstraintResolveResult,
+  documentPatch: SceneTransformPatch | undefined,
+  sourceSceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
+  sceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
+): Matrix2D<"object-local", "scene"> | undefined {
+  if (!documentPatch) return sceneMatrix;
+  if (documentPatch.type === "replace-matrix") return documentPatch.matrix;
+
+  const toCanonicalPosition = coordinateMatrix("scene", "scene", [
+    1,
+    0,
+    0,
+    1,
+    documentPatch.delta.x,
+    documentPatch.delta.y,
+  ]);
+  if (sourceSceneMatrix) {
+    return multiplyCoordinateMatrices(toCanonicalPosition, sourceSceneMatrix);
+  }
+  if (!sceneMatrix) return undefined;
+
+  const inputPosition = resolved.input.frame
+    ? {
+        x: resolved.input.frame.left,
+        y: resolved.input.frame.top,
+      }
+    : resolved.input.position;
+  const resultPosition = resolved.result.frame
+    ? {
+        x: resolved.result.frame.left,
+        y: resolved.result.frame.top,
+      }
+    : resolved.result.position;
+  if (!inputPosition || !resultPosition) return sceneMatrix;
+
+  const constraintCorrection = coordinateMatrix("scene", "scene", [
+    1,
+    0,
+    0,
+    1,
+    resultPosition.x - inputPosition.x,
+    resultPosition.y - inputPosition.y,
+  ]);
+  return multiplyCoordinateMatrices(constraintCorrection, sceneMatrix);
 }
 
 function createProjectionPatches(
@@ -879,6 +936,9 @@ function createSessionScope(
 function cloneConstraintSpec(spec: ConstraintSpec): ConstraintSpec {
   return {
     ...spec,
+    ...(spec.application
+      ? { application: { ...spec.application } }
+      : {}),
     ...(spec.params ? { params: cloneRecord(spec.params) } : {}),
   };
 }

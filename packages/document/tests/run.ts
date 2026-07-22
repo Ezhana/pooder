@@ -193,7 +193,14 @@ function testObjectInteractionNormalizesSupportedFields() {
                       constraints: [
                         {
                           activeWhen: { op: "const", value: true },
-                          spec: { type: "grid.snap", params: { size: 5 } },
+                          spec: {
+                            type: "grid.snap",
+                            application: {
+                              preview: "evaluate",
+                              commit: "apply",
+                            },
+                            params: { size: 5 },
+                          },
                         },
                       ],
                     },
@@ -252,7 +259,14 @@ function testObjectInteractionNormalizesSupportedFields() {
           constraints: [
             {
               activeWhen: { op: "const", value: true },
-              spec: { type: "grid.snap", params: { size: 5 } },
+              spec: {
+                type: "grid.snap",
+                application: {
+                  preview: "evaluate",
+                  commit: "apply",
+                },
+                params: { size: 5 },
+              },
             },
           ],
         },
@@ -269,6 +283,69 @@ function testObjectInteractionNormalizesSupportedFields() {
   assert(
     !("interaction" in (objects?.[2] ?? {})),
     "empty legacy interaction fields should not be part of normalized document objects",
+  );
+}
+
+function testConstraintApplicationValidation() {
+  const diagnostics = validateEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 120, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "invalid-application",
+                frame: { x: 0, y: 0, width: 20, height: 20 },
+                source: {
+                  kind: "shape",
+                  shape: "rect",
+                  params: { width: 20, height: 20 },
+                },
+                interaction: {
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [
+                        {
+                          spec: {
+                            type: "grid.snap",
+                            application: {
+                              preview: "render-guide",
+                              release: "apply",
+                            },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert(
+    diagnostics.some(
+      (item) =>
+        item.code === "interaction-constraint-application-mode-invalid",
+    ),
+    "constraint application should reject unsupported modes",
+  );
+  assert(
+    diagnostics.some(
+      (item) =>
+        item.code === "interaction-constraint-application-phase-invalid",
+    ),
+    "constraint application should reject unsupported phases",
   );
 }
 
@@ -1089,6 +1166,7 @@ function testCloneAndRecursiveObjectAccessors() {
 function main() {
   testNormalizeDefaults();
   testObjectInteractionNormalizesSupportedFields();
+  testConstraintApplicationValidation();
   testLegacyObjectConstraintsAreIgnored();
   testImagePlacementObjectDoesNotRequireLegacySrc();
   testObjectWithoutSourceIsDropped();

@@ -2035,6 +2035,54 @@ async function testConstraintResolverServiceBuiltins() {
       true,
       "rect.snap should expose snap guides in result metadata",
     );
+
+    const phaseAwareConstraint = {
+      type: "rect.snap",
+      application: {
+        preview: "evaluate" as const,
+        commit: "apply" as const,
+      },
+      params: {
+        id: "frame",
+        rect: { left: 100, top: 10, width: 80, height: 60 },
+        thresholdPx: 6,
+      },
+    };
+    const evaluatedPreview = resolver.resolve({
+      phase: "preview",
+      transform: {
+        frame: { left: 96, top: 15, width: 10, height: 10 },
+      },
+      constraints: [phaseAwareConstraint],
+      metadata: { viewportScale: 1 },
+    });
+    assertDeepEqual(
+      evaluatedPreview.result.frame,
+      { left: 96, top: 15, width: 10, height: 10 },
+      "evaluate application should preserve the proposed transform",
+    );
+    assertEqual(
+      Array.isArray(
+        (evaluatedPreview.result.metadata?.rectSnap as { guides?: unknown[] })
+          ?.guides,
+      ),
+      true,
+      "evaluate application should retain constraint metadata",
+    );
+
+    const appliedCommit = resolver.resolve({
+      phase: "commit",
+      transform: {
+        frame: { left: 96, top: 15, width: 10, height: 10 },
+      },
+      constraints: [phaseAwareConstraint],
+      metadata: { viewportScale: 1 },
+    });
+    assertDeepEqual(
+      appliedCommit.result.frame,
+      { left: 100, top: 10, width: 10, height: 10 },
+      "apply application should use the constraint transform",
+    );
   });
 }
 
@@ -2045,10 +2093,18 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     const resolver = runtime.services.getOrThrow<ConstraintResolverService>(
       CONSTRAINT_RESOLVER_SERVICE,
     );
-    resolver.registerConstraint("test.move", (result) => ({
-      ...result,
-      frame: result.frame ? { ...result.frame, left: 10 } : result.frame,
-    }));
+    const resolvedPhases: string[] = [];
+    resolver.registerConstraint("test.move", (result, _constraint, context) => {
+      resolvedPhases.push(context.phase);
+      return {
+        ...result,
+        frame: result.frame ? { ...result.frame, left: 10 } : result.frame,
+      };
+    });
+    resolver.registerConstraint("test.phase", (result, _constraint, context) => {
+      resolvedPhases.push(context.phase);
+      return result;
+    });
     resolver.registerConstraint("test.resize", (result) => ({
       ...result,
       size: { width: 50, height: 60 },
@@ -2183,14 +2239,26 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     assertEqual(moveCommit.result.frame?.left, 10);
     assertEqual(moveCommit.phase, "commit");
     assertEqual(moveCommit.coordinateSpace, "scene");
-    assertEqual(manipulationActionPayload.commit, true);
+    assertEqual(manipulationActionPayload.phase, "commit");
+    assertDeepEqual(
+      moveCommit.sceneMatrix?.values,
+      [1, 0, 0, 1, 10, 2],
+      "commit should expose the constraint-resolved absolute scene matrix",
+    );
     assertDeepEqual(
       manipulationActionPayload.sceneMatrix,
       moveCommit.sceneMatrix,
       "manipulation actions should receive the absolute scene matrix",
     );
     const staleBoundsMove = interaction.previewManipulation("move", {
-      spec: { manipulation: { move: { enabled: true } } },
+      spec: {
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [{ spec: { type: "test.phase" } }],
+          },
+        },
+      },
       runtimeContext,
       transform: {
         frame: { left: 0, top: 0, width: 20, height: 30 },
@@ -2230,6 +2298,16 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
         delta: { space: "scene", x: 5, y: 7 },
       },
       "move should use the live scene matrix when Fabric bounds are stale",
+    );
+    assertDeepEqual(
+      staleBoundsMove.sceneMatrix?.values,
+      [1, 0, 0, 1, 5, 7],
+      "actions should receive a canonical matrix without projection geometry",
+    );
+    assertDeepEqual(
+      resolvedPhases,
+      ["commit", "preview"],
+      "interaction phases should reach constraint handlers",
     );
     assertDeepEqual(
       moveCommit.projectionPatches.map((patch) => patch.target.projectionId),

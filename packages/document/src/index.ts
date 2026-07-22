@@ -1,10 +1,22 @@
 export * from "./effect-schema";
 
+export type DocumentConstraintResolvePhase = "preview" | "commit";
+
+export type DocumentConstraintApplicationMode = "evaluate" | "apply";
+
+export type DocumentConstraintApplicationPolicy = Partial<
+  Record<
+    DocumentConstraintResolvePhase,
+    DocumentConstraintApplicationMode
+  >
+>;
+
 export interface DocumentConstraintSpec {
   type: string;
   source?: DocumentGeometryRef;
   mode?: string;
   params?: Record<string, unknown>;
+  application?: DocumentConstraintApplicationPolicy;
 }
 
 export interface DocumentGeometryRef {
@@ -960,6 +972,7 @@ function normalizeInteractionConstraint(
   const type = normalizeId(rawSpec.type);
   if (!type) return null;
   const source = normalizeGeometryRef(rawSpec.source);
+  const application = normalizeConstraintApplication(rawSpec.application);
   return {
     ...(normalizeRuntimeCondition(value.activeWhen)
       ? { activeWhen: normalizeRuntimeCondition(value.activeWhen) }
@@ -968,11 +981,31 @@ function normalizeInteractionConstraint(
       type,
       ...(source ? { source } : {}),
       ...(typeof rawSpec.mode === "string" ? { mode: rawSpec.mode } : {}),
+      ...(application ? { application } : {}),
       ...(isRecord(rawSpec.params)
         ? { params: cloneRecord(rawSpec.params) }
         : {}),
     },
   };
+}
+
+function normalizeConstraintApplication(
+  value: unknown,
+): DocumentConstraintApplicationPolicy | undefined {
+  if (!isRecord(value)) return undefined;
+  const preview = normalizeConstraintApplicationMode(value.preview);
+  const commit = normalizeConstraintApplicationMode(value.commit);
+  if (!preview && !commit) return undefined;
+  return {
+    ...(preview ? { preview } : {}),
+    ...(commit ? { commit } : {}),
+  };
+}
+
+function normalizeConstraintApplicationMode(
+  value: unknown,
+): DocumentConstraintApplicationMode | undefined {
+  return value === "evaluate" || value === "apply" ? value : undefined;
 }
 
 function normalizeInteractionConstraints(
@@ -1767,6 +1800,37 @@ function validateObjectInteraction(
           message: "Interaction constraint requires spec.type.",
           path: `${constraintPath}.spec`,
         });
+      }
+      if (spec?.application !== undefined) {
+        const applicationPath = `${constraintPath}.spec.application`;
+        if (!isRecord(spec.application)) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "interaction-constraint-application-invalid",
+            message: "Constraint application must be an object.",
+            path: applicationPath,
+          });
+        } else {
+          Object.entries(spec.application).forEach(([phase, mode]) => {
+            if (phase !== "preview" && phase !== "commit") {
+              addDiagnostic(diagnostics, {
+                severity: "error",
+                code: "interaction-constraint-application-phase-invalid",
+                message: `Constraint application phase "${phase}" is not supported.`,
+                path: `${applicationPath}.${phase}`,
+              });
+              return;
+            }
+            if (!normalizeConstraintApplicationMode(mode)) {
+              addDiagnostic(diagnostics, {
+                severity: "error",
+                code: "interaction-constraint-application-mode-invalid",
+                message: `Constraint application mode for "${phase}" must be "evaluate" or "apply".`,
+                path: `${applicationPath}.${phase}`,
+              });
+            }
+          });
+        }
       }
       if (
         isRecord(constraint) &&
