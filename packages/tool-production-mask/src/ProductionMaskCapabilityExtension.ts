@@ -69,9 +69,6 @@ import {
 } from "./capability";
 import {
   POODER_PRODUCTION_MASK_LAYER_PRESET,
-  PRODUCTION_MASK_COVER_LAYER_ID,
-  PRODUCTION_MASK_OVERLAY_LAYER_ID,
-  PRODUCTION_MASK_PREVIEW_LAYER_ID,
 } from "./layers";
 import { SubscriptionBag } from "./runtime/subscriptions";
 import { type FrameRect, resolveSurfaceFrameRect } from "./scene/frame";
@@ -295,6 +292,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     ProductionMaskSessionResult
   >;
   private sessionScene?: SceneHandle;
+  private originalSpecs: RenderObjectSpec[] = [];
   private maskSpecs: RenderObjectSpec[] = [];
   private coverSpecs: RenderObjectSpec[] = [];
   private overlaySpecs: RenderObjectSpec[] = [];
@@ -304,6 +302,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     change: ProductionMaskCapabilityChangeEvent;
   }>();
   private readonly capabilityId: string;
+  private readonly originalLayerId: string;
   private readonly maskLayerId: string;
   private readonly coverLayerId: string;
   private readonly overlayLayerId: string;
@@ -315,6 +314,10 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     );
     this.capabilityId =
       options.capabilityId || POODER_PRODUCTION_MASK_CAPABILITY_ID;
+    this.originalLayerId = normalizeProductionMaskLayerId(
+      options.layers?.originalLayerId,
+      POODER_PRODUCTION_MASK_LAYER_PRESET.original,
+    );
     this.maskLayerId = normalizeProductionMaskLayerId(
       options.layers?.maskLayerId,
       POODER_PRODUCTION_MASK_LAYER_PRESET.mask,
@@ -409,6 +412,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         createProductionMaskCapabilityDefinition(this.getFacade(), {
           capabilityId: this.capabilityId,
           layers: {
+            originalLayerId: this.originalLayerId,
             maskLayerId: this.maskLayerId,
             coverLayerId: this.coverLayerId,
             overlayLayerId: this.overlayLayerId,
@@ -533,7 +537,9 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         },
         initialDraft: {
           descriptor: clone(descriptor),
-          previewReferenceVisible: true,
+          previewOriginalVisible: true,
+          previewOriginalMaskVisible: true,
+          previewCurrentMaskVisible: true,
         } satisfies ProductionMaskSessionDraft,
       });
     } catch (error) {
@@ -652,14 +658,24 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   }
 
   private updatePreview(options: {
-    referenceVisible?: boolean;
+    originalVisible?: boolean;
+    originalMaskVisible?: boolean;
+    currentMaskVisible?: boolean;
   }): ProductionMaskOperationResult {
     return this.updateDraft((draft) => ({
       ...draft,
-      previewReferenceVisible:
-        typeof options.referenceVisible === "boolean"
-          ? options.referenceVisible
-          : draft.previewReferenceVisible,
+      previewOriginalVisible:
+        typeof options.originalVisible === "boolean"
+          ? options.originalVisible
+          : draft.previewOriginalVisible,
+      previewOriginalMaskVisible:
+        typeof options.originalMaskVisible === "boolean"
+          ? options.originalMaskVisible
+          : draft.previewOriginalMaskVisible,
+      previewCurrentMaskVisible:
+        typeof options.currentMaskVisible === "boolean"
+          ? options.currentMaskVisible
+          : draft.previewCurrentMaskVisible,
     }));
   }
 
@@ -706,7 +722,9 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       dirty: this.sessionHandle?.dirty ?? false,
       descriptor: descriptor ? clone(descriptor) : null,
       phase: this.sessionHandle?.phase ?? "idle",
-      previewReferenceVisible: draft?.previewReferenceVisible ?? true,
+      previewOriginalVisible: draft?.previewOriginalVisible ?? true,
+      previewOriginalMaskVisible: draft?.previewOriginalMaskVisible ?? true,
+      previewCurrentMaskVisible: draft?.previewCurrentMaskVisible ?? true,
       sessionId: this.sessionHandle?.descriptor.sessionId ?? null,
     };
   }
@@ -767,6 +785,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       composition: {
         entries: [
           ...this.createDocumentProjectionEntries(descriptor, "below"),
+          { source: "local", layerIds: [this.originalLayerId] },
           { source: "local", layerIds: [this.coverLayerId] },
           { source: "local", layerIds: [this.maskLayerId] },
           ...this.createDocumentProjectionEntries(descriptor, "above"),
@@ -774,9 +793,10 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         ],
       },
     });
-    scene.addLayer({ id: this.coverLayerId, order: 0 });
-    scene.addLayer({ id: this.maskLayerId, order: 1 });
-    scene.addLayer({ id: this.overlayLayerId, order: 2 });
+    scene.addLayer({ id: this.originalLayerId, order: 0 });
+    scene.addLayer({ id: this.coverLayerId, order: 1 });
+    scene.addLayer({ id: this.maskLayerId, order: 2 });
+    scene.addLayer({ id: this.overlayLayerId, order: 3 });
     session.own(scene);
     this.sessionScene = scene;
   }
@@ -785,29 +805,41 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     descriptor: ProductionMaskDescriptor,
     placement: ProductionMaskSessionProjection["placement"],
   ) {
+    const referenceObjectId = descriptor.payload.reference.objectId;
     const projections = descriptor.payload.sessionProjections ?? [];
-    const referenceIncluded = projections.some((projection) =>
-      projection.source.objectIds?.includes(
-        descriptor.payload.reference.objectId,
-      ),
-    );
-    const effective = referenceIncluded
-      ? projections
-      : [
-          {
-            placement: "below" as const,
-            source: { objectIds: [descriptor.payload.reference.objectId] },
-          },
-          ...projections,
-        ];
-    return effective
+    return projections
       .filter((projection) => projection.placement === placement)
-      .map((projection) => ({
-        source: "render-graph" as const,
-        interaction: "disabled" as const,
-        filter: ({ node }: { node: RenderGraphNode }) =>
-          this.matchesProjection(descriptor, projection, node),
-      }));
+      .map((projection) => {
+        const objectIds = (projection.source.objectIds ?? []).filter(
+          (objectId) => objectId !== referenceObjectId,
+        );
+        const tags = projection.source.tags ?? [];
+        if (objectIds.length === 0 && tags.length === 0) {
+          return null;
+        }
+        const nextProjection: ProductionMaskSessionProjection = {
+          ...projection,
+          source: {
+            ...(objectIds.length > 0 ? { objectIds } : {}),
+            ...(tags.length > 0 ? { tags } : {}),
+          },
+        };
+        return {
+          source: "render-graph" as const,
+          interaction: "disabled" as const,
+          filter: ({ node }: { node: RenderGraphNode }) =>
+            this.matchesProjection(descriptor, nextProjection, node),
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          source: "render-graph";
+          interaction: "disabled";
+          filter: (input: { node: RenderGraphNode }) => boolean;
+        } => entry !== null,
+      );
   }
 
   private matchesProjection(
@@ -981,30 +1013,45 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     const reference = await this.createReferenceSnapshot(descriptor);
     if (sequence !== this.renderSequence) return;
 
+    let originalSpecs: RenderObjectSpec[] = [];
     let maskSpecs: RenderObjectSpec[] = [];
     let coverSpecs: RenderObjectSpec[] = [];
+    if (reference && draft.previewOriginalVisible) {
+      originalSpecs = [
+        this.buildImageSpec(
+          `production-mask-original:${descriptor.effectId}`,
+          reference,
+          reference.src,
+          1,
+          this.originalLayerId,
+          "production-mask-original",
+        ),
+      ];
+    }
     if (reference && descriptor.payload.enabled && descriptor.payload.source) {
       const sourceUrl = this.sourceUrl(descriptor.payload.source, reference);
       const tint = normalizeTint(descriptor.payload.preview?.tint);
-      const maskSource = await this.getMaskSource(
-        sourceUrl,
-        descriptor.payload.alpha,
-        tint,
-      );
-      if (sequence !== this.renderSequence) return;
-      if (maskSource) {
-        maskSpecs = [
-          this.buildImageSpec(
-            `production-mask:${descriptor.effectId}`,
-            reference,
-            maskSource,
-            descriptor.payload.preview?.opacity ?? DEFAULT_MASK_OPACITY,
-            this.maskLayerId,
-            descriptor.payload.process,
-          ),
-        ];
+      if (draft.previewCurrentMaskVisible) {
+        const maskSource = await this.getMaskSource(
+          sourceUrl,
+          descriptor.payload.alpha,
+          tint,
+        );
+        if (sequence !== this.renderSequence) return;
+        if (maskSource) {
+          maskSpecs = [
+            this.buildImageSpec(
+              `production-mask:${descriptor.effectId}`,
+              reference,
+              maskSource,
+              descriptor.payload.preview?.opacity ?? DEFAULT_MASK_OPACITY,
+              this.maskLayerId,
+              descriptor.payload.process,
+            ),
+          ];
+        }
       }
-      if (draft.previewReferenceVisible) {
+      if (draft.previewOriginalMaskVisible) {
         const coverSource = await this.getMaskSource(
           reference.src,
           normalizeAlphaParameters({
@@ -1029,6 +1076,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       }
     }
 
+    this.originalSpecs = originalSpecs;
     this.maskSpecs = maskSpecs;
     this.coverSpecs = coverSpecs;
     this.overlaySpecs = this.buildFrameSpecs(
@@ -1045,6 +1093,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       .selectElements()
       .forEach((element) => scene.removeElement(element.id));
     [
+      [this.originalLayerId, this.originalSpecs],
       [this.coverLayerId, this.coverSpecs],
       [this.maskLayerId, this.maskSpecs],
       [this.overlayLayerId, this.overlaySpecs],
@@ -1148,6 +1197,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   }
 
   private clearRenderedMask(): void {
+    this.originalSpecs = [];
     this.maskSpecs = [];
     this.coverSpecs = [];
     this.overlaySpecs = [];

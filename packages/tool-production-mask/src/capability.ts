@@ -17,6 +17,7 @@ import {
 export const POODER_PRODUCTION_MASK_CAPABILITY_ID = "pooder.production-mask";
 
 export interface ProductionMaskLayerOptions {
+  originalLayerId?: string;
   maskLayerId?: string;
   coverLayerId?: string;
   overlayLayerId?: string;
@@ -97,14 +98,21 @@ export interface ProductionMaskDescriptor {
 
 export interface ProductionMaskSessionDraft {
   descriptor: ProductionMaskDescriptor;
-  previewReferenceVisible: boolean;
+  /** Show the reference/user artwork projection in the session scene. */
+  previewOriginalVisible: boolean;
+  /** Show the cover overlay derived from the original artwork alpha. */
+  previewOriginalMaskVisible: boolean;
+  /** Show the current production-mask preview. */
+  previewCurrentMaskVisible: boolean;
 }
 
 export interface ProductionMaskViewState {
   dirty: boolean;
   descriptor: ProductionMaskDescriptor | null;
   phase: SessionPhase | "idle";
-  previewReferenceVisible: boolean;
+  previewOriginalVisible: boolean;
+  previewOriginalMaskVisible: boolean;
+  previewCurrentMaskVisible: boolean;
   sessionId: string | null;
 }
 
@@ -167,7 +175,9 @@ export interface ProductionMaskCapabilityApi {
   ): ProductionMaskOperationResult;
   updateEnabled(enabled: boolean): ProductionMaskOperationResult;
   updatePreview(options: {
-    referenceVisible?: boolean;
+    originalVisible?: boolean;
+    originalMaskVisible?: boolean;
+    currentMaskVisible?: boolean;
   }): ProductionMaskOperationResult;
   commitSession(): Promise<ProductionMaskOperationResult>;
   rollbackSession(): Promise<ProductionMaskOperationResult>;
