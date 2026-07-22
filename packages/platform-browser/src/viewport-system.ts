@@ -1,4 +1,15 @@
-import { Coordinate, Layout, Point, Size } from "./coordinate";
+import {
+  Coordinate,
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
+  type CoordinateSpace,
+  type CoordinatePoint,
+  type CoordinateRect,
+  type Layout,
+  type Matrix2D,
+  type Point,
+  type Size,
+} from "@pooder/core";
 
 export class ViewportSystem {
   private _containerSize: Size = { width: 0, height: 0 };
@@ -115,6 +126,87 @@ export class ViewportSystem {
     return {
       x: (point.x - this._layout.offsetX) / this._layout.scale,
       y: (point.y - this._layout.offsetY) / this._layout.scale,
+    };
+  }
+
+  sceneToScreenPoint(
+    point: CoordinatePoint<"scene">,
+  ): CoordinatePoint<"screen"> {
+    const projected = this.toPixelPoint(point);
+    return { ...projected, space: "screen" };
+  }
+
+  screenToScenePoint(
+    point: CoordinatePoint<"screen">,
+  ): CoordinatePoint<"scene"> {
+    const projected = this.toPhysicalPoint(point);
+    return { ...projected, space: "scene" };
+  }
+
+  sceneToScreenLength(value: number): number {
+    return this.toPixel(value);
+  }
+
+  screenToSceneLength(value: number): number {
+    return this.toPhysical(value);
+  }
+
+  sceneToScreenMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "scene">,
+  ): Matrix2D<TFrom, "screen"> {
+    const sceneToScreen = coordinateMatrix("scene", "screen", [
+      this._layout.scale,
+      0,
+      0,
+      this._layout.scale,
+      this._layout.offsetX,
+      this._layout.offsetY,
+    ]);
+    return multiplyCoordinateMatrices(sceneToScreen, matrix);
+  }
+
+  screenToSceneMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "screen">,
+  ): Matrix2D<TFrom, "scene"> {
+    const scale = this._layout.scale || 1;
+    const screenToScene = coordinateMatrix("screen", "scene", [
+      1 / scale,
+      0,
+      0,
+      1 / scale,
+      -this._layout.offsetX / scale,
+      -this._layout.offsetY / scale,
+    ]);
+    return multiplyCoordinateMatrices(screenToScene, matrix);
+  }
+
+  sceneToScreenRect(rect: CoordinateRect<"scene">): CoordinateRect<"screen"> {
+    const origin = this.sceneToScreenPoint({
+      space: "scene",
+      x: rect.left,
+      y: rect.top,
+    });
+    return {
+      space: "screen",
+      left: origin.x,
+      top: origin.y,
+      width: this.sceneToScreenLength(rect.width),
+      height: this.sceneToScreenLength(rect.height),
+    };
+  }
+
+  screenToSceneRect(rect: CoordinateRect<"screen">): CoordinateRect<"scene"> {
+    const origin = this.screenToScenePoint({
+      space: "screen",
+      x: rect.left,
+      y: rect.top,
+    });
+    return {
+      space: "scene",
+      left: origin.x,
+      top: origin.y,
+      width: this.screenToSceneLength(rect.width),
+      height: this.screenToSceneLength(rect.height),
     };
   }
 }

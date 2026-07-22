@@ -1,11 +1,135 @@
-import type {
-  ConstraintSpec,
-  InteractionConstraintSpec,
-  InteractionOperationSpec,
-  InteractionSessionIntent,
-  InteractionSpec,
-  RuntimeConditionExpr,
-} from "@pooder/core";
+export * from "./effect-schema";
+
+export type DocumentConstraintResolvePhase = "preview" | "commit";
+
+export type DocumentConstraintApplicationMode = "evaluate" | "apply";
+
+export type DocumentConstraintApplicationPolicy = Partial<
+  Record<
+    DocumentConstraintResolvePhase,
+    DocumentConstraintApplicationMode
+  >
+>;
+
+export interface DocumentConstraintSpec {
+  type: string;
+  source?: DocumentGeometryRef;
+  mode?: string;
+  params?: Record<string, unknown>;
+  application?: DocumentConstraintApplicationPolicy;
+}
+
+export interface DocumentGeometryRef {
+  sourceId: string;
+  geometryId: string;
+  variant?: string;
+}
+
+export type DocumentRuntimeConditionRef =
+  | { source: "context"; key: string }
+  | { source: "activeToolId" }
+  | {
+      source: "workflowSession";
+      field: "active" | "focused";
+      sessionId: string;
+    }
+  | {
+      source: "workflowSession";
+      field: "scopeActive";
+      scope: DocumentSessionScope;
+    }
+  | {
+      source: "workflowSession";
+      field: "anyActive";
+      scope?: DocumentSessionScope;
+    }
+  | {
+      source: "renderLayer";
+      layerId: string;
+      field: "exists" | "objectCount" | "visibleObjectCount";
+    };
+
+export type DocumentRuntimeConditionExpr =
+  | { op: "const"; value: boolean }
+  | { op: "truthy"; ref: DocumentRuntimeConditionRef }
+  | { op: "equals"; ref: DocumentRuntimeConditionRef; value: unknown }
+  | {
+      op: "in";
+      ref: DocumentRuntimeConditionRef;
+      values: readonly unknown[];
+    }
+  | {
+      op: "compare";
+      ref: DocumentRuntimeConditionRef;
+      cmp: ">" | ">=" | "==" | "!=" | "<" | "<=";
+      value: number;
+    }
+  | { op: "not"; expr: DocumentRuntimeConditionExpr }
+  | { op: "all"; exprs: readonly DocumentRuntimeConditionExpr[] }
+  | { op: "any"; exprs: readonly DocumentRuntimeConditionExpr[] };
+
+export interface DocumentSessionScope {
+  surfaceId?: string | null;
+  subjectId?: string | null;
+  channel?: string | null;
+  groupId?: string | null;
+}
+
+export interface DocumentInteractionSessionIntent {
+  channel: string;
+  groupId: string;
+  sessionId?: string;
+  mode: "exclusive" | "cooperative" | "passive";
+  scope: "subject" | "surface" | "editor";
+  leavePolicy?: "block" | "commit" | "rollback";
+}
+
+export interface DocumentInteractionConstraintSpec {
+  activeWhen?: DocumentRuntimeConditionExpr;
+  spec: DocumentConstraintSpec;
+}
+
+export interface DocumentInteractionOperationSpec {
+  enabled: boolean;
+  constraints?: DocumentInteractionConstraintSpec[];
+  action?: {
+    commandId: string;
+    payload?: Record<string, unknown>;
+  };
+}
+
+export interface DocumentInteractionSpec {
+  hitRegion?: { type: "frame"; space: "scene" };
+  enabledWhen?: DocumentRuntimeConditionExpr;
+  selection?: { enabled: boolean };
+  activation?: {
+    enabled?: boolean;
+    trigger?: "primary-pointer" | "double-click";
+    action: {
+      commandId: string;
+      payload?: Record<string, unknown>;
+    };
+    session?: DocumentInteractionSessionIntent;
+  };
+  manipulation?: {
+    move?: DocumentInteractionOperationSpec;
+    resize?: DocumentInteractionOperationSpec;
+    rotate?: DocumentInteractionOperationSpec;
+  };
+}
+
+/** @deprecated Use DocumentConstraintSpec. */
+export type ConstraintSpec = DocumentConstraintSpec;
+/** @deprecated Use DocumentInteractionConstraintSpec. */
+export type InteractionConstraintSpec = DocumentInteractionConstraintSpec;
+/** @deprecated Use DocumentInteractionOperationSpec. */
+export type InteractionOperationSpec = DocumentInteractionOperationSpec;
+/** @deprecated Use DocumentInteractionSessionIntent. */
+export type InteractionSessionIntent = DocumentInteractionSessionIntent;
+/** @deprecated Use DocumentInteractionSpec. */
+export type InteractionSpec = DocumentInteractionSpec;
+/** @deprecated Use DocumentRuntimeConditionExpr. */
+export type RuntimeConditionExpr = DocumentRuntimeConditionExpr;
 
 export const EDITOR_DOCUMENT_VERSION = 7 as const;
 
@@ -13,6 +137,10 @@ export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
 export type EditorDocumentRequirePolicy = "strict" | "warn" | "ignore";
 export type EditorDocumentDiagnosticSeverity = "error" | "warning";
+export type EditorDocumentDiagnosticStage =
+  | "document-schema"
+  | "effect-schema"
+  | "runtime-capability";
 export type EditorEffectPhase =
   | "document"
   | "layout"
@@ -49,6 +177,8 @@ export interface EditorTransform {
   scaleX?: number;
   scaleY?: number;
   angle?: number;
+  skewX?: number;
+  skewY?: number;
   originX?: "left" | "center" | "right";
   originY?: "top" | "center" | "bottom";
 }
@@ -115,6 +245,10 @@ export interface EditorLayer {
 
 export interface EditorObjectBase {
   id: string;
+  /** Object geometry is always relative to its containing layer/object. */
+  coordinateSpace: "parent-local";
+  /** Optional containing object. This object's frame remains parent-local. */
+  parentObjectId?: string;
   frame?: EditorRect;
   order?: number;
   visible?: boolean;
@@ -123,7 +257,7 @@ export interface EditorObjectBase {
   transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  interaction?: InteractionSpec;
+  interaction?: DocumentInteractionSpec;
   effects?: EditorObjectEffect[];
 }
 
@@ -242,6 +376,7 @@ export type EditorObjectEffect = EditorEffect | EditorBuiltinObjectEffect;
 
 export interface EditorDocumentDiagnostic {
   severity: EditorDocumentDiagnosticSeverity;
+  stage?: EditorDocumentDiagnosticStage;
   code: string;
   message: string;
   path: string;
@@ -250,11 +385,11 @@ export interface EditorDocumentDiagnostic {
 }
 
 export interface EditorDocumentValidationOptions {
-  resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
   validators?: readonly EditorDocumentValidator[];
 }
 
-export interface EditorDocumentCapabilityCollectionOptions extends EditorDocumentValidationOptions {
+export interface EditorDocumentCapabilityCollectionOptions {
+  resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
   availableCapabilityIds?: Iterable<string>;
   includeIgnored?: boolean;
 }
@@ -295,6 +430,21 @@ export interface EditorDocumentCapabilityCollectionResult {
   diagnostics: EditorDocumentDiagnostic[];
 }
 
+export interface EditorDocumentObjectVisitContext {
+  document: EditorDocument;
+  surface: EditorSurface;
+  surfaceIndex: number;
+  layer: EditorLayer;
+  layerIndex: number;
+  object: EditorObject;
+  objectIndex: number;
+  path: string;
+}
+
+export type EditorDocumentObjectVisitor = (
+  context: EditorDocumentObjectVisitContext,
+) => void;
+
 const VALID_UNITS = new Set(["px", "mm", "cm", "in"]);
 const VALID_REQUIRE_POLICIES = new Set(["strict", "warn", "ignore"]);
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -305,7 +455,88 @@ function cloneRecord<T extends Record<string, unknown> | undefined>(
   value: T,
 ): T {
   if (!value) return value;
-  return { ...value } as T;
+  const normalized = normalizeSerializableValue(value);
+  return (isRecord(normalized) ? normalized : {}) as T;
+}
+
+function normalizeSerializableValue(
+  value: unknown,
+  ancestors = new Set<unknown>(),
+): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (value === undefined || typeof value !== "object") return undefined;
+  if (ancestors.has(value)) return undefined;
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map(
+        (item) => normalizeSerializableValue(item, ancestors) ?? null,
+      );
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    return Object.fromEntries(
+      Object.entries(value).flatMap(([key, item]) => {
+        const normalized = normalizeSerializableValue(item, ancestors);
+        return normalized === undefined ? [] : [[key, normalized]];
+      }),
+    );
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function cloneSerializableValue(
+  value: unknown,
+  ancestors = new Set<unknown>(),
+): unknown {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) return value;
+    throw new TypeError("EditorDocument contains a non-finite number.");
+  }
+  if (typeof value !== "object") {
+    throw new TypeError("EditorDocument contains a non-serializable value.");
+  }
+  if (ancestors.has(value)) {
+    throw new TypeError("EditorDocument contains a circular reference.");
+  }
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneSerializableValue(item, ancestors));
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("EditorDocument contains a non-plain object.");
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        cloneSerializableValue(item, ancestors),
+      ]),
+    );
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function normalizeId(value: unknown): string {
@@ -453,13 +684,17 @@ function normalizeImagePlacement(value: unknown): EditorImagePlacement {
       placement.fit === "contain" || placement.fit === "stretch"
         ? placement.fit
         : "cover",
-    anchorX: normalizeFiniteNumber(placement.anchorX) ?? 0.5,
-    anchorY: normalizeFiniteNumber(placement.anchorY) ?? 0.5,
+    anchorX: normalizeUnitCoordinate(placement.anchorX),
+    anchorY: normalizeUnitCoordinate(placement.anchorY),
     zoom: normalizePositiveNumber(placement.zoom) ?? 1,
     rotation: normalizeFiniteNumber(placement.rotation) ?? 0,
     opacity: normalizeFiniteNumber(placement.opacity) ?? 1,
     clip: placement.clip === "none" ? "none" : "frame",
   };
+}
+
+function normalizeUnitCoordinate(value: unknown): number {
+  return Math.min(1, Math.max(0, normalizeFiniteNumber(value) ?? 0.5));
 }
 
 function normalizeImageSlot(value: unknown): EditorImageSlotSpec | undefined {
@@ -572,7 +807,15 @@ function normalizeSurfaceFrames(
 function normalizeTransform(value: unknown): EditorTransform | undefined {
   if (!isRecord(value)) return undefined;
   const transform: EditorTransform = {};
-  const numericKeys = ["left", "top", "scaleX", "scaleY", "angle"] as const;
+  const numericKeys = [
+    "left",
+    "top",
+    "scaleX",
+    "scaleY",
+    "angle",
+    "skewX",
+    "skewY",
+  ] as const;
   numericKeys.forEach((key) => {
     const parsed = normalizeFiniteNumber(value[key]);
     if (parsed !== undefined) transform[key] = parsed;
@@ -597,9 +840,127 @@ function normalizeTransform(value: unknown): EditorTransform | undefined {
 function normalizeRuntimeCondition(
   value: unknown,
 ): RuntimeConditionExpr | undefined {
-  return isRecord(value)
-    ? (cloneRecord(value) as unknown as RuntimeConditionExpr)
-    : undefined;
+  if (!isRecord(value)) return undefined;
+  if (value.op === "const" && typeof value.value === "boolean") {
+    return { op: "const", value: value.value };
+  }
+  if (value.op === "not") {
+    const expr = normalizeRuntimeCondition(value.expr);
+    return expr ? { op: "not", expr } : undefined;
+  }
+  if (value.op === "all" || value.op === "any") {
+    if (!Array.isArray(value.exprs)) return undefined;
+    const exprs = value.exprs.map(normalizeRuntimeCondition);
+    if (exprs.some((expr) => !expr)) return undefined;
+    return { op: value.op, exprs: exprs as RuntimeConditionExpr[] };
+  }
+
+  const ref = normalizeRuntimeConditionRef(value.ref);
+  if (!ref) return undefined;
+  if (value.op === "truthy") return { op: "truthy", ref };
+  if (value.op === "equals") {
+    const normalized = normalizeSerializableValue(value.value);
+    return normalized === undefined
+      ? undefined
+      : { op: "equals", ref, value: normalized };
+  }
+  if (value.op === "in" && Array.isArray(value.values)) {
+    return {
+      op: "in",
+      ref,
+      values: value.values.map(
+        (item) => normalizeSerializableValue(item) ?? null,
+      ),
+    };
+  }
+  if (
+    value.op === "compare" &&
+    (value.cmp === ">" ||
+      value.cmp === ">=" ||
+      value.cmp === "==" ||
+      value.cmp === "!=" ||
+      value.cmp === "<" ||
+      value.cmp === "<=")
+  ) {
+    const normalized = normalizeFiniteNumber(value.value);
+    return normalized === undefined
+      ? undefined
+      : { op: "compare", ref, cmp: value.cmp, value: normalized };
+  }
+  return undefined;
+}
+
+function normalizeRuntimeConditionRef(
+  value: unknown,
+): DocumentRuntimeConditionRef | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.source === "activeToolId") return { source: "activeToolId" };
+  if (value.source === "context") {
+    const key = normalizeId(value.key);
+    return key ? { source: "context", key } : undefined;
+  }
+  if (value.source === "renderLayer") {
+    const layerId = normalizeId(value.layerId);
+    if (
+      !layerId ||
+      (value.field !== "exists" &&
+        value.field !== "objectCount" &&
+        value.field !== "visibleObjectCount")
+    ) {
+      return undefined;
+    }
+    return { source: "renderLayer", layerId, field: value.field };
+  }
+  if (value.source !== "workflowSession") return undefined;
+  if (value.field === "active" || value.field === "focused") {
+    const sessionId = normalizeId(value.sessionId);
+    return sessionId
+      ? { source: "workflowSession", field: value.field, sessionId }
+      : undefined;
+  }
+  if (value.field === "scopeActive") {
+    const scope = normalizeSessionScope(value.scope);
+    return scope
+      ? { source: "workflowSession", field: "scopeActive", scope }
+      : undefined;
+  }
+  if (value.field === "anyActive") {
+    const scope = normalizeSessionScope(value.scope);
+    return {
+      source: "workflowSession",
+      field: "anyActive",
+      ...(scope ? { scope } : {}),
+    };
+  }
+  return undefined;
+}
+
+function normalizeSessionScope(
+  value: unknown,
+): DocumentSessionScope | undefined {
+  if (!isRecord(value)) return undefined;
+  const scope: DocumentSessionScope = {};
+  (["surfaceId", "subjectId", "channel", "groupId"] as const).forEach((key) => {
+    if (value[key] === null) scope[key] = null;
+    else {
+      const normalized = normalizeId(value[key]);
+      if (normalized) scope[key] = normalized;
+    }
+  });
+  return Object.keys(scope).length ? scope : undefined;
+}
+
+function normalizeGeometryRef(value: unknown): DocumentGeometryRef | undefined {
+  if (!isRecord(value)) return undefined;
+  const sourceId = normalizeId(value.sourceId);
+  const geometryId = normalizeId(value.geometryId);
+  const variant = normalizeId(value.variant);
+  if (!sourceId || !geometryId) return undefined;
+  return {
+    sourceId,
+    geometryId,
+    ...(variant ? { variant } : {}),
+  };
 }
 
 function normalizeInteractionConstraint(
@@ -610,15 +971,41 @@ function normalizeInteractionConstraint(
   if (!rawSpec) return null;
   const type = normalizeId(rawSpec.type);
   if (!type) return null;
+  const source = normalizeGeometryRef(rawSpec.source);
+  const application = normalizeConstraintApplication(rawSpec.application);
   return {
     ...(normalizeRuntimeCondition(value.activeWhen)
       ? { activeWhen: normalizeRuntimeCondition(value.activeWhen) }
       : {}),
     spec: {
-      ...cloneRecord(rawSpec),
       type,
-    } as ConstraintSpec,
+      ...(source ? { source } : {}),
+      ...(typeof rawSpec.mode === "string" ? { mode: rawSpec.mode } : {}),
+      ...(application ? { application } : {}),
+      ...(isRecord(rawSpec.params)
+        ? { params: cloneRecord(rawSpec.params) }
+        : {}),
+    },
   };
+}
+
+function normalizeConstraintApplication(
+  value: unknown,
+): DocumentConstraintApplicationPolicy | undefined {
+  if (!isRecord(value)) return undefined;
+  const preview = normalizeConstraintApplicationMode(value.preview);
+  const commit = normalizeConstraintApplicationMode(value.commit);
+  if (!preview && !commit) return undefined;
+  return {
+    ...(preview ? { preview } : {}),
+    ...(commit ? { commit } : {}),
+  };
+}
+
+function normalizeConstraintApplicationMode(
+  value: unknown,
+): DocumentConstraintApplicationMode | undefined {
+  return value === "evaluate" || value === "apply" ? value : undefined;
 }
 
 function normalizeInteractionConstraints(
@@ -636,9 +1023,21 @@ function normalizeInteractionOperation(
 ): InteractionOperationSpec | undefined {
   if (!isRecord(value) || typeof value.enabled !== "boolean") return undefined;
   const constraints = normalizeInteractionConstraints(value.constraints);
+  const rawAction = isRecord(value.action) ? value.action : undefined;
+  const commandId = normalizeId(rawAction?.commandId);
   return {
     enabled: value.enabled,
     ...(constraints ? { constraints } : {}),
+    ...(commandId
+      ? {
+          action: {
+            commandId,
+            ...(isRecord(rawAction?.payload)
+              ? { payload: cloneRecord(rawAction.payload) }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -681,7 +1080,7 @@ function normalizeObjectInteraction(
   if (!isRecord(value)) return undefined;
   const interaction: InteractionSpec = {};
   if (isRecord(value.hitRegion) && value.hitRegion.type === "frame") {
-    interaction.hitRegion = { type: "frame" };
+    interaction.hitRegion = { type: "frame", space: "scene" };
   }
   const enabledWhen = normalizeRuntimeCondition(value.enabledWhen);
   if (enabledWhen) interaction.enabledWhen = enabledWhen;
@@ -849,6 +1248,8 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
   const interaction = normalizeObjectInteraction(value.interaction);
   const base = {
     id,
+    coordinateSpace: "parent-local" as const,
+    parentObjectId: normalizeId(value.parentObjectId) || undefined,
     order:
       normalizeFiniteNumber(value.order) !== undefined
         ? normalizeFiniteNumber(value.order)
@@ -992,6 +1393,58 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
   };
 }
 
+/** Creates a fully detached copy without relying on browser or runtime APIs. */
+export function cloneEditorDocument(document: EditorDocument): EditorDocument {
+  return cloneSerializableValue(document) as EditorDocument;
+}
+
+/**
+ * Visits every persisted editor object in document order.
+ *
+ * The context keeps hierarchy and path information together so callers do not
+ * need to repeat the surface/layer/object recursion themselves.
+ */
+export function visitEditorDocumentObjects(
+  document: EditorDocument,
+  visitor: EditorDocumentObjectVisitor,
+): void {
+  document.surfaces.forEach((surface, surfaceIndex) => {
+    surface.layers.forEach((layer, layerIndex) => {
+      layer.objects?.forEach((object, objectIndex) => {
+        visitor({
+          document,
+          surface,
+          surfaceIndex,
+          layer,
+          layerIndex,
+          object,
+          objectIndex,
+          path: `surfaces[${surfaceIndex}].layers[${layerIndex}].objects[${objectIndex}]`,
+        });
+      });
+    });
+  });
+}
+
+export function getEditorDocumentObjects(
+  document: EditorDocument,
+): EditorObject[] {
+  const objects: EditorObject[] = [];
+  visitEditorDocumentObjects(document, ({ object }) => objects.push(object));
+  return objects;
+}
+
+export function findEditorDocumentObject(
+  document: EditorDocument,
+  objectId: string,
+): EditorObject | undefined {
+  let match: EditorObject | undefined;
+  visitEditorDocumentObjects(document, ({ object }) => {
+    if (!match && object.id === objectId) match = object;
+  });
+  return match;
+}
+
 function addDiagnostic(
   diagnostics: EditorDocumentDiagnostic[],
   diagnostic: EditorDocumentDiagnostic,
@@ -1028,7 +1481,7 @@ function validateUniqueId(
 
 function resolveEffectCapabilityId(
   effect: EditorEffect,
-  options: EditorDocumentValidationOptions,
+  options: EditorDocumentCapabilityCollectionOptions,
 ): string | undefined {
   return effect.capabilityId || options.resolveEffectCapabilityId?.(effect);
 }
@@ -1053,7 +1506,6 @@ function validateEffect(
   diagnostics: EditorDocumentDiagnostic[],
   effect: EditorEffect,
   path: string,
-  options: EditorDocumentValidationOptions,
 ) {
   if (!effect.type) {
     addDiagnostic(diagnostics, {
@@ -1061,15 +1513,6 @@ function validateEffect(
       code: "effect-type-required",
       message: "Effect type is required.",
       path,
-    });
-  }
-  if (!resolveEffectCapabilityId(effect, options)) {
-    addDiagnostic(diagnostics, {
-      severity: "error",
-      code: "effect-capability-required",
-      message: `Effect "${effect.type || "(unknown)"}" requires a capabilityId.`,
-      path,
-      effectType: effect.type,
     });
   }
 }
@@ -1092,10 +1535,9 @@ function validateEffects(
   diagnostics: EditorDocumentDiagnostic[],
   effects: EditorEffect[] | undefined,
   path: string,
-  options: EditorDocumentValidationOptions,
 ) {
   effects?.forEach((effect, index) =>
-    validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options),
+    validateEffect(diagnostics, effect, `${path}.effects[${index}]`),
   );
 }
 
@@ -1103,11 +1545,111 @@ function validateObjectEffects(
   diagnostics: EditorDocumentDiagnostic[],
   effects: EditorObjectEffect[] | undefined,
   path: string,
-  options: EditorDocumentValidationOptions,
 ) {
   effects?.forEach((effect, index) => {
     if (isGenericEditorEffect(effect)) {
-      validateEffect(diagnostics, effect, `${path}.effects[${index}]`, options);
+      validateEffect(diagnostics, effect, `${path}.effects[${index}]`);
+    }
+  });
+}
+
+function validateRawEffectEnvelopes(
+  diagnostics: EditorDocumentDiagnostic[],
+  input: Record<string, unknown>,
+) {
+  const surfaces = Array.isArray(input.surfaces) ? input.surfaces : [];
+  surfaces.forEach((surface, surfaceIndex) => {
+    if (!isRecord(surface)) return;
+    const surfacePath = `surfaces[${surfaceIndex}]`;
+    validateRawEffectArray(diagnostics, surface.effects, surfacePath);
+    const layers = Array.isArray(surface.layers) ? surface.layers : [];
+    layers.forEach((layer, layerIndex) => {
+      if (!isRecord(layer)) return;
+      const layerPath = `${surfacePath}.layers[${layerIndex}]`;
+      validateRawEffectArray(diagnostics, layer.effects, layerPath);
+      const objects = Array.isArray(layer.objects) ? layer.objects : [];
+      objects.forEach((object, objectIndex) => {
+        if (!isRecord(object)) return;
+        validateRawEffectArray(
+          diagnostics,
+          object.effects,
+          `${layerPath}.objects[${objectIndex}]`,
+        );
+      });
+    });
+  });
+}
+
+function validateObjectParentReferences(
+  diagnostics: EditorDocumentDiagnostic[],
+  layer: EditorLayer,
+  layerPath: string,
+): void {
+  const objects = layer.objects ?? [];
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  objects.forEach((object, objectIndex) => {
+    if (!object.parentObjectId) return;
+    const path = `${layerPath}.objects[${objectIndex}].parentObjectId`;
+    if (!byId.has(object.parentObjectId)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "object-parent-missing",
+        message: `Object "${object.id}" references missing parent "${object.parentObjectId}" in its layer.`,
+        path,
+      });
+      return;
+    }
+    const visited = new Set([object.id]);
+    let current: EditorObject | undefined = object;
+    while (current?.parentObjectId) {
+      if (visited.has(current.parentObjectId)) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "object-parent-cycle",
+          message: `Object "${object.id}" participates in a parent cycle.`,
+          path,
+        });
+        return;
+      }
+      visited.add(current.parentObjectId);
+      current = byId.get(current.parentObjectId);
+    }
+  });
+}
+
+function validateRawEffectArray(
+  diagnostics: EditorDocumentDiagnostic[],
+  value: unknown,
+  ownerPath: string,
+) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "effects-invalid",
+      message: "Effects must be an array.",
+      path: `${ownerPath}.effects`,
+    });
+    return;
+  }
+  value.forEach((effect, effectIndex) => {
+    const path = `${ownerPath}.effects[${effectIndex}]`;
+    if (!isRecord(effect)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "effect-invalid",
+        message: "Effect must be an object.",
+        path,
+      });
+      return;
+    }
+    if (!normalizeId(effect.type)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "effect-type-required",
+        message: "Effect type is required.",
+        path: `${path}.type`,
+      });
     }
   });
 }
@@ -1166,6 +1708,18 @@ function validateObjectInteraction(
       code: "interaction-selection-invalid",
       message: "Interaction selection requires a boolean enabled field.",
       path: `${path}.selection`,
+    });
+  }
+
+  if (
+    value.enabledWhen !== undefined &&
+    !normalizeRuntimeCondition(value.enabledWhen)
+  ) {
+    addDiagnostic(diagnostics, {
+      severity: "error",
+      code: "interaction-condition-invalid",
+      message: "Interaction enabledWhen is not a valid condition expression.",
+      path: `${path}.enabledWhen`,
     });
   }
 
@@ -1234,6 +1788,7 @@ function validateObjectInteraction(
       return;
     }
     operation.constraints.forEach((constraint, constraintIndex) => {
+      const constraintPath = `${operationPath}.constraints[${constraintIndex}]`;
       const spec =
         isRecord(constraint) && isRecord(constraint.spec)
           ? constraint.spec
@@ -1243,7 +1798,50 @@ function validateObjectInteraction(
           severity: "error",
           code: "interaction-constraint-invalid",
           message: "Interaction constraint requires spec.type.",
-          path: `${operationPath}.constraints[${constraintIndex}].spec`,
+          path: `${constraintPath}.spec`,
+        });
+      }
+      if (spec?.application !== undefined) {
+        const applicationPath = `${constraintPath}.spec.application`;
+        if (!isRecord(spec.application)) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "interaction-constraint-application-invalid",
+            message: "Constraint application must be an object.",
+            path: applicationPath,
+          });
+        } else {
+          Object.entries(spec.application).forEach(([phase, mode]) => {
+            if (phase !== "preview" && phase !== "commit") {
+              addDiagnostic(diagnostics, {
+                severity: "error",
+                code: "interaction-constraint-application-phase-invalid",
+                message: `Constraint application phase "${phase}" is not supported.`,
+                path: `${applicationPath}.${phase}`,
+              });
+              return;
+            }
+            if (!normalizeConstraintApplicationMode(mode)) {
+              addDiagnostic(diagnostics, {
+                severity: "error",
+                code: "interaction-constraint-application-mode-invalid",
+                message: `Constraint application mode for "${phase}" must be "evaluate" or "apply".`,
+                path: `${applicationPath}.${phase}`,
+              });
+            }
+          });
+        }
+      }
+      if (
+        isRecord(constraint) &&
+        constraint.activeWhen !== undefined &&
+        !normalizeRuntimeCondition(constraint.activeWhen)
+      ) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "interaction-condition-invalid",
+          message: "Constraint activeWhen is not a valid condition expression.",
+          path: `${constraintPath}.activeWhen`,
         });
       }
     });
@@ -1368,6 +1966,7 @@ export function validateEditorDocument(
 
   validateDocumentConfig(diagnostics, input);
   validateV7ImageObjects(diagnostics, input);
+  validateRawEffectEnvelopes(diagnostics, input);
 
   runValidators(diagnostics, options.validators, {
     document,
@@ -1427,7 +2026,7 @@ export function validateEditorDocument(
         });
       }
     });
-    validateEffects(diagnostics, surface.effects, surfacePath, options);
+    validateEffects(diagnostics, surface.effects, surfacePath);
     runValidators(diagnostics, options.validators, {
       document,
       path: surfacePath,
@@ -1451,7 +2050,7 @@ export function validateEditorDocument(
         `${layerPath}.id`,
         "layer",
       );
-      validateEffects(diagnostics, layer.effects, layerPath, options);
+      validateEffects(diagnostics, layer.effects, layerPath);
       runValidators(diagnostics, options.validators, {
         document,
         path: layerPath,
@@ -1500,7 +2099,7 @@ export function validateEditorDocument(
           isRecord(rawObject) ? rawObject.interaction : undefined,
           `${objectPath}.interaction`,
         );
-        validateObjectEffects(diagnostics, object.effects, objectPath, options);
+        validateObjectEffects(diagnostics, object.effects, objectPath);
         runValidators(diagnostics, options.validators, {
           document,
           path: objectPath,
@@ -1519,6 +2118,7 @@ export function validateEditorDocument(
           }),
         );
       });
+      validateObjectParentReferences(diagnostics, layer, layerPath);
     });
   });
 
@@ -1545,7 +2145,10 @@ export function validateEditorDocument(
     });
   });
 
-  return diagnostics;
+  return diagnostics.map((diagnostic) => ({
+    ...diagnostic,
+    stage: "document-schema",
+  }));
 }
 
 function collectEffects(
@@ -1633,5 +2236,14 @@ export function collectEditorDocumentCapabilityRequirements(
     }
   });
 
-  return { requirements, diagnostics };
+  return {
+    requirements,
+    diagnostics: diagnostics.map((diagnostic) => ({
+      ...diagnostic,
+      stage: "runtime-capability",
+    })),
+  };
 }
+
+export const checkEditorDocumentRuntimeCapabilities =
+  collectEditorDocumentCapabilityRequirements;

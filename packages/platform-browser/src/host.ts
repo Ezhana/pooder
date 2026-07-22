@@ -1,15 +1,19 @@
 import type {
+  GeometrySourceService,
   Service,
   ServiceIdentifier,
   SurfaceFrameService,
 } from "@pooder/core";
-import { SURFACE_FRAME_SERVICE } from "@pooder/core";
+import { GEOMETRY_SOURCE_SERVICE, SURFACE_FRAME_SERVICE } from "@pooder/core";
 import { IMAGE_RESOURCE_SERVICE } from "@pooder/core";
+import { OBJECT_IMAGE_RESOLVER_SERVICE } from "@pooder/core";
+import { loadPaperGeometryBackend } from "@pooder/geometry-paper";
 import { BrowserSceneExportService } from "./browser-scene-export-service";
 import CanvasService from "./canvas-service";
 import { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
 import { SceneLayoutService } from "./scene-layout-service";
 import { BrowserImageResourceService } from "./image-resource-service";
+import { BrowserObjectImageResolverService } from "./object-image-resolver-service";
 import {
   CANVAS_SERVICE,
   FABRIC_RENDER_GRAPH_ADAPTER,
@@ -38,8 +42,23 @@ export interface BrowserHostAttachment {
   readonly canvasService: CanvasService;
   readonly fabricRenderGraphAdapter: FabricRenderGraphAdapter;
   readonly imageResourceService: BrowserImageResourceService;
+  readonly objectImageResolverService: BrowserObjectImageResolverService;
   readonly sceneLayoutService: SceneLayoutService;
   dispose(): void;
+}
+
+export async function registerBrowserGeometryBackend(
+  runtime: BrowserHostRuntime,
+): Promise<{ dispose(): void }> {
+  const geometrySource = runtime.services.get<GeometrySourceService>(
+    GEOMETRY_SOURCE_SERVICE,
+  );
+  if (!geometrySource) {
+    throw new Error(
+      "[@pooder/platform-browser] GeometrySourceService is not registered.",
+    );
+  }
+  return loadPaperGeometryBackend(geometrySource);
 }
 
 type ResizeObserverLike = {
@@ -61,6 +80,7 @@ export interface AttachBrowserHostOptions {
   ) => ResizeObserverLike;
   createSceneLayoutService?: () => SceneLayoutService;
   createImageResourceService?: () => BrowserImageResourceService;
+  createObjectImageResolverService?: () => BrowserObjectImageResolverService;
 }
 
 function measureContainer(container: AttachBrowserHostOptions["container"]): {
@@ -93,6 +113,9 @@ export function attachBrowserHost(
   const createImageResourceService =
     options.createImageResourceService ??
     (() => new BrowserImageResourceService());
+  const createObjectImageResolverService =
+    options.createObjectImageResolverService ??
+    (() => new BrowserObjectImageResolverService());
 
   const { container, canvas } = options;
   const { height, width } = measureContainer(container);
@@ -105,6 +128,7 @@ export function attachBrowserHost(
   const browserSceneExportService = createBrowserSceneExportService();
   const fabricRenderGraphAdapter = createFabricRenderGraphAdapter();
   const imageResourceService = createImageResourceService();
+  const objectImageResolverService = createObjectImageResolverService();
 
   const registeredImageResources = runtime.services.register(
     imageResourceService,
@@ -137,11 +161,27 @@ export function attachBrowserHost(
     );
   }
 
+  const registeredSceneAdapter = runtime.services.register(
+    fabricRenderGraphAdapter,
+    FABRIC_RENDER_GRAPH_ADAPTER,
+  );
+  if (!registeredSceneAdapter) {
+    runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
+    runtime.services.unregister(canvasService, CANVAS_SERVICE);
+    throw new Error(
+      "[@pooder/platform-browser] Failed to register FabricRenderGraphAdapter.",
+    );
+  }
+
   const registeredExport = runtime.services.register(
     browserSceneExportService,
     SCENE_EXPORT_SERVICE,
   );
   if (!registeredExport) {
+    runtime.services.unregister(
+      fabricRenderGraphAdapter,
+      FABRIC_RENDER_GRAPH_ADAPTER,
+    );
     runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
     runtime.services.unregister(canvasService, CANVAS_SERVICE);
     throw new Error(
@@ -149,19 +189,24 @@ export function attachBrowserHost(
     );
   }
 
-  const registeredSceneAdapter = runtime.services.register(
-    fabricRenderGraphAdapter,
-    FABRIC_RENDER_GRAPH_ADAPTER,
+  const registeredObjectImageResolver = runtime.services.register(
+    objectImageResolverService,
+    OBJECT_IMAGE_RESOLVER_SERVICE,
   );
-  if (!registeredSceneAdapter) {
+  if (!registeredObjectImageResolver) {
     runtime.services.unregister(
       browserSceneExportService,
       SCENE_EXPORT_SERVICE,
     );
+    runtime.services.unregister(
+      fabricRenderGraphAdapter,
+      FABRIC_RENDER_GRAPH_ADAPTER,
+    );
     runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
     runtime.services.unregister(canvasService, CANVAS_SERVICE);
+    runtime.services.unregister(imageResourceService, IMAGE_RESOURCE_SERVICE);
     throw new Error(
-      "[@pooder/platform-browser] Failed to register FabricRenderGraphAdapter.",
+      "[@pooder/platform-browser] Failed to register BrowserObjectImageResolverService.",
     );
   }
 
@@ -225,19 +270,24 @@ export function attachBrowserHost(
     canvasService,
     fabricRenderGraphAdapter,
     imageResourceService,
+    objectImageResolverService,
     sceneLayoutService,
     dispose() {
       resizeObserver.disconnect();
       viewportDisposables.forEach((disposable) => disposable?.dispose());
       runtime.services.unregister(
-        fabricRenderGraphAdapter,
-        FABRIC_RENDER_GRAPH_ADAPTER,
+        objectImageResolverService,
+        OBJECT_IMAGE_RESOLVER_SERVICE,
       );
-      runtime.services.unregister(imageResourceService, IMAGE_RESOURCE_SERVICE);
       runtime.services.unregister(
         browserSceneExportService,
         SCENE_EXPORT_SERVICE,
       );
+      runtime.services.unregister(
+        fabricRenderGraphAdapter,
+        FABRIC_RENDER_GRAPH_ADAPTER,
+      );
+      runtime.services.unregister(imageResourceService, IMAGE_RESOURCE_SERVICE);
       runtime.services.unregister(sceneLayoutService, SCENE_LAYOUT_SERVICE);
       runtime.services.unregister(canvasService, CANVAS_SERVICE);
     },

@@ -1,0 +1,49 @@
+{
+  "name": "@pooder/tools",
+  "version": "9.0.0",
+  "description": "Official capability-based tools for Pooder editor",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./document": {
+      "types": "./dist/document/index.d.ts",
+      "import": "./dist/document/index.mjs",
+      "require": "./dist/document/index.js"
+    },
+    "./effect-schemas": {
+      "types": "./dist/document/effect-schemas.d.ts",
+      "import": "./dist/document/effect-schemas.mjs",
+      "require": "./dist/document/effect-schemas.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/document/index.ts src/document/effect-schemas.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts src/document/index.ts src/document/effect-schemas.ts --format cjs,esm --dts --watch",
+    "test": "tsc -p tsconfig.test.json && node -r ./.test-dist/kit/tests/setup-paper.js .test-dist/kit/tests/run.js",
+    "test:contract:compile": "tsc -p tsconfig.contract.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/paper": "^0.12.3",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@pooder/core": "workspace:*",
+    "@pooder/document": "workspace:*",
+    "@pooder/geometry-paper": "workspace:*",
+    "@pooder/image-mask-contract": "workspace:*",
+    "paper": "^0.12.18"
+  }
+}

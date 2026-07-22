@@ -12,11 +12,6 @@ import type {
   GeometrySnapshot,
   GeometrySourceService,
 } from "./geometry-source";
-import {
-  containsGeometryPoint,
-  findNearestGeometryPoint,
-  getGeometryBounds,
-} from "./geometry-source";
 
 export interface TransformInput {
   position?: GeometryPoint;
@@ -39,13 +34,26 @@ export interface TransformResult {
   metadata?: Record<string, unknown>;
 }
 
-export type ConstraintSource = GeometryRef | GeometrySnapshot;
+export type ConstraintSource = GeometryRef;
+
+/**
+ * Describes why constraints are being resolved. Direct callers default to
+ * commit semantics so their result is safe to persist.
+ */
+export type ConstraintResolvePhase = "preview" | "commit";
+
+export type ConstraintApplicationMode = "evaluate" | "apply";
+
+export type ConstraintApplicationPolicy = Partial<
+  Record<ConstraintResolvePhase, ConstraintApplicationMode>
+>;
 
 export interface ConstraintSpec {
   type: string;
   source?: ConstraintSource;
   mode?: string;
   params?: Record<string, unknown>;
+  application?: ConstraintApplicationPolicy;
 }
 
 export interface ConstraintDiagnostic {
@@ -60,6 +68,7 @@ export interface ConstraintResolveInput {
   constraints?: readonly ConstraintSpec[];
   coordinateSpace?: CoordinateSpace;
   geometrySource?: GeometrySourceService;
+  phase?: ConstraintResolvePhase;
   target?: unknown;
   metadata?: Record<string, unknown>;
 }
@@ -74,6 +83,7 @@ export interface ConstraintHandlerContext {
   resolver: ConstraintResolverService;
   geometrySource?: GeometrySourceService;
   coordinateSpace?: CoordinateSpace;
+  phase: ConstraintResolvePhase;
   input: ConstraintResolveInput;
   diagnostics: ConstraintDiagnostic[];
 }
@@ -95,6 +105,10 @@ export class ConstraintResolverService implements Service {
 
   init(context: ServiceContext): void {
     this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
+  }
+
+  getGeometrySource(): GeometrySourceService | undefined {
+    return this.geometrySource;
   }
 
   registerConstraint(type: string, resolver: ConstraintHandler): Disposable {
@@ -121,6 +135,7 @@ export class ConstraintResolverService implements Service {
       resolver: this,
       geometrySource: input.geometrySource ?? this.geometrySource,
       coordinateSpace: input.coordinateSpace,
+      phase: input.phase ?? "commit",
       input,
       diagnostics,
     };
@@ -137,10 +152,14 @@ export class ConstraintResolverService implements Service {
         });
         return current;
       }
-      return normalizeTransformResult(
+      const candidate = normalizeTransformResult(
         handler(current, constraint, context),
         initial,
       );
+      return resolveConstraintApplicationMode(constraint, context.phase) ===
+        "evaluate"
+        ? retainConstraintEvaluation(current, candidate)
+        : candidate;
     }, initial);
 
     return {
@@ -153,6 +172,23 @@ export class ConstraintResolverService implements Service {
       constraints,
     };
   }
+}
+
+function resolveConstraintApplicationMode(
+  constraint: ConstraintSpec,
+  phase: ConstraintResolvePhase,
+): ConstraintApplicationMode {
+  return constraint.application?.[phase] ?? "apply";
+}
+
+function retainConstraintEvaluation(
+  current: TransformResult,
+  candidate: TransformResult,
+): TransformResult {
+  return {
+    ...current,
+    ...(candidate.metadata ? { metadata: { ...candidate.metadata } } : {}),
+  };
 }
 
 export function registerBuiltinConstraints(
@@ -221,14 +257,26 @@ function resolvePathNearestPoint(
   const geometry = resolveConstraintGeometry(constraint, context);
   const position = getResultPosition(result);
   if (!geometry || !position) return result;
-  const nearest = findNearestGeometryPoint(geometry, position);
+  const geometrySource = context.geometrySource;
+  if (!geometrySource || !constraint.source) return result;
+  const nearest = geometrySource.nearestPoint(
+    constraint.source,
+    position,
+    context.coordinateSpace,
+  ).value;
   if (!nearest) return result;
   const next = moveResultToPosition(result, nearest);
   if (
     constraint.type === "path.follow" &&
     constraint.params?.contain === true
   ) {
-    return containsGeometryPoint(geometry, nearest) ? next : result;
+    return geometrySource.contains(
+      constraint.source,
+      nearest,
+      context.coordinateSpace,
+    ).value
+      ? next
+      : result;
   }
   return next;
 }
@@ -285,12 +333,12 @@ function resolveRectSnap(
       includeCenters: constraint.params?.includeCenters !== false,
     },
   });
-  const moved = moveResultToPosition(result, {
+  const resolved = moveResultToPosition(result, {
     x: snap.frame.left,
     y: snap.frame.top,
   });
   return {
-    ...moved,
+    ...resolved,
     metadata: {
       ...result.metadata,
       rectSnap: {
@@ -349,7 +397,12 @@ function resolveConstraintRect(
   const geometry = resolveConstraintGeometry(constraint, context);
   if (!geometry) return null;
   if (geometry.kind === "rect") return normalizeRectLike(geometry.rect);
-  return getGeometryBounds(geometry);
+  return constraint.source
+    ? (context.geometrySource?.getBounds(
+        constraint.source,
+        context.coordinateSpace,
+      ).value ?? null)
+    : null;
 }
 
 function resolveConstraintGeometry(
@@ -358,12 +411,11 @@ function resolveConstraintGeometry(
 ): GeometrySnapshot | null {
   const source = constraint.source;
   if (!source) return null;
-  if (isGeometrySnapshot(source)) return source;
   const geometrySource = context.geometrySource;
   if (!geometrySource) return null;
   return context.coordinateSpace
-    ? geometrySource.projectGeometry(source, context.coordinateSpace)
-    : geometrySource.getGeometry(source);
+    ? geometrySource.project({ ref: source, to: context.coordinateSpace }).value
+    : geometrySource.getSnapshot(source).value;
 }
 
 function collectSnapPoints(
@@ -551,12 +603,6 @@ function toComparableTransform(result: TransformResult) {
     rotation: result.rotation,
     scale: result.scale,
   };
-}
-
-function isGeometrySnapshot(
-  value: ConstraintSource,
-): value is GeometrySnapshot {
-  return typeof (value as GeometrySnapshot).kind === "string";
 }
 
 function normalizeType(type: unknown, throwIfEmpty = true): string {

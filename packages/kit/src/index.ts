@@ -1,8 +1,16 @@
-export * from "./extensions";
-export * from "./factories";
-export * from "./document";
-export { createKitCapabilitiesForDocument } from "./document/capabilities";
+/**
+ * Optional factory-only aggregate for official Pooder Tool packages.
+ * Applications should prefer direct Tool package dependencies.
+ */
 export {
-  KIT_LEGACY_LAYER_PRESET,
-  type KitLegacyLayerPreset,
-} from "./shared/constants/layers";
+  createClipCapability,
+  createConfigurableVisualCapability,
+  createDesignExportCapability,
+  createDielineGeometryCapability,
+  createEdgeDetectionCapability,
+  createFeatureCapability,
+  createImageMaskCapability,
+  createImageSlotCapability,
+  createMirrorCapability,
+  createSceneExportCapability,
+} from "@pooder/tools";

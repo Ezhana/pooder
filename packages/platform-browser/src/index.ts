@@ -4,6 +4,7 @@ export { default as CanvasService } from "./canvas-service";
 export * from "./host";
 export * from "./image-resource-service";
 export * from "./output-mask";
+export * from "./object-image-resolver-service";
 export * from "./scene-layout-service";
 export * from "./render-spec";
 export * from "./scene/fabric-render-graph-adapter";

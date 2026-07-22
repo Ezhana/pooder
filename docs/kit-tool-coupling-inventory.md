@@ -3,7 +3,7 @@
 Status: current extension inventory
 Date: 2026-05-11
 
-This inventory reflects `packages/kit/src/extensions/` as it exists now. Older
+This inventory reflects `packages/tools/src/extensions/` as it exists now. Older
 kit-owned product tools and removed compatibility surfaces are intentionally not
 listed here.
 

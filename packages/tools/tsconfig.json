@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "es2018",
+    "module": "esnext",
+    "baseUrl": ".",
+    "moduleResolution": "bundler",
+    "lib": ["esnext", "dom"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "noEmit": true,
+    "paths": {
+      "@pooder/core": ["../core/src/index.ts"],
+      "@pooder/document": ["../document/src/index.ts"],
+      "@pooder/geometry-paper": ["../geometry-paper/src/index.ts"],
+      "@pooder/image-mask-contract": ["../image-mask-contract/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

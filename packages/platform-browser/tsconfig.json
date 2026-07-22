@@ -11,7 +11,8 @@
     "declaration": true,
     "noEmit": true,
     "paths": {
-      "@pooder/core": ["../core/src/index.ts"]
+      "@pooder/core": ["../core/src/index.ts"],
+      "@pooder/geometry-paper": ["../geometry-paper/src/index.ts"]
     }
   },
   "include": ["src"]

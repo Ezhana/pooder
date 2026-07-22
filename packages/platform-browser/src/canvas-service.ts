@@ -7,22 +7,30 @@ import {
   Rect,
   Text,
   controlsUtils,
+  util,
 } from "fabric";
 import {
   Service,
   TypedEventEmitter,
   evaluateRuntimeCondition,
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
   type CanvasObjectLike,
   type CanvasObjectSelector,
   type CanvasServiceEventMap,
   type CanvasService as CanvasServiceContract,
   type CanvasSize,
   type CanvasViewportLayout,
+  type CoordinatePoint,
+  type CoordinateRect,
+  type CoordinateSpace,
+  type Matrix2D,
   type RenderCoordinateSpace,
   type RenderEffectSpec,
   type RenderInvalidation,
   type RenderLayoutInsets,
   type RenderLayoutLength,
+  type RenderViewportCoordinateSpace,
   type RenderObjectOrigin,
   type RenderObjectOwnership,
   type RenderObjectLayoutSpec,
@@ -77,8 +85,9 @@ const isDevelopmentRuntime = () => {
     return false;
   }
 
-  return process.env?.NODE_ENV === "development" ||
-    process.env?.NODE_ENV === "test";
+  return (
+    process.env?.NODE_ENV === "development" || process.env?.NODE_ENV === "test"
+  );
 };
 
 export class FabricEffectRendererRegistry {
@@ -145,13 +154,22 @@ export default class CanvasService implements Service, CanvasServiceContract {
   private canvasForwardersBound = false;
 
   private readonly forwardSelectionCreated = (event: unknown) => {
-    this.events.emit("selection", { kind: "created", target: readFabricTarget(event) });
+    this.events.emit("selection", {
+      kind: "created",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardSelectionUpdated = (event: unknown) => {
-    this.events.emit("selection", { kind: "updated", target: readFabricTarget(event) });
+    this.events.emit("selection", {
+      kind: "updated",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardSelectionCleared = (event: unknown) => {
-    this.events.emit("selection", { kind: "cleared", target: readFabricTarget(event) });
+    this.events.emit("selection", {
+      kind: "cleared",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardObjectModified = (event: unknown) => {
     const target = readFabricTarget(event);
@@ -159,25 +177,46 @@ export default class CanvasService implements Service, CanvasServiceContract {
     this.events.emit("transform", { kind: "commit", target });
   };
   private readonly forwardMouseDown = (event: unknown) => {
-    this.events.emit("pointer", { kind: "down", target: readFabricTarget(event) });
+    this.events.emit("pointer", {
+      kind: "down",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardDoubleClick = (event: unknown) => {
-    this.events.emit("pointer", { kind: "double-click", target: readFabricTarget(event) });
+    this.events.emit("pointer", {
+      kind: "double-click",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardObjectAdded = (event: unknown) => {
-    this.events.emit("objectChange", { kind: "added", target: readFabricTarget(event) });
+    this.events.emit("objectChange", {
+      kind: "added",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardObjectRemoved = (event: unknown) => {
-    this.events.emit("objectChange", { kind: "removed", target: readFabricTarget(event) });
+    this.events.emit("objectChange", {
+      kind: "removed",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardObjectMoving = (event: unknown) => {
-    this.events.emit("transform", { kind: "move", target: readFabricTarget(event) });
+    this.events.emit("transform", {
+      kind: "move",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardObjectScaling = (event: unknown) => {
-    this.events.emit("transform", { kind: "resize", target: readFabricTarget(event) });
+    this.events.emit("transform", {
+      kind: "resize",
+      target: readFabricTarget(event),
+    });
   };
   private readonly forwardObjectRotating = (event: unknown) => {
-    this.events.emit("transform", { kind: "rotate", target: readFabricTarget(event) });
+    this.events.emit("transform", {
+      kind: "rotate",
+      target: readFabricTarget(event),
+    });
   };
 
   constructor(el: HTMLCanvasElement | string | Canvas, options?: any) {
@@ -196,7 +235,6 @@ export default class CanvasService implements Service, CanvasServiceContract {
     if (this.canvas.width !== undefined && this.canvas.height !== undefined) {
       this.viewport.updateContainer(this.canvas.width, this.canvas.height);
     }
-
   }
 
   init() {
@@ -263,9 +301,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
   }
 
   selectObjects(selector: CanvasObjectSelector = {}): CanvasObjectLike[] {
-    return (this.canvas.getObjects() as CanvasObjectLike[]).filter((obj: any) => {
-      return this.matchesObjectSelector(obj, selector);
-    });
+    return (this.canvas.getObjects() as CanvasObjectLike[]).filter(
+      (obj: any) => {
+        return this.matchesObjectSelector(obj, selector);
+      },
+    );
   }
 
   selectOneObject(selector: CanvasObjectSelector): FabricObject | undefined {
@@ -331,70 +371,57 @@ export default class CanvasService implements Service, CanvasServiceContract {
     return Number.isFinite(scale) && scale > 0 ? scale : 1;
   }
 
-  getSceneOffset(): { x: number; y: number } {
-    const offset = this.viewport.offset;
-    const x = Number(offset.x);
-    const y = Number(offset.y);
-    return {
-      x: Number.isFinite(x) ? x : 0,
-      y: Number.isFinite(y) ? y : 0,
-    };
+  toScreenPoint(point: CoordinatePoint<"scene">): CoordinatePoint<"screen"> {
+    return this.viewport.sceneToScreenPoint(point);
   }
 
-  toScreenPoint(point: { x: number; y: number }): { x: number; y: number } {
-    const scale = this.getSceneScale();
-    const offset = this.getSceneOffset();
-    return {
-      x: point.x * scale + offset.x,
-      y: point.y * scale + offset.y,
-    };
+  toScenePoint(point: CoordinatePoint<"screen">): CoordinatePoint<"scene"> {
+    return this.viewport.screenToScenePoint(point);
   }
 
-  toScenePoint(point: { x: number; y: number }): { x: number; y: number } {
-    const scale = this.getSceneScale();
-    const offset = this.getSceneOffset();
-    return {
-      x: (point.x - offset.x) / scale,
-      y: (point.y - offset.y) / scale,
-    };
+  toScreenMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "scene">,
+  ): Matrix2D<TFrom, "screen"> {
+    return this.viewport.sceneToScreenMatrix(matrix);
+  }
+
+  toSceneMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "screen">,
+  ): Matrix2D<TFrom, "scene"> {
+    return this.viewport.screenToSceneMatrix(matrix);
   }
 
   toScreenLength(value: number): number {
-    return value * this.getSceneScale();
+    return this.viewport.sceneToScreenLength(value);
   }
 
   toSceneLength(value: number): number {
-    return value / this.getSceneScale();
+    return this.viewport.screenToSceneLength(value);
   }
 
-  toScreenRect(rect: RectLike): RectLike {
-    const start = this.toScreenPoint({ x: rect.left, y: rect.top });
-    return {
-      left: start.x,
-      top: start.y,
-      width: this.toScreenLength(rect.width),
-      height: this.toScreenLength(rect.height),
-    };
+  toScreenRect(rect: CoordinateRect<"scene">): CoordinateRect<"screen"> {
+    return this.viewport.sceneToScreenRect(rect);
   }
 
-  toSceneRect(rect: RectLike): RectLike {
-    const start = this.toScenePoint({ x: rect.left, y: rect.top });
-    return {
-      left: start.x,
-      top: start.y,
-      width: this.toSceneLength(rect.width),
-      height: this.toSceneLength(rect.height),
-    };
+  toSceneRect(rect: CoordinateRect<"screen">): CoordinateRect<"scene"> {
+    return this.viewport.screenToSceneRect(rect);
   }
 
-  getSceneViewportRect(): RectLike {
+  getSceneViewportRect(): CoordinateRect<"scene"> {
     const width = Number(this.canvas.width || 0);
     const height = Number(this.canvas.height || 0);
-    return this.toSceneRect({ left: 0, top: 0, width, height });
+    return this.toSceneRect({
+      space: "screen",
+      left: 0,
+      top: 0,
+      width,
+      height,
+    });
   }
 
-  getScreenViewportRect(): RectLike {
+  getScreenViewportRect(): CoordinateRect<"screen"> {
     return {
+      space: "screen",
       left: 0,
       top: 0,
       width: Number(this.canvas.width || 0),
@@ -560,7 +587,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const sourceId = String(source.id || "").trim();
     if (!sourceId) return null;
 
-    const template = await this.createFabricObject({
+    const templateSpec: RenderObjectSpec = {
       ...source,
       id: sourceId,
       data: {
@@ -575,8 +602,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
         evented: false,
         excludeFromExport: true,
       },
-    });
+    };
+    const template = await this.createFabricObject(templateSpec);
     if (!template) return null;
+
+    this.patchFabricObject(template, templateSpec);
 
     (template as any).set?.({
       selectable: false,
@@ -640,7 +670,9 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const order = new Map(orderedKeys.map((key, index) => [key, index]));
     const objects = this.canvas
       .getObjects()
-      .filter((object: any) => object?.data?.renderTarget === GRAPH_RENDER_TARGET)
+      .filter(
+        (object: any) => object?.data?.renderTarget === GRAPH_RENDER_TARGET,
+      )
       .sort((a: any, b: any) => {
         const aOrder = order.get(String(a?.data?.renderKey || "")) ?? 0;
         const bOrder = order.get(String(b?.data?.renderKey || "")) ?? 0;
@@ -650,7 +682,9 @@ export default class CanvasService implements Service, CanvasServiceContract {
     objects.forEach((object, index) => this.moveObjectInCanvas(object, index));
   }
 
-  private normalizeSelectorValues(value?: readonly string[]): Set<string> | undefined {
+  private normalizeSelectorValues(
+    value?: readonly string[],
+  ): Set<string> | undefined {
     if (!Array.isArray(value)) return undefined;
     const values = Array.from(
       new Set(
@@ -666,22 +700,44 @@ export default class CanvasService implements Service, CanvasServiceContract {
     object: CanvasObjectLike,
     selector: CanvasObjectSelector,
   ): boolean {
-    if (selector.visible !== undefined && object?.visible !== selector.visible) {
+    if (
+      selector.visible !== undefined &&
+      object?.visible !== selector.visible
+    ) {
       return false;
     }
     const data = object?.data ?? {};
     const ids = this.normalizeSelectorValues(selector.ids);
     if (ids && !ids.has(String(data.id || "").trim())) return false;
     const layerIds = this.normalizeSelectorValues(selector.layerIds);
-    if (layerIds && !layerIds.has(String(data.layerId || data.passId || "").trim())) {
+    if (
+      layerIds &&
+      !layerIds.has(String(data.layerId || data.passId || "").trim())
+    ) {
       return false;
     }
     const subjectIds = this.normalizeSelectorValues(selector.subjectIds);
-    if (subjectIds && !subjectIds.has(String(data.subjectId || data.subject?.objectId || data.subject?.layerId || data.subject?.surfaceId || "").trim())) {
+    if (
+      subjectIds &&
+      !subjectIds.has(
+        String(
+          data.subjectId ||
+            data.subject?.objectId ||
+            data.subject?.layerId ||
+            data.subject?.surfaceId ||
+            "",
+        ).trim(),
+      )
+    ) {
       return false;
     }
-    const renderIntentIds = this.normalizeSelectorValues(selector.renderIntentIds);
-    if (renderIntentIds && !renderIntentIds.has(String(data.renderIntentId || "").trim())) {
+    const renderIntentIds = this.normalizeSelectorValues(
+      selector.renderIntentIds,
+    );
+    if (
+      renderIntentIds &&
+      !renderIntentIds.has(String(data.renderIntentId || "").trim())
+    ) {
       return false;
     }
     const types = this.normalizeSelectorValues(selector.types);
@@ -691,7 +747,9 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const tags = this.normalizeSelectorValues(selector.tags);
     if (tags) {
       const objectTags = Array.isArray(data.tags) ? data.tags : [];
-      if (!objectTags.some((tag: unknown) => tags.has(String(tag || "").trim()))) {
+      if (
+        !objectTags.some((tag: unknown) => tags.has(String(tag || "").trim()))
+      ) {
         return false;
       }
     }
@@ -706,18 +764,21 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   private toSpaceRect(
     rect: RectLike,
-    from: RenderCoordinateSpace,
-    to: RenderCoordinateSpace,
+    from: RenderViewportCoordinateSpace,
+    to: RenderViewportCoordinateSpace,
   ): RectLike {
     if (from === to) return { ...rect };
-    return from === "scene" ? this.toScreenRect(rect) : this.toSceneRect(rect);
+    return from === "scene"
+      ? this.toScreenRect({ ...rect, space: "scene" })
+      : this.toSceneRect({ ...rect, space: "screen" });
   }
 
   private resolveLayoutLength(
     value: RenderLayoutLength | undefined,
     base: number,
   ): number | undefined {
-    if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+    if (typeof value === "number")
+      return Number.isFinite(value) ? value : undefined;
     if (typeof value !== "string") return undefined;
     const raw = value.trim();
     if (!raw) return undefined;
@@ -735,7 +796,10 @@ export default class CanvasService implements Service, CanvasServiceContract {
   ): { top: number; right: number; bottom: number; left: number } {
     if (typeof inset === "number" || typeof inset === "string") {
       const all =
-        this.resolveLayoutLength(inset, Math.min(reference.width, reference.height)) ?? 0;
+        this.resolveLayoutLength(
+          inset,
+          Math.min(reference.width, reference.height),
+        ) ?? 0;
       return { top: all, right: all, bottom: all, left: all };
     }
 
@@ -750,10 +814,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
 
   private resolveLayoutReferenceRect(
     layout: RenderObjectLayoutSpec,
-    space: RenderCoordinateSpace,
+    space: RenderViewportCoordinateSpace,
   ): RectLike {
     if (layout.referenceRect) {
-      const sourceSpace: RenderCoordinateSpace = layout.referenceRect.space || space;
+      const sourceSpace: RenderViewportCoordinateSpace =
+        layout.referenceRect.space;
       return this.toSpaceRect(layout.referenceRect, sourceSpace, space);
     }
 
@@ -801,6 +866,11 @@ export default class CanvasService implements Service, CanvasServiceContract {
     if (!layout) return { ...props };
 
     const space: RenderCoordinateSpace = spec.space || "scene";
+    if (space !== "scene" && space !== "screen") {
+      throw new Error(
+        `Render layout requires scene or screen space; received ${space}.`,
+      );
+    }
     const reference = this.resolveLayoutReferenceRect(layout, space);
     const inset = this.resolveLayoutInsets(layout.inset, reference);
     const area: RectLike = {
@@ -828,8 +898,10 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const objectWidth = Number.isFinite(next.width) ? Number(next.width) : 0;
     const objectHeight = Number.isFinite(next.height) ? Number(next.height) : 0;
 
-    const objectLeft = area.left + (area.width - objectWidth) * alignX + offsetX;
-    const objectTop = area.top + (area.height - objectHeight) * alignY + offsetY;
+    const objectLeft =
+      area.left + (area.width - objectWidth) * alignX + offsetX;
+    const objectTop =
+      area.top + (area.height - objectHeight) * alignY + offsetY;
 
     const originX = this.normalizeOriginX(next.originX);
     const originY = this.normalizeOriginY(next.originY);
@@ -846,13 +918,86 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const nextData = this.resolveFabricObjectData(obj, spec, extraData);
     const props = this.resolveObjectFabricProps(obj, spec);
     obj.set({ ...props, data: nextData });
+    this.applyAffinePlacement(obj, spec);
     obj.setCoords();
   }
 
-  private patchFabricRenderMetadata(
-    obj: any,
-    metadata: Record<string, any>,
-  ) {
+  private applyAffinePlacement(
+    object: FabricObject,
+    spec: RenderObjectSpec,
+  ): void {
+    const placement = spec.placement;
+    if (!placement) return;
+    const bounds = placement.localBounds;
+    const fabricCenterToLocal = coordinateMatrix(
+      "object-local",
+      "object-local",
+      [
+        1,
+        0,
+        0,
+        1,
+        bounds.left + bounds.width / 2,
+        bounds.top + bounds.height / 2,
+      ],
+    );
+    const fabricCenterToScene = multiplyCoordinateMatrices(
+      placement.localToScene,
+      fabricCenterToLocal,
+    );
+    const fabricCenterToScreen = this.toScreenMatrix(fabricCenterToScene);
+    util.applyTransformToObject(object, [...fabricCenterToScreen.values]);
+  }
+
+  async createDetachedRenderObject(
+    spec: RenderObjectSpec,
+    sceneToTarget: Matrix2D<"scene", "screen">,
+  ): Promise<FabricObject | undefined> {
+    const object = await this.createFabricObject(spec);
+    if (!object) return undefined;
+    object.set(this.resolveObjectFabricProps(object, spec));
+    const placement = spec.placement;
+    if (placement) {
+      const bounds = placement.localBounds;
+      const centerToLocal = coordinateMatrix(
+        "object-local",
+        "object-local",
+        [
+          1,
+          0,
+          0,
+          1,
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2,
+        ],
+      );
+      const centerToTarget = multiplyCoordinateMatrices(
+        sceneToTarget,
+        multiplyCoordinateMatrices(placement.localToScene, centerToLocal),
+      );
+      util.applyTransformToObject(object, [...centerToTarget.values]);
+    }
+    object.set({ selectable: false, evented: false, visible: true });
+    for (const effect of spec.effects ?? []) {
+      if (effect.type !== "clipPath") continue;
+      const clipPath = await this.createDetachedRenderObject(
+        { ...effect.source, effects: [] },
+        sceneToTarget,
+      );
+      if (!clipPath) continue;
+      clipPath.set({
+        selectable: false,
+        evented: false,
+        excludeFromExport: true,
+        absolutePositioned: effect.coordinateMode !== "object",
+      } as any);
+      object.set({ clipPath } as any);
+    }
+    object.setCoords();
+    return object;
+  }
+
+  private patchFabricRenderMetadata(obj: any, metadata: Record<string, any>) {
     obj.set({ data: { ...(obj.data || {}), ...metadata } });
   }
 
@@ -866,6 +1011,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       ...(spec.data || {}),
       ...(extraData || {}),
       id: spec.id,
+      ...(spec.placement ? { affinePlacement: spec.placement } : {}),
     };
     nextData.renderSourceKey = this.getSpecRenderSourceKey(spec);
     return nextData;
@@ -893,10 +1039,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const origin = item.origin;
     if (!origin) return true;
     return invalidations.some((invalidation) => {
-      if (
-        invalidation.type === "full" ||
-        invalidation.type === "composition"
-      )
+      if (invalidation.type === "full" || invalidation.type === "composition")
         return true;
       if (origin.type === "render-intent") {
         return (
@@ -922,6 +1065,13 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const props = this.resolveFabricProps(spec, spec.props || {});
     if (spec.type === "path") {
       return this.omitPathSourceProps(props);
+    }
+    if (spec.placement && (spec.type === "image" || spec.type === "rect")) {
+      return {
+        ...props,
+        width: spec.placement.localBounds.width,
+        height: spec.placement.localBounds.height,
+      };
     }
     if (spec.type !== "image") return props;
     return this.resolveImageTargetSizeProps(obj, props);
@@ -981,12 +1131,22 @@ export default class CanvasService implements Service, CanvasServiceContract {
     props: Record<string, any>,
   ): Record<string, any> {
     const space: RenderCoordinateSpace = spec.space || "scene";
+    if (spec.placement && spec.layout) {
+      throw new Error(
+        `RenderObjectSpec "${spec.id}" cannot combine affine placement with layout.`,
+      );
+    }
     const next: Record<string, any> = {
       selectable: false,
       evented: false,
       ...this.resolveRenderPatternProps(this.resolveLayoutProps(spec, props)),
     };
-    if (space === "screen") {
+    if (spec.placement) {
+      return this.removeUndefinedFabricProps(
+        this.resolveInteractiveControlProps(next),
+      );
+    }
+    if (space !== "scene") {
       return this.removeUndefinedFabricProps(
         this.resolveInteractiveControlProps(next),
       );
@@ -996,6 +1156,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const hasTop = Number.isFinite(next.top);
     if (hasLeft || hasTop) {
       const mapped = this.toScreenPoint({
+        space: "scene",
         x: hasLeft ? Number(next.left) : 0,
         y: hasTop ? Number(next.top) : 0,
       });
@@ -1080,7 +1241,9 @@ export default class CanvasService implements Service, CanvasServiceContract {
     };
   }
 
-  private resolveRenderPatternProps(props: Record<string, any>): Record<string, any> {
+  private resolveRenderPatternProps(
+    props: Record<string, any>,
+  ): Record<string, any> {
     if (!this.isRenderPatternSpec(props.fill)) return props;
     return {
       ...props,
@@ -1183,15 +1346,15 @@ export default class CanvasService implements Service, CanvasServiceContract {
     if (spec.type === "image") {
       if (!spec.src) return undefined;
       const image = await Image.fromURL(spec.src, { crossOrigin: "anonymous" });
-      (image as any).__pooderSourceWidth = finitePositiveNumber(image.width) ?? 1;
-      (image as any).__pooderSourceHeight = finitePositiveNumber(image.height) ?? 1;
+      (image as any).__pooderSourceWidth =
+        finitePositiveNumber(image.width) ?? 1;
+      (image as any).__pooderSourceHeight =
+        finitePositiveNumber(image.height) ?? 1;
       const props = this.resolveFabricProps(spec, spec.props || {});
-      image.set(
-        {
-          ...this.resolveImageTargetSizeProps(image, props),
-          data: { ...(spec.data || {}), id: spec.id },
-        } as any,
-      );
+      image.set({
+        ...this.resolveImageTargetSizeProps(image, props),
+        data: { ...(spec.data || {}), id: spec.id },
+      } as any);
       image.setCoords();
       return image as any;
     }

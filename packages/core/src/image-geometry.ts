@@ -7,12 +7,7 @@ export interface ImageSourceSize {
   height: number;
 }
 
-export interface ImageGeometryFrame {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
+export type ImageGeometryFrame = CoordinateRect<"object-local">;
 
 export interface ImageGeometryTransform {
   anchorX?: number;
@@ -34,17 +29,13 @@ export interface ImageGeometryDescriptor {
 }
 
 export interface ResolvedImageGeometry {
-  width: number;
-  height: number;
-  left: number;
-  top: number;
-  scaleX: number;
-  scaleY: number;
-  angle: number;
+  /** Source bitmap bounds, expressed in the image visual's local coordinates. */
+  imageLocalBounds: CoordinateRect<"object-local">;
+  /** Maps bitmap-local geometry into the containing document object's local space. */
+  imageLocalToObjectLocal: Matrix2D<"object-local", "object-local">;
   opacity: number;
-  originX: "center";
-  originY: "center";
-  clip?: ImageGeometryFrame;
+  /** Crop geometry remains in the containing object-local coordinate space. */
+  clip?: CoordinateRect<"object-local">;
 }
 
 const finiteNumber = (value: unknown, fallback: number): number => {
@@ -87,12 +78,12 @@ export function normalizeImageGeometryDescriptor(
         ? { size: { width: sourceWidth, height: sourceHeight } }
         : {}),
     },
-    frame: {
+    frame: coordinateRect("object-local", {
       left: finiteNumber(value.frame.left, 0),
       top: finiteNumber(value.frame.top, 0),
       width,
       height,
-    },
+    }),
     fit,
     transform: {
       anchorX: finiteNumber(transform.anchorX, 0.5),
@@ -103,12 +94,12 @@ export function normalizeImageGeometryDescriptor(
     },
     ...(clip
       ? {
-          clip: {
+          clip: coordinateRect("object-local", {
             left: finiteNumber(clip.left, 0),
             top: finiteNumber(clip.top, 0),
             width: positiveNumber(clip.width, width),
             height: positiveNumber(clip.height, height),
-          },
+          }),
         }
       : {}),
   };
@@ -155,18 +146,44 @@ export function resolveImageGeometry(
   const transform = descriptor.transform ?? {};
   const zoom = Math.max(0.05, finiteNumber(transform.zoom, 1));
   const fitScale = resolveImageFitScale(frame, source, descriptor.fit);
-
-  return {
+  const imageLocalBounds = coordinateRect("object-local", {
+    left: 0,
+    top: 0,
     width: source.width,
     height: source.height,
-    left: frame.left + finiteNumber(transform.anchorX, 0.5) * frame.width,
-    top: frame.top + finiteNumber(transform.anchorY, 0.5) * frame.height,
+  });
+  const pivot = { x: source.width / 2, y: source.height / 2 };
+  const position = {
+    x: frame.left + normalizedAnchor(transform.anchorX) * frame.width,
+    y: frame.top + normalizedAnchor(transform.anchorY) * frame.height,
+  };
+  const localMatrix = createLocalToSceneMatrix({
+    position,
+    pivot,
     scaleX: fitScale.x * zoom,
     scaleY: fitScale.y * zoom,
-    angle: finiteNumber(transform.rotation, 0),
+    rotation: finiteNumber(transform.rotation, 0),
+  });
+
+  return {
+    imageLocalBounds,
+    imageLocalToObjectLocal: coordinateMatrix(
+      "object-local",
+      "object-local",
+      localMatrix.values,
+    ),
     opacity: finiteNumber(transform.opacity, 1),
-    originX: "center",
-    originY: "center",
     ...(descriptor.clip ? { clip: { ...descriptor.clip } } : {}),
   };
 }
+
+function normalizedAnchor(value: unknown): number {
+  return Math.min(1, Math.max(0, finiteNumber(value, 0.5)));
+}
+import {
+  coordinateMatrix,
+  coordinateRect,
+  createLocalToSceneMatrix,
+  type CoordinateRect,
+  type Matrix2D,
+} from "./coordinate";

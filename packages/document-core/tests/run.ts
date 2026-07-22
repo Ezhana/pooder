@@ -12,9 +12,10 @@ import {
   applyEditorDocument,
   createEditorDocumentController,
   resolveObjectSource,
+  sceneFrameToLocalFrame,
   SourceResolver,
 } from "../src";
-import type { EditorEffect } from "@pooder/document";
+import { EffectSchemaRegistry, type EditorEffect } from "@pooder/document";
 
 declare const process: {
   exit(code: number): never;
@@ -74,6 +75,19 @@ function createRuntime() {
         },
       },
       services: {
+        register<T extends Service>(
+          service: T,
+          identifier?: ServiceIdentifier<T>,
+        ) {
+          if (!identifier) return false;
+          services.set(identifier, service);
+          return true;
+        },
+        get<T extends Service>(
+          identifier: ServiceIdentifier<T>,
+        ): T | undefined {
+          return services.get(identifier) as T | undefined;
+        },
         getOrThrow<T extends Service>(identifier: ServiceIdentifier<T>): T {
           const service = services.get(
             identifier as ServiceIdentifier<Service>,
@@ -212,7 +226,16 @@ async function testApplyEditorDocument() {
         },
       ],
     },
-    { resolveEffectCapabilityId: resolveTestEffectCapabilityId },
+    {
+      effectSchemaRegistry: new EffectSchemaRegistry([
+        {
+          effectType: "custom",
+          capabilityId: "test.effect",
+          validate: () => [],
+        },
+      ]),
+      resolveEffectCapabilityId: resolveTestEffectCapabilityId,
+    },
   );
 
   assertEqual(result.ok, true, "document should apply");
@@ -302,15 +325,171 @@ async function testControllerUpdatesOnlyChangedRenderIntents() {
   assertEqual(updated.ok, true, "controller object update should succeed");
   assertDeepEqual(
     reasons,
-    [{ type: "document-updated", intentIds: ["first"] }],
+    [{ type: "base-updated", intentIds: ["first"] }],
     "controller updates should publish only changed render intents",
+  );
+}
+
+async function testDocumentServiceDraftIsolation() {
+  const { runtime } = createRuntime();
+  const service = createEditorDocumentController(runtime);
+  const applied = await service.apply({
+    version: 7,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "shape",
+                frame: { x: 10, y: 20, width: 30, height: 40 },
+                source: { kind: "shape", shape: "rect", params: {} },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assertEqual(applied.ok, true, "draft fixture should apply");
+  const events: string[] = [];
+  service.onDidChange((event) => events.push(event.type));
+  const draft = await service.beginDraft();
+  const invalid = await draft.mutate((document) => {
+    document.surfaces = [];
+  });
+  assertEqual(invalid.ok, false, "invalid draft mutation should fail");
+  assertEqual(
+    service.export("working")?.surfaces.length,
+    1,
+    "failed mutation must not pollute working state",
+  );
+  const updated = await draft.mutate((document) => {
+    const object = document.surfaces[0]?.layers[0]?.objects?.[0];
+    if (object?.frame) object.frame.x = 25;
+  });
+  assertEqual(
+    updated.ok,
+    true,
+    "valid draft mutation should update working state",
+  );
+  assertEqual(
+    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    10,
+    "draft mutation should not change committed state",
+  );
+  await draft.rollback();
+  assertEqual(
+    service.export("working")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    10,
+    "rollback should restore committed state",
+  );
+  const commitDraft = await service.beginDraft();
+  const commitMutation = await commitDraft.mutate((document) => {
+    const object = document.surfaces[0]?.layers[0]?.objects?.[0];
+    if (object?.frame) object.frame.x = 35;
+  });
+  assertEqual(commitMutation.ok, true, "commit draft mutation should succeed");
+  await commitDraft.commit();
+  assertEqual(
+    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    35,
+    "commit should atomically promote working state",
+  );
+
+  const committedBeforeInvalidApply = service.export("committed");
+  const invalidApply = await service.apply({
+    version: 7,
+    config: {},
+    surfaces: [],
+  });
+  assertEqual(invalidApply.ok, false, "invalid document apply should fail");
+  assertDeepEqual(
+    service.export("committed"),
+    committedBeforeInvalidApply,
+    "validation failure must preserve the complete committed document",
+  );
+  assertDeepEqual(
+    events,
+    ["mutate", "rollback", "mutate", "commit"],
+    "draft events should be explicit",
+  );
+}
+
+async function testDocumentServiceCommitsSceneTranslationBySubject() {
+  const { runtime, renderIntentService } = createRuntime();
+  const service = createEditorDocumentController(runtime);
+  const applied = await service.apply({
+    version: 7,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "shape",
+                frame: { x: 10, y: 20, width: 30, height: 40 },
+                source: { kind: "shape", shape: "rect", params: {} },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assertEqual(applied.ok, true, "translation fixture should apply");
+  const previousRevision = renderIntentService.getGraph().revision;
+
+  const result = await service.commitManipulation({
+    subjectId: "shape",
+    sceneTransformPatch: {
+      type: "translate",
+      coordinateSpace: "scene",
+      delta: { space: "scene", x: 20, y: 10 },
+    },
+    parentMatrix: [2, 0, 0, 2, 0, 0],
+  });
+
+  assertEqual(result.ok, true, "scene translation should commit");
+  assertDeepEqual(
+    service.export()?.surfaces[0]?.layers[0]?.objects?.[0]?.frame,
+    { x: 20, y: 25, width: 30, height: 40 },
+    "scene delta should be converted to parent-local document coordinates",
+  );
+  assert(
+    renderIntentService.getGraph().revision > previousRevision,
+    "document commit should regenerate the RenderGraph",
+  );
+}
+
+function testSceneFrameUsesInverseParentMatrix() {
+  assertDeepEqual(
+    sceneFrameToLocalFrame(
+      { left: 30, top: 50, width: 40, height: 20 },
+      [2, 0, 0, 2, 10, 10],
+    ),
+    { left: 10, top: 20, width: 20, height: 10 },
+    "scene frame should be converted through the inverse parent matrix",
   );
 }
 
 async function main() {
   testSourceResolver();
+  testSceneFrameUsesInverseParentMatrix();
   await testApplyEditorDocument();
   await testControllerUpdatesOnlyChangedRenderIntents();
+  await testDocumentServiceDraftIsolation();
+  await testDocumentServiceCommitsSceneTranslationBySubject();
   console.log("ok");
 }
 

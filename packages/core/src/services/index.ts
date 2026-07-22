@@ -30,6 +30,7 @@ import {
   CONSTRAINT_RESOLVER_SERVICE,
   INTERACTION_SERVICE,
   IMAGE_RESOURCE_SERVICE,
+  OBJECT_IMAGE_RESOLVER_SERVICE,
 } from "./tokens";
 
 export {
@@ -61,6 +62,7 @@ export {
   CONSTRAINT_RESOLVER_SERVICE,
   INTERACTION_SERVICE,
   IMAGE_RESOURCE_SERVICE,
+  OBJECT_IMAGE_RESOLVER_SERVICE,
   CORE_SERVICE_TOKENS,
 };
 
@@ -80,6 +82,7 @@ export type {
   RenderGraph,
   RenderGraphLayer,
   RenderGraphNode,
+  RenderGraphProjectionMembership,
   RenderIntentChangeEvent,
   RenderIntentChangeReason,
   RenderIntentCompilerContext,

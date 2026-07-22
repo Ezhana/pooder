@@ -1,6 +1,12 @@
 import { TypedEventEmitter } from "./typed-event";
 import type Disposable from "./disposable";
 import type { Service } from "./service";
+import {
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
+  type AffinePlacement,
+  type Matrix2D,
+} from "./coordinate";
 import type {
   RenderCoordinateSpace,
   RenderEffectSpec,
@@ -12,6 +18,11 @@ import type {
   InteractionOperationSpec,
   InteractionSpec,
 } from "./interaction-service";
+import type {
+  GeometryRef,
+  GeometrySource,
+  GeometrySnapshot,
+} from "./geometry-source";
 
 export type RenderIntentSubjectKind = "surface" | "layer" | "object";
 export type RenderIntentChannel =
@@ -41,30 +52,7 @@ export interface RenderIntentVisualAspect extends RenderIntentSource {
   replacement?: RenderIntentSource;
 }
 
-export interface RenderIntentFrame {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface RenderIntentTransform {
-  left?: number;
-  top?: number;
-  scaleX?: number;
-  scaleY?: number;
-  angle?: number;
-  originX?: "left" | "center" | "right";
-  originY?: "top" | "center" | "bottom";
-}
-
-export interface RenderIntentPlacementAspect {
-  frame?: RenderIntentFrame;
-  transform?: RenderIntentTransform;
-  width?: number;
-  height?: number;
-  fit?: "cover" | "contain" | "stretch";
-}
+export type RenderIntentPlacementAspect = AffinePlacement;
 
 export interface RenderIntentExportAspect {
   keys?: readonly string[];
@@ -86,6 +74,8 @@ export interface RenderIntentDraft {
   id: string;
   subject: RenderIntentSubject;
   visual?: RenderIntentVisualAspect;
+  previewGeometryRef?: GeometryRef;
+  exportGeometryRef?: GeometryRef;
   placement?: RenderIntentPlacementAspect;
   effects?: RenderEffectSpec[];
   interaction?: InteractionSpec;
@@ -101,6 +91,8 @@ export type RenderIntentPatch = Partial<
   Omit<RenderIntentDraft, "id" | "subject" | "ordering">
 > & {
   id: string;
+  /** Local-space post-transform composed onto the canonical placement. */
+  placementTransform?: Matrix2D<"object-local", "object-local">;
   subject?: Partial<RenderIntentSubject>;
   ordering?: Partial<RenderIntentOrderingAspect>;
   clear?: readonly RenderIntentPatchClearPath[];
@@ -142,12 +134,11 @@ export interface RenderGraphNode {
   surfaceId: string;
   type: RenderObjectSpec["type"];
   visual?: RenderIntentSource;
-  coordinateSpace: RenderCoordinateSpace;
+  previewGeometryRef: GeometryRef;
+  exportGeometryRef: GeometryRef;
+  coordinateSpace: "scene";
   exportKeys: string[];
-  frame?: RenderIntentFrame;
-  transform?: RenderIntentTransform;
-  width?: number;
-  height?: number;
+  placement: AffinePlacement;
   props: Record<string, unknown>;
   data: Record<string, unknown>;
   effects: RenderEffectSpec[];
@@ -156,6 +147,16 @@ export interface RenderGraphNode {
   visible: boolean;
   tags: string[];
   sortKey: RenderGraphSortKey;
+}
+
+/**
+ * Authoritative one-to-many mapping from a logical subject to its independent
+ * render projections. Backends may materialize every node differently, but
+ * selection and interaction must resolve through this membership first.
+ */
+export interface RenderGraphProjectionMembership {
+  subjectId: string;
+  nodeIds: string[];
 }
 
 export interface RenderGraphLayer {
@@ -173,6 +174,7 @@ export interface RenderGraph {
   revision: number;
   surfaceIds: string[];
   layers: RenderGraphLayer[];
+  projectionMemberships: RenderGraphProjectionMembership[];
   diagnostics: RenderIntentDiagnostic[];
 }
 
@@ -211,8 +213,8 @@ export interface RenderIntentCompilerQuery {
 }
 
 export type RenderIntentChangeReason =
-  | { type: "document-replaced" }
-  | { type: "document-updated"; intentIds: string[] }
+  | { type: "base-replaced" }
+  | { type: "base-updated"; intentIds: string[] }
   | {
       type: "runtime-patch";
       operation: "upsert" | "remove" | "clear";
@@ -237,7 +239,9 @@ export type RenderIntentDiagnosticCode =
   | "render-intent-patch-base-missing"
   | "render-intent-clear-path-invalid"
   | "render-intent-field-conflict"
-  | "render-intent-missing-layer";
+  | "render-intent-missing-layer"
+  | "render-intent-missing-placement"
+  | "render-intent-non-scene-space";
 
 export interface RenderIntentDiagnostic {
   code: RenderIntentDiagnosticCode;
@@ -280,7 +284,9 @@ const PATCH_PHASE_ORDER: Record<string, number> = {
 
 const CRITICAL_PATCH_FIELDS = [
   "visual.replacement",
-  "placement.frame",
+  "placement.localBounds",
+  "placement.localToScene",
+  "placementTransform",
   "ordering.layerId",
   "export.visibleWhen",
 ] as const;
@@ -382,7 +388,7 @@ export class RenderIntentService implements Service {
 
   setDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
     this.baseIntents = intents.map(cloneDraft);
-    return this.recompile({ type: "document-replaced" });
+    return this.recompile({ type: "base-replaced" });
   }
 
   updateDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
@@ -400,7 +406,7 @@ export class RenderIntentService implements Service {
     );
     const intentIds = collectChangedRenderIntentIds(previous, this.graph);
     if (intentIds.length) {
-      this.emitChange({ type: "document-updated", intentIds });
+      this.emitChange({ type: "base-updated", intentIds });
     }
     return this.getGraph();
   }
@@ -596,7 +602,9 @@ function collectChangedRenderIntentIds(
   const before = collectRenderIntentSnapshots(previous);
   const after = collectRenderIntentSnapshots(next);
   return Array.from(new Set([...before.keys(), ...after.keys()]))
-    .filter((intentId) => !sameJsonValue(before.get(intentId), after.get(intentId)))
+    .filter(
+      (intentId) => !sameJsonValue(before.get(intentId), after.get(intentId)),
+    )
     .sort();
 }
 
@@ -851,6 +859,28 @@ export function createRenderGraph(
     }
     surfaceIds.add(draft.subject.surfaceId);
     const layer = getOrCreateGraphLayer(layerMap, draft);
+    if (draft.coordinateSpace && draft.coordinateSpace !== "scene") {
+      diagnostics.push({
+        code: "render-intent-non-scene-space",
+        severity: "error",
+        patchId: draft.id,
+        field: "coordinateSpace",
+        message:
+          `RenderIntent "${draft.id}" uses ${draft.coordinateSpace} space. ` +
+          "Formal RenderGraph nodes must be projected to scene space first.",
+      });
+      return;
+    }
+    if (draft.visual?.type && !draft.placement) {
+      diagnostics.push({
+        code: "render-intent-missing-placement",
+        severity: "error",
+        patchId: draft.id,
+        field: "placement",
+        message: `RenderIntent "${draft.id}" must provide an affine placement.`,
+      });
+      return;
+    }
     const node = createGraphNode(draft);
     if (node) {
       layer.nodes.push(node);
@@ -866,13 +896,32 @@ export function createRenderGraph(
       nodes: layer.nodes.sort(compareGraphNodes),
     }))
     .sort(compareGraphLayers);
+  const projectionMemberships = collectProjectionMemberships(layers);
 
   return {
     revision,
     surfaceIds: Array.from(surfaceIds.values()),
     layers,
+    projectionMemberships,
     diagnostics,
   };
+}
+
+function collectProjectionMemberships(
+  layers: readonly RenderGraphLayer[],
+): RenderGraphProjectionMembership[] {
+  const memberships = new Map<string, string[]>();
+  layers.forEach((layer) => {
+    layer.nodes.forEach((node) => {
+      const nodeIds = memberships.get(node.subjectId) ?? [];
+      nodeIds.push(node.id);
+      memberships.set(node.subjectId, nodeIds);
+    });
+  });
+  return Array.from(memberships, ([subjectId, nodeIds]) => ({
+    subjectId,
+    nodeIds,
+  })).sort((left, right) => left.subjectId.localeCompare(right.subjectId));
 }
 
 function normalizeIdList(values: readonly string[] | undefined): string[] {
@@ -909,6 +958,8 @@ function createDraftFromPatch(
       stack: ordering.stack,
     },
     visual: patch.visual,
+    previewGeometryRef: patch.previewGeometryRef,
+    exportGeometryRef: patch.exportGeometryRef,
     placement: patch.placement,
     effects: patch.effects,
     interaction: patch.interaction,
@@ -948,7 +999,7 @@ function getOrCreateGraphLayer(
 function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   const source = resolveVisualSource(draft);
   const type = draft.visual?.type;
-  if (!type) return null;
+  if (!type || !draft.placement) return null;
 
   const channel =
     draft.ordering.channel ??
@@ -960,6 +1011,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
   const id = source.kind === "replacement" ? `image:${draft.id}` : draft.id;
   const subjectId =
     draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.surfaceId;
+  const defaultGeometryId = draft.id;
   return {
     id,
     subjectId,
@@ -967,13 +1019,24 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     surfaceId: draft.subject.surfaceId,
     type,
     visual: source.source,
-    coordinateSpace: draft.coordinateSpace || "scene",
+    previewGeometryRef: cloneRecord(
+      draft.previewGeometryRef ?? {
+        sourceId: "render-intent",
+        geometryId: defaultGeometryId,
+        purpose: "preview",
+      },
+    ),
+    exportGeometryRef: cloneRecord(
+      draft.exportGeometryRef ?? {
+        sourceId: "render-intent",
+        geometryId: defaultGeometryId,
+        purpose: "export",
+      },
+    ),
+    coordinateSpace: "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
     tags: normalizeIdList(draft.export?.tags),
-    frame: draft.placement?.frame,
-    transform: draft.placement?.transform,
-    width: draft.placement?.width,
-    height: draft.placement?.height,
+    placement: cloneRecord(draft.placement),
     props: {
       ...(draft.props ?? {}),
     },
@@ -1042,6 +1105,12 @@ function mergeDraft(
     ...patch,
     subject: { ...base.subject, ...patch.subject },
     visual: mergeOptionalRecord(base.visual, patch.visual),
+    previewGeometryRef: cloneRecord(
+      patch.previewGeometryRef ?? base.previewGeometryRef,
+    ),
+    exportGeometryRef: cloneRecord(
+      patch.exportGeometryRef ?? base.exportGeometryRef,
+    ),
     placement: mergeOptionalRecord(base.placement, patch.placement),
     effects: mergeOptionalEffects(base.effects, patch.effects),
     interaction: mergeInteractionAspect(base.interaction, patch.interaction),
@@ -1060,12 +1129,29 @@ function mergePatch(
 ): { draft: RenderIntentDraft; diagnostics: RenderIntentDiagnostic[] } {
   const clearResult = applyPatchClear(base, patch, entry);
   const clearedBase = clearResult.draft;
+  const placement = mergeOptionalRecord(clearedBase.placement, patch.placement);
+  const transformedPlacement =
+    placement && patch.placementTransform
+      ? {
+          ...placement,
+          localToScene: multiplyCoordinateMatrices(
+            placement.localToScene,
+            createPivotTransform(placement, patch.placementTransform),
+          ),
+        }
+      : placement;
   return {
     draft: {
       ...clearedBase,
       subject: { ...clearedBase.subject, ...(patch.subject ?? {}) },
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
-      placement: mergeOptionalRecord(clearedBase.placement, patch.placement),
+      previewGeometryRef: cloneRecord(
+        patch.previewGeometryRef ?? clearedBase.previewGeometryRef,
+      ),
+      exportGeometryRef: cloneRecord(
+        patch.exportGeometryRef ?? clearedBase.exportGeometryRef,
+      ),
+      placement: transformedPlacement,
       effects: mergeOptionalEffects(clearedBase.effects, patch.effects),
       interaction: mergeInteractionAspect(
         clearedBase.interaction,
@@ -1079,6 +1165,20 @@ function mergePatch(
     },
     diagnostics: clearResult.diagnostics,
   };
+}
+
+function createPivotTransform(
+  placement: AffinePlacement,
+  transform: Matrix2D<"object-local", "object-local">,
+): Matrix2D<"object-local", "object-local"> {
+  const { x, y } = placement.pivot;
+  return multiplyCoordinateMatrices(
+    coordinateMatrix("object-local", "object-local", [1, 0, 0, 1, x, y]),
+    multiplyCoordinateMatrices(
+      transform,
+      coordinateMatrix("object-local", "object-local", [1, 0, 0, 1, -x, -y]),
+    ),
+  );
 }
 
 function applyPatchClear(
@@ -1261,6 +1361,69 @@ function cloneGraph(graph: RenderGraph): RenderGraph {
 function cloneRecord<T>(value: T): T {
   if (value === undefined || value === null) return value;
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * Compatibility source for declarative render intents. It is the only place
+ * where legacy visual props are translated into the geometry contract; render
+ * backends consume the resulting refs/snapshots instead of inspecting props.
+ */
+export function createRenderIntentGeometrySource(
+  service: Pick<RenderIntentService, "getGraph">,
+): GeometrySource {
+  const findNode = (geometryId: string) => {
+    for (const layer of service.getGraph().layers) {
+      const node = layer.nodes.find(
+        (candidate) =>
+          candidate.id === geometryId ||
+          String(candidate.data.renderIntentId || "") === geometryId,
+      );
+      if (node) return node;
+    }
+    return undefined;
+  };
+
+  return {
+    sourceId: "render-intent",
+    getSnapshot(ref): GeometrySnapshot | null {
+      const node = findNode(ref.geometryId);
+      if (!node) return null;
+      const bounds = {
+        left: node.placement.localBounds.left,
+        top: node.placement.localBounds.top,
+        width: node.placement.localBounds.width,
+        height: node.placement.localBounds.height,
+      };
+      const base = {
+        ref,
+        space: "object-local" as const,
+        bounds,
+        localToScene: node.placement.localToScene,
+        metadata: {
+          renderIntentId: String(node.data.renderIntentId || node.id),
+          subjectId: node.subjectId,
+        },
+      };
+      if (node.type === "path") {
+        const pathData = String(
+          node.props.pathData ?? node.props.path ?? "",
+        ).trim();
+        return pathData
+          ? { ...base, kind: "path", format: "svg-path", pathData }
+          : null;
+      }
+      return { ...base, kind: "rect", rect: bounds };
+    },
+    listGeometries: () =>
+      service.getGraph().layers.flatMap((layer) =>
+        layer.nodes.map((node) => ({
+          ref: node.previewGeometryRef,
+          kind: node.type === "path" ? ("path" as const) : ("rect" as const),
+          space: "object-local" as const,
+          metadata: { layerId: layer.id, renderIntentId: node.id },
+        })),
+      ),
+  };
 }
 
 function normalizeId(value: string, label: string): string {

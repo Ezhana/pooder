@@ -1,14 +1,30 @@
-import PooderCanvasHost from "./pooder-canvas-host.vue";
 import PooderRuntimeProvider from "./pooder-runtime-provider.vue";
 
-export { PooderRuntimeProvider, PooderCanvasHost };
+export { PooderRuntimeProvider };
 export {
   createPooderRuntime,
+  getPooderDocument,
+  installPooderDocument,
   POODER_RUNTIME_KEY,
+  usePooderDocument,
   usePooderRuntime,
+  usePooderSessions,
 } from "./runtime";
 export type {
-  PooderCanvasHostReadyPayload,
-  PooderCanvasHostRenderSyncPayload,
-} from "./canvas-host";
-export type { PooderRuntimeLike } from "./runtime";
+  InstallPooderDocumentOptions,
+  PooderConfigurationApi,
+  PooderConfigurationChangeEvent,
+  PooderDisposable,
+  PooderRuntime,
+  PooderSessionApi,
+} from "./runtime";
+export type {
+  ApplyEditorDocumentResult,
+  DocumentDraft,
+  EditorDocumentSession,
+  EditorDocumentSessionDerive,
+  EditorDocumentChangeEvent,
+  EditorDocumentMutationResult,
+  EditorDocumentService,
+  OpenEditorDocumentSessionInput,
+} from "@pooder/document-core";

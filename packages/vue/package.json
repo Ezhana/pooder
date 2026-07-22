@@ -1,8 +1,8 @@
 {
   "name": "@pooder/vue",
   "version": "6.0.0",
-  "main": "./dist/index.umd.js",
-  "module": "./dist/index.es.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "files": [
     "dist"
@@ -10,8 +10,13 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.es.js",
-      "require": "./dist/index.umd.js"
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./editor": {
+      "types": "./dist/editor.d.ts",
+      "import": "./dist/editor.mjs",
+      "require": "./dist/editor.cjs"
     },
     "./dist/vue.css": "./dist/vue.css"
   },
@@ -24,6 +29,8 @@
   },
   "dependencies": {
     "@pooder/core": "workspace:*",
+    "@pooder/document": "workspace:*",
+    "@pooder/document-core": "workspace:*",
     "@pooder/platform-browser": "workspace:*"
   },
   "peerDependencies": {

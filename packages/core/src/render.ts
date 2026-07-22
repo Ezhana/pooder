@@ -1,13 +1,25 @@
 import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type { Unit } from "./coordinate";
+import type {
+  AffinePlacement,
+  CoordinatePoint,
+  CoordinateRect,
+  CoordinateSpace,
+  Matrix2D,
+} from "./coordinate";
 import type { DielineShape, DielineShapeStyle } from "./dieline-shape";
 import type { SessionScope } from "./workflow-session";
+import type { GeometryRef } from "./geometry-source";
 
 export type RenderObjectType = "rect" | "image" | "path" | "text";
 
 export type RenderProps = Record<string, any>;
-export type RenderCoordinateSpace = "scene" | "screen";
+export type RenderCoordinateSpace = CoordinateSpace;
+export type RenderViewportCoordinateSpace = Extract<
+  CoordinateSpace,
+  "scene" | "screen"
+>;
 export type RenderLayoutLength = number | string;
 export type RenderLayoutAlign = "start" | "center" | "end";
 export type RenderLayoutReference =
@@ -27,7 +39,7 @@ export interface RenderLayoutRect {
   top: number;
   width: number;
   height: number;
-  space?: RenderCoordinateSpace;
+  space: RenderViewportCoordinateSpace;
 }
 
 export interface RenderObjectLayoutSpec {
@@ -46,10 +58,13 @@ export interface RenderObjectSpec {
   id: string;
   subjectId?: string;
   type: RenderObjectType;
+  previewGeometryRef?: GeometryRef;
+  exportGeometryRef?: GeometryRef;
   props: RenderProps;
   data?: Record<string, any>;
   src?: string;
   space?: RenderCoordinateSpace;
+  placement?: AffinePlacement;
   exportKeys?: readonly string[];
   layout?: RenderObjectLayoutSpec;
   effects?: RenderEffectSpec[];
@@ -141,13 +156,25 @@ export type RuntimeConditionExpr =
   | { op: "all"; exprs: readonly RuntimeConditionExpr[] }
   | { op: "any"; exprs: readonly RuntimeConditionExpr[] };
 
-export interface RenderClipPathEffectSpec {
+type RenderClipPathEffectBase = {
   type: "clipPath";
   id?: string;
   activeWhen?: RuntimeConditionExpr;
-  source: RenderObjectSpec;
-  coordinateMode?: "absolute" | "object";
-}
+  /** Authoritative geometry used by interactive renderers. */
+  previewGeometryRef?: GeometryRef;
+  /** Authoritative geometry used by export renderers. */
+  exportGeometryRef?: GeometryRef;
+};
+
+export type RenderClipPathEffectSpec =
+  | (RenderClipPathEffectBase & {
+      coordinateMode: "absolute";
+      source: RenderObjectSpec & { space: CoordinateSpace };
+    })
+  | (RenderClipPathEffectBase & {
+      coordinateMode: "object";
+      source: Omit<RenderObjectSpec, "space"> & { space: "object-local" };
+    });
 
 export type RenderEffectSpec = RenderClipPathEffectSpec;
 
@@ -252,7 +279,8 @@ export class RenderEffectRegistryService implements Service {
     const backend = String(query.backend || "").trim();
     return this.renderers.filter((renderer) => {
       if (renderer.effectType !== effectType) return false;
-      if (backend && renderer.backend && renderer.backend !== backend) return false;
+      if (backend && renderer.backend && renderer.backend !== backend)
+        return false;
       return true;
     });
   }
@@ -387,7 +415,10 @@ export function evaluateRuntimeCondition(
     case "truthy":
       return Boolean(readRuntimeConditionRefValue(expr.ref, context));
     case "equals":
-      return Object.is(readRuntimeConditionRefValue(expr.ref, context), expr.value);
+      return Object.is(
+        readRuntimeConditionRefValue(expr.ref, context),
+        expr.value,
+      );
     case "in":
       return expr.values.some((value) =>
         Object.is(readRuntimeConditionRefValue(expr.ref, context), value),
@@ -401,7 +432,9 @@ export function evaluateRuntimeCondition(
     case "not":
       return !evaluateRuntimeCondition(expr.expr, context);
     case "all":
-      return expr.exprs.every((item) => evaluateRuntimeCondition(item, context));
+      return expr.exprs.every((item) =>
+        evaluateRuntimeCondition(item, context),
+      );
     case "any":
       return expr.exprs.some((item) => evaluateRuntimeCondition(item, context));
     default:
@@ -409,17 +442,13 @@ export function evaluateRuntimeCondition(
   }
 }
 
-export interface CanvasPoint {
-  x: number;
-  y: number;
-}
+/** @deprecated Use CoordinatePoint with an explicit space. */
+export type CanvasPoint<TSpace extends CoordinateSpace = CoordinateSpace> =
+  CoordinatePoint<TSpace>;
 
-export interface CanvasRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
+/** @deprecated Use CoordinateRect with an explicit space. */
+export type CanvasRect<TSpace extends CoordinateSpace = CoordinateSpace> =
+  CoordinateRect<TSpace>;
 
 export interface CanvasSize {
   width: number;
@@ -498,15 +527,20 @@ export interface CanvasService extends Service {
   getTopContext(): CanvasRenderingContext2D | undefined;
   clearTopContext(): void;
   getSceneScale(): number;
-  getSceneOffset(): CanvasPoint;
-  toScreenPoint(point: CanvasPoint): CanvasPoint;
-  toScenePoint(point: CanvasPoint): CanvasPoint;
+  toScreenPoint(point: CoordinatePoint<"scene">): CoordinatePoint<"screen">;
+  toScenePoint(point: CoordinatePoint<"screen">): CoordinatePoint<"scene">;
+  toScreenMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "scene">,
+  ): Matrix2D<TFrom, "screen">;
+  toSceneMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "screen">,
+  ): Matrix2D<TFrom, "scene">;
   toScreenLength(value: number): number;
   toSceneLength(value: number): number;
-  toScreenRect(rect: CanvasRect): CanvasRect;
-  toSceneRect(rect: CanvasRect): CanvasRect;
-  getSceneViewportRect(): CanvasRect;
-  getScreenViewportRect(): CanvasRect;
+  toScreenRect(rect: CoordinateRect<"scene">): CoordinateRect<"screen">;
+  toSceneRect(rect: CoordinateRect<"screen">): CoordinateRect<"scene">;
+  getSceneViewportRect(): CoordinateRect<"scene">;
+  getScreenViewportRect(): CoordinateRect<"screen">;
   loadImageSize(src: string): Promise<CanvasSize | null>;
 }
 
@@ -514,7 +548,7 @@ export type SceneExportFormat = "png" | "jpeg";
 export type SceneExportFrame = "cut" | "trim" | "bleed";
 
 export type SceneExportCrop =
-  | { type: "sceneRect"; rect: CanvasRect }
+  | { type: "sceneRect"; rect: CoordinateRect<"scene"> }
   | { type: "elementBounds"; elementIds?: readonly string[] }
   | { type: "frame"; frame: SceneExportFrame };
 
@@ -563,7 +597,7 @@ export interface SceneExportResult {
   format: SceneExportFormat;
   multiplier: number;
   source: SceneExportSourceResult;
-  crop: CanvasRect;
+  crop: CoordinateRect<"scene">;
 }
 
 export interface SceneExportService extends Service {

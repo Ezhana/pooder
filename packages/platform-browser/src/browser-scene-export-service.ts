@@ -1,78 +1,69 @@
-import type {
-  SceneExportCrop,
-  SceneExportFormat,
-  SceneExportOptions,
-  SceneExportResult,
-  SceneExportService,
-  CanvasService,
-  SceneLayoutService,
-  Service,
-  ServiceContext,
+import {
+  GEOMETRY_SOURCE_SERVICE,
+  RENDER_INTENT_SERVICE,
+  SURFACE_FRAME_SERVICE,
+  coordinateMatrix,
+  type CanvasService,
+  type GeometrySourceService,
+  type Matrix2D,
+  type RenderGraphLayer,
+  type RenderGraphNode,
+  type RenderIntentService,
+  type RenderObjectSpec,
+  type SceneExportCrop,
+  type SceneExportFormat,
+  type SceneExportOptions,
+  type SceneExportResult,
+  type SceneExportOutputMaskTransparentColor,
+  type SceneExportService,
+  type Service,
+  type ServiceContext,
+  type SurfaceFrameService,
 } from "@pooder/core";
-import { Canvas as FabricCanvas, type FabricObject, Point } from "fabric";
+import { Canvas as FabricCanvas, type FabricObject } from "fabric";
 import {
   CANVAS_SERVICE,
   FABRIC_RENDER_GRAPH_ADAPTER,
   SCENE_EXPORT_SERVICE,
-  SCENE_LAYOUT_SERVICE,
 } from "./tokens";
 import type { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapter";
 import { applyAlphaMask, renderOutputMask } from "./output-mask";
 
 export type BrowserSceneExportFormat = SceneExportFormat;
 export type BrowserSceneExportFrame = "cut" | "trim" | "bleed";
-
 export interface BrowserSceneExportRect {
   left: number;
   top: number;
   width: number;
   height: number;
 }
-
 export type BrowserSceneExportCrop = SceneExportCrop;
 export type BrowserSceneExportOptions = SceneExportOptions;
 export type BrowserSceneExportResult = SceneExportResult;
 
-interface ExportCanvasLike {
-  add(object: FabricObject): void;
-  dispose(): void;
-  renderAll(): void;
-  setDimensions(size: { width: number; height: number }): void;
-  toDataURL(options: {
-    format: BrowserSceneExportFormat;
-    multiplier: number;
-  }): string;
-}
+type DetachedObjectFactory = CanvasService & {
+  createDetachedRenderObject(
+    spec: RenderObjectSpec,
+    sceneToTarget: Matrix2D<"scene", "screen">,
+  ): Promise<FabricObject | undefined>;
+};
 
-function normalizeFormat(format: unknown): BrowserSceneExportFormat {
-  return format === "jpeg" ? "jpeg" : "png";
-}
-
-function normalizeOutputMaskMode(mode: unknown): "alpha" | "outline" | "shape" {
-  if (mode === "alpha" || mode === "outline" || mode === "shape") {
-    return mode;
-  }
-  throw new Error("browser-scene-export-output-mask-mode-unsupported");
-}
-
-function isInvalidOutputMaskError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message === "browser-scene-export-output-mask-invalid"
-  );
-}
-
-function normalizeMultiplier(multiplier: unknown): number {
-  const numeric = Number(multiplier);
-  return Number.isFinite(numeric) ? Math.max(1, numeric) : 2;
+interface ExportEntry {
+  layer: RenderGraphLayer;
+  node: RenderGraphNode;
+  spec: RenderObjectSpec;
 }
 
 function normalizeIds(values: unknown): string[] {
   if (!Array.isArray(values)) return [];
-  const ids = values
-    .map((value) => String(value || "").trim())
-    .filter((value) => value.length > 0);
-  return Array.from(new Set(ids));
+  return Array.from(
+    new Set(values.map((value) => String(value || "").trim()).filter(Boolean)),
+  );
+}
+
+function normalizeMultiplier(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(1, number) : 2;
 }
 
 function isPositiveRect(rect: BrowserSceneExportRect): boolean {
@@ -86,172 +77,98 @@ function isPositiveRect(rect: BrowserSceneExportRect): boolean {
   );
 }
 
-function readLayerId(object: any): string {
-  return String(object?.data?.layerId || object?.data?.passId || "").trim();
-}
-
-function readElementId(object: any): string {
-  return readExportKeys(object)[0] || "";
-}
-
-function readExportKeys(object: any): string[] {
-  const keys = object?.data?.exportKeys;
-  if (!Array.isArray(keys)) return [];
-  return normalizeIds(keys);
-}
-
-function readExportTags(object: any): string[] {
-  return normalizeIds(object?.data?.tags);
-}
-
-function readOutputMaskKeys(object: any): string[] {
-  return normalizeIds([
-    object?.data?.outputMaskKey,
-    ...(Array.isArray(object?.data?.outputMaskKeys)
-      ? object.data.outputMaskKeys
-      : []),
-  ]);
-}
-
-function cloneRect(rect: BrowserSceneExportRect): BrowserSceneExportRect {
-  return {
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height,
-  };
-}
-
-function normalizeSourceSelector(source: BrowserSceneExportOptions["source"]) {
-  return {
-    layerIds: normalizeIds(source?.layerIds),
-    elementIds: normalizeIds(source?.elementIds),
-    tags: normalizeIds(source?.tags),
-    visible: typeof source?.visible === "boolean" ? source.visible : undefined,
-  };
-}
-
 export class BrowserSceneExportService implements Service, SceneExportService {
   static readonly token = SCENE_EXPORT_SERVICE;
 
-  private canvasService?: CanvasService;
-  private sceneLayoutService?: SceneLayoutService;
+  private canvasService?: DetachedObjectFactory;
+  private geometrySource?: GeometrySourceService;
+  private renderIntentService?: RenderIntentService;
   private renderGraphAdapter?: FabricRenderGraphAdapter;
+  private surfaceFrameService?: SurfaceFrameService;
+  private serviceContext?: ServiceContext;
 
-  init(context: ServiceContext) {
-    this.canvasService = context.get(CANVAS_SERVICE);
-    this.sceneLayoutService = context.get(SCENE_LAYOUT_SERVICE);
+  init(context: ServiceContext): void {
+    this.serviceContext = context;
+    this.canvasService = context.get(CANVAS_SERVICE) as
+      | DetachedObjectFactory
+      | undefined;
+    this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
+    this.renderIntentService = context.get(RENDER_INTENT_SERVICE);
     this.renderGraphAdapter = context.get(FABRIC_RENDER_GRAPH_ADAPTER);
-
-    if (!this.canvasService || !this.sceneLayoutService) {
+    this.surfaceFrameService = context.get(SURFACE_FRAME_SERVICE);
+    if (
+      !this.canvasService ||
+      !this.geometrySource ||
+      !this.renderIntentService
+    ) {
       throw new Error(
-        "[BrowserSceneExportService] CanvasService and SceneLayoutService are required.",
+        "[BrowserSceneExportService] Canvas, RenderIntent, and GeometrySource services are required.",
       );
     }
   }
 
-  dispose() {
+  dispose(): void {
     this.canvasService = undefined;
-    this.sceneLayoutService = undefined;
+    this.geometrySource = undefined;
+    this.renderIntentService = undefined;
     this.renderGraphAdapter = undefined;
+    this.surfaceFrameService = undefined;
+    this.serviceContext = undefined;
   }
 
   async exportImage(
     options: BrowserSceneExportOptions = {},
   ): Promise<BrowserSceneExportResult> {
-    const canvasService = this.requireCanvasService();
-    await this.renderGraphAdapter?.flush();
+    const entries = this.selectEntries(options);
+    if (!entries.length) throw new Error("browser-scene-export-empty");
 
-    const outputMask = options.outputMask;
-    const format = outputMask ? "png" : normalizeFormat(options.format);
-    const multiplier = normalizeMultiplier(options.multiplier);
-    const source = normalizeSourceSelector(options.source);
-    const sourceObjects = this.getSourceObjects({
-      source,
-    });
-
-    if (!sourceObjects.length) {
-      throw new Error("browser-scene-export-empty");
-    }
-
-    const crop = this.resolveCrop(options.crop, sourceObjects);
+    const crop = this.resolveCrop(options.crop, entries);
     if (!isPositiveRect(crop)) {
       throw new Error("browser-scene-export-crop-unavailable");
     }
-
+    const multiplier = normalizeMultiplier(options.multiplier);
     const width = Math.max(1, Math.round(crop.width * multiplier));
     const height = Math.max(1, Math.round(crop.height * multiplier));
-    const sceneScale = canvasService.getSceneScale();
-    const scaleBase = sceneScale > 0 ? sceneScale : 1;
+    const format = options.outputMask
+      ? "png"
+      : options.format === "jpeg"
+        ? "jpeg"
+        : "png";
+    const sceneToTarget = coordinateMatrix("scene", "screen", [
+      multiplier,
+      0,
+      0,
+      multiplier,
+      -crop.left * multiplier,
+      -crop.top * multiplier,
+    ]);
     const exportCanvas = this.createExportCanvas(width, height);
-    const exportedLayerIds = new Set<string>();
-    const exportedElementIds = new Set<string>();
-    const exportedTags = new Set<string>();
 
     try {
-      for (const source of sourceObjects as any[]) {
-        const clone = await source.clone();
-        const center = source.getCenterPoint
-          ? source.getCenterPoint()
-          : new Point(source.left ?? 0, source.top ?? 0);
-        const sceneCenter = canvasService.toScenePoint({
-          x: center.x,
-          y: center.y,
-        });
-
-        clone.set({
-          ...(options.preserveClipPaths === false
-            ? { clipPath: undefined }
-            : {}),
-          originX: "center",
-          originY: "center",
-          left: (sceneCenter.x - crop.left) * multiplier,
-          top: (sceneCenter.y - crop.top) * multiplier,
-          scaleX: ((source.scaleX || 1) / scaleBase) * multiplier,
-          scaleY: ((source.scaleY || 1) / scaleBase) * multiplier,
-          angle: source.angle || 0,
-          selectable: false,
-          evented: false,
-          visible: true,
-        });
-        delete clone.__pooderEffectClipKey;
-        clone.setCoords();
-        exportCanvas.add(clone);
-
-        const layerId = readLayerId(source);
-        const elementId = readElementId(source);
-        if (layerId) exportedLayerIds.add(layerId);
-        if (elementId) exportedElementIds.add(elementId);
-        readExportTags(source).forEach((tag) => exportedTags.add(tag));
+      for (const entry of entries) {
+        const object = await this.requireCanvasService().createDetachedRenderObject(
+          {
+            ...entry.spec,
+            effects:
+              options.preserveClipPaths === false ? [] : entry.spec.effects,
+          },
+          sceneToTarget,
+        );
+        if (object) exportCanvas.add(object);
       }
-
       exportCanvas.renderAll();
       const exportedUrl = exportCanvas.toDataURL({ format, multiplier: 1 });
-      let url = exportedUrl;
-      if (outputMask) {
-        try {
-          url = await this.applyOutputMask(exportedUrl, {
+      const url = options.outputMask
+        ? await this.applyOutputMask(exportedUrl, options.outputMask.sourceKey, {
             crop,
             height,
             multiplier,
-            outputMask,
-            sceneScale: scaleBase,
+            mode: options.outputMask.mode ?? "alpha",
+            sceneToTarget,
+            transparentColor: options.outputMask.transparentColor,
             width,
-          });
-        } catch (error) {
-          if (!isInvalidOutputMaskError(error)) {
-            throw error;
-          }
-          console.warn(
-            "[BrowserSceneExportService] Output mask is invalid; using the unmasked export.",
-            error,
-          );
-        }
-      }
-      if (!url) {
-        throw new Error("browser-scene-export-failed");
-      }
-
+          })
+        : exportedUrl;
       return {
         url,
         width,
@@ -259,85 +176,136 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         format,
         multiplier,
         source: {
-          layerIds: Array.from(exportedLayerIds),
-          elementIds: Array.from(exportedElementIds),
-          tags: Array.from(exportedTags),
+          layerIds: Array.from(new Set(entries.map(({ layer }) => layer.id))),
+          elementIds: Array.from(
+            new Set(entries.flatMap(({ node }) => node.exportKeys)),
+          ),
+          tags: Array.from(new Set(entries.flatMap(({ node }) => node.tags))),
         },
-        crop: cloneRect(crop),
+        crop: { ...crop, space: "scene" },
       };
     } finally {
       exportCanvas.dispose();
     }
   }
 
-  private getSourceObjects(options: {
-    source: {
-      layerIds: string[];
-      elementIds: string[];
-      tags: string[];
-      visible?: boolean;
-    };
-  }): FabricObject[] {
-    const layerIdSet = new Set(options.source.layerIds);
-    const elementIdSet = new Set(options.source.elementIds);
-    const tagSet = new Set(options.source.tags);
-    const hasLayerFilter = layerIdSet.size > 0;
-    const hasElementFilter = elementIdSet.size > 0;
-    const hasTagFilter = tagSet.size > 0;
+  private selectEntries(options: BrowserSceneExportOptions): ExportEntry[] {
+    const selector = options.source;
+    const layerIds = new Set(normalizeIds(selector?.layerIds));
+    const elementIds = new Set(normalizeIds(selector?.elementIds));
+    const tags = new Set(normalizeIds(selector?.tags));
+    const includeHidden = options.includeHidden === true;
+    const entries: ExportEntry[] = [];
+    for (const layer of this.requireRenderIntentService().getGraph().layers) {
+      if (layerIds.size && !layerIds.has(layer.id)) continue;
+      for (const node of layer.nodes) {
+        const authoritativeVisible = layer.visible && node.visible;
+        if (!includeHidden && selector?.visible === undefined && !authoritativeVisible)
+          continue;
+        if (
+          selector?.visible !== undefined &&
+          authoritativeVisible !== selector.visible
+        )
+          continue;
+        if (
+          elementIds.size &&
+          !node.exportKeys.some((key) => elementIds.has(key))
+        )
+          continue;
+        if (tags.size && !node.tags.some((tag) => tags.has(tag))) continue;
+        if (node.props.excludeFromExport === true) continue;
+        const spec = this.requireRenderGraphAdapter().createExportRenderObjectSpec(
+          layer,
+          node,
+        );
+        if (spec) entries.push({ layer, node, spec });
+      }
+    }
+    return entries;
+  }
 
-    return this.getCanvasObjects({
-      visible: options.source.visible,
-    }).filter((object: any) => {
-      if (object?.excludeFromExport === true) return false;
-      if (hasLayerFilter && !layerIdSet.has(readLayerId(object))) {
-        return false;
-      }
-      if (
-        hasElementFilter &&
-        !readExportKeys(object).some((id) => elementIdSet.has(id))
-      ) {
-        return false;
-      }
-      if (
-        hasTagFilter &&
-        !readExportTags(object).some((tag) => tagSet.has(tag))
-      ) {
-        return false;
-      }
-      return true;
-    });
+  private resolveCrop(
+    crop: BrowserSceneExportCrop | undefined,
+    entries: ExportEntry[],
+  ): BrowserSceneExportRect {
+    if (crop?.type === "sceneRect") return { ...crop.rect };
+    if (crop?.type === "frame") return this.resolveFrameCrop(crop.frame);
+    const ids = new Set(
+      crop?.type === "elementBounds" ? normalizeIds(crop.elementIds) : [],
+    );
+    const bounds = entries
+      .filter(
+        ({ node }) => !ids.size || node.exportKeys.some((key) => ids.has(key)),
+      )
+      .map(({ node }) =>
+        this.requireGeometrySource().getBounds(node.exportGeometryRef, "scene")
+          .value,
+      )
+      .filter((value): value is BrowserSceneExportRect => Boolean(value));
+    if (!bounds.length) {
+      throw new Error("browser-scene-export-bounds-unavailable");
+    }
+    const left = Math.min(...bounds.map((rect) => rect.left));
+    const top = Math.min(...bounds.map((rect) => rect.top));
+    const right = Math.max(...bounds.map((rect) => rect.left + rect.width));
+    const bottom = Math.max(...bounds.map((rect) => rect.top + rect.height));
+    return { left, top, width: right - left, height: bottom - top };
+  }
+
+  private resolveFrameCrop(frame: BrowserSceneExportFrame): BrowserSceneExportRect {
+    const frames = this.surfaceFrameService?.getFrames();
+    if (!frames) throw new Error("browser-scene-export-frame-unavailable");
+    const source =
+      frame === "bleed"
+        ? (frames.exportFrame ?? frames.productionFrame)
+        : frames.productionFrame;
+    return {
+      left: source.xMm,
+      top: source.yMm,
+      width: source.widthMm,
+      height: source.heightMm,
+    };
   }
 
   private async applyOutputMask(
     sourceUrl: string,
+    sourceKey: string,
     options: {
       crop: BrowserSceneExportRect;
       height: number;
       multiplier: number;
-      outputMask: NonNullable<BrowserSceneExportOptions["outputMask"]>;
-      sceneScale: number;
+      mode: "alpha" | "outline" | "shape";
+      sceneToTarget: Matrix2D<"scene", "screen">;
+      transparentColor?: SceneExportOutputMaskTransparentColor;
       width: number;
     },
   ): Promise<string> {
-    const sourceKey = String(options.outputMask.sourceKey || "").trim();
-    if (!sourceKey) {
+    const key = String(sourceKey || "").trim();
+    if (!key)
       throw new Error("browser-scene-export-output-mask-source-key-required");
-    }
-
-    const source = this.resolveOutputMaskSource(sourceKey);
-    const mode = normalizeOutputMaskMode(options.outputMask.mode || "alpha");
+    const entry = this.selectEntries({ includeHidden: true }).find(({ node }) =>
+      normalizeIds(node.data.outputMaskKeys).includes(key),
+    );
+    if (!entry)
+      throw new Error("browser-scene-export-output-mask-source-missing");
+    const source = await this.requireCanvasService().createDetachedRenderObject(
+      { ...entry.spec, effects: [] },
+      options.sceneToTarget,
+    );
+    if (!source)
+      throw new Error("browser-scene-export-output-mask-source-missing");
     const maskCanvas = await renderOutputMask({
       canvasService: this.requireCanvasService(),
-      crop: options.crop,
+      crop: { ...options.crop, space: "scene" },
       height: options.height,
-      mode,
+      mode: options.mode,
       multiplier: options.multiplier,
-      sceneScale: options.sceneScale,
+      sceneScale: 1,
       source,
-      transparentColor: options.outputMask.transparentColor,
+      sourceInTargetSpace: true,
+      transparentColor: options.transparentColor,
       width: options.width,
     });
-
     return applyAlphaMask({
       height: options.height,
       maskCanvas,
@@ -346,142 +314,40 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     });
   }
 
-  private resolveOutputMaskSource(sourceKey: string): FabricObject {
-    const source = this.getCanvasObjects({}).find((object: any) =>
-      readOutputMaskKeys(object).includes(sourceKey),
-    );
-
-    if (!source) {
-      throw new Error("browser-scene-export-output-mask-source-missing");
-    }
-
-    return source;
-  }
-
-  private getCanvasObjects(selector: { visible?: boolean }): FabricObject[] {
-    const canvasService = this.requireCanvasService() as any;
-    if (typeof canvasService.selectObjects === "function") {
-      return canvasService.selectObjects({
-        visible: selector.visible,
-      }) as FabricObject[];
-    }
-    return (canvasService.canvas?.getObjects?.() || []).filter(
-      (object: any) => {
-        return (
-          selector.visible === undefined || object?.visible === selector.visible
-        );
-      },
-    ) as FabricObject[];
-  }
-
-  private resolveCrop(
-    crop: BrowserSceneExportCrop | undefined,
-    sourceObjects: FabricObject[],
-  ): BrowserSceneExportRect {
-    if (crop?.type === "sceneRect") {
-      return cloneRect(crop.rect);
-    }
-
-    if (crop?.type === "frame") {
-      return this.resolveFrameCrop(crop.frame);
-    }
-
-    return this.resolveElementBoundsCrop(sourceObjects, crop);
-  }
-
-  private resolveFrameCrop(
-    frame: BrowserSceneExportFrame,
-  ): BrowserSceneExportRect {
-    const layout = this.requireSceneLayoutService().recomputeLayout();
-    if (!layout) {
-      throw new Error("browser-scene-export-frame-unavailable");
-    }
-
-    const rect =
-      frame === "trim"
-        ? layout.trimRect
-        : frame === "bleed"
-          ? layout.bleedRect
-          : layout.cutRect;
-
-    return this.requireCanvasService().toSceneRect({
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
-    });
-  }
-
-  private resolveElementBoundsCrop(
-    sourceObjects: FabricObject[],
-    crop: BrowserSceneExportCrop | undefined,
-  ): BrowserSceneExportRect {
-    const elementIds =
-      crop?.type === "elementBounds" ? normalizeIds(crop.elementIds) : [];
-    const elementIdSet = new Set(elementIds);
-    const objects = elementIdSet.size
-      ? sourceObjects.filter((object) =>
-          readExportKeys(object).some((id) => elementIdSet.has(id)),
-        )
-      : sourceObjects;
-    const bounds = objects
-      .map((object: any) =>
-        typeof object.getBoundingRect === "function"
-          ? object.getBoundingRect()
-          : undefined,
-      )
-      .filter((rect): rect is BrowserSceneExportRect => {
-        return Boolean(rect && isPositiveRect(rect));
-      });
-
-    if (!bounds.length) {
-      throw new Error("browser-scene-export-bounds-unavailable");
-    }
-
-    const left = Math.min(...bounds.map((rect) => rect.left));
-    const top = Math.min(...bounds.map((rect) => rect.top));
-    const right = Math.max(...bounds.map((rect) => rect.left + rect.width));
-    const bottom = Math.max(...bounds.map((rect) => rect.top + rect.height));
-
-    return this.requireCanvasService().toSceneRect({
-      left,
-      top,
-      width: right - left,
-      height: bottom - top,
-    });
-  }
-
-  private createExportCanvas(width: number, height: number): ExportCanvasLike {
-    if (typeof document === "undefined") {
+  private createExportCanvas(width: number, height: number) {
+    if (typeof document === "undefined")
       throw new Error("browser-scene-export-browser-required");
-    }
-
-    const el = document.createElement("canvas");
-    const exportCanvas = new FabricCanvas(el, {
+    const canvas = new FabricCanvas(document.createElement("canvas"), {
       renderOnAddRemove: false,
       selection: false,
       enableRetinaScaling: false,
       preserveObjectStacking: true,
     } as any);
-    exportCanvas.setDimensions({ width, height });
-    return exportCanvas;
+    canvas.setDimensions({ width, height });
+    return canvas;
   }
 
-  private requireCanvasService(): CanvasService {
-    if (!this.canvasService) {
-      throw new Error(
-        "[BrowserSceneExportService] CanvasService is not initialized.",
-      );
-    }
+  private requireCanvasService(): DetachedObjectFactory {
+    if (!this.canvasService)
+      throw new Error("[BrowserSceneExportService] CanvasService is unavailable.");
     return this.canvasService;
   }
-
-  private requireSceneLayoutService(): SceneLayoutService {
-    if (!this.sceneLayoutService) {
-      throw new Error(
-        "[BrowserSceneExportService] SceneLayoutService is not initialized.",
-      );
-    }
-    return this.sceneLayoutService;
+  private requireGeometrySource(): GeometrySourceService {
+    if (!this.geometrySource)
+      throw new Error("[BrowserSceneExportService] GeometrySourceService is unavailable.");
+    return this.geometrySource;
+  }
+  private requireRenderIntentService(): RenderIntentService {
+    if (!this.renderIntentService)
+      throw new Error("[BrowserSceneExportService] RenderIntentService is unavailable.");
+    return this.renderIntentService;
+  }
+  private requireRenderGraphAdapter(): FabricRenderGraphAdapter {
+    this.renderGraphAdapter ??= this.serviceContext?.get(
+      FABRIC_RENDER_GRAPH_ADAPTER,
+    );
+    if (!this.renderGraphAdapter)
+      throw new Error("[BrowserSceneExportService] RenderGraphAdapter is unavailable.");
+    return this.renderGraphAdapter;
   }
 }

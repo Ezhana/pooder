@@ -20,7 +20,7 @@ ownership.
 
 | Surface | Status | Replacement / owner |
 | --- | --- | --- |
-| Legacy global command ids | `deprecated bridge` | Use typed capability facades. Allowed bridges are listed in `packages/kit/src/extensions/legacyCommandBridge.ts`. |
+| Legacy global command ids | `deprecated bridge` | Use typed capability facades. Allowed bridges are listed in `packages/tools/src/extensions/legacyCommandBridge.ts`. |
 | `exportImage` | `deprecated bridge` | `DesignExportCapabilityApi.exportImage()` or `SceneExportCapabilityApi.exportImage()`. |
 | `detectEdge` | `deprecated bridge` | `EdgeDetectionCapabilityApi.detectEdge()`. |
 | `updateFeaturePosition` | `deprecated bridge` | `DielineGeometryCapabilityApi.updateFeaturePosition()`. |

@@ -13,14 +13,13 @@ import {
   computeDragInteraction,
   containsPoint,
   containsRect,
-  containsGeometryPoint,
-  createStaticGeometrySourceProvider,
+  coordinateMatrix,
+  createAffinePlacement,
+  createStaticGeometrySource,
   ConstraintResolverService,
   DefaultSurfaceFrameService,
   GeometrySourceService,
   createRectSnapLines,
-  findNearestGeometryPoint,
-  getGeometryBounds,
   intersectRects,
   mergeRenderIntentPatchDraft,
   normalizeRect,
@@ -1599,7 +1598,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       composition: {
         entries: [
           { source: "local", layerIds: ["underlay"] },
-          { source: "document", interaction: "disabled" },
+          { source: "render-graph", interaction: "disabled" },
           { source: "local", layerIds: ["controls"] },
         ],
       },
@@ -1768,63 +1767,161 @@ async function testGeometrySourceServiceRegistry() {
       GEOMETRY_SOURCE_SERVICE,
     );
     const disposable = geometry.registerSource(
-      createStaticGeometrySourceProvider({
+      createStaticGeometrySource({
         sourceId: "static",
         geometries: [
           {
             kind: "rect",
             ref: { sourceId: "static", geometryId: "bounds" },
-            space: "document",
+            space: "parent-local",
+            bounds: { left: 10, top: 20, width: 30, height: 40 },
             rect: { left: 10, top: 20, width: 30, height: 40 },
+            localToScene: coordinateMatrix(
+              "parent-local",
+              "scene",
+              [1, 0, 0, 1, 5, 10],
+            ),
           },
           {
             kind: "pointSet",
             ref: { sourceId: "static", geometryId: "points" },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 100, height: 100 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
             points: [
               { x: 0, y: 0 },
               { x: 100, y: 100 },
             ],
           },
+          {
+            kind: "rect",
+            ref: {
+              sourceId: "static",
+              geometryId: "representation",
+              purpose: "preview",
+            },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 10, height: 10 },
+            rect: { left: 0, top: 0, width: 10, height: 10 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
+          },
+          {
+            kind: "rect",
+            ref: {
+              sourceId: "static",
+              geometryId: "representation",
+              purpose: "export",
+            },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 20, height: 20 },
+            rect: { left: 0, top: 0, width: 20, height: 20 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
+          },
+          {
+            kind: "path",
+            format: "svg-path",
+            pathData: "M 0 0 L 10 0",
+            ref: { sourceId: "static", geometryId: "unhandled-path" },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 10, height: 0 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
+          },
         ],
       }),
     );
 
-    const rect = geometry.getGeometry({
+    const rect = geometry.getSnapshot({
       sourceId: "static",
       geometryId: "bounds",
-    });
+    }).value;
     assert(rect, "geometry source should resolve registered geometry");
     assertDeepEqual(
-      getGeometryBounds(rect),
+      geometry.getBounds(rect.ref).value,
       { left: 10, top: 20, width: 30, height: 40 },
       "geometry utility should read rect bounds",
     );
     assertDeepEqual(
-      findNearestGeometryPoint(rect, { x: 100, y: 0 }),
+      geometry.nearestPoint(rect.ref, { x: 100, y: 0 }).value,
       { x: 40, y: 20 },
       "geometry utility should clamp nearest rect point",
     );
     assertEqual(
-      containsGeometryPoint(rect, { x: 15, y: 25 }),
+      geometry.contains(rect.ref, { x: 15, y: 25 }).value,
       true,
       "geometry utility should test point containment",
     );
     assertEqual(
-      geometry.projectGeometry(
-        { sourceId: "static", geometryId: "bounds" },
-        "scene",
-      )?.space,
+      geometry.project({
+        ref: { sourceId: "static", geometryId: "bounds" },
+        to: "scene",
+      }).value?.space,
       "scene",
       "default projection should produce the requested coordinate space",
     );
     assertEqual(
       geometry.listGeometries("static").length,
-      2,
+      5,
       "geometry source should list registered descriptors",
     );
+    assertEqual(
+      geometry.getBounds({
+        sourceId: "static",
+        geometryId: "representation",
+        purpose: "preview",
+      }).value?.width,
+      10,
+      "preview geometry should resolve independently",
+    );
+    assertEqual(
+      geometry.getBounds({
+        sourceId: "static",
+        geometryId: "representation",
+        purpose: "export",
+      }).value?.width,
+      20,
+      "export geometry should resolve independently",
+    );
+    assertEqual(
+      geometry.nearestPoint(
+        { sourceId: "static", geometryId: "unhandled-path" },
+        { x: 5, y: 5 },
+      ).diagnostics[0]?.code,
+      "geometry-backend-missing",
+      "path queries without a backend should return an explicit diagnostic",
+    );
+    const headlessBackend = geometry.registerBackend({
+      backendId: "test.headless",
+      supports: (snapshot) => snapshot.format === "svg-path",
+      nearestPoint: (_snapshot, point) => ({ x: point.x, y: 0 }),
+    });
+    assertDeepEqual(
+      geometry.nearestPoint(
+        { sourceId: "static", geometryId: "unhandled-path" },
+        { x: 5, y: 5 },
+      ).value,
+      { x: 5, y: 0 },
+      "headless environments should be able to inject a pure computation backend",
+    );
+    headlessBackend.dispose();
     disposable.dispose();
     assertEqual(
-      geometry.getGeometry({ sourceId: "static", geometryId: "bounds" }),
+      geometry.getSnapshot({ sourceId: "static", geometryId: "bounds" }).value,
       null,
       "disposing a source should unregister it",
     );
@@ -1840,12 +1937,19 @@ async function testConstraintResolverServiceBuiltins() {
       CONSTRAINT_RESOLVER_SERVICE,
     );
     geometry.registerSource(
-      createStaticGeometrySourceProvider({
+      createStaticGeometrySource({
         sourceId: "static",
         geometries: [
           {
             kind: "polygon",
             ref: { sourceId: "static", geometryId: "diamond" },
+            space: "scene",
+            bounds: { left: 0, top: 0, width: 100, height: 100 },
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
             points: [
               { x: 50, y: 0 },
               { x: 100, y: 50 },
@@ -1931,6 +2035,54 @@ async function testConstraintResolverServiceBuiltins() {
       true,
       "rect.snap should expose snap guides in result metadata",
     );
+
+    const phaseAwareConstraint = {
+      type: "rect.snap",
+      application: {
+        preview: "evaluate" as const,
+        commit: "apply" as const,
+      },
+      params: {
+        id: "frame",
+        rect: { left: 100, top: 10, width: 80, height: 60 },
+        thresholdPx: 6,
+      },
+    };
+    const evaluatedPreview = resolver.resolve({
+      phase: "preview",
+      transform: {
+        frame: { left: 96, top: 15, width: 10, height: 10 },
+      },
+      constraints: [phaseAwareConstraint],
+      metadata: { viewportScale: 1 },
+    });
+    assertDeepEqual(
+      evaluatedPreview.result.frame,
+      { left: 96, top: 15, width: 10, height: 10 },
+      "evaluate application should preserve the proposed transform",
+    );
+    assertEqual(
+      Array.isArray(
+        (evaluatedPreview.result.metadata?.rectSnap as { guides?: unknown[] })
+          ?.guides,
+      ),
+      true,
+      "evaluate application should retain constraint metadata",
+    );
+
+    const appliedCommit = resolver.resolve({
+      phase: "commit",
+      transform: {
+        frame: { left: 96, top: 15, width: 10, height: 10 },
+      },
+      constraints: [phaseAwareConstraint],
+      metadata: { viewportScale: 1 },
+    });
+    assertDeepEqual(
+      appliedCommit.result.frame,
+      { left: 100, top: 10, width: 10, height: 10 },
+      "apply application should use the constraint transform",
+    );
   });
 }
 
@@ -1941,10 +2093,18 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     const resolver = runtime.services.getOrThrow<ConstraintResolverService>(
       CONSTRAINT_RESOLVER_SERVICE,
     );
-    resolver.registerConstraint("test.move", (result) => ({
-      ...result,
-      frame: result.frame ? { ...result.frame, left: 10 } : result.frame,
-    }));
+    const resolvedPhases: string[] = [];
+    resolver.registerConstraint("test.move", (result, _constraint, context) => {
+      resolvedPhases.push(context.phase);
+      return {
+        ...result,
+        frame: result.frame ? { ...result.frame, left: 10 } : result.frame,
+      };
+    });
+    resolver.registerConstraint("test.phase", (result, _constraint, context) => {
+      resolvedPhases.push(context.phase);
+      return result;
+    });
     resolver.registerConstraint("test.resize", (result) => ({
       ...result,
       size: { width: 50, height: 60 },
@@ -1966,6 +2126,10 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       manipulation: {
         move: {
           enabled: true,
+          action: {
+            commandId: "interaction.transform",
+            payload: { operationOwner: "test" },
+          },
           constraints: [
             {
               activeWhen: { op: "const" as const, value: true },
@@ -2025,40 +2189,179 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     );
 
     const committedKinds: string[] = [];
-    interaction.onDidCommitManipulation((event) =>
-      committedKinds.push(event.kind),
-    );
+    const committedPatches: unknown[] = [];
+    let manipulationActionPayload: any;
+    runtime.services
+      .getOrThrow(COMMAND_SERVICE)
+      .registerCommand("interaction.transform", (payload) => {
+        manipulationActionPayload = payload;
+      });
+    interaction.onDidCommitManipulation((event) => {
+      committedKinds.push(event.kind);
+      committedPatches.push(event.result.documentPatch);
+    });
     const transform = {
       frame: { left: 1, top: 2, width: 20, height: 30 },
       size: { width: 20, height: 30 },
       rotation: 12,
     };
-    assertEqual(
-      interaction.resolveManipulation("move", {
-        spec,
-        runtimeContext,
-        transform,
-      }).result.frame?.left,
-      10,
+    const moveCommit = interaction.commitManipulation("move", {
+      spec,
+      runtimeContext,
+      transform,
+      coordinateSpace: "scene",
+      sourceTransform: {
+        frame: { left: 0, top: 0, width: 20, height: 30 },
+      },
+      sourceSceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 0, 0],
+      ),
+      sceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 1, 2],
+      ),
+      subject: {
+        subjectId: "image",
+        projectionTargets: ["image.fill", "image.outline"].map(
+          (projectionId) => ({
+            projectionId,
+            geometryRef: {
+              sourceId: "render-intent",
+              geometryId: projectionId,
+            },
+          }),
+        ),
+      },
+    });
+    assertEqual(moveCommit.result.frame?.left, 10);
+    assertEqual(moveCommit.phase, "commit");
+    assertEqual(moveCommit.coordinateSpace, "scene");
+    assertEqual(manipulationActionPayload.phase, "commit");
+    assertDeepEqual(
+      moveCommit.sceneMatrix?.values,
+      [1, 0, 0, 1, 10, 2],
+      "commit should expose the constraint-resolved absolute scene matrix",
     );
     assertDeepEqual(
-      interaction.resolveManipulation("resize", {
-        spec,
-        runtimeContext,
-        transform,
-      }).result.size,
-      { width: 50, height: 60 },
+      manipulationActionPayload.sceneMatrix,
+      moveCommit.sceneMatrix,
+      "manipulation actions should receive the absolute scene matrix",
     );
+    const staleBoundsMove = interaction.previewManipulation("move", {
+      spec: {
+        manipulation: {
+          move: {
+            enabled: true,
+            constraints: [{ spec: { type: "test.phase" } }],
+          },
+        },
+      },
+      runtimeContext,
+      transform: {
+        frame: { left: 0, top: 0, width: 20, height: 30 },
+      },
+      sourceTransform: {
+        frame: { left: 0, top: 0, width: 20, height: 30 },
+      },
+      sourceSceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 0, 0],
+      ),
+      sceneMatrix: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 5, 7],
+      ),
+      coordinateSpace: "scene",
+      subject: {
+        subjectId: "stale-bounds-image",
+        projectionTargets: [
+          {
+            projectionId: "stale-bounds-image",
+            geometryRef: {
+              sourceId: "render-intent",
+              geometryId: "missing-projection",
+            },
+          },
+        ],
+      },
+    });
+    assertDeepEqual(
+      staleBoundsMove.projectionPatches[0]?.transform,
+      {
+        type: "translate",
+        coordinateSpace: "scene",
+        delta: { space: "scene", x: 5, y: 7 },
+      },
+      "move should use the live scene matrix when Fabric bounds are stale",
+    );
+    assertDeepEqual(
+      staleBoundsMove.sceneMatrix?.values,
+      [1, 0, 0, 1, 5, 7],
+      "actions should receive a canonical matrix without projection geometry",
+    );
+    assertDeepEqual(
+      resolvedPhases,
+      ["commit", "preview"],
+      "interaction phases should reach constraint handlers",
+    );
+    assertDeepEqual(
+      moveCommit.projectionPatches.map((patch) => patch.target.projectionId),
+      ["image.fill", "image.outline"],
+      "one logical operation should emit one patch per projection target",
+    );
+    const resizePreview = interaction.previewManipulation("resize", {
+      spec,
+      runtimeContext,
+      transform,
+      coordinateSpace: "scene",
+      subject: {
+        subjectId: "image",
+        projectionTargets: [
+          {
+            projectionId: "image",
+            geometryRef: {
+              sourceId: "render-intent",
+              geometryId: "image",
+            },
+          },
+        ],
+      },
+    });
+    assertDeepEqual(resizePreview.result.size, { width: 50, height: 60 });
+    assertEqual(resizePreview.phase, "preview");
+    assertEqual(resizePreview.documentPatch, undefined);
     assertEqual(
-      interaction.resolveManipulation("rotate", {
+      interaction.commitManipulation("rotate", {
         spec,
         runtimeContext,
         transform,
-        commit: true,
+        coordinateSpace: "scene",
+        subject: {
+          subjectId: "image",
+          projectionTargets: [
+            {
+              projectionId: "image",
+              geometryRef: {
+                sourceId: "render-intent",
+                geometryId: "image",
+              },
+            },
+          ],
+        },
       }).result.rotation,
       90,
     );
-    assertDeepEqual(committedKinds, ["rotate"]);
+    assertDeepEqual(committedKinds, ["move", "rotate"]);
+    assertDeepEqual(committedPatches[0], {
+      type: "translate",
+      coordinateSpace: "scene",
+      delta: { space: "scene", x: 10, y: 2 },
+    });
 
     runtime.services
       .getOrThrow(COMMAND_SERVICE)
@@ -2145,6 +2448,93 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     assertEqual(blocked.activated, false);
     assertEqual(blocked.reason, "session-conflict");
     await existing.cancel();
+  });
+}
+
+async function testRenderGraphRecordsSubjectProjectionMemberships() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createProjection = (id: string, objectOrder: number) => ({
+      id,
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "logical-object",
+      },
+      visual: { type: "rect" as const },
+      placement: createAffinePlacement({
+        localBounds: { left: 0, top: 0, width: 10, height: 10 },
+        localToScene: coordinateMatrix("object-local", "scene", [
+          1,
+          0,
+          0,
+          1,
+          objectOrder * 10,
+          0,
+        ]),
+      }),
+      ordering: { layerId: "art", objectOrder },
+    });
+    const graph = intents.setDocumentIntents([
+      createProjection("logical-object:fill", 0),
+      createProjection("logical-object:outline", 1),
+    ]);
+    assertDeepEqual(
+      graph.projectionMemberships,
+      [
+        {
+          subjectId: "logical-object",
+          nodeIds: ["logical-object:fill", "logical-object:outline"],
+        },
+      ],
+      "RenderGraph should explicitly index every projection of a logical subject",
+    );
+
+    const interaction =
+      runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
+    const selections: unknown[] = [];
+    interaction.onDidChangeSelection((event) => selections.push(event.subject));
+    interaction.selectSubject({
+      subjectId: "logical-object",
+      surfaceId: "front",
+      projectionTargets: graph.layers.flatMap((layer) =>
+        layer.nodes.map((node) => ({
+          projectionId: node.id,
+          geometryRef: node.previewGeometryRef,
+        })),
+      ),
+    });
+    assertDeepEqual(
+      selections,
+      [
+        {
+          subjectId: "logical-object",
+          surfaceId: "front",
+          projectionTargets: [
+            {
+              projectionId: "logical-object:fill",
+              geometryRef: {
+                sourceId: "render-intent",
+                geometryId: "logical-object:fill",
+                purpose: "preview",
+              },
+            },
+            {
+              projectionId: "logical-object:outline",
+              geometryRef: {
+                sourceId: "render-intent",
+                geometryId: "logical-object:outline",
+                purpose: "preview",
+              },
+            },
+          ],
+        },
+      ],
+      "selection should expose the logical subject instead of a render target",
+    );
   });
 }
 
@@ -2259,7 +2649,7 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
     assertDeepEqual(
       changes.map((event) => event.reason),
       [
-        { type: "document-replaced" },
+        { type: "base-replaced" },
         {
           type: "runtime-patch",
           operation: "upsert",
@@ -2326,8 +2716,8 @@ async function testRenderIntentDocumentUpdatesAreScoped() {
     ]);
     assertDeepEqual(
       changes.map((event) => event.reason),
-      [{ type: "document-updated", intentIds: ["first"] }],
-      "document updates should invalidate only semantically changed intents",
+      [{ type: "base-updated", intentIds: ["first"] }],
+      "base updates should invalidate only semantically changed intents",
     );
 
     changes.length = 0;
@@ -2973,7 +3363,7 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
 
   const resolved = resolveImageGeometry({
     source: { src: "/image.png", size: source },
-    frame,
+    frame: { space: "object-local", ...frame },
     fit: "cover",
     transform: {
       anchorX: 0.25,
@@ -2982,21 +3372,14 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
       rotation: 15,
       opacity: 0.8,
     },
-    clip: frame,
+    clip: { space: "object-local", ...frame },
   });
-  assertDeepEqual(resolved, {
-    width: 400,
-    height: 400,
-    left: 60,
-    top: 95,
-    scaleX: 0.6,
-    scaleY: 0.6,
-    angle: 15,
-    opacity: 0.8,
-    originX: "center",
-    originY: "center",
-    clip: frame,
-  });
+  assertEqual(resolved.imageLocalBounds.width, 400);
+  assertEqual(resolved.imageLocalBounds.height, 400);
+  assertEqual(resolved.imageLocalToObjectLocal.from, "object-local");
+  assertEqual(resolved.imageLocalToObjectLocal.to, "object-local");
+  assertEqual(resolved.opacity, 0.8);
+  assertEqual(resolved.clip?.space, "object-local");
 }
 
 async function main() {
@@ -3101,6 +3484,10 @@ async function main() {
     [
       "keeps render intent runtime patches source scoped",
       testRenderIntentRuntimePatchesAreSourceScoped,
+    ],
+    [
+      "records logical subject projection memberships",
+      testRenderGraphRecordsSubjectProjectionMemberships,
     ],
     [
       "scopes document render intent updates by semantic diff",

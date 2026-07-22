@@ -29,6 +29,7 @@ import type { Service, ServiceContext } from "../service";
 import type SessionService from "./SessionService";
 import { SESSION_SERVICE } from "./tokens";
 import { TypedEventEmitter } from "../typed-event";
+import type { AffinePlacement } from "../coordinate";
 
 export type SceneChangeEvent = SceneChangeSet;
 
@@ -505,6 +506,10 @@ export default class SceneService implements Service {
         patch.transform === undefined
           ? this.cloneRecord(current.transform)
           : this.cloneRecord(patch.transform),
+      placement:
+        patch.placement === undefined
+          ? this.clonePlacement(current.placement)
+          : this.clonePlacement(patch.placement),
     } as SceneElement);
 
     scene.elementsById.set(elementId, next);
@@ -780,7 +785,25 @@ export default class SceneService implements Service {
       metadata: this.cloneRecord(element.metadata),
       data: this.cloneRecord(element.data),
       style: this.cloneRecord(element.style),
+      placement: this.clonePlacement(element.placement),
       transform: this.cloneRecord(element.transform),
+      renderGraphProjection: element.renderGraphProjection
+        ? { ...element.renderGraphProjection }
+        : undefined,
+    };
+  }
+
+  private clonePlacement(
+    placement: AffinePlacement | undefined,
+  ): AffinePlacement | undefined {
+    if (!placement) return undefined;
+    return {
+      localBounds: { ...placement.localBounds },
+      localToScene: {
+        ...placement.localToScene,
+        values: [...placement.localToScene.values],
+      },
+      pivot: { ...placement.pivot },
     };
   }
 
@@ -851,15 +874,17 @@ export default class SceneService implements Service {
     effects?: readonly RenderEffectSpec[],
   ): RenderEffectSpec[] | undefined {
     if (!effects) return undefined;
-    return effects.map((effect) => ({
-      ...effect,
-      source: {
+    return effects.map((effect) => {
+      const source = {
         ...effect.source,
         data: this.cloneRecord(effect.source.data),
         props: this.cloneRecord(effect.source.props) ?? {},
         effects: this.cloneEffects(effect.source.effects),
-      },
-    }));
+      };
+      return effect.coordinateMode === "object"
+        ? { ...effect, coordinateMode: "object", source }
+        : { ...effect, coordinateMode: "absolute", source };
+    }) as RenderEffectSpec[];
   }
 
   private cloneTags(value?: readonly string[]): string[] | undefined {
@@ -984,12 +1009,12 @@ function normalizeComposition(
   }
   return {
     entries: composition.entries.map((entry) => {
-      if (entry.source === "document") {
+      if (entry.source === "render-graph") {
         if (entry.interaction !== "disabled") {
-          throw new Error("Document projections must disable interaction.");
+          throw new Error("RenderGraph projections must disable interaction.");
         }
         return {
-          source: "document" as const,
+          source: "render-graph" as const,
           interaction: "disabled" as const,
           ...(entry.filter ? { filter: entry.filter } : {}),
         };
@@ -1015,7 +1040,7 @@ function cloneComposition(
 ): SceneSnapshot["composition"] {
   return {
     entries: composition.entries.map((entry) =>
-      entry.source === "document"
+      entry.source === "render-graph"
         ? { ...entry }
         : { ...entry, layerIds: [...entry.layerIds] },
     ),

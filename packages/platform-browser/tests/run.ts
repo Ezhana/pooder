@@ -2,6 +2,10 @@ import type { Service } from "@pooder/core";
 import {
   CONFIGURATION_SERVICE,
   COMMAND_SERVICE,
+  coordinateMatrix,
+  createAffinePlacement,
+  createLocalToSceneMatrix,
+  GEOMETRY_SOURCE_SERVICE,
   INTERACTION_SERVICE,
   Pooder,
   RENDER_INTENT_SERVICE,
@@ -9,6 +13,7 @@ import {
   SESSION_SERVICE,
   SURFACE_FRAME_SERVICE,
   type RenderIntentService,
+  type GeometrySourceService,
   type InteractionService,
   type SceneService,
   type SessionService,
@@ -16,6 +21,7 @@ import {
 import type { SurfaceSceneFrames } from "@pooder/core";
 import {
   attachBrowserHost,
+  BrowserObjectImageResolverService,
   BrowserSceneExportService,
   CANVAS_SERVICE,
   CanvasService,
@@ -35,6 +41,7 @@ import type {
 import { ViewportSystem } from "../src/viewport-system";
 
 declare const process: {
+  env: Record<string, string | undefined>;
   exit(code: number): never;
 };
 
@@ -69,6 +76,25 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   if (actualJson !== expectedJson) {
     throw new Error(`${message} (expected ${expectedJson}, got ${actualJson})`);
   }
+}
+
+function createTestPlacement(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+) {
+  return createAffinePlacement({
+    localBounds: { left: 0, top: 0, width, height },
+    localToScene: coordinateMatrix("object-local", "scene", [
+      1,
+      0,
+      0,
+      1,
+      left,
+      top,
+    ]),
+  });
 }
 
 class FakeCanvasService {
@@ -414,8 +440,13 @@ function createCanvasServiceForReconcileTests() {
   service.viewport = {
     offset: { x: 0, y: 0 },
     scale: 1,
+    sceneToScreenMatrix: (matrix: any) => ({
+      ...matrix,
+      to: "screen",
+    }),
     updateContainer() {},
   };
+  service.applyAffinePlacement = () => {};
   service.createFabricObject = async (spec: any) => {
     const obj = new FakeFabricObject(spec.type, { src: spec.src });
     obj.set({
@@ -479,15 +510,75 @@ async function testCanvasServicePreservesViewportLayout() {
     "canvas viewport should keep provided scale",
   );
   assertDeepEqual(
-    service.getSceneOffset(),
-    { x: 112.25, y: 60.75 },
+    service.toScreenPoint({ space: "scene", x: 0, y: 0 }),
+    { x: 112.25, y: 60.75, space: "screen" },
     "canvas viewport should keep provided offset",
   );
   assertDeepEqual(
-    service.toScreenPoint({ x: 10, y: 20 }),
-    { x: 154.75, y: 145.75 },
+    service.toScreenPoint({ space: "scene", x: 10, y: 20 }),
+    { x: 154.75, y: 145.75, space: "screen" },
     "screen mapping should use the provided scale and offset together",
   );
+}
+
+function testViewportProjectionRoundTripsWithoutResizeDrift() {
+  const viewport = new ViewportSystem();
+  const canonicalPoint = { space: "scene" as const, x: 12.5, y: -7.25 };
+  const canonicalRect = {
+    space: "scene" as const,
+    left: -10,
+    top: 20,
+    width: 35,
+    height: 45,
+  };
+  const canonicalMatrix = coordinateMatrix(
+    "object-local",
+    "scene",
+    [1.5, 0.25, -0.5, 0.75, 18, -9],
+  );
+  const layouts = [
+    { scale: 2, offsetX: 100, offsetY: 50, width: 400, height: 300 },
+    { scale: 3.5, offsetX: -20, offsetY: 80, width: 700, height: 525 },
+    { scale: 0.75, offsetX: 12, offsetY: -4, width: 150, height: 112.5 },
+    { scale: 2, offsetX: 100, offsetY: 50, width: 400, height: 300 },
+  ];
+
+  for (const [index, layout] of layouts.entries()) {
+    viewport.setLayout(layout);
+    const screenPoint = viewport.sceneToScreenPoint(canonicalPoint);
+    const scenePoint = viewport.screenToScenePoint(screenPoint);
+    assertClose(scenePoint.x, canonicalPoint.x, `viewport point x ${index}`);
+    assertClose(scenePoint.y, canonicalPoint.y, `viewport point y ${index}`);
+
+    const screenRect = viewport.sceneToScreenRect(canonicalRect);
+    const sceneRect = viewport.screenToSceneRect(screenRect);
+    assertClose(
+      sceneRect.left,
+      canonicalRect.left,
+      `viewport rect left ${index}`,
+    );
+    assertClose(sceneRect.top, canonicalRect.top, `viewport rect top ${index}`);
+    assertClose(
+      sceneRect.width,
+      canonicalRect.width,
+      `viewport rect width ${index}`,
+    );
+    assertClose(
+      sceneRect.height,
+      canonicalRect.height,
+      `viewport rect height ${index}`,
+    );
+
+    const screenMatrix = viewport.sceneToScreenMatrix(canonicalMatrix);
+    const sceneMatrix = viewport.screenToSceneMatrix(screenMatrix);
+    canonicalMatrix.values.forEach((value, matrixIndex) =>
+      assertClose(
+        sceneMatrix.values[matrixIndex],
+        value,
+        `viewport matrix ${index}:${matrixIndex}`,
+      ),
+    );
+  }
 }
 
 function testAttachRegistersRenderGraphAdapter() {
@@ -625,6 +716,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
         objectId: "bg",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 10, 10),
       ordering: { layerId: "bg", stack: 0, layerOrder: 0 },
       props: { width: 10, height: 10 },
     },
@@ -637,6 +729,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
         objectId: "art",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 5, 5),
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
       props: { width: 5, height: 5 },
       effects: [
@@ -646,6 +739,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
           source: {
             id: "clip-source",
             type: "rect",
+            space: "scene",
             props: { width: 3, height: 3 },
           },
           coordinateMode: "absolute",
@@ -661,6 +755,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
         objectId: "hidden-export",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 7, 8),
       ordering: { layerId: "art", stack: 10, layerOrder: 1 },
       export: { visible: false, tags: ["mockup"] },
       props: { width: 7, height: 8 },
@@ -721,6 +816,7 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
         objectId: "document-node",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 20, 20),
       ordering: { layerId: "document", stack: 0 },
       props: { width: 20, height: 20 },
       interaction: { selection: { enabled: true } },
@@ -743,7 +839,7 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     composition: {
       entries: [
         { source: "local", layerIds: ["underlay"] },
-        { source: "document", interaction: "disabled" },
+        { source: "render-graph", interaction: "disabled" },
         { source: "local", layerIds: ["controls"] },
       ],
     },
@@ -905,7 +1001,7 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
       },
       visual: { type: "image", src: "/user.png" },
       ordering: { layerId: "art" },
-      placement: { width: 100, height: 80 },
+      placement: createTestPlacement(0, 0, 100, 80),
     },
   ]);
   const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
@@ -932,7 +1028,7 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
     layerId: "working",
     type: "image",
     src: "/user.png",
-    data: { imageSlotObjectId: "user-image" },
+    renderGraphProjection: { subjectId: "user-image", type: "image" },
   });
   await adapter.flush();
   const workingItems = canvas.reconcileCalls.at(-1)?.items ?? [];
@@ -959,8 +1055,9 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
   scene.dispose();
   await adapter.flush();
   assertEqual(
-    canvas.reconcileCalls.at(-1)?.items.find((item) => item.key === "user-image")
-      ?.spec.id,
+    canvas.reconcileCalls
+      .at(-1)
+      ?.items.find((item) => item.key === "user-image")?.spec.id,
     "user-image",
     "committed document image should inherit the same canonical target",
   );
@@ -1062,17 +1159,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
           },
         },
       },
-      placement: {
-        frame: { x: 100, y: 120, width: 200, height: 160 },
-        transform: {
-          left: 200,
-          top: 200,
-          originX: "center",
-          originY: "center",
-          scaleX: 0.5,
-          scaleY: 0.5,
-        },
-      },
+      placement: createTestPlacement(100, 120, 200, 160),
       ordering: { layerId: "art", stack: 10, layerOrder: 0 },
     },
     {
@@ -1085,20 +1172,16 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
         objectType: "image",
       },
       visual: { type: "image", src: "data:image/png;base64,resolved" },
-      placement: {
-        frame: { x: 100, y: 120, width: 200, height: 160 },
-        width: 400,
-        height: 320,
-        transform: {
-          left: 220,
-          top: 210,
-          originX: "center",
-          originY: "center",
+      placement: createAffinePlacement({
+        localBounds: { left: 0, top: 0, width: 400, height: 320 },
+        localToScene: createLocalToSceneMatrix({
+          position: { x: 220, y: 210 },
+          pivot: { x: 200, y: 160 },
           scaleX: 0.75,
           scaleY: 0.6,
-          angle: 15,
-        },
-      },
+          rotation: 15,
+        }),
+      }),
       ordering: { layerId: "art", stack: 10, layerOrder: 0, objectOrder: 1 },
     },
   ]);
@@ -1470,7 +1553,7 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
     states.some(
       (state) =>
         state.syncing &&
-        state.causes.some((cause) => cause.type === "document-apply") &&
+        state.causes.some((cause) => cause.type === "base-replaced") &&
         state.invalidations.some(
           (invalidation) => invalidation.type === "full",
         ),
@@ -1540,18 +1623,19 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
       }),
   );
   assert(
-    states.some((state) =>
-      state.causes.some(
-        (cause) =>
-          cause.type === "interaction-preview" &&
-          cause.sessionId === "image:front",
-      ) &&
-      state.invalidations.some(
-        (invalidation) =>
-          invalidation.type === "scene-elements" &&
-          invalidation.sceneId === "image:front:scene" &&
-          invalidation.elementIds.includes("snap-line"),
-      ),
+    states.some(
+      (state) =>
+        state.causes.some(
+          (cause) =>
+            cause.type === "interaction-preview" &&
+            cause.sessionId === "image:front",
+        ) &&
+        state.invalidations.some(
+          (invalidation) =>
+            invalidation.type === "scene-elements" &&
+            invalidation.sceneId === "image:front:scene" &&
+            invalidation.elementIds.includes("snap-line"),
+        ),
     ),
     "adapter should preserve interaction preview provenance and element invalidation",
   );
@@ -1635,10 +1719,7 @@ async function testFabricRenderGraphAdapterDoesNotSizePathFromFrame() {
         objectId: "cutline",
       },
       visual: { type: "path" },
-      placement: {
-        frame: { x: 30, y: 30, width: 531, height: 531 },
-        transform: { scaleX: 1, scaleY: 1 },
-      },
+      placement: createTestPlacement(30, 30, 531, 531),
       ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
       props: {
         fill: "transparent",
@@ -1686,10 +1767,14 @@ async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft(
         objectId: "detected-cutline",
       },
       visual: { type: "path" },
-      placement: {
-        frame: { x: 10, y: 12, width: 80, height: 40 },
-        transform: { left: 10, scaleX: 2, scaleY: 2, top: 12 },
-      },
+      placement: createAffinePlacement({
+        localBounds: { left: 0, top: 0, width: 40, height: 20 },
+        localToScene: coordinateMatrix(
+          "object-local",
+          "scene",
+          [2, 0, 0, 2, 10, 12],
+        ),
+      }),
       ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
       props: {
         pathData: "M0 0H40V20H0Z",
@@ -1738,9 +1823,7 @@ async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay
         objectType: "object",
       },
       visual: { type: "path" },
-      placement: {
-        frame: { x: 30, y: 30, width: 531, height: 531 },
-      },
+      placement: createTestPlacement(30, 30, 531, 531),
       ordering: {
         layerId: "front.dieline-overlay",
         layerOrder: 30,
@@ -1947,12 +2030,10 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "empty-slot",
       },
       visual: { type: "image" },
-      placement: {
-        frame: { x: 12, y: 24, width: 80, height: 60 },
-      },
+      placement: createTestPlacement(12, 24, 80, 60),
       ordering: { layerId: "art", objectOrder: 6 },
       interaction: {
-        hitRegion: { type: "frame" },
+        hitRegion: { type: "frame", space: "scene" },
         activation: { action: { commandId: "test.open" } },
       },
     },
@@ -2312,6 +2393,156 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
   await runtime.dispose();
 }
 
+async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
+  const runtime = new Pooder();
+  const canvas = new FakeCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as any, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  const intents = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  const interaction =
+    runtime.services.getOrThrow<InteractionService>(INTERACTION_SERVICE);
+  const interactionSpec = { manipulation: { move: { enabled: true } } };
+  intents.setDocumentIntents([
+    {
+      id: "subject:fill",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "subject",
+      },
+      visual: { type: "rect" },
+      placement: createTestPlacement(10, 20, 10, 10),
+      ordering: { layerId: "art", objectOrder: 0 },
+      interaction: interactionSpec,
+    },
+    {
+      id: "subject:outline",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "subject",
+      },
+      visual: { type: "rect" },
+      placement: createTestPlacement(50, 20, 10, 10),
+      ordering: { layerId: "art", objectOrder: 1 },
+      interaction: interactionSpec,
+    },
+  ]);
+  await adapter.flush();
+
+  const createTarget = (
+    renderNodeId: string,
+    placement: ReturnType<typeof createTestPlacement>,
+    left: number,
+  ) => ({
+    left,
+    top: 20,
+    width: 10,
+    height: 10,
+    scaleX: 1,
+    scaleY: 1,
+    data: {
+      affinePlacement: placement,
+      interactionSpec,
+      renderKey: renderNodeId,
+      renderNodeId,
+      renderTarget: "render-graph",
+      subjectId: "subject",
+      surfaceId: "front",
+    },
+    getBoundingRect() {
+      return {
+        left: this.left,
+        top: this.top,
+        width: this.width,
+        height: this.height,
+      };
+    },
+    set(values: Record<string, unknown>) {
+      Object.assign(this, values);
+    },
+    setCoords() {},
+  });
+  const active = createTarget(
+    "subject:fill",
+    createTestPlacement(10, 20, 10, 10),
+    15,
+  );
+  const sibling = createTarget(
+    "subject:outline",
+    createTestPlacement(50, 20, 10, 10),
+    50,
+  );
+  canvas.objects = [active, sibling];
+
+  const liveProjectionGeometry = runtime.services
+    .getOrThrow<GeometrySourceService>(GEOMETRY_SOURCE_SERVICE)
+    .getSnapshot({
+      sourceId: "render-graph",
+      geometryId: "subject:fill",
+      purpose: "preview",
+    }).value;
+  assertDeepEqual(
+    liveProjectionGeometry?.localToScene.values,
+    active.data.affinePlacement.localToScene.values,
+    "live projection geometry should preserve its declarative affine placement",
+  );
+
+  canvas.emit("selection", { kind: "created", target: active });
+  assertDeepEqual(
+    interaction.getSelectedSubject(),
+    {
+      subjectId: "subject",
+      surfaceId: "front",
+      projectionTargets: [
+        {
+          projectionId: "subject:fill",
+          geometryRef: {
+            sourceId: "render-intent",
+            geometryId: "subject:fill",
+            purpose: "preview",
+          },
+        },
+        {
+          projectionId: "subject:outline",
+          geometryRef: {
+            sourceId: "render-intent",
+            geometryId: "subject:outline",
+            purpose: "preview",
+          },
+        },
+      ],
+    },
+    "Fabric selection should resolve to the logical subject membership",
+  );
+
+  let committedPatch: unknown;
+  interaction.onDidCommitManipulation((event) => {
+    committedPatch = event.result.documentPatch;
+  });
+  canvas.emitCanvasEvent("object:moving", { target: active });
+  assertEqual(
+    sibling.left,
+    55,
+    "temporary dragging should translate every derived subject projection",
+  );
+  canvas.emitCanvasEvent("object:modified", { target: active });
+  assertDeepEqual(
+    committedPatch,
+    {
+      type: "translate",
+      coordinateSpace: "scene",
+      delta: { space: "scene", x: 5, y: 0 },
+    },
+    "commit should emit a scene-space transform patch from the canonical projection",
+  );
+
+  await runtime.dispose();
+}
+
 async function testCanvasReconcileRemovesStaleObjectsAndClearsClip() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
   const stale = new FakeFabricObject("rect", {
@@ -2421,32 +2652,35 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
   image.left = 137;
   image.top = 142;
 
-  await service.reconcileRenderGraphDrawList([
-    workingImage,
-    {
-      key: "snap-guide",
-      layerId: "image.session.controls",
-      origin: {
-        type: "scene-element",
-        sceneId: "image-session",
-        elementId: "snap-guide",
-      },
-      order: 1,
-      spec: {
-        id: "snap-guide",
-        type: "path",
-        props: { pathData: "M100 0L100 200" },
-      },
-    },
-  ], {
-    invalidations: [
+  await service.reconcileRenderGraphDrawList(
+    [
+      workingImage,
       {
-        type: "scene-elements",
-        sceneId: "image-session",
-        elementIds: ["snap-guide"],
+        key: "snap-guide",
+        layerId: "image.session.controls",
+        origin: {
+          type: "scene-element",
+          sceneId: "image-session",
+          elementId: "snap-guide",
+        },
+        order: 1,
+        spec: {
+          id: "snap-guide",
+          type: "path",
+          props: { pathData: "M100 0L100 200" },
+        },
       },
     ],
-  });
+    {
+      invalidations: [
+        {
+          type: "scene-elements",
+          sceneId: "image-session",
+          elementIds: ["snap-guide"],
+        },
+      ],
+    },
+  );
 
   assertEqual(
     image.left,
@@ -2553,9 +2787,7 @@ async function testCanvasReconcileReplacesInvalidatedRenderIntentImage() {
   await service.reconcileRenderGraphDrawList(
     [createTemplateItem("/template-two.png")],
     {
-      invalidations: [
-        { type: "render-intents", intentIds: ["template-slot"] },
-      ],
+      invalidations: [{ type: "render-intents", intentIds: ["template-slot"] }],
     },
   );
 
@@ -2834,6 +3066,62 @@ async function testCanvasReconcileAppliesClipPath() {
   );
 }
 
+async function testCanvasReconcileAppliesPlacedRectClipPath() {
+  const { canvas, service } = createCanvasServiceForReconcileTests();
+  await service.reconcileRenderGraphDrawList([
+    {
+      key: "placed-art-node",
+      layerId: "art",
+      order: 0,
+      spec: {
+        id: "placed-art-node",
+        type: "rect",
+        props: { width: 10, height: 10 },
+        data: { subjectId: "placed-art-subject" },
+        effects: [
+          {
+            type: "clipPath",
+            id: "clip.placed",
+            coordinateMode: "absolute",
+            source: {
+              id: "placed-clip-source",
+              type: "rect",
+              space: "scene",
+              placement: createAffinePlacement({
+                localBounds: { left: 0, top: 0, width: 5, height: 6 },
+                localToScene: coordinateMatrix(
+                  "object-local",
+                  "scene",
+                  [1, 0, 0, 1, 2, 3],
+                ),
+              }),
+              props: { fill: "#000" },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  const clipPath = canvas.objects[0]?.clipPath as any;
+  assert(clipPath, "placed clip path should be attached");
+  assertEqual(
+    clipPath.width,
+    5,
+    "placed clip should consume local bounds width",
+  );
+  assertEqual(
+    clipPath.height,
+    6,
+    "placed clip should consume local bounds height",
+  );
+  assertEqual(
+    clipPath.absolutePositioned,
+    true,
+    "placed scene clip should remain absolute-positioned",
+  );
+}
+
 async function testCanvasReconcileAppliesImageClipPath() {
   const { canvas, service } = createCanvasServiceForReconcileTests();
   await service.reconcileRenderGraphDrawList([
@@ -2884,6 +3172,91 @@ async function testCanvasReconcileAppliesImageClipPath() {
     clipPath.absolutePositioned,
     true,
     "image clip path should be absolute-positioned like other clip sources",
+  );
+}
+
+async function testSceneExportUsesThePreviewClipContract() {
+  const clipEffect = {
+    type: "clipPath" as const,
+    id: "clip.contract",
+    coordinateMode: "absolute" as const,
+    source: {
+      id: "clip-source",
+      type: "rect" as const,
+      space: "scene" as const,
+      props: { width: 50, height: 40 },
+    },
+  };
+  const capturedSpecs: any[] = [];
+  const createExportCanvas = () => ({
+    add() {},
+    dispose() {},
+    renderAll() {},
+    toDataURL() {
+      return "data:image/png;base64,contract";
+    },
+  });
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    async createDetachedRenderObject(spec: unknown) {
+      capturedSpecs.push(spec);
+      return {};
+    },
+  };
+  service.geometrySource = {};
+  service.renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          id: "artwork",
+          visible: true,
+          nodes: [
+            {
+              id: "shape",
+              visible: true,
+              exportKeys: ["shape"],
+              tags: ["contract"],
+              props: {},
+              effects: [clipEffect],
+            },
+          ],
+        },
+      ],
+    }),
+  };
+  service.renderGraphAdapter = {
+    createExportRenderObjectSpec: () => ({
+      id: "shape",
+      type: "rect",
+      props: { width: 100, height: 80 },
+      effects: [clipEffect],
+    }),
+  };
+  service.createExportCanvas = createExportCanvas;
+
+  await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+  });
+  assertDeepEqual(
+    capturedSpecs[0]?.effects,
+    [clipEffect],
+    "export should consume the same clip effect contract as preview",
+  );
+
+  await service.exportImage({
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+    preserveClipPaths: false,
+  });
+  assertDeepEqual(
+    capturedSpecs[1]?.effects,
+    [],
+    "clip removal should require an explicit export option",
   );
 }
 
@@ -3663,9 +4036,253 @@ async function testSceneExportAllowsHiddenOutputMaskSource() {
   );
 }
 
+async function testObjectImageResolverCachesCommittedVisuals() {
+  let notifyRenderChange: (() => void) | undefined;
+  let effects: unknown[] = [{}];
+  let exportCalls = 0;
+  let lastExportOptions: Record<string, unknown> | undefined;
+  const renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          nodes: [
+            {
+              data: {
+                imageGeometry: {
+                  fit: "cover",
+                  frame: { height: 50, left: 0, top: 0, width: 80 },
+                  source: {
+                    size: { height: 200, width: 300 },
+                    src: "https://example.com/original.png",
+                  },
+                },
+              },
+              effects,
+              exportKeys: ["image-slot"],
+              id: "render-image-slot",
+              placement: createTestPlacement(10, 20, 80, 50),
+              props: {},
+              subjectId: "image-slot",
+              type: "image",
+            },
+          ],
+        },
+      ],
+    }),
+    onDidChange: (listener: () => void) => {
+      notifyRenderChange = listener;
+      return { dispose() {} };
+    },
+  };
+  const sceneExportService = {
+    exportImage: async (options: Record<string, unknown>) => {
+      exportCalls += 1;
+      lastExportOptions = options;
+      return {
+        crop: { height: 50, left: 10, top: 20, width: 80 },
+        format: "png" as const,
+        height: 100,
+        url: `data:image/png;base64,resolved-${exportCalls}`,
+        width: 160,
+      };
+    },
+  };
+  const resolver = new BrowserObjectImageResolverService();
+  resolver.init({
+    eventBus: {} as any,
+    get: () => undefined,
+    getOrThrow: (token: unknown) =>
+      token === RENDER_INTENT_SERVICE
+        ? (renderIntentService as any)
+        : (sceneExportService as any),
+    has: () => true,
+  });
+
+  const first = await resolver.resolve({ objectId: "image-slot" });
+  const second = await resolver.resolve({ objectId: "image-slot" });
+  assertEqual(first.url, second.url, "resolved visuals should be cached");
+  assertEqual(exportCalls, 1, "cached visual should not be exported twice");
+  assertEqual(
+    (lastExportOptions?.preserveClipPaths as boolean) ?? false,
+    true,
+    "committed visual export should preserve clipping",
+  );
+  assertDeepEqual(
+    first.sceneBounds,
+    { height: 50, left: 10, top: 20, width: 80 },
+    "resolved visual should retain its scene-space bounds",
+  );
+
+  const original = await resolver.resolve({
+    objectId: "image-slot",
+    representation: "original-resource",
+  });
+  assertEqual(
+    original.url,
+    "https://example.com/original.png",
+    "original representation should retain the editable resource",
+  );
+  assertEqual(
+    original.derived,
+    false,
+    "original resource should not be derived",
+  );
+  assertEqual(exportCalls, 1, "original resource should bypass scene export");
+
+  notifyRenderChange?.();
+  const refreshed = await resolver.resolve({ objectId: "image-slot" });
+  assertEqual(exportCalls, 2, "render changes should invalidate visual cache");
+  assertEqual(
+    refreshed.revision,
+    1,
+    "resolved revision should track invalidation",
+  );
+
+  effects = [];
+  notifyRenderChange?.();
+  const unchanged = await resolver.resolve({ objectId: "image-slot" });
+  assertEqual(
+    unchanged.url,
+    "https://example.com/original.png",
+    "an unprocessed committed visual should reuse its original resource",
+  );
+  assertEqual(
+    unchanged.derived,
+    false,
+    "identity resolution should not be derived",
+  );
+  assertEqual(exportCalls, 2, "identity resolution should bypass scene export");
+  resolver.dispose();
+}
+
+async function testObjectImageResolverCropsCommittedVisualToClip() {
+  let lastExportOptions: Record<string, unknown> | undefined;
+  const clipPlacement = createTestPlacement(100, 200, 80, 50);
+  const renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          nodes: [
+            {
+              data: {
+                imageGeometry: {
+                  clip: { height: 50, left: 0, top: 0, width: 80 },
+                  fit: "cover",
+                  frame: { height: 50, left: 0, top: 0, width: 80 },
+                  source: {
+                    size: { height: 200, width: 300 },
+                    src: "https://example.com/original.png",
+                  },
+                  transform: { zoom: 2 },
+                },
+              },
+              effects: [
+                {
+                  coordinateMode: "absolute",
+                  source: {
+                    placement: clipPlacement,
+                    space: "scene",
+                    type: "rect",
+                  },
+                  type: "clipPath",
+                },
+              ],
+              exportKeys: ["image-slot"],
+              id: "render-image-slot",
+              // Oversized source placement that overflows the clip frame.
+              placement: createTestPlacement(60, 160, 160, 120),
+              props: {},
+              subjectId: "image-slot",
+              type: "image",
+            },
+          ],
+        },
+      ],
+    }),
+    onDidChange: () => ({ dispose() {} }),
+  };
+  const sceneExportService = {
+    exportImage: async (options: Record<string, unknown>) => {
+      lastExportOptions = options;
+      return {
+        crop: { height: 50, left: 100, space: "scene", top: 200, width: 80 },
+        format: "png" as const,
+        height: 100,
+        url: "data:image/png;base64,clipped",
+        width: 160,
+      };
+    },
+  };
+  const resolver = new BrowserObjectImageResolverService();
+  resolver.init({
+    eventBus: {} as any,
+    get: () => undefined,
+    getOrThrow: (token: unknown) =>
+      token === RENDER_INTENT_SERVICE
+        ? (renderIntentService as any)
+        : (sceneExportService as any),
+    has: () => true,
+  });
+
+  const resolved = await resolver.resolve({ objectId: "image-slot" });
+  const exportCrop = lastExportOptions?.crop as
+    | { type?: string; rect?: Record<string, number | string> }
+    | undefined;
+  assertEqual(
+    exportCrop?.type,
+    "sceneRect",
+    "committed visual should crop with sceneRect",
+  );
+  assertDeepEqual(
+    {
+      height: Number(exportCrop?.rect?.height),
+      left: Number(exportCrop?.rect?.left),
+      top: Number(exportCrop?.rect?.top),
+      width: Number(exportCrop?.rect?.width),
+    },
+    { height: 50, left: 100, top: 200, width: 80 },
+    "committed visual should crop to the clip region instead of element bounds",
+  );
+  assertEqual(
+    (lastExportOptions?.preserveClipPaths as boolean) ?? false,
+    true,
+    "committed visual export should preserve clipping",
+  );
+  assertEqual(resolved.derived, true, "clipped committed visual is derived");
+  assertDeepEqual(
+    {
+      height: resolved.sceneBounds.height,
+      left: resolved.sceneBounds.left,
+      top: resolved.sceneBounds.top,
+      width: resolved.sceneBounds.width,
+    },
+    { height: 50, left: 100, top: 200, width: 80 },
+    "committed visual scene bounds should match the clip region",
+  );
+  assertDeepEqual(
+    {
+      height: resolved.placement.localBounds.height,
+      left: resolved.placement.localBounds.left,
+      top: resolved.placement.localBounds.top,
+      width: resolved.placement.localBounds.width,
+    },
+    { height: 100, left: 0, top: 0, width: 160 },
+    "committed visual placement should use the clipped export pixel bounds",
+  );
+  resolver.dispose();
+}
+
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["applies alpha mask data", testOutputMaskAlphaHelpers],
+    [
+      "resolves and caches committed object visuals",
+      testObjectImageResolverCachesCommittedVisuals,
+    ],
+    [
+      "crops committed visuals to clip bounds",
+      testObjectImageResolverCropsCommittedVisualToClip,
+    ],
     ["fills outline output masks", testOutputMaskOutlineHelpers],
     [
       "preserves outline output mask frame shapes",
@@ -3682,6 +4299,10 @@ async function main() {
     [
       "preserves explicit viewport layout",
       testCanvasServicePreservesViewportLayout,
+    ],
+    [
+      "round-trips scene and screen projections without resize drift",
+      testViewportProjectionRoundTripsWithoutResizeDrift,
     ],
     [
       "builds graph adapter draw list",
@@ -3752,6 +4373,10 @@ async function main() {
       testFabricRenderGraphAdapterConstrainsDragging,
     ],
     [
+      "moves every projection of a logical subject",
+      testFabricRenderGraphAdapterMovesLogicalSubjectProjections,
+    ],
+    [
       "reconciles stale objects and clip cleanup",
       testCanvasReconcileRemovesStaleObjectsAndClearsClip,
     ],
@@ -3784,7 +4409,15 @@ async function main() {
       testCanvasReconcileAppliesInteractiveControlDefaults,
     ],
     ["applies graph clip paths", testCanvasReconcileAppliesClipPath],
+    [
+      "applies placed graph rect clip paths",
+      testCanvasReconcileAppliesPlacedRectClipPath,
+    ],
     ["applies graph image clip paths", testCanvasReconcileAppliesImageClipPath],
+    [
+      "uses the preview clip contract during export",
+      testSceneExportUsesThePreviewClipContract,
+    ],
     [
       "exports by render graph node ids",
       testSceneExportMatchesRenderGraphNodeIds,
@@ -3823,7 +4456,27 @@ async function main() {
     ],
   ];
 
-  for (const [name, run] of tests) {
+  const filter = String(process.env.POODER_TEST_FILTER || "")
+    .trim()
+    .toLowerCase();
+  const foundationNames = new Set([
+    "round-trips scene and screen projections without resize drift",
+    "applies graph clip paths",
+    "applies placed graph rect clip paths",
+    "applies graph image clip paths",
+    "uses the preview clip contract during export",
+  ]);
+  const selectedTests =
+    filter === "foundation"
+      ? tests.filter(([name]) => foundationNames.has(name))
+      : filter
+        ? tests.filter(([name]) => name.toLowerCase().includes(filter))
+        : tests;
+  if (selectedTests.length === 0) {
+    throw new Error(`No platform-browser tests match "${filter}".`);
+  }
+
+  for (const [name, run] of selectedTests) {
     await run();
     console.log(`PASS ${name}`);
   }

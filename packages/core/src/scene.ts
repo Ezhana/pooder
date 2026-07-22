@@ -2,6 +2,7 @@ import type { RenderEffectSpec } from "./render";
 import type { InteractionSpec } from "./interaction-service";
 import type { RenderGraphLayer, RenderGraphNode } from "./render-intent";
 import type Disposable from "./disposable";
+import type { AffinePlacement, CoordinatePoint } from "./coordinate";
 
 export type LayerId = string;
 export type ElementId = string;
@@ -14,10 +15,7 @@ export type SceneMetadata = Record<string, unknown>;
 export type SceneElementData = Record<string, unknown>;
 export type SceneElementStyle = Record<string, unknown>;
 
-export interface ScenePoint {
-  x: number;
-  y: number;
-}
+export type ScenePoint = CoordinatePoint<"scene">;
 
 export interface SceneTransform {
   left?: number;
@@ -107,8 +105,18 @@ export interface SceneElementBase {
   data?: SceneElementData;
   /** @internal Renderer-specific props belong to the legacy overlay adapter. */
   style?: SceneElementStyle;
+  placement?: AffinePlacement;
   transform?: SceneTransform;
   interaction?: InteractionSpec;
+  /**
+   * Associates a local scene element with the logical RenderGraph projection
+   * it temporarily replaces. Render adapters use this only to preserve target
+   * identity while composition changes.
+   */
+  renderGraphProjection?: {
+    readonly subjectId: string;
+    readonly type?: SceneElementType;
+  };
 }
 
 export interface SceneImageElement extends SceneElementBase {
@@ -161,7 +169,9 @@ export interface SceneElementPatch {
   metadata?: SceneMetadata;
   data?: SceneElementData;
   style?: SceneElementStyle;
+  placement?: AffinePlacement;
   transform?: SceneTransform;
+  renderGraphProjection?: SceneElementBase["renderGraphProjection"];
   src?: string;
   width?: number;
   height?: number;
@@ -243,19 +253,19 @@ export interface SessionSceneOwner {
 
 export type SceneOwner = SessionSceneOwner;
 
-export interface DocumentProjectionFilterContext {
+export interface RenderGraphProjectionFilterContext {
   readonly layer: RenderGraphLayer;
   readonly node: RenderGraphNode;
 }
 
-export type DocumentProjectionFilter = (
-  context: DocumentProjectionFilterContext,
+export type RenderGraphProjectionFilter = (
+  context: RenderGraphProjectionFilterContext,
 ) => boolean;
 
-export interface DocumentSceneCompositionEntry {
-  readonly source: "document";
+export interface RenderGraphSceneCompositionEntry {
+  readonly source: "render-graph";
   readonly interaction: "disabled";
-  readonly filter?: DocumentProjectionFilter;
+  readonly filter?: RenderGraphProjectionFilter;
 }
 
 export interface LocalSceneCompositionEntry {
@@ -264,7 +274,7 @@ export interface LocalSceneCompositionEntry {
 }
 
 export type SceneCompositionEntry =
-  | DocumentSceneCompositionEntry
+  | RenderGraphSceneCompositionEntry
   | LocalSceneCompositionEntry;
 
 export interface SceneComposition {

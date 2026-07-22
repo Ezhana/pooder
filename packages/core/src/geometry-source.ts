@@ -1,12 +1,20 @@
 import type Disposable from "./disposable";
 import type { Service } from "./service";
 import type { GeometryPoint, GeometryRect } from "./interaction";
+import {
+  coordinateMatrix,
+  transformCoordinatePoint,
+  type CoordinateSpace,
+  type Matrix2D,
+} from "./coordinate";
 
-export type CoordinateSpace = "document" | "scene" | "screen";
+export type { CoordinateSpace } from "./coordinate";
 
 export interface GeometryRef {
   sourceId: string;
   geometryId: string;
+  /** Selects the geometry optimized for interactive preview or final output. */
+  purpose?: "preview" | "export";
   variant?: string;
 }
 
@@ -19,8 +27,10 @@ export type GeometrySnapshotKind =
 
 export interface GeometrySnapshotBase {
   kind: GeometrySnapshotKind;
-  ref?: GeometryRef;
-  space?: CoordinateSpace;
+  ref: GeometryRef;
+  space: CoordinateSpace;
+  bounds: GeometryRect;
+  localToScene: Matrix2D<CoordinateSpace, "scene">;
   metadata?: Record<string, unknown>;
 }
 
@@ -29,32 +39,10 @@ export interface GeometryRectSnapshot extends GeometrySnapshotBase {
   rect: GeometryRect;
 }
 
-export interface GeometryPathUtilityContext {
-  snapshot: GeometryPathSnapshot;
-}
-
-export interface GeometryPathUtilities {
-  bounds?(context: GeometryPathUtilityContext): GeometryRect | null;
-  nearestPoint?(
-    point: GeometryPoint,
-    context: GeometryPathUtilityContext,
-  ): GeometryPoint | null;
-  contains?(point: GeometryPoint, context: GeometryPathUtilityContext): boolean;
-  sample?(
-    ratio: number,
-    context: GeometryPathUtilityContext,
-  ): GeometryPoint | null;
-  normalAt?(
-    point: GeometryPoint,
-    context: GeometryPathUtilityContext,
-  ): GeometryPoint | null;
-}
-
 export interface GeometryPathSnapshot extends GeometrySnapshotBase {
   kind: "path";
+  format: string;
   pathData: string;
-  bounds?: GeometryRect;
-  utilities?: GeometryPathUtilities;
 }
 
 export interface GeometryPolygonSnapshot extends GeometrySnapshotBase {
@@ -69,7 +57,7 @@ export interface GeometryPointSetSnapshot extends GeometrySnapshotBase {
 
 export interface GeometryCompoundSnapshot extends GeometrySnapshotBase {
   kind: "compound";
-  children: GeometrySnapshot[];
+  children: GeometryRef[];
 }
 
 export type GeometrySnapshot =
@@ -82,50 +70,163 @@ export type GeometrySnapshot =
 export interface GeometryDescriptor {
   ref: GeometryRef;
   kind: GeometrySnapshotKind;
-  space?: CoordinateSpace;
+  space: CoordinateSpace;
   label?: string;
   metadata?: Record<string, unknown>;
 }
 
-export interface GeometrySourceProvider {
+export interface GeometryProjectionRequest {
+  ref: GeometryRef;
+  to: CoordinateSpace;
+}
+
+export type GeometryBooleanOperator =
+  | "union"
+  | "intersect"
+  | "subtract"
+  | "exclude";
+
+export interface GeometryBooleanRequest {
+  refs: readonly [GeometryRef, GeometryRef, ...GeometryRef[]];
+  operator: GeometryBooleanOperator;
+  resultRef: GeometryRef;
+  space?: CoordinateSpace;
+}
+
+export interface GeometrySource {
   sourceId: string;
-  getGeometry(ref: GeometryRef): GeometrySnapshot | null;
+  getSnapshot(ref: GeometryRef): GeometrySnapshot | null;
   listGeometries?(): GeometryDescriptor[];
-  projectGeometry?(
-    ref: GeometryRef,
-    space: CoordinateSpace,
-  ): GeometrySnapshot | null;
+}
+
+/** @deprecated Use GeometrySource. */
+export type GeometrySourceProvider = GeometrySource;
+
+export interface GeometryBackend {
+  backendId: string;
+  supports(snapshot: GeometryPathSnapshot): boolean;
+  nearestPoint?(
+    snapshot: GeometryPathSnapshot,
+    point: GeometryPoint,
+  ): GeometryPoint | null;
+  normalAt?(
+    snapshot: GeometryPathSnapshot,
+    point: GeometryPoint,
+  ): GeometryPoint | null;
+  contains?(snapshot: GeometryPathSnapshot, point: GeometryPoint): boolean;
+  sample?(snapshot: GeometryPathSnapshot, ratio: number): GeometryPoint | null;
+  boolean?(
+    operator: GeometryBooleanOperator,
+    snapshots: readonly [
+      GeometryPathSnapshot,
+      GeometryPathSnapshot,
+      ...GeometryPathSnapshot[],
+    ],
+    resultRef: GeometryRef,
+  ): GeometryPathSnapshot | null;
+  project?(
+    snapshot: GeometryPathSnapshot,
+    to: CoordinateSpace,
+  ): GeometryPathSnapshot | null;
+}
+
+export type GeometryOperation =
+  | "snapshot"
+  | "bounds"
+  | "nearestPoint"
+  | "normalAt"
+  | "contains"
+  | "sample"
+  | "boolean"
+  | "project";
+
+export interface GeometryDiagnostic {
+  code:
+    | "geometry-source-missing"
+    | "geometry-snapshot-missing"
+    | "geometry-backend-missing"
+    | "geometry-operation-unsupported"
+    | "geometry-projection-unsupported";
+  message: string;
+  operation: GeometryOperation;
+  ref: GeometryRef;
+  backendId?: string;
+}
+
+export interface GeometryOperationResult<T> {
+  value: T;
+  diagnostics: GeometryDiagnostic[];
 }
 
 export class GeometrySourceService implements Service {
-  private readonly providers = new Map<string, GeometrySourceProvider>();
+  private readonly providers = new Map<string, GeometrySource>();
+  private readonly backends = new Map<string, GeometryBackend>();
 
   init(): void {}
 
-  registerSource(source: GeometrySourceProvider): Disposable {
-    const sourceId = normalizeId(
-      source.sourceId,
-      "GeometrySourceProvider.sourceId",
-    );
+  registerSource(source: GeometrySource): Disposable {
+    const sourceId = normalizeId(source.sourceId, "GeometrySource.sourceId");
     if (this.providers.has(sourceId)) {
       throw new Error(`Geometry source "${sourceId}" is already registered.`);
     }
-    const provider = { ...source, sourceId };
-    this.providers.set(sourceId, provider);
+    this.providers.set(sourceId, source);
     return {
       dispose: () => {
-        if (this.providers.get(sourceId) === provider) {
+        if (this.providers.get(sourceId) === source) {
           this.providers.delete(sourceId);
         }
       },
     };
   }
 
-  getGeometry(ref: GeometryRef): GeometrySnapshot | null {
+  registerBackend(backend: GeometryBackend): Disposable {
+    const backendId = normalizeId(
+      backend.backendId,
+      "GeometryBackend.backendId",
+    );
+    if (this.backends.has(backendId)) {
+      throw new Error(`Geometry backend "${backendId}" is already registered.`);
+    }
+    this.backends.set(backendId, backend);
+    return {
+      dispose: () => {
+        if (this.backends.get(backendId) === backend) {
+          this.backends.delete(backendId);
+        }
+      },
+    };
+  }
+
+  hasBackend(backendId: string): boolean {
+    return this.backends.has(
+      normalizeId(backendId, "GeometryBackend.backendId"),
+    );
+  }
+
+  getSnapshot(
+    ref: GeometryRef,
+  ): GeometryOperationResult<GeometrySnapshot | null> {
     const normalized = normalizeGeometryRef(ref);
-    const snapshot =
-      this.providers.get(normalized.sourceId)?.getGeometry(normalized) ?? null;
-    return snapshot ? cloneGeometrySnapshot(snapshot) : null;
+    const source = this.providers.get(normalized.sourceId);
+    if (!source) {
+      return geometryFailure(
+        null,
+        "geometry-source-missing",
+        "snapshot",
+        normalized,
+        `Geometry source "${normalized.sourceId}" is not registered.`,
+      );
+    }
+    const snapshot = source.getSnapshot(normalized);
+    return snapshot
+      ? geometrySuccess(normalizeGeometrySnapshot(snapshot, normalized))
+      : geometryFailure(
+          null,
+          "geometry-snapshot-missing",
+          "snapshot",
+          normalized,
+          `Geometry "${formatGeometryRef(normalized)}" was not found.`,
+        );
   }
 
   listGeometries(sourceId?: string): GeometryDescriptor[] {
@@ -137,41 +238,274 @@ export class GeometrySourceService implements Service {
     );
   }
 
-  projectGeometry(
+  getBounds(
     ref: GeometryRef,
-    space: CoordinateSpace,
+    space?: CoordinateSpace,
+  ): GeometryOperationResult<GeometryRect | null> {
+    const resolved = this.resolveSnapshot(ref, space, "bounds");
+    return resolved.value
+      ? { value: resolved.value.bounds, diagnostics: resolved.diagnostics }
+      : { value: null, diagnostics: resolved.diagnostics };
+  }
+
+  nearestPoint(
+    ref: GeometryRef,
+    point: GeometryPoint,
+    space?: CoordinateSpace,
+  ): GeometryOperationResult<GeometryPoint | null> {
+    const resolved = this.resolveSnapshot(ref, space, "nearestPoint");
+    if (!resolved.value) {
+      return { value: null, diagnostics: resolved.diagnostics };
+    }
+    const backendCheck = this.requireBackend(resolved.value, "nearestPoint");
+    if (backendCheck) return backendCheck;
+    return geometrySuccess(
+      findNearestGeometryPoint(resolved.value, point, this),
+    );
+  }
+
+  normalAt(
+    ref: GeometryRef,
+    point: GeometryPoint,
+    space?: CoordinateSpace,
+  ): GeometryOperationResult<GeometryPoint | null> {
+    const resolved = this.resolveSnapshot(ref, space, "normalAt");
+    if (!resolved.value) {
+      return { value: null, diagnostics: resolved.diagnostics };
+    }
+    const backendCheck = this.requireBackend(resolved.value, "normalAt");
+    if (backendCheck) return backendCheck;
+    return geometrySuccess(getGeometryNormalAt(resolved.value, point, this));
+  }
+
+  contains(
+    ref: GeometryRef,
+    point: GeometryPoint,
+    space?: CoordinateSpace,
+  ): GeometryOperationResult<boolean | null> {
+    const resolved = this.resolveSnapshot(ref, space, "contains");
+    if (!resolved.value) {
+      return { value: null, diagnostics: resolved.diagnostics };
+    }
+    const backendCheck = this.requireBackend(resolved.value, "contains");
+    if (backendCheck) return backendCheck;
+    return geometrySuccess(containsGeometryPoint(resolved.value, point, this));
+  }
+
+  sample(
+    ref: GeometryRef,
+    ratio: number,
+    space?: CoordinateSpace,
+  ): GeometryOperationResult<GeometryPoint | null> {
+    const resolved = this.resolveSnapshot(ref, space, "sample");
+    if (!resolved.value) {
+      return { value: null, diagnostics: resolved.diagnostics };
+    }
+    const backendCheck = this.requireBackend(resolved.value, "sample");
+    if (backendCheck) return backendCheck;
+    return geometrySuccess(sampleGeometryPoint(resolved.value, ratio, this));
+  }
+
+  boolean(
+    request: GeometryBooleanRequest,
+  ): GeometryOperationResult<GeometryPathSnapshot | null> {
+    const normalizedResultRef = normalizeGeometryRef(request.resultRef);
+    const resolved = request.refs.map((ref) =>
+      this.resolveSnapshot(ref, request.space, "boolean"),
+    );
+    const failed = resolved.find((result) => !result.value);
+    if (failed) return { value: null, diagnostics: failed.diagnostics };
+    const snapshots = resolved.map((result) => result.value!);
+    if (snapshots.some((snapshot) => snapshot.kind !== "path")) {
+      return geometryFailure(
+        null,
+        "geometry-operation-unsupported",
+        "boolean",
+        normalizedResultRef,
+        "Boolean geometry operations require path snapshots.",
+      );
+    }
+    const paths = snapshots as [
+      GeometryPathSnapshot,
+      GeometryPathSnapshot,
+      ...GeometryPathSnapshot[],
+    ];
+    const backend = this.getBackend(paths[0]);
+    if (!backend || paths.some((path) => !backend.supports(path))) {
+      return geometryFailure(
+        null,
+        "geometry-backend-missing",
+        "boolean",
+        normalizedResultRef,
+        `No single geometry backend supports every path in the ${request.operator} operation.`,
+      );
+    }
+    if (!backend.boolean) {
+      return geometryFailure(
+        null,
+        "geometry-operation-unsupported",
+        "boolean",
+        normalizedResultRef,
+        `Geometry backend "${backend.backendId}" does not implement boolean operations.`,
+        backend.backendId,
+      );
+    }
+    const value = backend.boolean(request.operator, paths, normalizedResultRef);
+    return value
+      ? geometrySuccess(
+          normalizeGeometrySnapshot(
+            value,
+            normalizedResultRef,
+          ) as GeometryPathSnapshot,
+        )
+      : geometryFailure(
+          null,
+          "geometry-operation-unsupported",
+          "boolean",
+          normalizedResultRef,
+          `Geometry backend "${backend.backendId}" could not complete the ${request.operator} operation.`,
+          backend.backendId,
+        );
+  }
+
+  project(
+    request: GeometryProjectionRequest,
+  ): GeometryOperationResult<GeometrySnapshot | null> {
+    const normalized = normalizeGeometryRef(request.ref);
+    const resolved = this.getSnapshot(normalized);
+    const snapshot = resolved.value;
+    if (!snapshot) return resolved;
+    if (snapshot.space === request.to) return resolved;
+    const projected = this.projectSnapshot(snapshot, request.to);
+    if (!projected) {
+      const backend =
+        snapshot.kind === "path" ? this.getBackend(snapshot) : null;
+      const missingBackend = snapshot.kind === "path" && !backend;
+      return geometryFailure(
+        null,
+        missingBackend
+          ? "geometry-backend-missing"
+          : "geometry-projection-unsupported",
+        "project",
+        normalized,
+        missingBackend
+          ? `No geometry backend supports ${describeGeometry(snapshot)}.`
+          : backend
+            ? `Geometry backend "${backend.backendId}" cannot project "${formatGeometryRef(normalized)}" to ${request.to}.`
+            : `Core geometry "${formatGeometryRef(normalized)}" cannot be projected to ${request.to}.`,
+        backend?.backendId,
+      );
+    }
+    if (projected.space !== request.to) {
+      throw new Error(
+        `Geometry provider "${normalized.sourceId}" returned ${projected.space} ` +
+          `space while projecting to ${request.to}.`,
+      );
+    }
+    return geometrySuccess(normalizeGeometrySnapshot(projected, normalized));
+  }
+
+  private resolveSnapshot(
+    ref: GeometryRef,
+    space?: CoordinateSpace,
+    operation: GeometryOperation = "snapshot",
+  ): GeometryOperationResult<GeometrySnapshot | null> {
+    const raw = this.getSnapshot(ref);
+    const resolved =
+      operation === "snapshot"
+        ? raw
+        : {
+            ...raw,
+            diagnostics: raw.diagnostics.map((diagnostic) => ({
+              ...diagnostic,
+              operation,
+            })),
+          };
+    const snapshot = resolved.value;
+    if (!snapshot || !space || snapshot.space === space) return resolved;
+    const projected = this.project({ ref, to: space });
+    return projected.diagnostics.length
+      ? projected
+      : { ...projected, diagnostics: resolved.diagnostics };
+  }
+
+  private projectSnapshot(
+    snapshot: GeometrySnapshot,
+    to: CoordinateSpace,
   ): GeometrySnapshot | null {
-    const normalized = normalizeGeometryRef(ref);
-    const provider = this.providers.get(normalized.sourceId);
-    const projected = provider?.projectGeometry?.(normalized, space);
-    if (projected) return cloneGeometrySnapshot(projected);
-    const snapshot = provider?.getGeometry(normalized) ?? null;
-    if (!snapshot) return null;
-    return cloneGeometrySnapshot({ ...snapshot, space });
+    if (snapshot.kind === "path") {
+      return this.getBackend(snapshot)?.project?.(snapshot, to) ?? null;
+    }
+    if (to !== "scene") return null;
+    return projectCoreSnapshotToScene(snapshot);
+  }
+
+  getBackend(snapshot: GeometryPathSnapshot): GeometryBackend | undefined {
+    return Array.from(this.backends.values()).find((backend) => {
+      try {
+        return backend.supports(snapshot);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  private requireBackend(
+    snapshot: GeometrySnapshot,
+    operation: Exclude<
+      GeometryOperation,
+      "snapshot" | "bounds" | "boolean" | "project"
+    >,
+  ): GeometryOperationResult<null> | null {
+    if (snapshot.kind !== "path") return null;
+    const backend = this.getBackend(snapshot);
+    if (!backend) {
+      return geometryFailure(
+        null,
+        "geometry-backend-missing",
+        operation,
+        snapshot.ref,
+        `No geometry backend supports ${describeGeometry(snapshot)}.`,
+      );
+    }
+    if (typeof backend[operation] !== "function") {
+      return geometryFailure(
+        null,
+        "geometry-operation-unsupported",
+        operation,
+        snapshot.ref,
+        `Geometry backend "${backend.backendId}" does not implement ${operation}.`,
+        backend.backendId,
+      );
+    }
+    return null;
   }
 }
 
-export function createStaticGeometrySourceProvider(options: {
+export function createStaticGeometrySource(options: {
   sourceId: string;
   geometries: readonly GeometrySnapshot[];
-}): GeometrySourceProvider {
-  const sourceId = normalizeId(
-    options.sourceId,
-    "GeometrySourceProvider.sourceId",
-  );
+}): GeometrySource {
+  const sourceId = normalizeId(options.sourceId, "GeometrySource.sourceId");
   const snapshots = new Map<string, GeometrySnapshot>();
   options.geometries.forEach((snapshot, index) => {
     const geometryId =
       snapshot.ref?.geometryId || String(snapshot.metadata?.id || index);
-    snapshots.set(geometryId, {
+    const ref = {
+      sourceId,
+      geometryId,
+      purpose: snapshot.ref?.purpose,
+      variant: snapshot.ref?.variant,
+    };
+    snapshots.set(geometryRefKey(ref), {
       ...cloneGeometrySnapshot(snapshot),
-      ref: { sourceId, geometryId, variant: snapshot.ref?.variant },
+      ref,
     });
   });
   return {
     sourceId,
-    getGeometry(ref) {
-      return cloneGeometrySnapshot(snapshots.get(ref.geometryId) ?? null);
+    getSnapshot(ref) {
+      return cloneGeometrySnapshot(snapshots.get(geometryRefKey(ref)) ?? null);
     },
     listGeometries() {
       return Array.from(snapshots.values()).map((snapshot) => ({
@@ -184,29 +518,13 @@ export function createStaticGeometrySourceProvider(options: {
   };
 }
 
-export function getGeometryBounds(
-  snapshot: GeometrySnapshot,
-): GeometryRect | null {
-  switch (snapshot.kind) {
-    case "rect":
-      return normalizeGeometryRect(snapshot.rect);
-    case "path":
-      return normalizeOptionalRect(
-        snapshot.utilities?.bounds?.({ snapshot }) ?? snapshot.bounds,
-      );
-    case "polygon":
-    case "pointSet":
-      return boundsForPoints(snapshot.points);
-    case "compound":
-      return unionRects(snapshot.children.map(getGeometryBounds));
-    default:
-      return null;
-  }
-}
+/** @deprecated Use createStaticGeometrySource. */
+export const createStaticGeometrySourceProvider = createStaticGeometrySource;
 
-export function containsGeometryPoint(
+function containsGeometryPoint(
   snapshot: GeometrySnapshot,
   point: GeometryPoint,
+  service: GeometrySourceService,
 ): boolean {
   const normalizedPoint = normalizeGeometryPoint(point);
   switch (snapshot.kind) {
@@ -214,7 +532,7 @@ export function containsGeometryPoint(
       return rectContainsPoint(snapshot.rect, normalizedPoint);
     case "path":
       return Boolean(
-        snapshot.utilities?.contains?.(normalizedPoint, { snapshot }),
+        service.getBackend(snapshot)?.contains?.(snapshot, normalizedPoint),
       );
     case "polygon":
       return polygonContainsPoint(snapshot.points, normalizedPoint);
@@ -224,16 +542,17 @@ export function containsGeometryPoint(
       );
     case "compound":
       return snapshot.children.some((child) =>
-        containsGeometryPoint(child, normalizedPoint),
+        Boolean(service.contains(child, normalizedPoint, snapshot.space).value),
       );
     default:
       return false;
   }
 }
 
-export function findNearestGeometryPoint(
+function findNearestGeometryPoint(
   snapshot: GeometrySnapshot,
   point: GeometryPoint,
+  service: GeometrySourceService,
 ): GeometryPoint | null {
   const normalizedPoint = normalizeGeometryPoint(point);
   switch (snapshot.kind) {
@@ -241,7 +560,7 @@ export function findNearestGeometryPoint(
       return clampPointToRect(normalizedPoint, snapshot.rect);
     case "path":
       return normalizeOptionalPoint(
-        snapshot.utilities?.nearestPoint?.(normalizedPoint, { snapshot }),
+        service.getBackend(snapshot)?.nearestPoint?.(snapshot, normalizedPoint),
       );
     case "polygon":
       return nearestPointOnPolyline(snapshot.points, normalizedPoint, true);
@@ -250,7 +569,11 @@ export function findNearestGeometryPoint(
     case "compound":
       return nearestFromCandidates(
         snapshot.children
-          .map((child) => findNearestGeometryPoint(child, normalizedPoint))
+          .map(
+            (child) =>
+              service.nearestPoint(child, normalizedPoint, snapshot.space)
+                .value,
+          )
           .filter((item): item is GeometryPoint => Boolean(item)),
         normalizedPoint,
       );
@@ -259,9 +582,10 @@ export function findNearestGeometryPoint(
   }
 }
 
-export function sampleGeometryPoint(
+function sampleGeometryPoint(
   snapshot: GeometrySnapshot,
   ratio: number,
+  service: GeometrySourceService,
 ): GeometryPoint | null {
   const normalizedRatio = clamp01(Number.isFinite(ratio) ? ratio : 0);
   switch (snapshot.kind) {
@@ -269,7 +593,7 @@ export function sampleGeometryPoint(
       return sampleRect(snapshot.rect, normalizedRatio);
     case "path":
       return normalizeOptionalPoint(
-        snapshot.utilities?.sample?.(normalizedRatio, { snapshot }),
+        service.getBackend(snapshot)?.sample?.(snapshot, normalizedRatio),
       );
     case "polygon":
       return samplePolyline(snapshot.points, normalizedRatio, true);
@@ -284,33 +608,34 @@ export function sampleGeometryPoint(
         ],
       );
     case "compound":
-      return snapshot.children.length
-        ? sampleGeometryPoint(
-            snapshot.children[
-              Math.min(
-                snapshot.children.length - 1,
-                Math.floor(normalizedRatio * snapshot.children.length),
-              )
-            ],
-            normalizedRatio,
+      if (!snapshot.children.length) return null;
+      return service.sample(
+        snapshot.children[
+          Math.min(
+            snapshot.children.length - 1,
+            Math.floor(normalizedRatio * snapshot.children.length),
           )
-        : null;
+        ],
+        normalizedRatio,
+        snapshot.space,
+      ).value;
     default:
       return null;
   }
 }
 
-export function getGeometryNormalAt(
+function getGeometryNormalAt(
   snapshot: GeometrySnapshot,
   point: GeometryPoint,
+  service: GeometrySourceService,
 ): GeometryPoint | null {
   const normalizedPoint = normalizeGeometryPoint(point);
   if (snapshot.kind === "path") {
     return normalizeOptionalPoint(
-      snapshot.utilities?.normalAt?.(normalizedPoint, { snapshot }),
+      service.getBackend(snapshot)?.normalAt?.(snapshot, normalizedPoint),
     );
   }
-  const nearest = findNearestGeometryPoint(snapshot, normalizedPoint);
+  const nearest = findNearestGeometryPoint(snapshot, normalizedPoint, service);
   if (!nearest) return null;
   const dx = normalizedPoint.x - nearest.x;
   const dy = normalizedPoint.y - nearest.y;
@@ -319,12 +644,82 @@ export function getGeometryNormalAt(
   return { x: dx / length, y: dy / length };
 }
 
+function geometrySuccess<T>(value: T): GeometryOperationResult<T> {
+  return { value, diagnostics: [] };
+}
+
+function geometryFailure<T>(
+  value: T,
+  code: GeometryDiagnostic["code"],
+  operation: GeometryOperation,
+  ref: GeometryRef,
+  message: string,
+  backendId?: string,
+): GeometryOperationResult<T> {
+  return {
+    value,
+    diagnostics: [
+      {
+        code,
+        operation,
+        ref: { ...ref },
+        message,
+        ...(backendId ? { backendId } : {}),
+      },
+    ],
+  };
+}
+
+function formatGeometryRef(ref: GeometryRef): string {
+  const suffix = [ref.purpose, ref.variant].filter(Boolean).join(":");
+  return `${ref.sourceId}/${ref.geometryId}${suffix ? `:${suffix}` : ""}`;
+}
+
+function describeGeometry(snapshot: GeometrySnapshot): string {
+  const format = snapshot.kind === "path" ? `${snapshot.format} ` : "";
+  return `${format}${snapshot.kind} geometry "${formatGeometryRef(snapshot.ref)}"`;
+}
+
 function normalizeGeometryRef(ref: GeometryRef): GeometryRef {
+  const purpose = ref.purpose;
+  if (purpose !== undefined && purpose !== "preview" && purpose !== "export") {
+    throw new Error(`Unknown GeometryRef purpose "${String(purpose)}".`);
+  }
   return {
     sourceId: normalizeId(ref.sourceId, "GeometryRef.sourceId"),
     geometryId: normalizeId(ref.geometryId, "GeometryRef.geometryId"),
+    ...(purpose ? { purpose } : {}),
     ...(ref.variant ? { variant: String(ref.variant) } : {}),
   };
+}
+
+function geometryRefKey(ref: GeometryRef): string {
+  return `${ref.geometryId}\u0000${ref.purpose ?? ""}\u0000${ref.variant ?? ""}`;
+}
+
+function normalizeGeometrySnapshot(
+  snapshot: GeometrySnapshot,
+  ref: GeometryRef,
+): GeometrySnapshot {
+  const cloned = cloneGeometrySnapshot(snapshot);
+  if (cloned.kind === "path") {
+    cloned.format = normalizeId(
+      cloned.format,
+      `Geometry "${ref.sourceId}/${ref.geometryId}" format`,
+    );
+  }
+  if (cloned.space !== cloned.localToScene.from) {
+    throw new Error(
+      `Geometry "${ref.sourceId}/${ref.geometryId}" declares ${cloned.space} ` +
+        `space but localToScene starts in ${cloned.localToScene.from}.`,
+    );
+  }
+  if (cloned.localToScene.to !== "scene") {
+    throw new Error(
+      `Geometry "${ref.sourceId}/${ref.geometryId}" localToScene must end in scene.`,
+    );
+  }
+  return { ...cloned, ref };
 }
 
 function cloneDescriptor(descriptor: GeometryDescriptor): GeometryDescriptor {
@@ -335,23 +730,89 @@ function cloneDescriptor(descriptor: GeometryDescriptor): GeometryDescriptor {
   };
 }
 
+function projectCoreSnapshotToScene(
+  snapshot: Exclude<GeometrySnapshot, GeometryPathSnapshot>,
+): GeometrySnapshot {
+  const projectPoint = (point: GeometryPoint): GeometryPoint => {
+    const projected = transformCoordinatePoint(snapshot.localToScene, {
+      ...normalizeGeometryPoint(point),
+      space: snapshot.space,
+    });
+    return { x: projected.x, y: projected.y };
+  };
+  const localToScene = coordinateMatrix("scene", "scene", [1, 0, 0, 1, 0, 0]);
+  const projectedBoundsPoints = rectCorners(snapshot.bounds).map(projectPoint);
+  const bounds = boundsForPoints(projectedBoundsPoints) ?? {
+    left: 0,
+    top: 0,
+    width: 0,
+    height: 0,
+  };
+  const base = {
+    ref: snapshot.ref,
+    space: "scene" as const,
+    bounds,
+    localToScene,
+    metadata: cloneRecord(snapshot.metadata),
+  };
+  switch (snapshot.kind) {
+    case "rect":
+    case "polygon":
+      return {
+        ...base,
+        kind: "polygon",
+        points:
+          snapshot.kind === "rect"
+            ? rectCorners(snapshot.rect).map(projectPoint)
+            : snapshot.points.map(projectPoint),
+      };
+    case "pointSet":
+      return {
+        ...base,
+        kind: "pointSet",
+        points: snapshot.points.map(projectPoint),
+      };
+    case "compound":
+      return {
+        ...base,
+        kind: "compound",
+        children: snapshot.children.map((child) => ({ ...child })),
+      };
+  }
+}
+
+function rectCorners(rect: GeometryRect): GeometryPoint[] {
+  const normalized = normalizeGeometryRect(rect);
+  const right = normalized.left + normalized.width;
+  const bottom = normalized.top + normalized.height;
+  return [
+    { x: normalized.left, y: normalized.top },
+    { x: right, y: normalized.top },
+    { x: right, y: bottom },
+    { x: normalized.left, y: bottom },
+  ];
+}
+
 function cloneGeometrySnapshot<T extends GeometrySnapshot | null | undefined>(
   snapshot: T,
 ): T {
   if (!snapshot) return snapshot;
   const base = {
     ...snapshot,
-    ref: snapshot.ref ? { ...snapshot.ref } : undefined,
+    ref: { ...snapshot.ref },
+    bounds: normalizeGeometryRect(snapshot.bounds),
+    localToScene: coordinateMatrix(
+      snapshot.localToScene.from,
+      "scene",
+      snapshot.localToScene.values,
+    ),
     metadata: cloneRecord(snapshot.metadata),
   };
   switch (snapshot.kind) {
     case "rect":
       return { ...base, rect: normalizeGeometryRect(snapshot.rect) } as T;
     case "path":
-      return {
-        ...base,
-        bounds: normalizeOptionalRect(snapshot.bounds) ?? undefined,
-      } as T;
+      return base as T;
     case "polygon":
     case "pointSet":
       return {
@@ -361,7 +822,7 @@ function cloneGeometrySnapshot<T extends GeometrySnapshot | null | undefined>(
     case "compound":
       return {
         ...base,
-        children: snapshot.children.map(cloneGeometrySnapshot),
+        children: snapshot.children.map((child) => ({ ...child })),
       } as T;
     default:
       return base as T;
@@ -402,12 +863,6 @@ function normalizeGeometryRect(rect: GeometryRect): GeometryRect {
   };
 }
 
-function normalizeOptionalRect(
-  rect: GeometryRect | null | undefined,
-): GeometryRect | null {
-  return rect ? normalizeGeometryRect(rect) : null;
-}
-
 function boundsForPoints(
   points: readonly GeometryPoint[],
 ): GeometryRect | null {
@@ -423,16 +878,6 @@ function boundsForPoints(
     width: Math.max(...xs) - left,
     height: Math.max(...ys) - top,
   };
-}
-
-function unionRects(rects: Array<GeometryRect | null>): GeometryRect | null {
-  const values = rects.filter((rect): rect is GeometryRect => Boolean(rect));
-  if (!values.length) return null;
-  const left = Math.min(...values.map((rect) => rect.left));
-  const top = Math.min(...values.map((rect) => rect.top));
-  const right = Math.max(...values.map((rect) => rect.left + rect.width));
-  const bottom = Math.max(...values.map((rect) => rect.top + rect.height));
-  return { left, top, width: right - left, height: bottom - top };
 }
 
 function rectContainsPoint(rect: GeometryRect, point: GeometryPoint): boolean {

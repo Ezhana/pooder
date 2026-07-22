@@ -31,6 +31,7 @@ import {
 } from "./services";
 import { ExtensionContext } from "./context";
 import { TypedEventEmitter } from "./typed-event";
+import { createRenderIntentGeometrySource } from "./render-intent";
 
 export interface RuntimeServiceChangeEvent {
   readonly type: "registered" | "unregistered";
@@ -48,6 +49,7 @@ export * from "./render-intent";
 export * from "./coordinate";
 export * from "./image-geometry";
 export * from "./image-resource";
+export * from "./object-image";
 export * from "./units";
 export * from "./dieline-shape";
 export * from "./scene-layout-model";
@@ -60,6 +62,7 @@ export * from "./interaction-service";
 export * from "./surface-frames";
 export * from "./typed-event";
 export * from "./services";
+export type { default as Disposable } from "./disposable";
 /** @internal Temporary legacy test/extension bridge. */
 export { default as EventBus } from "./event";
 
@@ -148,7 +151,7 @@ type RuntimeSessionsApi = {
 };
 
 export class Pooder {
-  /** @internal Temporary bridge for extensions wrapped by defineLegacyExtension(). */
+  /** @internal Host-service event channel. */
   readonly eventBus: EventBus = new EventBus();
   private readonly serviceRegistry: ServiceRegistry = new ServiceRegistry();
   private readonly serviceEvents = new TypedEventEmitter<{
@@ -183,6 +186,7 @@ export class Pooder {
   private readonly interactionService = new InteractionService({
     commandService: this.commandService,
     constraintResolver: this.constraintResolverService,
+    geometrySource: this.geometrySourceService,
     sessionService: this.sessionService,
   });
   private readonly extensionManager: ExtensionManager;
@@ -195,6 +199,9 @@ export class Pooder {
   readonly sessions: RuntimeSessionsApi;
 
   constructor() {
+    this.geometrySourceService.registerSource(
+      createRenderIntentGeometrySource(this.renderIntentService),
+    );
     this.registerService(
       this.capabilityRegistryService,
       CORE_SERVICE_TOKENS.CAPABILITY_REGISTRY,
@@ -235,7 +242,6 @@ export class Pooder {
       CORE_SERVICE_TOKENS.INTERACTION,
     );
     const context: ExtensionContext = {
-      eventBus: this.eventBus,
       services: {
         get: <T extends Service>(identifier: ServiceIdentifier<T>) =>
           this.serviceRegistry.get(identifier),

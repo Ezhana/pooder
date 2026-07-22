@@ -1,5 +1,5 @@
+import { util } from "fabric";
 import {
-  COMMAND_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   INTERACTION_SERVICE,
   RENDER_INTENT_SERVICE,
@@ -8,11 +8,16 @@ import {
   SCENE_LAYOUT_SERVICE,
   SURFACE_FRAME_SERVICE,
   evaluateRuntimeCondition,
+  coordinateMatrix,
+  multiplyCoordinateMatrices,
+  transformCoordinateRect,
+  type AffinePlacement,
   type CanvasService,
-  type CommandService,
   type GeometryRect,
+  type GeometryRef,
+  type GeometrySnapshot,
   type GeometrySourceService,
-  type GeometrySourceProvider,
+  type GeometrySource,
   type RenderEffectSpec,
   type RenderGraph,
   type RenderGraphLayer,
@@ -20,8 +25,12 @@ import {
   type RenderInvalidation,
   type RenderIntentChangeReason,
   type InteractionManipulationKind,
+  type InteractionProjectionPatch,
+  type InteractionProjectionTarget,
+  type InteractionSubject,
   type InteractionService,
   type InteractionSpec,
+  type Matrix2D,
   type RenderObjectSpec,
   type SceneElement,
   type SceneLayer,
@@ -63,8 +72,8 @@ const FABRIC_INTERACTION_PROP_KEYS = new Set([
 
 export type FabricRenderGraphSyncCause =
   | { type: "initial" }
-  | { type: "document-apply" }
-  | { type: "document-update"; intentIds: string[] }
+  | { type: "base-replaced" }
+  | { type: "base-updated"; intentIds: string[] }
   | {
       type: "runtime-patch";
       operation: "upsert" | "remove" | "clear";
@@ -120,7 +129,6 @@ export class FabricRenderGraphAdapter implements Service {
   private sceneLayoutService?: SceneLayoutService;
   private surfaceFrameService?: SurfaceFrameService;
   private sessionService?: SessionService;
-  private commandService?: CommandService;
   private graphSubscription?: { dispose(): void };
   private sceneSubscription?: { dispose(): void };
   private canvasEventDisposables: Array<{ dispose(): void }> = [];
@@ -139,9 +147,14 @@ export class FabricRenderGraphAdapter implements Service {
   private interactionSequence = 0;
   private readonly syncStateListeners =
     new Set<FabricRenderGraphSyncStateListener>();
-  private readonly activeManipulations = new WeakMap<
+  private activeManipulations = new WeakMap<
     object,
-    InteractionManipulationKind
+    {
+      kind: InteractionManipulationKind;
+      sourceFrame: GeometryRect;
+      sourceSceneMatrix?: Matrix2D<"object-local", "scene">;
+      subject: InteractionSubject;
+    }
   >();
 
   init(context: ServiceContext) {
@@ -157,7 +170,6 @@ export class FabricRenderGraphAdapter implements Service {
     this.sceneLayoutService = context.get(SCENE_LAYOUT_SERVICE);
     this.surfaceFrameService = context.get(SURFACE_FRAME_SERVICE);
     this.sessionService = context.get(SESSION_SERVICE);
-    this.commandService = context.get(COMMAND_SERVICE);
 
     if (!this.renderIntentService || !this.canvasService) {
       throw new Error(
@@ -167,7 +179,7 @@ export class FabricRenderGraphAdapter implements Service {
 
     this.graphSubscription = this.renderIntentService.onDidChange((event) => {
       if (
-        event.reason.type === "document-updated" &&
+        event.reason.type === "base-updated" &&
         event.reason.intentIds.length === 0
       ) {
         return;
@@ -200,6 +212,13 @@ export class FabricRenderGraphAdapter implements Service {
           event.kind === "double-click" ? "double-click" : "primary-pointer",
         );
       }),
+      this.canvasService.on("selection", (event) => {
+        this.requireInteractionService().selectSubject(
+          event.kind === "cleared"
+            ? null
+            : this.resolveInteractionSubject(event.target),
+        );
+      }),
     ];
     this.geometrySourceDisposable = this.geometrySource?.registerSource(
       this.createRenderGraphGeometrySource(),
@@ -228,7 +247,6 @@ export class FabricRenderGraphAdapter implements Service {
     this.sceneLayoutService = undefined;
     this.surfaceFrameService = undefined;
     this.sessionService = undefined;
-    this.commandService = undefined;
     this.syncRequested = false;
     this.syncPromise = null;
     this.pendingSyncCauses.clear();
@@ -383,10 +401,10 @@ export class FabricRenderGraphAdapter implements Service {
   private toRenderIntentSyncCause(
     reason: RenderIntentChangeReason,
   ): FabricRenderGraphSyncCause {
-    if (reason.type === "document-replaced") return { type: "document-apply" };
-    if (reason.type === "document-updated") {
+    if (reason.type === "base-replaced") return { type: "base-replaced" };
+    if (reason.type === "base-updated") {
       return {
-        type: "document-update",
+        type: "base-updated",
         intentIds: reason.intentIds.slice(),
       };
     }
@@ -408,7 +426,7 @@ export class FabricRenderGraphAdapter implements Service {
   private toRenderIntentInvalidations(
     reason: RenderIntentChangeReason,
   ): RenderInvalidation[] {
-    if (reason.type === "document-updated") {
+    if (reason.type === "base-updated") {
       return reason.intentIds.length
         ? [{ type: "render-intents", intentIds: reason.intentIds.slice() }]
         : [];
@@ -486,9 +504,10 @@ export class FabricRenderGraphAdapter implements Service {
         });
       },
     );
-    const canvasDisposable = this.canvasService?.on("resized", () =>
-      this.requestSync({ type: "canvas-resize" }),
-    );
+    const canvasDisposable = this.canvasService?.on("resized", () => {
+      this.resetInteractionPreview();
+      this.requestSync({ type: "canvas-resize" }, { type: "full" });
+    });
     this.runtimeConditionDisposables = [
       ...(sessionDisposable ? [sessionDisposable] : []),
       ...(sessionTerminalDisposable ? [sessionTerminalDisposable] : []),
@@ -518,9 +537,13 @@ export class FabricRenderGraphAdapter implements Service {
       if (!surfaceId || observed.has(surfaceId)) return;
       observed.add(surfaceId);
       this.layoutDisposables.push(
-        layoutService.onLayoutChange(surfaceId, () =>
-          this.requestSync({ type: "layout-change", surfaceId }),
-        ),
+        layoutService.onLayoutChange(surfaceId, () => {
+          this.resetInteractionPreview();
+          this.requestSync(
+            { type: "layout-change", surfaceId },
+            { type: "full" },
+          );
+        }),
       );
     };
     surfaceFrameService.listSurfaceIds().forEach(observe);
@@ -534,6 +557,10 @@ export class FabricRenderGraphAdapter implements Service {
   private detachLayoutChangeEvents() {
     this.layoutDisposables.forEach((disposable) => disposable.dispose());
     this.layoutDisposables = [];
+  }
+
+  private resetInteractionPreview(): void {
+    this.activeManipulations = new WeakMap();
   }
 
   private async runSyncLoop() {
@@ -567,7 +594,7 @@ export class FabricRenderGraphAdapter implements Service {
         conditionContext,
       );
     } else {
-      this.appendDocumentItems(items, graph, conditionContext);
+      this.appendRenderGraphItems(items, graph, conditionContext);
     }
 
     const graphOrderOffset = items.length + 1_000_000;
@@ -635,13 +662,13 @@ export class FabricRenderGraphAdapter implements Service {
     const rootItemStart = items.length;
     root.composition.entries.forEach((entry, entryIndex) => {
       const orderBase = entryIndex * 1_000_000_000;
-      if (entry.source === "document") {
-        this.appendDocumentItems(
+      if (entry.source === "render-graph") {
+        this.appendRenderGraphItems(
           items,
           graph,
           conditionContext,
           orderBase,
-          `root:${root.id}:${entryIndex}:document`,
+          `root:${root.id}:${entryIndex}:render-graph`,
           entry.filter,
         );
         return;
@@ -687,7 +714,7 @@ export class FabricRenderGraphAdapter implements Service {
       });
     });
     this.stabilizeRootCompositionItems(items, rootItemStart, graph);
-    this.appendRetainedDocumentItems(items, graph, conditionContext);
+    this.appendRetainedRenderGraphItems(items, graph, conditionContext);
   }
 
   private stabilizeRootCompositionItems(
@@ -700,14 +727,19 @@ export class FabricRenderGraphAdapter implements Service {
     items.slice(start).forEach((item) => {
       let canonicalKey =
         item.origin?.type === "render-intent" ? item.spec.id : undefined;
-      const imageSlotObjectId = String(
-        item.spec.data?.imageSlotObjectId || "",
-      ).trim();
-      if (imageSlotObjectId) {
+      const sceneElement =
+        item.origin?.type === "scene-element"
+          ? this.sceneService?.selectOneElement({
+              sceneId: item.origin.sceneId,
+              ids: [item.origin.elementId],
+            })
+          : undefined;
+      const projection = sceneElement?.renderGraphProjection;
+      if (projection) {
         canonicalKey = nodes.find(
           (node) =>
-            node.subjectId === imageSlotObjectId &&
-            node.type === item.spec.type,
+            node.subjectId === projection.subjectId &&
+            node.type === (projection.type ?? item.spec.type),
         )?.id;
       }
       if (canonicalKey && !usedKeys.has(canonicalKey)) {
@@ -717,7 +749,7 @@ export class FabricRenderGraphAdapter implements Service {
     });
   }
 
-  private appendRetainedDocumentItems(
+  private appendRetainedRenderGraphItems(
     items: FabricRenderTargetItem[],
     graph: RenderGraph,
     conditionContext: ReturnType<
@@ -726,7 +758,7 @@ export class FabricRenderGraphAdapter implements Service {
   ): void {
     const usedKeys = new Set(items.map((item) => item.key));
     const retained: FabricRenderTargetItem[] = [];
-    this.appendDocumentItems(retained, graph, conditionContext);
+    this.appendRenderGraphItems(retained, graph, conditionContext);
     retained.forEach((item) => {
       if (usedKeys.has(item.key)) return;
       items.push({
@@ -745,7 +777,7 @@ export class FabricRenderGraphAdapter implements Service {
     });
   }
 
-  private appendDocumentItems(
+  private appendRenderGraphItems(
     items: FabricRenderTargetItem[],
     graph: RenderGraph,
     conditionContext: ReturnType<
@@ -754,7 +786,7 @@ export class FabricRenderGraphAdapter implements Service {
     orderBase = 0,
     keyPrefix = "",
     filter?: SceneSnapshot["composition"]["entries"][number] extends infer T
-      ? T extends { source: "document"; filter?: infer F }
+      ? T extends { source: "render-graph"; filter?: infer F }
         ? F
         : never
       : never,
@@ -781,7 +813,7 @@ export class FabricRenderGraphAdapter implements Service {
             },
             order:
               orderBase +
-              this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex, node) -
+              this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex) -
               0.001,
             spec: frameHitTarget,
           });
@@ -803,7 +835,7 @@ export class FabricRenderGraphAdapter implements Service {
           },
           order:
             orderBase +
-            this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex, node),
+            this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex),
           spec,
         });
       });
@@ -817,8 +849,7 @@ export class FabricRenderGraphAdapter implements Service {
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
     >,
   ): RenderObjectSpec | null {
-    if (node.interaction?.hitRegion?.type !== "frame" || !node.frame)
-      return null;
+    if (node.interaction?.hitRegion?.type !== "frame") return null;
     const state = this.requireInteractionService().resolveState(
       node.interaction,
       conditionContext,
@@ -828,6 +859,7 @@ export class FabricRenderGraphAdapter implements Service {
       id: `${node.id}:frame-hit-target`,
       type: "rect",
       space: node.coordinateSpace,
+      placement: node.placement,
       data: {
         ...node.data,
         frameHitTarget: true,
@@ -839,12 +871,8 @@ export class FabricRenderGraphAdapter implements Service {
         surfaceId: node.surfaceId,
       },
       props: {
-        left: node.frame.x,
-        top: node.frame.y,
-        width: node.frame.width,
-        height: node.frame.height,
-        originX: "left",
-        originY: "top",
+        width: node.placement.localBounds.width,
+        height: node.placement.localBounds.height,
         fill: "rgba(0,0,0,0)",
         stroke: null,
         selectable: state.selectionEnabled,
@@ -860,11 +888,179 @@ export class FabricRenderGraphAdapter implements Service {
   private resolveGraphNodeRenderOrder(
     layerIndex: number,
     nodeIndex: number,
-    node: RenderGraphNode,
   ): number {
-    return node.data?.documentLayerRole === "guide"
-      ? 900_000_000 + layerIndex * 1_000_000 + nodeIndex
-      : layerIndex * 1_000_000 + nodeIndex;
+    return layerIndex * 1_000_000 + nodeIndex;
+  }
+
+  private resolveProjectionTargets(
+    subjectId: string,
+  ): InteractionProjectionTarget[] {
+    const graph = this.renderIntentService?.getGraph();
+    const membership = graph?.projectionMemberships.find(
+      (item) => item.subjectId === subjectId,
+    );
+    if (!graph || !membership) return [];
+    const nodes = graph.layers.flatMap((layer) => layer.nodes);
+    return membership.nodeIds.flatMap((projectionId) => {
+      const node = nodes.find((candidate) => candidate.id === projectionId);
+      return node
+        ? [{ projectionId, geometryRef: { ...node.previewGeometryRef } }]
+        : [];
+    });
+  }
+
+  private resolveInteractionSubject(target: any): InteractionSubject | null {
+    if (target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET) return null;
+    const graph = this.renderIntentService?.getGraph();
+    if (!graph) return null;
+    const renderNodeId = String(target.data?.renderNodeId || "").trim();
+    const declaredSubjectId = String(target.data?.subjectId || "").trim();
+    const membership = graph.projectionMemberships.find(
+      (item) =>
+        item.subjectId === declaredSubjectId ||
+        (renderNodeId && item.nodeIds.includes(renderNodeId)),
+    );
+    const subjectId = membership?.subjectId || declaredSubjectId;
+    if (!subjectId) return null;
+    const projectionTargets = this.resolveProjectionTargets(subjectId);
+    if (!projectionTargets.length && renderNodeId) {
+      projectionTargets.push({
+        projectionId: renderNodeId,
+        geometryRef: {
+          sourceId: "render-graph",
+          geometryId: renderNodeId,
+          purpose: "preview",
+        },
+      });
+    }
+    return {
+      subjectId,
+      ...(String(target.data?.surfaceId || "").trim()
+        ? { surfaceId: String(target.data.surfaceId).trim() }
+        : {}),
+      projectionTargets,
+    };
+  }
+
+  private resolveManipulationState(
+    kind: InteractionManipulationKind,
+    target: any,
+  ):
+    | {
+        kind: InteractionManipulationKind;
+        sourceFrame: GeometryRect;
+        sourceSceneMatrix?: Matrix2D<"object-local", "scene">;
+        subject: InteractionSubject;
+      }
+    | undefined {
+    if (!target || typeof target !== "object") return undefined;
+    const existing = this.activeManipulations.get(target);
+    if (existing) {
+      existing.kind = kind;
+      return existing;
+    }
+    const subject = this.resolveInteractionSubject(target);
+    const sourceFrame =
+      this.resolveDeclarativeSceneFrame(target) ??
+      this.getTargetSceneBounds(target);
+    if (!subject || !sourceFrame) return undefined;
+    const state = {
+      kind,
+      sourceFrame,
+      sourceSceneMatrix: target.data?.affinePlacement?.localToScene,
+      subject,
+    };
+    this.activeManipulations.set(target, state);
+    return state;
+  }
+
+  private resolveDeclarativeSceneFrame(target: any): GeometryRect | null {
+    const placement = target?.data?.affinePlacement as
+      | AffinePlacement
+      | undefined;
+    if (!placement) return null;
+    const frame = transformCoordinateRect(
+      placement.localToScene,
+      placement.localBounds,
+    );
+    return {
+      left: frame.left,
+      top: frame.top,
+      width: frame.width,
+      height: frame.height,
+    };
+  }
+
+  private applyOperationPatches(
+    patches: readonly InteractionProjectionPatch[],
+    phase: "active" | "committing",
+  ): void {
+    const canvas = this.canvasService;
+    if (!canvas) return;
+    patches.forEach((patch) => {
+      const projection = canvas
+        .selectObjects({
+          data: { renderTarget: FABRIC_RENDER_GRAPH_TARGET },
+        })
+        .find(
+          (candidate: any) =>
+            String(candidate?.data?.renderNodeId || "") ===
+            patch.target.projectionId,
+        ) as any;
+      if (!projection) return;
+      this.markInteractionOwnership(projection, phase);
+      this.applyProjectionTransform(projection, patch.transform);
+      projection.setCoords?.();
+    });
+  }
+
+  private applyProjectionTransform(
+    projection: any,
+    patch: InteractionProjectionPatch["transform"],
+  ): void {
+    const canvas = this.canvasService;
+    const placement = projection?.data?.affinePlacement as
+      | AffinePlacement
+      | undefined;
+    if (!canvas || !placement) return;
+    const sceneMatrix =
+      patch.type === "translate"
+        ? multiplyCoordinateMatrices(
+            coordinateMatrix("scene", "scene", [
+              1,
+              0,
+              0,
+              1,
+              patch.delta.x,
+              patch.delta.y,
+            ]),
+            placement.localToScene,
+          )
+        : patch.matrix;
+    const bounds = placement.localBounds;
+    const centerToLocal = coordinateMatrix("object-local", "object-local", [
+      1,
+      0,
+      0,
+      1,
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    ]);
+    const centerToScreen = canvas.toScreenMatrix(
+      multiplyCoordinateMatrices(sceneMatrix, centerToLocal),
+    );
+    if (typeof projection.calcTransformMatrix === "function") {
+      util.applyTransformToObject(projection, [...centerToScreen.values]);
+      return;
+    }
+    const [a, b, c, d, e, f] = centerToScreen.values;
+    projection.set?.({
+      left: e - canvas.toScreenLength(bounds.width) / 2,
+      top: f - canvas.toScreenLength(bounds.height) / 2,
+      angle: (Math.atan2(b, a) * 180) / Math.PI,
+      scaleX: Math.hypot(a, b),
+      scaleY: Math.hypot(c, d),
+    });
   }
 
   private markInteractionOwnership(
@@ -908,9 +1104,27 @@ export class FabricRenderGraphAdapter implements Service {
     }
     const spec = target.data?.interactionSpec as InteractionSpec | undefined;
     if (!spec) return;
-    const frame = this.getTargetSceneBounds(target);
-    if (!frame) return;
-    const result = this.requireInteractionService().resolveManipulation(kind, {
+    const interactionState = this.resolveManipulationState(kind, target);
+    if (!interactionState) return;
+    const measuredFrame = this.getTargetSceneBounds(target);
+    if (!measuredFrame) return;
+    const sceneMatrix = this.resolveTargetSceneMatrix(target);
+    const sourceSceneMatrix = interactionState.sourceSceneMatrix;
+    const frame =
+      kind === "move" && sourceSceneMatrix && sceneMatrix
+        ? {
+            ...measuredFrame,
+            left:
+              interactionState.sourceFrame.left +
+              sceneMatrix.values[4] -
+              sourceSceneMatrix.values[4],
+            top:
+              interactionState.sourceFrame.top +
+              sceneMatrix.values[5] -
+              sourceSceneMatrix.values[5],
+          }
+        : measuredFrame;
+    const operationInput = {
       spec,
       runtimeContext: this.buildRuntimeConditionContext(
         this.requireRenderIntentService().getGraph(),
@@ -926,138 +1140,109 @@ export class FabricRenderGraphAdapter implements Service {
           y: finiteNumber(target.scaleY, 1),
         },
       },
-      coordinateSpace: "scene",
+      sourceTransform: { frame: interactionState.sourceFrame },
+      sourceSceneMatrix,
+      sceneMatrix,
+      coordinateSpace: "scene" as const,
       target,
+      projectionId: String(target.data?.renderNodeId || "").trim(),
+      subject: interactionState.subject,
       metadata: {
         layerId: target.data?.layerId,
+        ...this.resolveParentSceneMatrix(target),
         renderIntentId: target.data?.renderIntentId,
         subjectId: target.data?.subjectId,
         surfaceId: target.data?.surfaceId,
         viewportScale: canvas.getSceneScale(),
       },
-      commit,
-    });
+    };
+    const result = commit
+      ? this.requireInteractionService().commitManipulation(
+          kind,
+          operationInput,
+        )
+      : this.requireInteractionService().previewManipulation(
+          kind,
+          operationInput,
+        );
     if (!result.enabled) return;
-    if (!commit && target && typeof target === "object") {
-      this.activeManipulations.set(target, kind);
-    }
-    const resultFrame = result.result.frame;
-    const updates: Record<string, number> = {};
-    if (resultFrame) {
-      const dx = canvas.toScreenLength(resultFrame.left - frame.left);
-      const dy = canvas.toScreenLength(resultFrame.top - frame.top);
-      if (dx !== 0) updates.left = finiteNumber(target.left, 0) + dx;
-      if (dy !== 0) updates.top = finiteNumber(target.top, 0) + dy;
-      if (frame.width > 0 && resultFrame.width !== frame.width) {
-        updates.scaleX =
-          finiteNumber(target.scaleX, 1) * (resultFrame.width / frame.width);
-      }
-      if (frame.height > 0 && resultFrame.height !== frame.height) {
-        updates.scaleY =
-          finiteNumber(target.scaleY, 1) * (resultFrame.height / frame.height);
-      }
-    }
-    const resultPosition = result.result.position;
-    if (!resultFrame && resultPosition) {
-      updates.left =
-        finiteNumber(target.left, 0) +
-        canvas.toScreenLength(resultPosition.x - frame.left);
-      updates.top =
-        finiteNumber(target.top, 0) +
-        canvas.toScreenLength(resultPosition.y - frame.top);
-    }
-    const resultSize = result.result.size;
-    if (
-      resultSize &&
-      frame.width > 0 &&
-      frame.height > 0 &&
-      (resultSize.width !== frame.width || resultSize.height !== frame.height)
-    ) {
-      updates.scaleX =
-        finiteNumber(target.scaleX, 1) * (resultSize.width / frame.width);
-      updates.scaleY =
-        finiteNumber(target.scaleY, 1) * (resultSize.height / frame.height);
-    }
-    if (typeof result.result.rotation === "number") {
-      updates.angle = result.result.rotation;
-    }
-    const scale = result.result.scale;
-    if (typeof scale === "number") {
-      updates.scaleX = scale;
-      updates.scaleY = scale;
-    } else if (scale) {
-      updates.scaleX = scale.x;
-      updates.scaleY = scale.y;
-    }
-    if (Object.keys(updates).length) target.set?.(updates);
-    target.setCoords?.();
-    this.dispatchManipulationAction(
-      kind,
-      target,
-      spec,
-      result.result.metadata,
-      commit,
+    this.applyOperationPatches(
+      result.projectionPatches,
+      commit ? "committing" : "active",
     );
   }
 
-  private dispatchManipulationAction(
-    kind: InteractionManipulationKind,
+  private resolveParentSceneMatrix(
     target: any,
-    spec: InteractionSpec,
-    resultMetadata: Record<string, unknown> | undefined,
-    commit: boolean,
-  ): void {
-    const action = spec.manipulation?.[kind]?.action;
+  ):
+    | { parentSceneMatrix: [number, number, number, number, number, number] }
+    | Record<string, never> {
     const canvas = this.canvasService;
-    if (!action || !canvas || !this.commandService) return;
-    const commandId = String(action.commandId || "").trim();
-    if (!commandId) return;
-    const rawCenter =
-      typeof target?.getCenterPoint === "function"
-        ? target.getCenterPoint()
-        : {
-            x: finiteNumber(target?.left, 0),
-            y: finiteNumber(target?.top, 0),
-          };
-    const center = canvas.toScenePoint({
-      x: finiteNumber(rawCenter?.x, finiteNumber(target?.left, 0)),
-      y: finiteNumber(rawCenter?.y, finiteNumber(target?.top, 0)),
+    const rawMatrix = target?.group?.calcTransformMatrix?.();
+    if (
+      !canvas ||
+      !Array.isArray(rawMatrix) ||
+      rawMatrix.length !== 6 ||
+      rawMatrix.some((value: unknown) => !Number.isFinite(value))
+    ) {
+      return {};
+    }
+    const scale = Math.max(0.0001, canvas.getSceneScale());
+    const translation = canvas.toScenePoint({
+      space: "screen",
+      x: rawMatrix[4],
+      y: rawMatrix[5],
     });
-    const objectScaling =
-      typeof target?.getObjectScaling === "function"
-        ? target.getObjectScaling()
-        : null;
-    const sceneScale = Math.max(0.0001, canvas.getSceneScale());
-    const scaleX =
-      finiteNumber(objectScaling?.x, finiteNumber(target?.scaleX, 1)) /
-      sceneScale;
-    const scaleY =
-      finiteNumber(objectScaling?.y, finiteNumber(target?.scaleY, 1)) /
-      sceneScale;
-    void this.commandService
-      .executeCommand(commandId, {
-        ...(action.payload ?? {}),
-        commit,
-        kind,
-        layerId: target?.data?.layerId,
-        sceneId: target?.data?.sceneId,
-        snap: resultMetadata?.rectSnap,
-        subjectId: target?.data?.subjectId,
-        surfaceId: target?.data?.surfaceId,
-        transform: {
-          centerX: center.x,
-          centerY: center.y,
-          rotation: finiteNumber(target?.angle, 0),
-          scaleX,
-          scaleY,
-        },
-      })
-      .catch((error) => {
-        console.error(
-          `[FabricRenderGraphAdapter] manipulation action "${commandId}" failed.`,
-          error,
-        );
-      });
+    return {
+      parentSceneMatrix: [
+        rawMatrix[0] / scale,
+        rawMatrix[1] / scale,
+        rawMatrix[2] / scale,
+        rawMatrix[3] / scale,
+        translation.x,
+        translation.y,
+      ],
+    };
+  }
+
+  private resolveTargetSceneMatrix(
+    target: any,
+  ): Matrix2D<"object-local", "scene"> | undefined {
+    const canvas = this.canvasService;
+    const placement = target?.data?.affinePlacement as
+      | AffinePlacement
+      | undefined;
+    const rawMatrix = target?.calcTransformMatrix?.();
+    if (
+      !canvas ||
+      !placement ||
+      !Array.isArray(rawMatrix) ||
+      rawMatrix.length !== 6 ||
+      rawMatrix.some((value: unknown) => !Number.isFinite(value))
+    ) {
+      return undefined;
+    }
+    const bounds = placement.localBounds;
+    const localToFabricCenter = coordinateMatrix(
+      "object-local",
+      "object-local",
+      [
+        1,
+        0,
+        0,
+        1,
+        -(bounds.left + bounds.width / 2),
+        -(bounds.top + bounds.height / 2),
+      ],
+    );
+    const fabricCenterToScreen = coordinateMatrix(
+      "object-local",
+      "screen",
+      rawMatrix as [number, number, number, number, number, number],
+    );
+    return canvas.toSceneMatrix(
+      multiplyCoordinateMatrices(fabricCenterToScreen, localToFabricCenter),
+    );
   }
 
   private handleRenderGraphObjectModified(target: any) {
@@ -1069,7 +1254,7 @@ export class FabricRenderGraphAdapter implements Service {
     }
     const kind =
       (target && typeof target === "object"
-        ? this.activeManipulations.get(target)
+        ? this.activeManipulations.get(target)?.kind
         : undefined) ?? "move";
     this.handleRenderGraphObjectManipulating(kind, target, true);
     if (target && typeof target === "object") {
@@ -1091,7 +1276,7 @@ export class FabricRenderGraphAdapter implements Service {
       ),
       layerId: target.data?.layerId,
       renderIntentId: target.data?.renderIntentId ?? target.data?.renderNodeId,
-      subjectId: target.data?.subjectId ?? target.data?.subject?.objectId,
+      subject: this.resolveInteractionSubject(target) ?? undefined,
       surfaceId: target.data?.surfaceId ?? target.data?.subject?.surfaceId,
       targetData: cloneRecord(target.data ?? {}),
       trigger,
@@ -1099,15 +1284,26 @@ export class FabricRenderGraphAdapter implements Service {
   }
 
   private resolveLiveObjectFrame(objectId: string): GeometryRect | null {
+    const target = this.resolveLiveProjection(objectId);
+    return target ? this.getTargetSceneBounds(target) : null;
+  }
+
+  private resolveLiveProjection(projectionId: string): any | null {
     const canvas = this.canvasService;
     if (!canvas) return null;
-    const normalized = String(objectId || "").trim();
+    const normalized = String(projectionId || "").trim();
     if (!normalized) return null;
-    const target = canvas.selectObjects({
-      data: { renderTarget: FABRIC_RENDER_GRAPH_TARGET },
-      subjectIds: [normalized],
-    })[0];
-    return target ? this.getTargetSceneBounds(target) : null;
+    return (
+      canvas
+        .selectObjects({
+          data: { renderTarget: FABRIC_RENDER_GRAPH_TARGET },
+        })
+        .find(
+          (candidate: any) =>
+            String(candidate?.data?.renderNodeId || "") === normalized ||
+            String(candidate?.data?.subjectId || "") === normalized,
+        ) ?? null
+    );
   }
 
   private getTargetSceneBounds(target: any): GeometryRect | null {
@@ -1125,6 +1321,7 @@ export class FabricRenderGraphAdapter implements Service {
               finiteNumber(target.height, 0) * finiteNumber(target.scaleY, 1),
           };
     const sceneBounds = canvas.toSceneRect({
+      space: "screen",
       left: finiteNumber(rawBounds.left, 0),
       top: finiteNumber(rawBounds.top, 0),
       width: finiteNumber(rawBounds.width, 0),
@@ -1138,17 +1335,43 @@ export class FabricRenderGraphAdapter implements Service {
     };
   }
 
-  private createRenderGraphGeometrySource(): GeometrySourceProvider {
+  private createRenderGraphGeometrySource(): GeometrySource {
     return {
       sourceId: "render-graph",
-      getGeometry: (ref) => {
-        const rect = this.resolveLiveObjectFrame(ref.geometryId);
+      getSnapshot: (ref) => {
+        const target = this.resolveLiveProjection(ref.geometryId);
+        const placement = target?.data?.affinePlacement as
+          | AffinePlacement
+          | undefined;
+        if (placement) {
+          const bounds = {
+            left: placement.localBounds.left,
+            top: placement.localBounds.top,
+            width: placement.localBounds.width,
+            height: placement.localBounds.height,
+          };
+          return {
+            kind: "rect",
+            ref,
+            space: "object-local",
+            bounds,
+            rect: bounds,
+            localToScene: placement.localToScene,
+          };
+        }
+        const rect = target ? this.getTargetSceneBounds(target) : null;
         return rect
           ? {
               kind: "rect",
               ref,
               space: "scene",
+              bounds: rect,
               rect,
+              localToScene: coordinateMatrix(
+                "scene",
+                "scene",
+                [1, 0, 0, 1, 0, 0],
+              ),
             }
           : null;
       },
@@ -1232,8 +1455,11 @@ export class FabricRenderGraphAdapter implements Service {
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
     >,
     layerEffects: RenderEffectSpec[] = [],
-    readOnlyProjection = false,
+    readOnly = false,
+    geometryRef: GeometryRef = node.previewGeometryRef,
   ): RenderObjectSpec | null {
+    const geometry = this.resolveGeometryProjection(geometryRef);
+    if (!geometry) return null;
     const hasDeclarativeInteraction = Boolean(node.interaction);
     const interactionState = this.requireInteractionService().resolveState(
       node.interaction,
@@ -1244,12 +1470,12 @@ export class FabricRenderGraphAdapter implements Service {
     const resizeEnabled = interactionState.manipulation.resize.enabled;
     const rotateEnabled = interactionState.manipulation.rotate.enabled;
     const controlsEnabled = resizeEnabled || rotateEnabled;
-    const selectable = readOnlyProjection
+    const selectable = readOnly
       ? false
       : hasDeclarativeInteraction
         ? interactionState.selectionEnabled
         : node.props.selectable === true;
-    const evented = readOnlyProjection
+    const evented = readOnly
       ? false
       : hasDeclarativeInteraction
         ? interactionState.hitTestEnabled
@@ -1258,16 +1484,16 @@ export class FabricRenderGraphAdapter implements Service {
           : selectable;
     const commonProps = {
       ...node.props,
-      ...this.resolvePlacementProps(node),
+      ...(geometry.pathData ? { pathData: geometry.pathData } : {}),
       selectable,
       evented,
-      hasControls: !readOnlyProjection && controlsEnabled,
-      hasBorders: !readOnlyProjection && controlsEnabled,
-      lockMovementX: readOnlyProjection || !moveEnabled,
-      lockMovementY: readOnlyProjection || !moveEnabled,
-      lockScalingX: readOnlyProjection || !resizeEnabled,
-      lockScalingY: readOnlyProjection || !resizeEnabled,
-      lockRotation: readOnlyProjection || !rotateEnabled,
+      hasControls: !readOnly && controlsEnabled,
+      hasBorders: !readOnly && controlsEnabled,
+      lockMovementX: readOnly || !moveEnabled,
+      lockMovementY: readOnly || !moveEnabled,
+      lockScalingX: readOnly || !resizeEnabled,
+      lockScalingY: readOnly || !resizeEnabled,
+      lockRotation: readOnly || !rotateEnabled,
       visible: layer.visible && node.visible,
     };
     const commonData = {
@@ -1279,17 +1505,20 @@ export class FabricRenderGraphAdapter implements Service {
       surfaceId: node.surfaceId,
       exportKeys: node.exportKeys,
       tags: node.tags,
-      ...(!readOnlyProjection && node.interaction
+      ...(!readOnly && node.interaction
         ? { interactionSpec: node.interaction }
         : {}),
-      ...(readOnlyProjection
-        ? { documentProjection: true, readOnly: true }
-        : {}),
+      ...(readOnly ? { readOnly: true } : {}),
     };
     const effects = [
       ...layerEffects,
       ...this.normalizeActiveEffects(node.effects, conditionContext),
-    ];
+    ].map((effect) =>
+      this.materializeGeometryEffect(
+        effect,
+        readOnly ? "export" : "preview",
+      ),
+    );
 
     if (node.type === "image") {
       const src = node.visual?.src;
@@ -1299,6 +1528,9 @@ export class FabricRenderGraphAdapter implements Service {
         type: "image",
         src,
         space: node.coordinateSpace,
+        placement: geometry.placement,
+        previewGeometryRef: node.previewGeometryRef,
+        exportGeometryRef: node.exportGeometryRef,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1310,6 +1542,9 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "path",
         space: node.coordinateSpace,
+        placement: geometry.placement,
+        previewGeometryRef: node.previewGeometryRef,
+        exportGeometryRef: node.exportGeometryRef,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1321,6 +1556,9 @@ export class FabricRenderGraphAdapter implements Service {
         id: node.id,
         type: "rect",
         space: node.coordinateSpace,
+        placement: geometry.placement,
+        previewGeometryRef: node.previewGeometryRef,
+        exportGeometryRef: node.exportGeometryRef,
         data: commonData,
         ...(effects.length ? { effects } : {}),
         props: commonProps,
@@ -1331,10 +1569,128 @@ export class FabricRenderGraphAdapter implements Service {
       id: node.id,
       type: "text",
       space: node.coordinateSpace,
+      placement: geometry.placement,
+      previewGeometryRef: node.previewGeometryRef,
+      exportGeometryRef: node.exportGeometryRef,
       data: commonData,
       ...(effects.length ? { effects } : {}),
       props: commonProps,
     };
+  }
+
+  createExportRenderObjectSpec(
+    layer: RenderGraphLayer,
+    node: RenderGraphNode,
+  ): RenderObjectSpec | null {
+    const conditionContext = this.buildRuntimeConditionContext(
+      this.requireRenderIntentService().getGraph(),
+    );
+    return this.toRenderObjectSpec(
+      layer,
+      node,
+      conditionContext,
+      this.normalizeActiveEffects(layer.effects, conditionContext),
+      true,
+      node.exportGeometryRef,
+    );
+  }
+
+  private resolveGeometryProjection(ref: GeometryRef): {
+    placement: AffinePlacement;
+    pathData?: string;
+    snapshot: GeometrySnapshot;
+  } | null {
+    const source = this.geometrySource;
+    if (!source) return null;
+    const resolved = source.getSnapshot(ref);
+    const snapshot = resolved.value;
+    if (!snapshot) {
+      resolved.diagnostics.forEach((diagnostic) =>
+        console.warn(`[FabricRenderGraphAdapter] ${diagnostic.message}`),
+      );
+      return null;
+    }
+    const pathData = this.geometryPathData(snapshot);
+    const localToScene = coordinateMatrix(
+      "object-local",
+      "scene",
+      snapshot.localToScene.values,
+    );
+    return {
+      snapshot,
+      ...(pathData ? { pathData } : {}),
+      placement: {
+        localBounds: {
+          space: "object-local",
+          left: snapshot.bounds.left,
+          top: snapshot.bounds.top,
+          width: snapshot.bounds.width,
+          height: snapshot.bounds.height,
+        },
+        localToScene,
+        pivot: {
+          space: "object-local",
+          x: snapshot.bounds.left + snapshot.bounds.width / 2,
+          y: snapshot.bounds.top + snapshot.bounds.height / 2,
+        },
+      },
+    };
+  }
+
+  private geometryPathData(snapshot: GeometrySnapshot): string | undefined {
+    if (snapshot.kind === "path") return snapshot.pathData;
+    if (snapshot.kind === "rect") {
+      const { left, top, width, height } = snapshot.rect;
+      return `M${left} ${top}H${left + width}V${top + height}H${left}Z`;
+    }
+    if (snapshot.kind === "polygon") {
+      const [first, ...rest] = snapshot.points;
+      return first
+        ? `M${first.x} ${first.y}${rest.map((point) => `L${point.x} ${point.y}`).join("")}Z`
+        : undefined;
+    }
+    if (snapshot.kind !== "compound") return undefined;
+    const children = snapshot.children
+      .map((ref) => this.geometrySource?.getSnapshot(ref).value)
+      .filter((child): child is GeometrySnapshot => Boolean(child));
+    const paths = children
+      .map((child) => this.geometryPathData(child))
+      .filter((path): path is string => Boolean(path));
+    return paths.length === children.length ? paths.join(" ") : undefined;
+  }
+
+  private materializeGeometryEffect(
+    effect: RenderEffectSpec,
+    purpose: "preview" | "export",
+  ): RenderEffectSpec {
+    if (effect.type !== "clipPath") return effect;
+    const ref =
+      purpose === "export"
+        ? effect.exportGeometryRef
+        : effect.previewGeometryRef;
+    if (!ref) return effect;
+    const geometry = this.resolveGeometryProjection(ref);
+    if (!geometry) return effect;
+    const pathData = this.geometryPathData(geometry.snapshot);
+    if (!pathData) return effect;
+    const source = {
+      id: `${effect.id ?? "clipPath"}:${purpose}:geometry`,
+      type: "path" as const,
+      placement: geometry.placement,
+      previewGeometryRef: effect.previewGeometryRef,
+      exportGeometryRef: effect.exportGeometryRef,
+      props: {
+        pathData,
+        fill: "#000000",
+        stroke: null,
+        selectable: false,
+        evented: false,
+        excludeFromExport: true,
+      },
+    };
+    return effect.coordinateMode === "object"
+      ? { ...effect, source: { ...source, space: "object-local" } }
+      : { ...effect, source: { ...source, space: "scene" } };
   }
 
   private getRenderableScenes(): SceneRecord[] {
@@ -1367,7 +1723,7 @@ export class FabricRenderGraphAdapter implements Service {
     const controlsEnabled = resizeEnabled || rotateEnabled;
     const props = {
       ...withoutFabricInteractionProps(element.style),
-      ...element.transform,
+      ...(element.placement ? {} : element.transform),
       ...renderProps,
       ...(element.type === "rect"
         ? { width: element.width, height: element.height }
@@ -1410,6 +1766,7 @@ export class FabricRenderGraphAdapter implements Service {
       id: element.id,
       type: element.type,
       ...(element.type === "image" ? { src: element.src } : {}),
+      ...(element.placement ? { placement: element.placement } : {}),
       space: element.data?.renderSpace === "screen" ? "screen" : "scene",
       data,
       effects: [
@@ -1434,67 +1791,6 @@ export class FabricRenderGraphAdapter implements Service {
       .map((effect) => ({ ...effect }));
   }
 
-  private resolvePlacementProps(
-    node: RenderGraphNode,
-  ): Record<string, unknown> {
-    const frame = node.frame;
-    const transform = node.transform ?? {};
-    const hasTransformLeft = Number.isFinite(transform.left);
-    const hasTransformTop = Number.isFinite(transform.top);
-
-    if (node.type === "image" && frame) {
-      const resolvedWidth = Number(node.width);
-      const resolvedHeight = Number(node.height);
-      if (resolvedWidth > 0 && resolvedHeight > 0) {
-        return {
-          ...transform,
-          left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
-          top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
-          originX: transform.originX ?? "center",
-          originY: transform.originY ?? "center",
-          width: resolvedWidth,
-          height: resolvedHeight,
-        };
-      }
-      return {
-        ...transform,
-        left: hasTransformLeft ? transform.left : frame.x + frame.width / 2,
-        top: hasTransformTop ? transform.top : frame.y + frame.height / 2,
-        originX: hasTransformLeft ? transform.originX : "center",
-        originY: hasTransformTop ? transform.originY : "center",
-        width: frame.width,
-        height: frame.height,
-        scaleX: normalizeFrameImageScale(transform.scaleX),
-        scaleY: normalizeFrameImageScale(transform.scaleY),
-      };
-    }
-
-    if (!frame) {
-      return { ...transform };
-    }
-
-    const placement = {
-      left: hasTransformLeft ? transform.left : frame.x,
-      top: hasTransformTop ? transform.top : frame.y,
-      originX: transform.originX ?? "left",
-      originY: transform.originY ?? "top",
-    };
-
-    if (node.type === "path") {
-      return {
-        ...transform,
-        ...placement,
-      };
-    }
-
-    return {
-      ...transform,
-      ...placement,
-      width: frame.width,
-      height: frame.height,
-    };
-  }
-
   private requireRenderIntentService(): RenderIntentService {
     if (!this.renderIntentService) {
       throw new Error(
@@ -1512,11 +1808,6 @@ export class FabricRenderGraphAdapter implements Service {
     }
     return this.canvasService;
   }
-}
-
-function normalizeFrameImageScale(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed < 0 ? -1 : 1;
 }
 
 function finiteNumber(value: unknown, fallback: number): number {

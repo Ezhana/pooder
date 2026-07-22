@@ -2,19 +2,14 @@
   "compilerOptions": {
     "target": "es2018",
     "module": "esnext",
-    "baseUrl": ".",
     "moduleResolution": "bundler",
-    "lib": ["esnext", "dom"],
     "strict": true,
-    "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": true,
     "noEmit": true,
+    "baseUrl": ".",
     "paths": {
-      "@pooder/core": ["../core/src/index.ts"],
-      "@pooder/core/internal/legacy-extension": ["../core/src/internal/legacy-extension.ts"],
-      "@pooder/document": ["../document/src/index.ts"],
-      "@pooder/document-core": ["../document-core/src/index.ts"]
+      "@pooder/tools": ["../tools/src/index.ts"]
     }
   },
   "include": ["src"]

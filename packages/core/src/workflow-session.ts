@@ -3,6 +3,7 @@ import type Disposable from "./disposable";
 export type SessionId = string;
 export const EDITOR_INTERACTION_SESSION_GROUP_ID = "editor-interaction";
 export type SessionLeavePolicy = "block" | "commit" | "rollback";
+export type SessionConcurrencyPolicy = "parallel" | "reject" | "replace";
 export type SessionInteractionMode = "exclusive" | "cooperative" | "passive";
 export type SessionPhase =
   | "opening"
@@ -74,6 +75,8 @@ export interface SessionLifecycle<TDraft = unknown, TResult = unknown> {
 export interface OpenSessionInput<TDraft, TResult = unknown> {
   descriptor: SessionDescriptor;
   initialDraft: TDraft;
+  /** Defines how another live session with the same normalized scope is handled. */
+  concurrency?: SessionConcurrencyPolicy;
   lifecycle?: SessionLifecycle<TDraft, TResult>;
 }
 
