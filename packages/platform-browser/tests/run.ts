@@ -4155,12 +4155,133 @@ async function testObjectImageResolverCachesCommittedVisuals() {
   resolver.dispose();
 }
 
+async function testObjectImageResolverCropsCommittedVisualToClip() {
+  let lastExportOptions: Record<string, unknown> | undefined;
+  const clipPlacement = createTestPlacement(100, 200, 80, 50);
+  const renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          nodes: [
+            {
+              data: {
+                imageGeometry: {
+                  clip: { height: 50, left: 0, top: 0, width: 80 },
+                  fit: "cover",
+                  frame: { height: 50, left: 0, top: 0, width: 80 },
+                  source: {
+                    size: { height: 200, width: 300 },
+                    src: "https://example.com/original.png",
+                  },
+                  transform: { zoom: 2 },
+                },
+              },
+              effects: [
+                {
+                  coordinateMode: "absolute",
+                  source: {
+                    placement: clipPlacement,
+                    space: "scene",
+                    type: "rect",
+                  },
+                  type: "clipPath",
+                },
+              ],
+              exportKeys: ["image-slot"],
+              id: "render-image-slot",
+              // Oversized source placement that overflows the clip frame.
+              placement: createTestPlacement(60, 160, 160, 120),
+              props: {},
+              subjectId: "image-slot",
+              type: "image",
+            },
+          ],
+        },
+      ],
+    }),
+    onDidChange: () => ({ dispose() {} }),
+  };
+  const sceneExportService = {
+    exportImage: async (options: Record<string, unknown>) => {
+      lastExportOptions = options;
+      return {
+        crop: { height: 50, left: 100, space: "scene", top: 200, width: 80 },
+        format: "png" as const,
+        height: 100,
+        url: "data:image/png;base64,clipped",
+        width: 160,
+      };
+    },
+  };
+  const resolver = new BrowserObjectImageResolverService();
+  resolver.init({
+    eventBus: {} as any,
+    get: () => undefined,
+    getOrThrow: (token: unknown) =>
+      token === RENDER_INTENT_SERVICE
+        ? (renderIntentService as any)
+        : (sceneExportService as any),
+    has: () => true,
+  });
+
+  const resolved = await resolver.resolve({ objectId: "image-slot" });
+  const exportCrop = lastExportOptions?.crop as
+    | { type?: string; rect?: Record<string, number | string> }
+    | undefined;
+  assertEqual(
+    exportCrop?.type,
+    "sceneRect",
+    "committed visual should crop with sceneRect",
+  );
+  assertDeepEqual(
+    {
+      height: Number(exportCrop?.rect?.height),
+      left: Number(exportCrop?.rect?.left),
+      top: Number(exportCrop?.rect?.top),
+      width: Number(exportCrop?.rect?.width),
+    },
+    { height: 50, left: 100, top: 200, width: 80 },
+    "committed visual should crop to the clip region instead of element bounds",
+  );
+  assertEqual(
+    (lastExportOptions?.preserveClipPaths as boolean) ?? false,
+    true,
+    "committed visual export should preserve clipping",
+  );
+  assertEqual(resolved.derived, true, "clipped committed visual is derived");
+  assertDeepEqual(
+    {
+      height: resolved.sceneBounds.height,
+      left: resolved.sceneBounds.left,
+      top: resolved.sceneBounds.top,
+      width: resolved.sceneBounds.width,
+    },
+    { height: 50, left: 100, top: 200, width: 80 },
+    "committed visual scene bounds should match the clip region",
+  );
+  assertDeepEqual(
+    {
+      height: resolved.placement.localBounds.height,
+      left: resolved.placement.localBounds.left,
+      top: resolved.placement.localBounds.top,
+      width: resolved.placement.localBounds.width,
+    },
+    { height: 100, left: 0, top: 0, width: 160 },
+    "committed visual placement should use the clipped export pixel bounds",
+  );
+  resolver.dispose();
+}
+
 async function main() {
   const tests: Array<[string, () => void | Promise<void>]> = [
     ["applies alpha mask data", testOutputMaskAlphaHelpers],
     [
       "resolves and caches committed object visuals",
       testObjectImageResolverCachesCommittedVisuals,
+    ],
+    [
+      "crops committed visuals to clip bounds",
+      testObjectImageResolverCropsCommittedVisualToClip,
     ],
     ["fills outline output masks", testOutputMaskOutlineHelpers],
     [

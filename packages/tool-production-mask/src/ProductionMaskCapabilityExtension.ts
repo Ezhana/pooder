@@ -10,15 +10,14 @@ import {
   CapabilityRegistryService,
   SessionConflictError,
   TypedEventEmitter,
-  coordinateRect,
   createAffinePlacement,
-  createLocalToSceneMatrix,
   type AffinePlacement,
   type ExtensionActivationSpec,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
   type ObjectImageResolverService,
+  type RenderEffectSpec,
   type RenderGraphNode,
   type RenderIntentCompilerContext,
   type RenderIntentCompilerContribution,
@@ -77,6 +76,8 @@ interface ImageSnapshot {
   id: string;
   placement: AffinePlacement;
   src: string;
+  /** Clip effects copied from the live reference node (keeps masks in frame). */
+  effects: RenderEffectSpec[];
 }
 
 interface MaskTint extends ImageMaskTint {
@@ -98,6 +99,13 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const cloneReferenceClipEffects = (
+  node: RenderGraphNode,
+): RenderEffectSpec[] =>
+  node.effects
+    .filter((effect) => effect.type === "clipPath")
+    .map((effect) => clone(effect));
 
 const normalizeStringList = (value: unknown): string[] =>
   Array.isArray(value)
@@ -167,9 +175,9 @@ const normalizePayload = (
     objectId: String(value.reference?.objectId || "").trim(),
   },
   alignment:
-    value.alignment === "reference-frame"
-      ? "reference-frame"
-      : "reference-source",
+    value.alignment === "reference-source"
+      ? "reference-source"
+      : "reference-frame",
   ...(value.source ? { source: clone(value.source) } : {}),
   alpha: normalizeAlphaParameters(value.alpha),
   ...(value.preview
@@ -879,18 +887,26 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     descriptor: ProductionMaskDescriptor,
   ): Promise<ImageSnapshot | null> {
     const objectId = descriptor.payload.reference.objectId;
-    if (!objectId || !this.objectImageResolver) return null;
+    const referenceNode = this.getReferenceNode(descriptor);
+    if (!objectId || !referenceNode || !this.objectImageResolver) return null;
     try {
+      // Use the live reference geometry (placement + clip) so original preview
+      // and uploaded masks share the same bitmap space as the canvas image.
+      // original-resource keeps source pixels 1:1 with placement.localBounds;
+      // clipPath effects keep the result inside the frame.
       const resolved = await this.objectImageResolver.resolve({
         objectId,
-        representation: "committed-visual",
-        format: "png",
-        multiplier: 2,
+        representation: "original-resource",
       });
+      const effects =
+        descriptor.payload.alignment === "reference-source"
+          ? []
+          : cloneReferenceClipEffects(referenceNode);
       return {
         id: resolved.objectId,
-        placement: resolved.placement,
+        placement: clone(referenceNode.placement),
         src: resolved.url,
+        effects,
       };
     } catch {
       return null;
@@ -957,6 +973,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     layerId: string,
     type: string,
   ): RenderObjectSpec {
+    const { width, height } = snapshot.placement.localBounds;
     return {
       id,
       type: "image",
@@ -966,8 +983,13 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         pivot: snapshot.placement.pivot,
         localToScene: snapshot.placement.localToScene,
       }),
+      ...(snapshot.effects.length ? { effects: clone(snapshot.effects) } : {}),
       data: { id, imageId: snapshot.id, layerId, type },
       props: {
+        // Force fabric create-path to size the bitmap into the reference
+        // source's localBounds so uploaded masks share the same geometry.
+        width,
+        height,
         opacity: normalizeUnitInterval(opacity, DEFAULT_MASK_OPACITY),
         excludeFromExport: true,
       },

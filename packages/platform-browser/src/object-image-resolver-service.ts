@@ -3,16 +3,21 @@ import {
   OBJECT_IMAGE_RESOLVER_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_EXPORT_SERVICE,
-  coordinateRect,
   createAffinePlacement,
   createLocalToSceneMatrix,
+  invertCoordinateMatrix,
+  multiplyCoordinateMatrices,
   normalizeImageGeometryDescriptor,
+  resolveImageGeometry,
   transformCoordinateRect,
+  type AffinePlacement,
+  type CoordinateRect,
   type ObjectImageResolverService,
   type RenderGraphNode,
   type RenderIntentService,
   type ResolveObjectImageOptions,
   type ResolvedObjectImage,
+  type SceneExportCrop,
   type SceneExportFormat,
   type SceneExportService,
   type Service,
@@ -32,6 +37,92 @@ function inferFormat(url: string): SceneExportFormat {
   return /^data:image\/jpe?g[;,]/i.test(url) || /\.jpe?g(?:[?#]|$)/i.test(url)
     ? "jpeg"
     : "png";
+}
+
+function isValidSceneRect(
+  rect: CoordinateRect<"scene"> | null | undefined,
+): rect is CoordinateRect<"scene"> {
+  return Boolean(
+    rect &&
+      Number.isFinite(rect.left) &&
+      Number.isFinite(rect.top) &&
+      Number.isFinite(rect.width) &&
+      Number.isFinite(rect.height) &&
+      rect.width > 0 &&
+      rect.height > 0,
+  );
+}
+
+function createPlacementFromSceneCrop(
+  crop: Pick<CoordinateRect<"scene">, "left" | "top" | "width" | "height">,
+  pixelWidth: number,
+  pixelHeight: number,
+): AffinePlacement {
+  const width = Math.max(1, pixelWidth);
+  const height = Math.max(1, pixelHeight);
+  return createAffinePlacement({
+    localBounds: {
+      left: 0,
+      top: 0,
+      width,
+      height,
+    },
+    pivot: { x: width / 2, y: height / 2 },
+    localToScene: createLocalToSceneMatrix({
+      position: {
+        x: crop.left + crop.width / 2,
+        y: crop.top + crop.height / 2,
+      },
+      pivot: { x: width / 2, y: height / 2 },
+      scaleX: crop.width / width,
+      scaleY: crop.height / height,
+    }),
+  });
+}
+
+/**
+ * Resolve the authoritative clip region for a committed visual.
+ * Prefer the live clipPath effect; fall back to imageGeometry.clip.
+ */
+function resolveCommittedVisualCrop(
+  node: RenderGraphNode,
+): CoordinateRect<"scene"> | null {
+  for (const effect of node.effects) {
+    if (effect.type !== "clipPath" || !effect.source?.placement) continue;
+    const crop =
+      effect.coordinateMode === "object"
+        ? transformCoordinateRect(
+            node.placement.localToScene,
+            effect.source.placement.localBounds,
+          )
+        : transformCoordinateRect(
+            effect.source.placement.localToScene,
+            effect.source.placement.localBounds,
+          );
+    if (isValidSceneRect(crop)) return crop;
+  }
+
+  const geometry = normalizeImageGeometryDescriptor(
+    node.data[IMAGE_GEOMETRY_DATA_KEY],
+  );
+  if (!geometry?.clip) return null;
+  try {
+    const resolved = resolveImageGeometry(
+      geometry,
+      geometry.source.size ?? {
+        width: geometry.frame.width,
+        height: geometry.frame.height,
+      },
+    );
+    const objectLocalToScene = multiplyCoordinateMatrices(
+      node.placement.localToScene,
+      invertCoordinateMatrix(resolved.imageLocalToObjectLocal),
+    );
+    const crop = transformCoordinateRect(objectLocalToScene, geometry.clip);
+    return isValidSceneRect(crop) ? crop : null;
+  } catch {
+    return null;
+  }
 }
 
 export class BrowserObjectImageResolverService
@@ -150,39 +241,33 @@ export class BrowserObjectImageResolverService
     revision: number,
   ): Promise<ResolvedObjectImage> {
     const node = this.resolveNode(objectId);
+    const clipCrop = resolveCommittedVisualCrop(node);
     const opacity = Number(node.props.opacity ?? 1);
-    if (node.effects.length === 0 && Number.isFinite(opacity) && opacity >= 1) {
+    const needsDerivedVisual =
+      Boolean(clipCrop) ||
+      node.effects.length > 0 ||
+      !(Number.isFinite(opacity) && opacity >= 1);
+
+    // Identity path: no clip / effects / opacity processing — reuse the source.
+    if (!needsDerivedVisual) {
       const original = await this.resolveOriginalResource(objectId, revision);
       return {
         ...original,
         representation: "committed-visual",
       };
     }
+
+    // Committed visual must match the clip-constrained final look: crop to the
+    // clip region (not the possibly overflowing elementBounds).
+    const crop: SceneExportCrop = clipCrop
+      ? { type: "sceneRect", rect: clipCrop }
+      : { type: "elementBounds", elementIds: [objectId] };
     const result = await this.requireSceneExportService().exportImage({
       format,
       multiplier,
       source: { elementIds: [objectId] },
-      crop: { type: "elementBounds", elementIds: [objectId] },
+      crop,
       preserveClipPaths: true,
-    });
-    const localBounds = coordinateRect("object-local", {
-      left: 0,
-      top: 0,
-      width: result.width,
-      height: result.height,
-    });
-    const placement = createAffinePlacement({
-      localBounds,
-      pivot: { x: result.width / 2, y: result.height / 2 },
-      localToScene: createLocalToSceneMatrix({
-        position: {
-          x: result.crop.left + result.crop.width / 2,
-          y: result.crop.top + result.crop.height / 2,
-        },
-        pivot: { x: result.width / 2, y: result.height / 2 },
-        scaleX: result.crop.width / result.width,
-        scaleY: result.crop.height / result.height,
-      }),
     });
     return {
       objectId,
@@ -192,7 +277,11 @@ export class BrowserObjectImageResolverService
       height: result.height,
       format: result.format,
       sceneBounds: result.crop,
-      placement,
+      placement: createPlacementFromSceneCrop(
+        result.crop,
+        result.width,
+        result.height,
+      ),
       revision,
       derived: true,
     };
