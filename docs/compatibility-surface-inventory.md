@@ -23,14 +23,10 @@ ownership.
 | Legacy global command ids | `deprecated bridge` | Use typed capability facades. Allowed bridges are listed in `packages/tools/src/extensions/legacyCommandBridge.ts`. |
 | `exportImage` | `deprecated bridge` | `DesignExportCapabilityApi.exportImage()` or `SceneExportCapabilityApi.exportImage()`. |
 | `detectEdge` | `deprecated bridge` | `EdgeDetectionCapabilityApi.detectEdge()`. |
-| `updateFeaturePosition` | `deprecated bridge` | `DielineGeometryCapabilityApi.updateFeaturePosition()`. |
-| Feature session commands | `deprecated bridge` | `FeatureCapabilityApi` methods: `beginSession`, `addFeature`, `addDoubleLayerHole`, `clearFeatures`, `rollbackSession`, `resetSession`, `updateWorkingGroupPosition`, `completeSession`. |
-| Global events `image:state:change`, `image:session:notice`, `image:session:open`, `feature:working:change` | `active compatibility` | Capability-owned typed subscriptions should be added before new consumers depend on raw global events. |
+| Global events `image:state:change`, `image:session:notice`, `image:session:open` | `active compatibility` | Capability-owned typed subscriptions should be added before new consumers depend on raw global events. |
 | Service-local raw events like `change` and `definitions:change` | `active compatibility` | Public consumers should use typed service methods such as `onDidChange` and `onDefinitionsChange`. |
 | `KIT_LEGACY_LAYER_PRESET` | `active compatibility` | Caller-owned layer ids passed through capability options. |
 | Legacy layer constants `image.user`, `dieline-overlay`, `feature-overlay`, `feature-dieline-overlay` | `remove in major` | Use app-owned layer ids; use `KIT_LEGACY_LAYER_PRESET` only to preserve old layouts during migration. |
-| Legacy config namespaces such as `dieline.*` | `active compatibility` | Capability options should pass app-owned `configNamespace` values. |
-| `FeatureToolOptions.requireDielineExtension` | `deprecated bridge` | Prefer explicit capability registration and dependencies owned by the app. |
 
 ## RenderIntent Patch Ownership
 

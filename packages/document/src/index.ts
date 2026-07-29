@@ -247,8 +247,6 @@ export interface EditorObjectBase {
   id: string;
   /** Object geometry is always relative to its containing layer/object. */
   coordinateSpace: "parent-local";
-  /** Optional containing object. This object's frame remains parent-local. */
-  parentObjectId?: string;
   frame?: EditorRect;
   order?: number;
   visible?: boolean;
@@ -339,7 +337,25 @@ export interface EditorPrimitiveObject extends EditorObjectBase {
   source: Exclude<ObjectSource, { kind: "image" }>;
 }
 
-export type EditorObject = EditorImageObject | EditorPrimitiveObject;
+export type EditorVisualObject = EditorImageObject | EditorPrimitiveObject;
+
+export interface EditorCompositeObject extends EditorObjectBase {
+  children: EditorObject[];
+}
+
+export type EditorObject = EditorVisualObject | EditorCompositeObject;
+
+export function isEditorCompositeObject(
+  object: EditorObject,
+): object is EditorCompositeObject {
+  return "children" in object;
+}
+
+export function isEditorVisualObject(
+  object: EditorObject,
+): object is EditorVisualObject {
+  return "source" in object;
+}
 
 export interface EditorEffect<TPayload = Record<string, unknown>> {
   id?: string;
@@ -438,6 +454,8 @@ export interface EditorDocumentObjectVisitContext {
   layerIndex: number;
   object: EditorObject;
   objectIndex: number;
+  parentObject?: EditorCompositeObject;
+  depth: number;
   path: string;
 }
 
@@ -1185,10 +1203,11 @@ function normalizeEffects(value: unknown): EditorEffect[] | undefined {
 function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
   if (!isRecord(value)) return null;
   const type = normalizeId(value.type);
+  const common = normalizeObjectEffectCommon(value);
 
   if (type === "clip-source") {
     const targetIds = normalizeIdList(value.targetIds);
-    return targetIds ? { type, targetIds } : null;
+    return targetIds ? { ...common, type, targetIds } : null;
   }
 
   if (type === "boolean") {
@@ -1203,6 +1222,7 @@ function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
 
     const participation = normalizeId(value.participation);
     return {
+      ...common,
       type,
       targetId,
       operation: operation as "add" | "subtract" | "intersect" | "exclude",
@@ -1221,6 +1241,7 @@ function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
     }
 
     return {
+      ...common,
       type,
       role,
       ...(isRecord(value.style) ? { style: cloneRecord(value.style) } : {}),
@@ -1228,6 +1249,18 @@ function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
   }
 
   return normalizeEffect(value);
+}
+
+function normalizeObjectEffectCommon(
+  value: Record<string, unknown>,
+): EditorObjectEffectCommon {
+  const common: EditorObjectEffectCommon = {};
+  const id = normalizeId(value.id);
+  const order = normalizeFiniteNumber(value.order);
+  if (id) common.id = id;
+  if (order !== undefined) common.order = order;
+  if (isRecord(value.metadata)) common.metadata = cloneRecord(value.metadata);
+  return common;
 }
 
 function normalizeObjectEffects(
@@ -1243,13 +1276,10 @@ function normalizeObjectEffects(
 function normalizeObject(value: unknown, order: number): EditorObject | null {
   if (!isRecord(value)) return null;
   const id = normalizeId(value.id);
-  const source = normalizeObjectSource(value.source);
-  if (!source) return null;
   const interaction = normalizeObjectInteraction(value.interaction);
   const base = {
     id,
     coordinateSpace: "parent-local" as const,
-    parentObjectId: normalizeId(value.parentObjectId) || undefined,
     order:
       normalizeFiniteNumber(value.order) !== undefined
         ? normalizeFiniteNumber(value.order)
@@ -1266,6 +1296,16 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
     effects: normalizeObjectEffects(value.effects),
     frame: normalizeRect(value.frame),
   };
+  if (Array.isArray(value.children) && value.source === undefined) {
+    return {
+      ...base,
+      children: value.children
+        .map((child, index) => normalizeObject(child, index))
+        .filter((child): child is EditorObject => Boolean(child)),
+    };
+  }
+  const source = normalizeObjectSource(value.source);
+  if (!source) return null;
   if (source.kind === "image") {
     const frame = normalizeRect(value.frame);
     if (!frame) return null;
@@ -1408,20 +1448,46 @@ export function visitEditorDocumentObjects(
   document: EditorDocument,
   visitor: EditorDocumentObjectVisitor,
 ): void {
+  const visitObjects = (
+    objects: EditorObject[] | undefined,
+    context: Omit<
+      EditorDocumentObjectVisitContext,
+      "object" | "objectIndex" | "parentObject" | "depth" | "path"
+    >,
+    path: string,
+    parentObject: EditorCompositeObject | undefined,
+    depth: number,
+  ) => {
+    objects?.forEach((object, objectIndex) => {
+      const objectPath = `${path}[${objectIndex}]`;
+      visitor({
+        ...context,
+        object,
+        objectIndex,
+        ...(parentObject ? { parentObject } : {}),
+        depth,
+        path: objectPath,
+      });
+      if (isEditorCompositeObject(object)) {
+        visitObjects(
+          object.children,
+          context,
+          `${objectPath}.children`,
+          object,
+          depth + 1,
+        );
+      }
+    });
+  };
   document.surfaces.forEach((surface, surfaceIndex) => {
     surface.layers.forEach((layer, layerIndex) => {
-      layer.objects?.forEach((object, objectIndex) => {
-        visitor({
-          document,
-          surface,
-          surfaceIndex,
-          layer,
-          layerIndex,
-          object,
-          objectIndex,
-          path: `surfaces[${surfaceIndex}].layers[${layerIndex}].objects[${objectIndex}]`,
-        });
-      });
+      visitObjects(
+        layer.objects,
+        { document, surface, surfaceIndex, layer, layerIndex },
+        `surfaces[${surfaceIndex}].layers[${layerIndex}].objects`,
+        undefined,
+        0,
+      );
     });
   });
 }
@@ -1557,6 +1623,35 @@ function validateRawEffectEnvelopes(
   diagnostics: EditorDocumentDiagnostic[],
   input: Record<string, unknown>,
 ) {
+  const validateObjects = (objects: unknown, path: string) => {
+    if (!Array.isArray(objects)) return;
+    objects.forEach((object, objectIndex) => {
+      if (!isRecord(object)) return;
+      const objectPath = `${path}[${objectIndex}]`;
+      validateRawEffectArray(diagnostics, object.effects, objectPath);
+      const hasSource = object.source !== undefined;
+      const hasChildren = object.children !== undefined;
+      if (hasSource === hasChildren) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "object-structure-invalid",
+          message:
+            "An EditorObject must contain exactly one of source or children.",
+          path: objectPath,
+        });
+      }
+      if (hasChildren && !Array.isArray(object.children)) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "composite-children-invalid",
+          message: "Composite children must be an array.",
+          path: `${objectPath}.children`,
+        });
+      } else {
+        validateObjects(object.children, `${objectPath}.children`);
+      }
+    });
+  };
   const surfaces = Array.isArray(input.surfaces) ? input.surfaces : [];
   surfaces.forEach((surface, surfaceIndex) => {
     if (!isRecord(surface)) return;
@@ -1567,54 +1662,93 @@ function validateRawEffectEnvelopes(
       if (!isRecord(layer)) return;
       const layerPath = `${surfacePath}.layers[${layerIndex}]`;
       validateRawEffectArray(diagnostics, layer.effects, layerPath);
-      const objects = Array.isArray(layer.objects) ? layer.objects : [];
-      objects.forEach((object, objectIndex) => {
-        if (!isRecord(object)) return;
-        validateRawEffectArray(
-          diagnostics,
-          object.effects,
-          `${layerPath}.objects[${objectIndex}]`,
-        );
-      });
+      validateObjects(layer.objects, `${layerPath}.objects`);
     });
   });
 }
 
-function validateObjectParentReferences(
+function validateObjectReferences(
   diagnostics: EditorDocumentDiagnostic[],
-  layer: EditorLayer,
-  layerPath: string,
+  document: EditorDocument,
 ): void {
-  const objects = layer.objects ?? [];
-  const byId = new Map(objects.map((object) => [object.id, object]));
-  objects.forEach((object, objectIndex) => {
-    if (!object.parentObjectId) return;
-    const path = `${layerPath}.objects[${objectIndex}].parentObjectId`;
-    if (!byId.has(object.parentObjectId)) {
+  const objects = new Map<string, EditorObject>();
+  const paths = new Map<string, string>();
+  visitEditorDocumentObjects(document, ({ object, path }) => {
+    objects.set(object.id, object);
+    paths.set(object.id, path);
+  });
+  const dependencies = new Map<string, Set<string>>();
+  const addDependency = (
+    sourceId: string,
+    targetId: string,
+    effectPath: string,
+  ) => {
+    if (!objects.has(targetId)) {
       addDiagnostic(diagnostics, {
         severity: "error",
-        code: "object-parent-missing",
-        message: `Object "${object.id}" references missing parent "${object.parentObjectId}" in its layer.`,
-        path,
+        code: "object-effect-target-missing",
+        message: `Object "${sourceId}" references missing object "${targetId}".`,
+        path: effectPath,
       });
       return;
     }
-    const visited = new Set([object.id]);
-    let current: EditorObject | undefined = object;
-    while (current?.parentObjectId) {
-      if (visited.has(current.parentObjectId)) {
-        addDiagnostic(diagnostics, {
-          severity: "error",
-          code: "object-parent-cycle",
-          message: `Object "${object.id}" participates in a parent cycle.`,
-          path,
-        });
-        return;
+    const targets = dependencies.get(sourceId) ?? new Set<string>();
+    targets.add(targetId);
+    dependencies.set(sourceId, targets);
+  };
+  visitEditorDocumentObjects(document, ({ object, path }) => {
+    object.effects?.forEach((effect, effectIndex) => {
+      const effectPath = `${path}.effects[${effectIndex}]`;
+      if (
+        isEditorBuiltinObjectEffect(effect) &&
+        effect.type === "boolean"
+      ) {
+        addDependency(object.id, effect.targetId, `${effectPath}.targetId`);
+      } else if (
+        isEditorBuiltinObjectEffect(effect) &&
+        effect.type === "clip-source"
+      ) {
+        effect.targetIds.forEach((targetId: string, targetIndex: number) =>
+          addDependency(
+            object.id,
+            targetId,
+            `${effectPath}.targetIds[${targetIndex}]`,
+          ),
+        );
+      } else if (
+        isGenericEditorEffect(effect) &&
+        typeof effect.target === "object" &&
+        effect.target &&
+        "objectId" in effect.target
+      ) {
+        addDependency(
+          object.id,
+          effect.target.objectId,
+          `${effectPath}.target.objectId`,
+        );
       }
-      visited.add(current.parentObjectId);
-      current = byId.get(current.parentObjectId);
-    }
+    });
   });
+
+  const visited = new Set<string>();
+  const active = new Set<string>();
+  const visit = (objectId: string) => {
+    if (active.has(objectId)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "object-effect-dependency-cycle",
+        message: `Object effect dependency cycle includes "${objectId}".`,
+        path: paths.get(objectId) ?? "surfaces",
+      });
+      return;
+    }
+    if (visited.has(objectId)) return;
+    active.add(objectId);
+    dependencies.get(objectId)?.forEach(visit);
+    active.delete(objectId);
+    visited.add(objectId);
+  };
+  objects.forEach((_object, objectId) => visit(objectId));
 }
 
 function validateRawEffectArray(
@@ -1682,7 +1816,7 @@ function validateObjectInteraction(
     addDiagnostic(diagnostics, {
       severity: "error",
       code: "interaction-field-invalid",
-      message: `Interaction field "${field}" is not supported in EditorDocument v6.`,
+      message: `Interaction field "${field}" is not supported in EditorDocument v7.`,
       path: `${path}.${field}`,
     });
   });
@@ -1869,18 +2003,13 @@ function validateV7ImageObjects(
   diagnostics: EditorDocumentDiagnostic[],
   input: Record<string, unknown>,
 ) {
-  const surfaces = Array.isArray(input.surfaces) ? input.surfaces : [];
-  surfaces.forEach((surface, surfaceIndex) => {
-    const layers =
-      isRecord(surface) && Array.isArray(surface.layers) ? surface.layers : [];
-    layers.forEach((layer, layerIndex) => {
-      const objects =
-        isRecord(layer) && Array.isArray(layer.objects) ? layer.objects : [];
-      objects.forEach((object, objectIndex) => {
-        if (!isRecord(object)) return;
-        const path = `surfaces[${surfaceIndex}].layers[${layerIndex}].objects[${objectIndex}]`;
-        const source = isRecord(object.source) ? object.source : undefined;
-        if (!source) return;
+  const validateObjects = (objects: unknown, objectsPath: string) => {
+    if (!Array.isArray(objects)) return;
+    objects.forEach((object, objectIndex) => {
+      if (!isRecord(object)) return;
+      const path = `${objectsPath}[${objectIndex}]`;
+      const source = isRecord(object.source) ? object.source : undefined;
+      if (source) {
         if (
           source.kind === "url" ||
           source.kind === "data-url" ||
@@ -1893,52 +2022,63 @@ function validateV7ImageObjects(
               'Top-level image resources are not supported in EditorDocument v7; use source.kind "image".',
             path: `${path}.source.kind`,
           });
-          return;
+        } else if (source.kind === "image") {
+          if (
+            source.resource !== undefined &&
+            !normalizeImageResource(source.resource)
+          ) {
+            addDiagnostic(diagnostics, {
+              severity: "error",
+              code: "image-resource-invalid",
+              message: "Image resource is invalid.",
+              path: `${path}.source.resource`,
+            });
+          }
+          const placement = isRecord(object.placement)
+            ? object.placement
+            : undefined;
+          const required = [
+            "fit",
+            "anchorX",
+            "anchorY",
+            "zoom",
+            "rotation",
+            "opacity",
+            "clip",
+          ];
+          const missing = required.filter(
+            (key) => !placement || placement[key] === undefined,
+          );
+          if (missing.length) {
+            addDiagnostic(diagnostics, {
+              severity: "error",
+              code: "image-placement-incomplete",
+              message: `Image placement requires ${missing.join(", ")}.`,
+              path: `${path}.placement`,
+            });
+          }
+          if (object.slot !== undefined && !isRecord(object.slot)) {
+            addDiagnostic(diagnostics, {
+              severity: "error",
+              code: "image-slot-invalid",
+              message: "Image slot must be an object.",
+              path: `${path}.slot`,
+            });
+          }
         }
-        if (source.kind !== "image") return;
-        if (
-          source.resource !== undefined &&
-          !normalizeImageResource(source.resource)
-        ) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "image-resource-invalid",
-            message: "Image resource is invalid.",
-            path: `${path}.source.resource`,
-          });
-        }
-        const placement = isRecord(object.placement)
-          ? object.placement
-          : undefined;
-        const required = [
-          "fit",
-          "anchorX",
-          "anchorY",
-          "zoom",
-          "rotation",
-          "opacity",
-          "clip",
-        ];
-        const missing = required.filter(
-          (key) => !placement || placement[key] === undefined,
-        );
-        if (missing.length) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "image-placement-incomplete",
-            message: `Image placement requires ${missing.join(", ")}.`,
-            path: `${path}.placement`,
-          });
-        }
-        if (object.slot !== undefined && !isRecord(object.slot)) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "image-slot-invalid",
-            message: "Image slot must be an object.",
-            path: `${path}.slot`,
-          });
-        }
-      });
+      }
+      validateObjects(object.children, `${path}.children`);
+    });
+  };
+  const surfaces = Array.isArray(input.surfaces) ? input.surfaces : [];
+  surfaces.forEach((surface, surfaceIndex) => {
+    const layers =
+      isRecord(surface) && Array.isArray(surface.layers) ? surface.layers : [];
+    layers.forEach((layer, layerIndex) => {
+      validateObjects(
+        isRecord(layer) ? layer.objects : undefined,
+        `surfaces[${surfaceIndex}].layers[${layerIndex}].objects`,
+      );
     });
   });
 }
@@ -2066,19 +2206,24 @@ export function validateEditorDocument(
           effect,
         }),
       );
-      layer.objects?.forEach((object, objectIndex) => {
-        const objectPath = `${layerPath}.objects[${objectIndex}]`;
-        const rawLayer = Array.isArray(
-          (rawSurface as Record<string, unknown>).layers,
-        )
-          ? ((rawSurface as Record<string, unknown>).layers as unknown[])[
-              layerIndex
-            ]
+      const rawLayer = Array.isArray(
+        (rawSurface as Record<string, unknown>).layers,
+      )
+        ? ((rawSurface as Record<string, unknown>).layers as unknown[])[
+            layerIndex
+          ]
+        : undefined;
+      const validateObjects = (
+        objects: EditorObject[] | undefined,
+        rawObjects: unknown,
+        objectsPath: string,
+        parentObject?: EditorCompositeObject,
+      ) => {
+        objects?.forEach((object, objectIndex) => {
+        const objectPath = `${objectsPath}[${objectIndex}]`;
+        const rawObject = Array.isArray(rawObjects)
+          ? rawObjects[objectIndex]
           : undefined;
-        const rawObject =
-          isRecord(rawLayer) && Array.isArray(rawLayer.objects)
-            ? rawLayer.objects[objectIndex]
-            : undefined;
         validateUniqueId(
           diagnostics,
           objectIds,
@@ -2117,10 +2262,31 @@ export function validateEditorDocument(
             effect,
           }),
         );
+        if (isEditorCompositeObject(object)) {
+          validateObjects(
+            object.children,
+            isRecord(rawObject) ? rawObject.children : undefined,
+            `${objectPath}.children`,
+            object,
+          );
+        } else if (parentObject && object.interaction) {
+          addDiagnostic(diagnostics, {
+            severity: "error",
+            code: "composite-child-interaction-invalid",
+            message: `Composite child "${object.id}" must not define interaction; interaction belongs to composite "${parentObject.id}".`,
+            path: `${objectPath}.interaction`,
+          });
+        }
       });
-      validateObjectParentReferences(diagnostics, layer, layerPath);
+      };
+      validateObjects(
+        layer.objects,
+        isRecord(rawLayer) ? rawLayer.objects : undefined,
+        `${layerPath}.objects`,
+      );
     });
   });
+  validateObjectReferences(diagnostics, document);
 
   document.views?.forEach((view, viewIndex) => {
     const viewPath = `views[${viewIndex}]`;
@@ -2165,14 +2331,22 @@ function collectEffects(
       layer.effects?.forEach((effect, effectIndex) =>
         visit(effect, `${layerPath}.effects[${effectIndex}]`),
       );
-      layer.objects?.forEach((object, objectIndex) => {
-        const objectPath = `${layerPath}.objects[${objectIndex}]`;
-        object.effects?.forEach((effect, effectIndex) => {
-          if (isGenericEditorEffect(effect)) {
-            visit(effect, `${objectPath}.effects[${effectIndex}]`);
+      const collectObjectEffects = (
+        objects: EditorObject[] | undefined,
+        objectsPath: string,
+      ) =>
+        objects?.forEach((object, objectIndex) => {
+          const objectPath = `${objectsPath}[${objectIndex}]`;
+          object.effects?.forEach((effect, effectIndex) => {
+            if (isGenericEditorEffect(effect)) {
+              visit(effect, `${objectPath}.effects[${effectIndex}]`);
+            }
+          });
+          if (isEditorCompositeObject(object)) {
+            collectObjectEffects(object.children, `${objectPath}.children`);
           }
         });
-      });
+      collectObjectEffects(layer.objects, `${layerPath}.objects`);
     });
   });
 }

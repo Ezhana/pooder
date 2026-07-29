@@ -1,9 +1,7 @@
 import { ClipCapabilityExtension } from "./extensions/clip";
 import { ConfigurableVisualCapabilityExtension } from "./extensions/configurable-visual";
 import { DesignExportCapabilityExtension } from "./extensions/design-export";
-import { DielineGeometryCapabilityExtension } from "./extensions/dieline";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
-import { FeatureCapabilityExtension } from "./extensions/feature";
 import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
 import { ImageSlotCapabilityExtension } from "./extensions/image-slot";
 import { MirrorCapabilityExtension } from "./extensions/mirror";
@@ -26,14 +24,6 @@ export const createDesignExportCapability = (
 export const createEdgeDetectionCapability = (
   options?: ConstructorParameters<typeof EdgeDetectionCapabilityExtension>[0],
 ) => new EdgeDetectionCapabilityExtension(options);
-
-export const createDielineGeometryCapability = (
-  options?: ConstructorParameters<typeof DielineGeometryCapabilityExtension>[0],
-) => new DielineGeometryCapabilityExtension(options);
-
-export const createFeatureCapability = (
-  options?: ConstructorParameters<typeof FeatureCapabilityExtension>[0],
-) => new FeatureCapabilityExtension(options);
 
 export const createImageSlotCapability = () =>
   new ImageSlotCapabilityExtension();

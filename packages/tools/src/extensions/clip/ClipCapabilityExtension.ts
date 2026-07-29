@@ -23,8 +23,6 @@ import {
   type SurfaceFrameService,
 } from "@pooder/core";
 import type { EditorDocument, EditorEffect } from "@pooder/document";
-import { buildDielineClipSourceSpec } from "../dieline/renderBuilder";
-import { readDielineState } from "../dieline/model";
 import {
   CLIP_CAPABILITY_ID,
   createClipCapabilityDefinition,
@@ -295,31 +293,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
       };
     }
 
-    return this.buildDielineSourceSpec(element, source);
-  }
-
-  private buildDielineSourceSpec(
-    element: SceneElement,
-    source: Extract<ClipSource, { type: "dieline" }>,
-  ): (RenderObjectSpec & { space: RenderCoordinateSpace }) | null {
-    if (!this.canvasService || !this.configService) return null;
-
-    const sceneLayout = this.sceneLayoutService?.getLayout();
-    if (!sceneLayout) return null;
-    const viewportSize = this.canvasService.getViewportSize();
-
-    return buildDielineClipSourceSpec({
-      state: readDielineState(
-        this.configService,
-        undefined,
-        source.configNamespace,
-        this.surfaceFrameService?.getFrames(),
-      ),
-      sceneLayout,
-      canvasWidth: viewportSize.width || 800,
-      canvasHeight: viewportSize.height || 600,
-      id: `clip.${element.id}.dieline-source`,
-    });
+    return null;
   }
 }
 

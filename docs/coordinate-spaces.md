@@ -51,10 +51,10 @@ interface AffinePlacement {
 
 `localBounds` describes geometry only. Its `left` and `top` may be non-zero and
 must never be interpreted as scene position. `localToScene` is the sole
-placement fact and stays intact through RenderIntent and RenderGraph; nesting is
-flattened by matrix multiplication. A document object may name a
-`parentObjectId`; its frame and transform are then interpreted in that parent's
-local space. Rotation, non-uniform and negative scale,
+placement fact and stays intact through RenderIntent and RenderGraph. A
+Composite owns recursive `children`; each child frame and transform is
+parent-local, and nesting is flattened by recursive matrix multiplication.
+Rotation, non-uniform and negative scale,
 skew, and translation are therefore preserved without decomposition. `pivot`
 is an editing anchor in local coordinates, not an additional transform.
 

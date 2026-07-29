@@ -6,6 +6,7 @@ import {
   findEditorDocumentObject,
   getEditorDocumentObjects,
   isGenericEditorEffect,
+  isEditorVisualObject,
   normalizeEditorDocument,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
@@ -569,7 +570,7 @@ function testSourceObjectNormalizesSource() {
   assertEqual(objects?.length, 2, "invalid source object should be dropped");
   const cutline = objects?.[0];
   assertDeepEqual(
-    cutline?.source,
+    cutline && isEditorVisualObject(cutline) ? cutline.source : undefined,
     {
       kind: "shape",
       shape: "circle",
@@ -588,7 +589,9 @@ function testSourceObjectNormalizesSource() {
     "source object should keep existing effects",
   );
   assertDeepEqual(
-    objects?.[1]?.source,
+    objects?.[1] && isEditorVisualObject(objects[1])
+      ? objects[1].source
+      : undefined,
     {
       kind: "url",
       url: "/art.png",
@@ -757,6 +760,66 @@ function testValidationStructureAndReferences() {
   assert(
     codes.includes("view-surface-missing"),
     "missing view surface should be invalid",
+  );
+}
+
+function testCompositeStructureAndEffectDependencies() {
+  const diagnostics = validateEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    config: TEST_DOCUMENT_CONFIG,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "objects",
+            objects: [
+              {
+                id: "feature",
+                frame: { x: 0, y: 0, width: 10, height: 10 },
+                children: [
+                  {
+                    id: "operand",
+                    frame: { x: 0, y: 0, width: 10, height: 10 },
+                    source: { kind: "shape", shape: "circle", params: {} },
+                    effects: [
+                      {
+                        type: "boolean",
+                        targetId: "cutline",
+                        operation: "add",
+                      },
+                    ],
+                  },
+                ],
+              },
+              {
+                id: "cutline",
+                frame: { x: 0, y: 0, width: 10, height: 10 },
+                source: { kind: "shape", shape: "rect", params: {} },
+                children: [],
+                effects: [
+                  {
+                    type: "clip-source",
+                    targetIds: ["operand"],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const codes = diagnostics.map((item) => item.code);
+  assert(
+    codes.includes("object-structure-invalid"),
+    "visual objects must not contain children",
+  );
+  assert(
+    codes.includes("object-effect-dependency-cycle"),
+    "boolean and clip-source dependency cycles must be rejected",
   );
 }
 
@@ -1113,9 +1176,15 @@ function testCloneAndRecursiveObjectAccessors() {
             id: "first",
             objects: [
               {
-                id: "one",
+                id: "group",
                 frame: { x: 0, y: 0, width: 1, height: 1 },
-                source: { kind: "shape", shape: "rect", params: {} },
+                children: [
+                  {
+                    id: "one",
+                    frame: { x: 0, y: 0, width: 1, height: 1 },
+                    source: { kind: "shape", shape: "rect", params: {} },
+                  },
+                ],
               },
             ],
           },
@@ -1146,7 +1215,7 @@ function testCloneAndRecursiveObjectAccessors() {
 
   assertDeepEqual(
     getEditorDocumentObjects(document).map((object) => object.id),
-    ["one", "two"],
+    ["group", "one", "two"],
     "object accessor should preserve document order",
   );
   assertEqual(
@@ -1158,7 +1227,11 @@ function testCloneAndRecursiveObjectAccessors() {
   visitEditorDocumentObjects(document, ({ path }) => paths.push(path));
   assertDeepEqual(
     paths,
-    ["surfaces[0].layers[0].objects[0]", "surfaces[0].layers[1].objects[0]"],
+    [
+      "surfaces[0].layers[0].objects[0]",
+      "surfaces[0].layers[0].objects[0].children[0]",
+      "surfaces[0].layers[1].objects[0]",
+    ],
     "visitor should expose stable object paths",
   );
 }
@@ -1176,6 +1249,7 @@ function main() {
   testDocumentConfigIsRequired();
   testImageObjectRequiresFrame();
   testValidationStructureAndReferences();
+  testCompositeStructureAndEffectDependencies();
   testCustomValidatorDiagnostics();
   testStructuralValidationDoesNotResolveCapabilities();
   testEffectsValidateWithoutCapabilityResolver();

@@ -1993,6 +1993,25 @@ async function testConstraintResolverServiceBuiltins() {
       "path.nearest-point should use generic geometry nearest point lookup",
     );
 
+    const lowestTangent = resolver.resolve({
+      transform: {
+        frame: { left: 0, top: 0, width: 10, height: 10 },
+      },
+      constraints: [
+        {
+          type: "path.lowest-tangent",
+          source: { sourceId: "static", geometryId: "diamond" },
+          params: { anchor: "composite-center" },
+        },
+      ],
+      coordinateSpace: "scene",
+    });
+    assertDeepEqual(
+      lowestTangent.result.frame,
+      { left: 45, top: 95, width: 10, height: 10 },
+      "path.lowest-tangent should place a composite by its center anchor",
+    );
+
     const snapped = resolver.resolve({
       transform: { position: { x: 23, y: 36 } },
       constraints: [

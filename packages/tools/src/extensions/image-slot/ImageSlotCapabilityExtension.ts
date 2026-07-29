@@ -27,11 +27,13 @@ import {
   type SessionHandle,
   type SessionService,
 } from "@pooder/core";
-import type {
-  EditorDocument,
-  EditorImageObject,
-  EditorImagePlacement,
-  EditorImageResource,
+import {
+  isEditorVisualObject,
+  visitEditorDocumentObjects,
+  type EditorDocument,
+  type EditorImageObject,
+  type EditorImagePlacement,
+  type EditorImageResource,
 } from "@pooder/document";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
@@ -499,7 +501,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     const result = await this.controller.updateObject(
       draft.objectId,
       (current) => {
-        if (current.source.kind !== "image" || !("placement" in current))
+        if (
+          !isEditorVisualObject(current) ||
+          current.source.kind !== "image" ||
+          !("placement" in current)
+        )
           return current;
         return {
           ...current,
@@ -1019,36 +1025,38 @@ function findImageSlot(
   document: EditorDocument,
   objectId: string,
 ): EditorImageObject | null {
-  for (const surface of document.surfaces)
-    for (const layer of surface.layers)
-      for (const object of layer.objects ?? []) {
-        if (
-          object.id === objectId &&
-          object.source.kind === "image" &&
-          "placement" in object &&
-          object.slot
-        )
-          return object as EditorImageObject;
-      }
-  return null;
+  let match: EditorImageObject | null = null;
+  visitEditorDocumentObjects(document, ({ object }) => {
+    if (
+      !match &&
+      object.id === objectId &&
+      isEditorVisualObject(object) &&
+      object.source.kind === "image" &&
+      "placement" in object &&
+      object.slot
+    )
+      match = object;
+  });
+  return match;
 }
 
 function findImageSlotContext(
   document: EditorDocument,
   objectId: string,
 ): { object: EditorImageObject; surfaceId: string } | null {
-  for (const surface of document.surfaces)
-    for (const layer of surface.layers)
-      for (const object of layer.objects ?? []) {
-        if (
-          object.id === objectId &&
-          object.source.kind === "image" &&
-          "placement" in object &&
-          object.slot
-        )
-          return { object: object as EditorImageObject, surfaceId: surface.id };
-      }
-  return null;
+  let match: { object: EditorImageObject; surfaceId: string } | null = null;
+  visitEditorDocumentObjects(document, ({ object, surface }) => {
+    if (
+      !match &&
+      object.id === objectId &&
+      isEditorVisualObject(object) &&
+      object.source.kind === "image" &&
+      "placement" in object &&
+      object.slot
+    )
+      match = { object, surfaceId: surface.id };
+  });
+  return match;
 }
 
 function toDraft(object: EditorImageObject): ImageSlotSessionDraft {

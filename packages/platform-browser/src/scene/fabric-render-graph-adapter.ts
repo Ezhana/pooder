@@ -923,6 +923,25 @@ export class FabricRenderGraphAdapter implements Service {
     const subjectId = membership?.subjectId || declaredSubjectId;
     if (!subjectId) return null;
     const projectionTargets = this.resolveProjectionTargets(subjectId);
+    const compositeMemberNodeIds = Array.isArray(
+      target.data?.compositeMemberNodeIds,
+    )
+      ? target.data.compositeMemberNodeIds
+          .map((value: unknown) => String(value || "").trim())
+          .filter(Boolean)
+      : [];
+    if (compositeMemberNodeIds.length) {
+      const memberIds = new Set(compositeMemberNodeIds);
+      graph.layers.forEach((layer) =>
+        layer.nodes.forEach((node) => {
+          if (!memberIds.has(node.id)) return;
+          projectionTargets.push({
+            projectionId: node.id,
+            geometryRef: { ...node.previewGeometryRef },
+          });
+        }),
+      );
+    }
     if (!projectionTargets.length && renderNodeId) {
       projectionTargets.push({
         projectionId: renderNodeId,

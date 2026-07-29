@@ -1,21 +1,31 @@
 import {
   DefaultSurfaceFrameService,
+  GEOMETRY_SOURCE_SERVICE,
+  Pooder,
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
   RenderIntentCompilerRegistryService,
   RenderIntentService,
   SURFACE_FRAME_SERVICE,
+  GeometrySourceService,
+  type GeometrySnapshot,
   type Service,
   type ServiceIdentifier,
 } from "@pooder/core";
 import {
   applyEditorDocument,
+  createDocumentObjectGeometrySource,
   createEditorDocumentController,
+  registerEditorDocumentService,
   resolveObjectSource,
   sceneFrameToLocalFrame,
   SourceResolver,
 } from "../src";
-import { EffectSchemaRegistry, type EditorEffect } from "@pooder/document";
+import {
+  EffectSchemaRegistry,
+  normalizeEditorDocument,
+  type EditorEffect,
+} from "@pooder/document";
 
 declare const process: {
   exit(code: number): never;
@@ -330,6 +340,73 @@ async function testControllerUpdatesOnlyChangedRenderIntents() {
   );
 }
 
+async function testCompositeRenderIntentFlattening() {
+  const { runtime, renderIntentService } = createRuntime();
+  const result = await applyEditorDocument(runtime, {
+    version: 7,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "guide",
+            objects: [
+              {
+                id: "feature",
+                frame: { x: 20, y: 30, width: 20, height: 20 },
+                interaction: {
+                  hitRegion: { type: "frame", space: "scene" },
+                  manipulation: { move: { enabled: true } },
+                },
+                children: [
+                  {
+                    id: "feature.add",
+                    frame: { x: 2, y: 3, width: 10, height: 10 },
+                    source: { kind: "shape", shape: "circle", params: {} },
+                  },
+                  {
+                    id: "feature.subtract",
+                    frame: { x: 4, y: 5, width: 4, height: 4 },
+                    source: { kind: "shape", shape: "circle", params: {} },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assertEqual(result.ok, true, "composite document should apply");
+  const nodes = renderIntentService
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes);
+  assertDeepEqual(
+    nodes.map((node) => node.id).sort(),
+    ["feature.add", "feature.subtract", "feature:interaction-proxy"].sort(),
+    "composite should flatten to visual nodes plus an interaction proxy",
+  );
+  assert(
+    nodes.every((node) => node.type !== ("group" as never)),
+    "composite rendering must not create a renderer group",
+  );
+  assertDeepEqual(
+    nodes
+      .find((node) => node.id === "feature.add")
+      ?.placement.localToScene.values.slice(4),
+    [22, 33],
+    "child placement should compose the complete parent transform",
+  );
+  assertEqual(
+    nodes.find((node) => node.id === "feature.add")?.interaction,
+    undefined,
+    "composite children should not receive interaction",
+  );
+}
+
 async function testDocumentServiceDraftIsolation() {
   const { runtime } = createRuntime();
   const service = createEditorDocumentController(runtime);
@@ -421,6 +498,112 @@ async function testDocumentServiceDraftIsolation() {
   );
 }
 
+async function testDocumentGeometryIsAvailableDuringInitialApply() {
+  const runtime = new Pooder();
+  const service = registerEditorDocumentService(runtime);
+  const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
+  const geometrySource = runtime.services.getOrThrow<GeometrySourceService>(
+    GEOMETRY_SOURCE_SERVICE,
+  );
+  let snapshotDuringApply: GeometrySnapshot | null = null;
+  const subscription = renderIntentService.onDidChange(() => {
+    snapshotDuringApply = geometrySource.getSnapshot({
+      sourceId: "document-object",
+      geometryId: "shape",
+      purpose: "preview",
+    }).value;
+  });
+
+  try {
+    const applied = await service.apply({
+      version: 7,
+      config: {},
+      surfaces: [
+        {
+          id: "front",
+          size: { width: 100, height: 100, unit: "mm" },
+          frames: TEST_SURFACE_FRAMES,
+          layers: [
+            {
+              id: "artwork",
+              objects: [
+                {
+                  id: "shape",
+                  frame: { x: 10, y: 20, width: 30, height: 40 },
+                  source: { kind: "shape", shape: "rect", params: {} },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    assertEqual(applied.ok, true, "initial document should apply");
+    assert(
+      snapshotDuringApply !== null,
+      "document geometry must resolve while the initial RenderGraph is published",
+    );
+  } finally {
+    subscription.dispose();
+    await runtime.dispose();
+  }
+}
+
+function testUnresolvedImageUsesFrameGeometry() {
+  const geometryService = new GeometrySourceService();
+  const document = normalizeEditorDocument({
+    version: 7,
+    config: {},
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              {
+                id: "image",
+                frame: { x: 10, y: 20, width: 30, height: 40 },
+                source: {
+                  kind: "image",
+                  resource: {
+                    kind: "url",
+                    url: "/image-without-intrinsic-size.png",
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const source = createDocumentObjectGeometrySource(
+    () => document,
+    geometryService,
+  );
+  const snapshot = source.getSnapshot({
+    sourceId: "document-object",
+    geometryId: "image",
+    purpose: "preview",
+  });
+
+  assertEqual(
+    snapshot?.kind,
+    "rect",
+    "an unresolved image should use its document frame geometry",
+  );
+  assertDeepEqual(
+    snapshot?.bounds,
+    { space: "object-local", left: 0, top: 0, width: 30, height: 40 },
+    "image frame geometry should not depend on resource intrinsic size",
+  );
+}
+
 async function testDocumentServiceCommitsSceneTranslationBySubject() {
   const { runtime, renderIntentService } = createRuntime();
   const service = createEditorDocumentController(runtime);
@@ -486,8 +669,11 @@ function testSceneFrameUsesInverseParentMatrix() {
 async function main() {
   testSourceResolver();
   testSceneFrameUsesInverseParentMatrix();
+  testUnresolvedImageUsesFrameGeometry();
   await testApplyEditorDocument();
+  await testCompositeRenderIntentFlattening();
   await testControllerUpdatesOnlyChangedRenderIntents();
+  await testDocumentGeometryIsAvailableDuringInitialApply();
   await testDocumentServiceDraftIsolation();
   await testDocumentServiceCommitsSceneTranslationBySubject();
   console.log("ok");

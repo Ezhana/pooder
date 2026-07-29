@@ -99,20 +99,6 @@ export async function synchronizeOfficialToolsForDocument(
   document: EditorDocument,
   controller?: ImageSlotDocumentController,
 ): Promise<void> {
-  const featureState = readObjectFeatureEffectState(document);
-  getCapability<{
-    replaceFeatures(
-      features: Record<string, unknown>[],
-      options?: Record<string, unknown>,
-    ): void;
-  }>(OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS.feature)?.replaceFeatures(
-    featureState?.features ?? [],
-    {
-      markDirty: false,
-      target: "both",
-    },
-  );
-
   if (controller) {
     getCapability<{
       syncDocument(
@@ -143,37 +129,6 @@ export const validateKitEditorDocument = validateOfficialToolDocument;
 /** @deprecated Use collectOfficialToolDocumentCapabilityRequirements. */
 export const collectKitEditorDocumentCapabilityRequirements =
   collectOfficialToolDocumentCapabilityRequirements;
-
-function readObjectFeatureEffectState(
-  document: EditorDocument,
-): { features: Record<string, unknown>[] } | null {
-  for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      for (const object of layer.objects ?? []) {
-        for (const effect of object.effects ?? []) {
-          if (effect.type !== "feature") continue;
-          const payload =
-            "payload" in effect &&
-            effect.payload &&
-            typeof effect.payload === "object"
-              ? effect.payload
-              : {};
-          const features = (payload as Record<string, unknown>).features;
-          if (Array.isArray(features)) {
-            return {
-              features: JSON.parse(JSON.stringify(features)) as Record<
-                string,
-                unknown
-              >[],
-            };
-          }
-        }
-      }
-    }
-  }
-
-  return null;
-}
 
 export type {
   EditorDocument,

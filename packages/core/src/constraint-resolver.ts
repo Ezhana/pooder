@@ -198,6 +198,11 @@ export function registerBuiltinConstraints(
   registerIfMissing(resolver, "rect.clamp-center", resolveRectClampCenter);
   registerIfMissing(resolver, "path.nearest-point", resolvePathNearestPoint);
   registerIfMissing(resolver, "path.follow", resolvePathNearestPoint);
+  registerIfMissing(
+    resolver,
+    "path.lowest-tangent",
+    resolvePathLowestTangent,
+  );
   registerIfMissing(resolver, "object-frame.contain", resolveRectContain);
   registerIfMissing(resolver, "rect.snap", resolveRectSnap);
   registerIfMissing(resolver, "snap.points", resolveSnapPoints);
@@ -255,7 +260,7 @@ function resolvePathNearestPoint(
   context: ConstraintHandlerContext,
 ): TransformResult {
   const geometry = resolveConstraintGeometry(constraint, context);
-  const position = getResultPosition(result);
+  const position = getConstraintAnchor(result, constraint);
   if (!geometry || !position) return result;
   const geometrySource = context.geometrySource;
   if (!geometrySource || !constraint.source) return result;
@@ -265,7 +270,45 @@ function resolvePathNearestPoint(
     context.coordinateSpace,
   ).value;
   if (!nearest) return result;
-  const next = moveResultToPosition(result, nearest);
+  let constrained = nearest;
+  if (constraint.type === "path.follow") {
+    const normal = geometrySource.normalAt(
+      constraint.source,
+      nearest,
+      context.coordinateSpace,
+    ).value;
+    if (normal) {
+      const currentOffset =
+        (position.x - nearest.x) * normal.x +
+        (position.y - nearest.y) * normal.y;
+      const minOffset = finiteNumber(
+        constraint.params?.minOffset,
+        Number.NEGATIVE_INFINITY,
+      );
+      const maxOffset = finiteNumber(
+        constraint.params?.maxOffset,
+        Number.POSITIVE_INFINITY,
+      );
+      const requestedOffset = finiteNumber(
+        constraint.params?.offset,
+        currentOffset,
+      );
+      const offset = clamp(
+        requestedOffset,
+        Math.min(minOffset, maxOffset),
+        Math.max(minOffset, maxOffset),
+      );
+      constrained = {
+        x: nearest.x + normal.x * offset,
+        y: nearest.y + normal.y * offset,
+      };
+    }
+  }
+  const next = moveResultAnchorToPosition(
+    result,
+    constrained,
+    constraint,
+  );
   if (
     constraint.type === "path.follow" &&
     constraint.params?.contain === true
@@ -279,6 +322,73 @@ function resolvePathNearestPoint(
       : result;
   }
   return next;
+}
+
+function resolvePathLowestTangent(
+  result: TransformResult,
+  constraint: ConstraintSpec,
+  context: ConstraintHandlerContext,
+): TransformResult {
+  const geometrySource = context.geometrySource;
+  if (!geometrySource || !constraint.source) return result;
+  const sampleCount = Math.max(
+    16,
+    Math.min(1024, Math.round(finiteNumber(constraint.params?.samples, 128))),
+  );
+  let lowest: GeometryPoint | null = null;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const point = geometrySource.sample(
+      constraint.source,
+      index / sampleCount,
+      context.coordinateSpace,
+    ).value;
+    if (
+      point &&
+      (!lowest ||
+        point.y > lowest.y ||
+        (point.y === lowest.y && point.x < lowest.x))
+    ) {
+      lowest = point;
+    }
+  }
+  return lowest
+    ? moveResultAnchorToPosition(result, lowest, constraint)
+    : result;
+}
+
+function getConstraintAnchor(
+  result: TransformResult,
+  constraint: ConstraintSpec,
+): GeometryPoint | null {
+  if (
+    result.frame &&
+    (constraint.params?.anchor === "center" ||
+      constraint.params?.anchor === "composite-center")
+  ) {
+    return {
+      x: result.frame.left + result.frame.width / 2,
+      y: result.frame.top + result.frame.height / 2,
+    };
+  }
+  return getResultPosition(result);
+}
+
+function moveResultAnchorToPosition(
+  result: TransformResult,
+  position: GeometryPoint,
+  constraint: ConstraintSpec,
+): TransformResult {
+  if (
+    !result.frame ||
+    (constraint.params?.anchor !== "center" &&
+      constraint.params?.anchor !== "composite-center")
+  ) {
+    return moveResultToPosition(result, position);
+  }
+  return moveResultToPosition(result, {
+    x: position.x - result.frame.width / 2,
+    y: position.y - result.frame.height / 2,
+  });
 }
 
 function resolveSnapPoints(

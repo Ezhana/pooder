@@ -7,7 +7,6 @@ import type {
 export const CLIP_CAPABILITY_ID = "pooder.kit.clip";
 
 export type ClipSource =
-  | { type: "dieline"; configNamespace?: string }
   | {
       type: "image";
       src: string;
@@ -77,16 +76,9 @@ function normalizeClipSource(value: unknown): ClipSource {
       };
     }
 
-    if (value.type === "dieline") {
-      const configNamespace = String(value.configNamespace || "").trim();
-      return {
-        type: "dieline",
-        ...(configNamespace ? { configNamespace } : {}),
-      };
-    }
   }
 
-  return { type: "dieline" };
+  return { type: "path", pathData: "", space: "scene" };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
