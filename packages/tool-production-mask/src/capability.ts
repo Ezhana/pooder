@@ -1,13 +1,15 @@
 import type {
   CapabilityDefinition,
+  ImageResourceDescriptor,
   SessionPhase,
   SessionTerminalReason,
 } from "@pooder/core";
 import type {
   EditorDocument,
   EditorDocumentDiagnostic,
-  EditorImageResource,
 } from "@pooder/document";
+
+type EditorImageResource = ImageResourceDescriptor;
 
 import {
   IMAGE_MASK_CAPABILITY_ID,
@@ -44,7 +46,7 @@ export interface ProductionMaskAlphaParameters {
 
 export type ProductionMaskSource =
   | { type: "reference-object" }
-  | { type: "image-resource"; resource: EditorImageResource };
+  | { type: "asset"; assetId: string };
 
 export interface ProductionMaskProjectionSource {
   objectIds?: string[];
@@ -142,6 +144,7 @@ export type ProductionMaskOperationFailureReason =
   | "session-conflict"
   | "session-not-active"
   | "source-empty"
+  | "transient-resource"
   | "document-update-failed";
 
 export type ProductionMaskOperationResult =

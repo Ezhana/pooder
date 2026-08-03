@@ -28,6 +28,7 @@ import {
   type AffinePlacement,
   type Disposable,
   type ImageResourceResolution,
+  type ImageResourceDescriptor,
   type ImageResourceService,
   type InteractionManipulationCommitEvent,
   type InteractionService,
@@ -73,7 +74,7 @@ import {
   type EditorBuiltinObjectEffect,
   type EditorCompositeObject,
   type EditorImageObject,
-  type EditorImageResource,
+  type EditorImageAsset,
   type EditorObject,
   type EditorObjectEffect,
   type EditorSurface,
@@ -149,18 +150,7 @@ export class SourceResolver {
   resolve(source: ObjectSource): ResolvedVisual | null {
     switch (source.kind) {
       case "image": {
-        const resource = source.resource;
-        if (!resource?.intrinsicSize) return null;
-        const imageUrl =
-          resource.kind === "data-url" ? resource.dataUrl : resource.url;
-        return {
-          source,
-          imageUrl,
-          mimeType:
-            resource.kind === "blob-url" ? undefined : resource.mimeType,
-          intrinsicSize: resource.intrinsicSize,
-          bounds: sizeToBounds(resource.intrinsicSize),
-        };
+        return null;
       }
       case "path":
       case "shape":
@@ -1961,6 +1951,7 @@ function createBaseRenderIntentDrafts(
   resolvedImages: ReadonlyMap<string, ImageResourceResolution>,
 ): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
+  const assetsById = new Map(document.assets.map((asset) => [asset.id, asset]));
   document.surfaces.forEach((surface) => {
     surface.layers.forEach((layer) => {
       const visit = (
@@ -2006,6 +1997,15 @@ function createBaseRenderIntentDrafts(
             object,
             index,
             resolvedImages.get(object.id),
+            object.source.kind === "image" && object.source.assetId
+              ? assetsById.get(object.source.assetId)
+              : undefined,
+            object.source.kind === "image" &&
+            (object as EditorImageObject).slot?.emptyPresentation
+              ? assetsById.get(
+                  (object as EditorImageObject).slot!.emptyPresentation!.assetId,
+                )
+              : undefined,
             framePlacement,
             compositeId,
           );
@@ -2128,6 +2128,8 @@ function createObjectRenderIntentDraft(
   object: EditorObject,
   index: number,
   imageResolution?: ImageResourceResolution,
+  imageAsset?: EditorImageAsset,
+  presentationAsset?: EditorImageAsset,
   framePlacement: AffinePlacement = createFrameAffinePlacement(object),
   compositeId?: string,
 ): RenderIntentDraft | null {
@@ -2218,6 +2220,8 @@ function createObjectRenderIntentDraft(
       base,
       object as EditorImageObject,
       imageResolution,
+      imageAsset,
+      presentationAsset,
       resolveEditorImageClipFrame(
         surface,
         object as EditorImageObject,
@@ -2271,27 +2275,30 @@ function createImageRenderIntentDraft(
   base: Omit<RenderIntentDraft, "visual">,
   object: EditorImageObject,
   resolution?: ImageResourceResolution,
+  resource?: EditorImageAsset,
+  presentationResource?: EditorImageAsset,
   clipFrame?: import("@pooder/core").CoordinateRect<"object-local">,
 ): RenderIntentDraft {
-  const resource = object.source.resource;
   const resolved = resolution?.ok
     ? resolution
     : resource?.intrinsicSize
       ? {
           ok: true as const,
-          src: resource.kind === "data-url" ? resource.dataUrl : resource.url,
+          src:
+            resource.source.kind === "data-url"
+              ? resource.source.dataUrl
+              : resource.source.url,
           width: resource.intrinsicSize.width,
           height: resource.intrinsicSize.height,
         }
       : undefined;
-  const presentationResource = object.slot?.emptyPresentation?.resource;
   const presentation =
     !resource && presentationResource?.intrinsicSize
       ? {
           src:
-            presentationResource.kind === "data-url"
-              ? presentationResource.dataUrl
-              : presentationResource.url,
+            presentationResource.source.kind === "data-url"
+              ? presentationResource.source.dataUrl
+              : presentationResource.source.url,
           width: presentationResource.intrinsicSize.width,
           height: presentationResource.intrinsicSize.height,
           fit: object.slot?.emptyPresentation?.fit ?? "cover",
@@ -2458,17 +2465,25 @@ async function resolveDocumentImageResources(
   );
   const entries: Array<Promise<readonly [string, ImageResourceResolution]>> =
     [];
+  const assetsById = new Map(document.assets.map((asset) => [asset.id, asset]));
   const collect = (objects: EditorObject[] | undefined) =>
     objects?.forEach((object) => {
       if (isEditorCompositeObject(object)) {
         collect(object.children);
         return;
       }
-      if (object.source.kind !== "image" || !object.source.resource || !service)
+      if (object.source.kind !== "image" || !object.source.assetId || !service)
         return;
+      const asset = assetsById.get(object.source.assetId);
+      if (!asset) return;
+      const resource: ImageResourceDescriptor = {
+        ...asset.source,
+        ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
+        ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
+      };
       entries.push(
         service
-          .resolve(object.source.resource)
+          .resolve(resource)
           .then((result) => [object.id, result] as const),
       );
     });

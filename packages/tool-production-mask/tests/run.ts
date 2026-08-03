@@ -15,8 +15,8 @@ const validPayload = {
   enabled: true,
   reference: { type: "document-object", objectId: "front.image" },
   source: {
-    type: "image-resource",
-    resource: { kind: "url", url: "https://example.com/reverse.png" },
+    type: "asset",
+    assetId: "reverse-mask",
   },
   alpha: {
     selection: "transparent",
@@ -70,7 +70,18 @@ async function main() {
     "production mask effects should contribute their RenderIntent compiler",
   );
   const compiled = await compiler?.compile({
-    document: { version: 7, config: {}, surfaces: [] },
+    document: {
+      version: 7,
+      assets: [
+        {
+          id: "reverse-mask",
+          type: "image",
+          source: { kind: "url", url: "https://example.com/reverse.png" },
+        },
+      ],
+      config: {},
+      surfaces: [],
+    },
     effect: {
       id: "front.production-mask.reverse",
       type: "production-mask",

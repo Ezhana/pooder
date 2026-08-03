@@ -90,37 +90,13 @@ function validateSource(
     return;
   }
   if (value.type === "reference-object") return;
-  if (value.type !== "image-resource") {
-    issues.push(
-      invalidValue("source.type", '"reference-object" or "image-resource"'),
-    );
+  if (value.type !== "asset") {
+    issues.push(invalidValue("source.type", '"reference-object" or "asset"'));
     return;
   }
-  if (!isRecord(value.resource)) {
-    issues.push(invalidType("source.resource", "an image resource"));
-    return;
+  if (!isNonEmptyString(value.assetId)) {
+    issues.push(invalidType("source.assetId", "a non-empty asset id"));
   }
-  const resource = value.resource;
-  if (resource.kind === "data-url") {
-    if (!isNonEmptyString(resource.dataUrl)) {
-      issues.push(invalidType("source.resource.dataUrl", "a non-empty string"));
-    }
-    return;
-  }
-  if (resource.kind === "url" || resource.kind === "blob-url") {
-    if (!isNonEmptyString(resource.url)) {
-      issues.push(invalidType("source.resource.url", "a non-empty string"));
-    }
-    if (resource.kind === "blob-url" && resource.transient !== true) {
-      issues.push(
-        invalidValue("source.resource.transient", "true for blob URLs"),
-      );
-    }
-    return;
-  }
-  issues.push(
-    invalidValue("source.resource.kind", '"url", "data-url", or "blob-url"'),
-  );
 }
 
 function validateAlpha(

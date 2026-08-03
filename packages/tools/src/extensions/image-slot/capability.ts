@@ -1,11 +1,26 @@
-import type { CapabilityDefinition, SceneElementInput } from "@pooder/core";
+import type {
+  CapabilityDefinition,
+  ImageResourceDescriptor,
+  SceneElementInput,
+} from "@pooder/core";
 import type {
   EditorDocument,
   EditorImagePlacement,
-  EditorImageResource,
 } from "@pooder/document";
 
+type EditorImageResource = ImageResourceDescriptor;
+
 export interface ImageSlotDocumentController {
+  mutate(
+    callback: (document: EditorDocument) => EditorDocument | void,
+  ): Promise<
+    | { ok: true; document: EditorDocument }
+    | {
+        ok: false;
+        reason: string;
+        diagnostics: import("@pooder/document").EditorDocumentDiagnostic[];
+      }
+  >;
   updateObject(
     objectId: string,
     update: (

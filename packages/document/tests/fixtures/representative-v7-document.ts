@@ -7,6 +7,18 @@
  */
 export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
   version: 7,
+  assets: [
+    {
+      id: "front-artwork",
+      type: "image",
+      source: { kind: "url", url: "https://example.test/front-artwork.png" },
+    },
+    {
+      id: "front-white-ink",
+      type: "image",
+      source: { kind: "url", url: "https://example.test/front-white-ink.png" },
+    },
+  ],
   config: {
     scene: { unit: "mm" },
   },
@@ -55,11 +67,8 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                   objectId: "front.image-slot",
                 },
                 source: {
-                  type: "image-resource",
-                  resource: {
-                    kind: "url",
-                    url: "https://example.test/front-white-ink.png",
-                  },
+                  type: "asset",
+                  assetId: "front-white-ink",
                 },
                 alpha: {
                   selection: "transparent",
@@ -81,10 +90,7 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
               frame: { x: 10, y: 15, width: 80, height: 90 },
               source: {
                 kind: "image",
-                resource: {
-                  kind: "url",
-                  url: "https://example.test/front-artwork.png",
-                },
+                assetId: "front-artwork",
               },
               placement: {
                 fit: "cover",

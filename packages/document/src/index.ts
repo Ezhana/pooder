@@ -192,6 +192,7 @@ export interface EditorTransform {
 
 export interface EditorDocument {
   version: EditorDocumentVersion;
+  assets: EditorAsset[];
   config: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   surfaces: EditorSurface[];
@@ -239,25 +240,25 @@ export interface EditorObjectBase {
   effects?: EditorObjectEffect[];
 }
 
-export type EditorImageResource =
+export type EditorAssetSource =
   | {
       kind: "url";
       url: string;
-      mimeType?: string;
-      intrinsicSize?: EditorSize;
     }
   | {
       kind: "data-url";
       dataUrl: string;
-      mimeType?: string;
-      intrinsicSize?: EditorSize;
-    }
-  | {
-      kind: "blob-url";
-      url: string;
-      transient: true;
-      intrinsicSize?: EditorSize;
     };
+
+export interface EditorImageAsset {
+  id: string;
+  type: "image";
+  source: EditorAssetSource;
+  mimeType?: string;
+  intrinsicSize?: EditorSize;
+}
+
+export type EditorAsset = EditorImageAsset;
 
 export interface EditorImagePlacement {
   fit: "cover" | "contain" | "stretch";
@@ -272,7 +273,7 @@ export interface EditorImagePlacement {
 export interface EditorImageSlotSpec {
   accepts?: string[];
   emptyPresentation?: {
-    resource: EditorImageResource;
+    assetId: string;
     fit: EditorImagePlacement["fit"];
   };
   sessionProjections?: Array<{
@@ -288,7 +289,7 @@ export interface EditorImageSlotSpec {
 export type ObjectSource =
   | {
       kind: "image";
-      resource?: EditorImageResource;
+      assetId?: string;
     }
   | {
       kind: "path";
@@ -308,7 +309,7 @@ export type ObjectSource =
 
 export interface EditorImageObject extends EditorObjectBase {
   frame: EditorRect;
-  source: { kind: "image"; resource?: EditorImageResource };
+  source: { kind: "image"; assetId?: string };
   placement: EditorImagePlacement;
   slot?: EditorImageSlotSpec;
 }
@@ -586,53 +587,40 @@ function normalizeSize(value: unknown): EditorSize | undefined {
     : undefined;
 }
 
-function normalizeImageResource(
-  value: unknown,
-): EditorImageResource | undefined {
+function normalizeAssetSource(value: unknown): EditorAssetSource | undefined {
   if (!isRecord(value)) return undefined;
-  const intrinsicSize = normalizeSize(value.intrinsicSize);
-  const mimeType = normalizeId(value.mimeType);
   if (value.kind === "url") {
     const url = normalizeId(value.url);
-    return url
-      ? {
-          kind: "url",
-          url,
-          ...(mimeType ? { mimeType } : {}),
-          ...(intrinsicSize ? { intrinsicSize } : {}),
-        }
-      : undefined;
+    return url ? { kind: "url", url } : undefined;
   }
   if (value.kind === "data-url") {
     const dataUrl = normalizeId(value.dataUrl);
-    return dataUrl
-      ? {
-          kind: "data-url",
-          dataUrl,
-          ...(mimeType ? { mimeType } : {}),
-          ...(intrinsicSize ? { intrinsicSize } : {}),
-        }
-      : undefined;
-  }
-  if (value.kind === "blob-url") {
-    const url = normalizeId(value.url);
-    return url
-      ? {
-          kind: "blob-url",
-          url,
-          transient: true,
-          ...(intrinsicSize ? { intrinsicSize } : {}),
-        }
-      : undefined;
+    return dataUrl ? { kind: "data-url", dataUrl } : undefined;
   }
   return undefined;
+}
+
+function normalizeAsset(value: unknown): EditorAsset | null {
+  if (!isRecord(value) || value.type !== "image") return null;
+  const id = normalizeId(value.id);
+  const source = normalizeAssetSource(value.source);
+  if (!id || !source) return null;
+  const mimeType = normalizeId(value.mimeType);
+  const intrinsicSize = normalizeSize(value.intrinsicSize);
+  return {
+    id,
+    type: "image",
+    source,
+    ...(mimeType ? { mimeType } : {}),
+    ...(intrinsicSize ? { intrinsicSize } : {}),
+  };
 }
 
 function normalizeObjectSource(value: unknown): ObjectSource | null {
   if (!isRecord(value)) return null;
   if (value.kind === "image") {
-    const resource = normalizeImageResource(value.resource);
-    return { kind: "image", ...(resource ? { resource } : {}) };
+    const assetId = normalizeId(value.assetId);
+    return { kind: "image", ...(assetId ? { assetId } : {}) };
   }
   switch (value.kind) {
     case "path": {
@@ -700,7 +688,7 @@ function normalizeImageSlot(value: unknown): EditorImageSlotSpec | undefined {
   const empty = isRecord(value.emptyPresentation)
     ? value.emptyPresentation
     : undefined;
-  const emptyResource = normalizeImageResource(empty?.resource);
+  const emptyAssetId = normalizeId(empty?.assetId);
   const sessionProjections = Array.isArray(value.sessionProjections)
     ? value.sessionProjections.flatMap((item) => {
         if (!isRecord(item) || !isRecord(item.source)) return [];
@@ -730,10 +718,10 @@ function normalizeImageSlot(value: unknown): EditorImageSlotSpec | undefined {
     : undefined;
   return {
     ...(accepts ? { accepts } : {}),
-    ...(emptyResource
+    ...(emptyAssetId
       ? {
           emptyPresentation: {
-            resource: emptyResource,
+            assetId: emptyAssetId,
             fit:
               empty?.fit === "contain" || empty?.fit === "stretch"
                 ? empty.fit
@@ -1308,6 +1296,11 @@ function normalizeSurface(value: unknown): EditorSurface | null {
 
 export function normalizeEditorDocument(value: unknown): EditorDocument {
   const input = isRecord(value) ? value : {};
+  const assets = Array.isArray(input.assets)
+    ? input.assets
+        .map(normalizeAsset)
+        .filter((asset): asset is EditorAsset => Boolean(asset))
+    : [];
   const config = isRecord(input.config) ? cloneRecord(input.config) : {};
   const surfaces = Array.isArray(input.surfaces)
     ? input.surfaces
@@ -1316,6 +1309,7 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
     : [];
   return {
     version: EDITOR_DOCUMENT_VERSION,
+    assets,
     config,
     ...(isRecord(input.metadata)
       ? { metadata: cloneRecord(input.metadata) }
@@ -1569,6 +1563,7 @@ function validateObjectReferences(
     paths.set(object.id, path);
   });
   const dependencies = new Map<string, Set<string>>();
+  const assetIds = new Set(document.assets.map((asset) => asset.id));
   const addDependency = (
     sourceId: string,
     targetId: string,
@@ -1588,6 +1583,19 @@ function validateObjectReferences(
     dependencies.set(sourceId, targets);
   };
   visitEditorDocumentObjects(document, ({ object, path }) => {
+    if (
+      isEditorVisualObject(object) &&
+      object.source.kind === "image" &&
+      object.source.assetId &&
+      !assetIds.has(object.source.assetId)
+    ) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "image-asset-missing",
+        message: `Image object "${object.id}" references missing asset "${object.source.assetId}".`,
+        path: `${path}.source.assetId`,
+      });
+    }
     object.effects?.forEach((effect, effectIndex) => {
       const effectPath = `${path}.effects[${effectIndex}]`;
       if (
@@ -1915,14 +1923,14 @@ function validateV7ImageObjects(
           });
         } else if (source.kind === "image") {
           if (
-            source.resource !== undefined &&
-            !normalizeImageResource(source.resource)
+            source.assetId !== undefined &&
+            !normalizeId(source.assetId)
           ) {
             addDiagnostic(diagnostics, {
               severity: "error",
-              code: "image-resource-invalid",
-              message: "Image resource is invalid.",
-              path: `${path}.source.resource`,
+              code: "image-asset-id-invalid",
+              message: "Image assetId must be a non-empty string.",
+              path: `${path}.source.assetId`,
             });
           }
           const placement = isRecord(object.placement)
@@ -1993,6 +2001,7 @@ export function validateEditorDocument(
   const surfaceIds = new Set<string>();
   const layerIds = new Set<string>();
   const objectIds = new Set<string>();
+  const assetIds = new Set<string>();
 
   validateDocumentConfig(diagnostics, input);
   validateV7ImageObjects(diagnostics, input);
@@ -2011,6 +2020,16 @@ export function validateEditorDocument(
       path: "surfaces",
     });
   }
+
+  document.assets.forEach((asset, assetIndex) => {
+    validateUniqueId(
+      diagnostics,
+      assetIds,
+      asset.id,
+      `assets[${assetIndex}].id`,
+      "asset",
+    );
+  });
 
   document.surfaces.forEach((surface, surfaceIndex) => {
     const surfacePath = `surfaces[${surfaceIndex}]`;

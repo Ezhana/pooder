@@ -21,6 +21,7 @@ import {
   type ExtensionContributions,
   type ExtensionDefinition,
   type GeometrySourceService,
+  type ImageResourceDescriptor,
   type InteractionOperationPhase,
   type SceneHandle,
   type SceneLayoutService,
@@ -30,12 +31,12 @@ import {
   type SessionService,
 } from "@pooder/core";
 import {
+  findEditorDocumentObject,
   isEditorVisualObject,
   visitEditorDocumentObjects,
   type EditorDocument,
   type EditorImageObject,
   type EditorImagePlacement,
-  type EditorImageResource,
 } from "@pooder/document";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
@@ -49,6 +50,8 @@ import {
   type ImageSlotViewState,
   type SessionSceneDecorationContribution,
 } from "./capability";
+
+type EditorImageResource = ImageResourceDescriptor;
 
 const DEFAULT_PLACEMENT: EditorImagePlacement = {
   fit: "cover",
@@ -266,7 +269,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!this.resolveDocumentObjectPlacement(objectId)) {
       return { ok: false as const, reason: "geometry-unavailable" };
     }
-    const draft = toDraft(object);
+    const draft = toDraft(object, this.document!);
     const sessionId = `image-slot:${objectId}`;
     try {
       this.sessionHandle =
@@ -511,25 +514,59 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       { ...this.state, phase: "committing" },
       { renderScene: false },
     );
-    const result = await this.controller.updateObject(
-      draft.objectId,
-      (current) => {
+    if (draft.resource?.kind === "blob-url") {
+      this.setState(
+        { ...this.state, phase: "error", error: "commit-failed" },
+        { renderScene: false },
+      );
+      return { type: "error" as const, reason: "transient-resource" };
+    }
+    const stableResource = draft.resource as
+      | Exclude<ImageResourceDescriptor, { kind: "blob-url" }>
+      | undefined;
+    const result = await this.controller.mutate((document) => {
+        const current = findEditorDocumentObject(document, draft.objectId);
         if (
+          !current ||
           !isEditorVisualObject(current) ||
           current.source.kind !== "image" ||
           !("placement" in current)
         )
-          return current;
-        return {
-          ...current,
-          source: {
-            kind: "image",
-            ...(draft.resource ? { resource: clone(draft.resource) } : {}),
-          },
-          placement: clone(draft.placement),
-        };
-      },
-    );
+          return;
+        const previousAssetId = current.source.assetId;
+        const assetId = previousAssetId || `${current.id}.image`;
+        current.source = stableResource
+          ? { kind: "image", assetId }
+          : { kind: "image" };
+        current.placement = clone(draft.placement);
+        if (stableResource) {
+          const { kind, intrinsicSize, mimeType } = stableResource;
+          const source =
+            kind === "data-url"
+              ? { kind, dataUrl: stableResource.dataUrl }
+              : { kind, url: stableResource.url };
+          const asset = {
+            id: assetId,
+            type: "image" as const,
+            source,
+            ...(mimeType ? { mimeType } : {}),
+            ...(intrinsicSize ? { intrinsicSize: clone(intrinsicSize) } : {}),
+          };
+          const assetIndex = document.assets.findIndex((entry) => entry.id === assetId);
+          if (assetIndex >= 0) document.assets[assetIndex] = asset;
+          else document.assets.push(asset);
+        } else if (previousAssetId) {
+          const stillReferenced = document.surfaces.some((surface) =>
+            surface.layers.some((layer) =>
+              layer.objects?.some((object) => objectReferencesAsset(object, previousAssetId)),
+            ),
+          );
+          if (!stillReferenced) {
+            document.assets = document.assets.filter((asset) => asset.id !== previousAssetId);
+          }
+        }
+        return document;
+      });
     if (!result.ok) {
       this.setState(
         { ...this.state, phase: "error", error: "commit-failed" },
@@ -1067,14 +1104,33 @@ function findImageSlotContext(
   return match;
 }
 
-function toDraft(object: EditorImageObject): ImageSlotSessionDraft {
+function toDraft(
+  object: EditorImageObject,
+  document: EditorDocument,
+): ImageSlotSessionDraft {
+  const asset = object.source.assetId
+    ? document.assets.find((entry) => entry.id === object.source.assetId)
+    : undefined;
   return {
     objectId: object.id,
-    ...(object.source.resource
-      ? { resource: clone(object.source.resource) }
+    ...(asset
+      ? {
+          resource: {
+            ...asset.source,
+            ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
+            ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
+          },
+        }
       : {}),
     placement: clone(object.placement),
   };
+}
+
+function objectReferencesAsset(object: import("@pooder/document").EditorObject, assetId: string): boolean {
+  if (isEditorVisualObject(object)) {
+    return object.source.kind === "image" && object.source.assetId === assetId;
+  }
+  return object.children.some((child) => objectReferencesAsset(child, assetId));
 }
 
 function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {

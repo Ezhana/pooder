@@ -16,6 +16,7 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
+  type ImageResourceDescriptor,
   type ObjectImageResolverService,
   type RenderEffectSpec,
   type RenderGraphNode,
@@ -39,9 +40,10 @@ import {
 import type {
   EditorDocument,
   EditorEffect,
-  EditorImageResource,
   EditorObjectEffect,
 } from "@pooder/document";
+
+type EditorImageResource = ImageResourceDescriptor;
 import {
   IMAGE_MASK_CAPABILITY_ID,
   type ImageMaskCapabilityApi,
@@ -284,6 +286,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
 
   private document: EditorDocument | null = null;
   private documentController: ProductionMaskDocumentController | null = null;
+  private readonly pendingAssets = new Map<string, EditorImageResource>();
   private selectedEffectId: string | null = null;
   private previewMaskBySource = new Map<string, string>();
   private pendingPreviewMaskBySource = new Map<string, Promise<string>>();
@@ -595,6 +598,9 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   ): ProductionMaskOperationResult {
     const sourceUrl = resourceLocation(resource);
     if (!sourceUrl) return { ok: false, reason: "source-empty" };
+    if (resource.kind === "blob-url") {
+      return { ok: false, reason: "transient-resource" };
+    }
     return this.updateDraft((draft) => ({
       ...draft,
       descriptor: {
@@ -602,7 +608,10 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         payload: {
           ...draft.descriptor.payload,
           enabled: true,
-          source: { type: "image-resource", resource: clone(resource) },
+          source: {
+            type: "asset",
+            assetId: this.stageMaskAsset(draft.descriptor.effectId, resource),
+          },
         },
       },
     }));
@@ -696,6 +705,29 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     if (!controller) return { ok: false, reason: "document-not-bound" };
     const draft = clone(handle.getDraft());
     const result = await controller.mutate((document) => {
+      const source = draft.descriptor.payload.source;
+      if (source?.type === "asset") {
+        const resource = this.pendingAssets.get(source.assetId);
+        if (resource && resource.kind !== "blob-url") {
+          const asset = {
+            id: source.assetId,
+            type: "image" as const,
+            source:
+              resource.kind === "data-url"
+                ? { kind: "data-url" as const, dataUrl: resource.dataUrl }
+                : { kind: "url" as const, url: resource.url },
+            ...(resource.mimeType ? { mimeType: resource.mimeType } : {}),
+            ...(resource.intrinsicSize
+              ? { intrinsicSize: clone(resource.intrinsicSize) }
+              : {}),
+          };
+          const assetIndex = document.assets.findIndex(
+            (entry) => entry.id === source.assetId,
+          );
+          if (assetIndex >= 0) document.assets[assetIndex] = asset;
+          else document.assets.push(asset);
+        }
+      }
       if (
         !replaceEffectPayload(
           document,
@@ -708,6 +740,9 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     });
     if (!result.ok) return { ok: false, reason: "document-update-failed" };
     this.document = clone(result.document);
+    if (draft.descriptor.payload.source?.type === "asset") {
+      this.pendingAssets.delete(draft.descriptor.payload.source.assetId);
+    }
     await handle.commit();
     return { ok: true };
   }
@@ -717,6 +752,8 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     if (!handle || handle.phase === "closed") {
       return { ok: false, reason: "session-not-active" };
     }
+    const source = handle.getDraft().descriptor.payload.source;
+    if (source?.type === "asset") this.pendingAssets.delete(source.assetId);
     await handle.rollback();
     return { ok: true };
   }
@@ -918,7 +955,19 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     reference: ImageSnapshot,
   ): string {
     if (!source || source.type === "reference-object") return reference.src;
-    return resourceLocation(source.resource);
+    const pending = this.pendingAssets.get(source.assetId);
+    if (pending) return resourceLocation(pending);
+    const asset = this.document?.assets.find((entry) => entry.id === source.assetId);
+    if (!asset) return "";
+    return asset.source.kind === "data-url"
+      ? asset.source.dataUrl
+      : asset.source.url;
+  }
+
+  private stageMaskAsset(effectId: string, resource: EditorImageResource): string {
+    const assetId = `${effectId}.source`;
+    this.pendingAssets.set(assetId, clone(resource));
+    return assetId;
   }
 
   private maskCacheKey(
