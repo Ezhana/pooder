@@ -493,7 +493,7 @@ async function testCompositeRenderIntentFlattening() {
 }
 
 async function testDocumentServiceDraftIsolation() {
-  const { runtime } = createRuntime();
+  const { runtime, renderIntentService } = createRuntime();
   const service = createEditorDocumentController(runtime);
   const applied = await service.apply({
     version: 7,
@@ -520,7 +520,11 @@ async function testDocumentServiceDraftIsolation() {
   });
   assertEqual(applied.ok, true, "draft fixture should apply");
   const events: string[] = [];
+  let renderPublications = 0;
   service.onDidChange((event) => events.push(event.type));
+  renderIntentService.onDidChange(() => {
+    renderPublications += 1;
+  });
   const draft = await service.beginDraft();
   const invalid = await draft.mutate((document) => {
     document.surfaces = [];
@@ -580,6 +584,11 @@ async function testDocumentServiceDraftIsolation() {
     events,
     ["mutate", "rollback", "mutate", "commit"],
     "draft events should be explicit",
+  );
+  assertEqual(
+    renderPublications,
+    3,
+    "mutate and rollback should each publish one graph while draft commit publishes none",
   );
 }
 
@@ -662,6 +671,7 @@ async function testDocumentPreparationFailuresAreAtomic() {
     surfaceFrameService,
   } = createRuntime();
   let configImports = 0;
+  let afterPublishCalls = 0;
   const originalImport = runtime.config.import.bind(runtime.config);
   runtime.config.import = (data) => {
     configImports += 1;
@@ -707,6 +717,12 @@ async function testDocumentPreparationFailuresAreAtomic() {
         },
       },
     ],
+    afterPublish: (_runtime, document) => {
+      afterPublishCalls += 1;
+      if (document.config.failAfterPublish) {
+        throw new Error("injected afterPublish failure");
+      }
+    },
   });
   const createDocument = (
     options: {
@@ -804,6 +820,28 @@ async function testDocumentPreparationFailuresAreAtomic() {
     snapshot(),
     stable,
     "preparation failures must preserve document, config, frames, graph, revision, and events",
+  );
+
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  const afterPublishFailure = await service.apply(
+    createDocument({ config: { failAfterPublish: true } }),
+  );
+  console.error = originalConsoleError;
+  assertEqual(
+    afterPublishFailure.ok,
+    true,
+    "afterPublish failures must not reject or roll back published state",
+  );
+  assertEqual(
+    service.export()?.config.failAfterPublish,
+    true,
+    "published document must remain committed after afterPublish failure",
+  );
+  assertEqual(
+    afterPublishCalls,
+    2,
+    "afterPublish should run for the baseline and successful publication only",
   );
 }
 
