@@ -40,11 +40,13 @@ export default class ConfigurationService implements Service {
     RegisteredConfigurationDefinition
   >();
   private readonly definitionIdsByExtension = new Map<string, Set<string>>();
+  private revision = 0;
   private readonly preparedPublications = new WeakMap<
     PreparedConfigurationPublication,
     {
       values: Map<string, any>;
       changes: ConfigurationValueChangeEvent[];
+      revision: number;
     }
   >();
   private readonly pendingPublicationNotifications = new WeakMap<
@@ -63,6 +65,7 @@ export default class ConfigurationService implements Service {
     const oldValue = this.configValues.get(key);
     if (!sameConfigurationValue(oldValue, value)) {
       this.configValues.set(key, value);
+      this.revision += 1;
       this.emitValueChange({ key, value, oldValue });
     }
   }
@@ -121,23 +124,29 @@ export default class ConfigurationService implements Service {
     const publication: PreparedConfigurationPublication = {
       values: Object.fromEntries(values),
     };
-    this.preparedPublications.set(publication, { values, changes });
+    this.preparedPublications.set(publication, {
+      values,
+      changes,
+      revision: this.revision,
+    });
     return publication;
+  }
+
+  assertImportPublicationCurrent(
+    publication: PreparedConfigurationPublication,
+  ): void {
+    this.requireCurrentPublication(publication);
   }
 
   publishImport(
     publication: PreparedConfigurationPublication,
     options: { notify?: boolean } = {},
   ): void {
-    const prepared = this.preparedPublications.get(publication);
-    if (!prepared) {
-      throw new Error(
-        "Configuration publication is invalid or already published.",
-      );
-    }
+    const prepared = this.requireCurrentPublication(publication);
     this.preparedPublications.delete(publication);
     this.configValues.clear();
     prepared.values.forEach((value, key) => this.configValues.set(key, value));
+    if (prepared.changes.length) this.revision += 1;
     if (options.notify === false) {
       this.pendingPublicationNotifications.set(publication, prepared.changes);
       return;
@@ -187,6 +196,7 @@ export default class ConfigurationService implements Service {
         definition.default !== undefined
       ) {
         this.configValues.set(definition.id, definition.default);
+        this.revision += 1;
       }
     });
 
@@ -256,6 +266,23 @@ export default class ConfigurationService implements Service {
       listener(event),
     );
     this.events.emit("change", event);
+  }
+
+  private requireCurrentPublication(
+    publication: PreparedConfigurationPublication,
+  ) {
+    const prepared = this.preparedPublications.get(publication);
+    if (!prepared) {
+      throw new Error(
+        "Configuration publication is invalid or already published.",
+      );
+    }
+    if (prepared.revision !== this.revision) {
+      throw new Error(
+        "Configuration publication is stale because configuration changed after prepare.",
+      );
+    }
+    return prepared;
   }
 }
 

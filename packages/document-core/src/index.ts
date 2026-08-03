@@ -187,14 +187,17 @@ export interface EditorDocumentRuntime {
     export(): Record<string, unknown>;
     get<T = unknown>(key: string, defaultValue?: T): T;
     import(data: Record<string, unknown>): void;
-    prepareImport?(
+    prepareImport(
       data: Record<string, unknown>,
     ): PreparedConfigurationPublication;
-    publishImport?(
+    assertImportPublicationCurrent(
+      publication: PreparedConfigurationPublication,
+    ): void;
+    publishImport(
       publication: PreparedConfigurationPublication,
       options?: { notify?: boolean },
     ): void;
-    notifyImportPublished?(publication: PreparedConfigurationPublication): void;
+    notifyImportPublished(publication: PreparedConfigurationPublication): void;
     update(key: string, value: unknown): void;
   };
   readonly services: {
@@ -427,9 +430,8 @@ export async function applyEditorDocument(
 
 interface PreparedEditorDocumentApplication {
   result: ApplyEditorDocumentResult;
-  configPublication:
-    | { type: "prepared"; value: PreparedConfigurationPublication }
-    | { type: "legacy"; value: Record<string, unknown> };
+  config: NonNullable<EditorDocumentRuntime["config"]>;
+  configPublication: PreparedConfigurationPublication;
   surfaceFramePublication: PreparedSurfaceFramePublication;
   renderIntentPublication: PreparedRenderIntentDocumentPublication;
   participantPublications: EditorDocumentPublication[];
@@ -552,6 +554,30 @@ async function prepareEditorDocumentApplication(
       [],
     );
   }
+  const config = runtime.config;
+  if (
+    typeof config.prepareImport !== "function" ||
+    typeof config.assertImportPublicationCurrent !== "function" ||
+    typeof config.publishImport !== "function" ||
+    typeof config.notifyImportPublished !== "function"
+  ) {
+    return createResult(
+      false,
+      document,
+      [
+        ...allDiagnostics,
+        {
+          severity: "error",
+          stage: "runtime-capability",
+          code: "runtime-config-publication-required",
+          message:
+            "Prepared Configuration publication is required to apply an EditorDocument atomically.",
+          path: "config",
+        },
+      ],
+      [],
+    );
+  }
   const surfaceFrameService = runtime.services.getOrThrow<SurfaceFrameService>(
     SURFACE_FRAME_SERVICE,
     "SurfaceFrameService is required to apply an EditorDocument.",
@@ -614,14 +640,7 @@ async function prepareEditorDocumentApplication(
     allDiagnostics,
     collectAppliedSurfaceIds(mergeResult.drafts),
   );
-  const prepareConfigImport = runtime.config.prepareImport;
-  const supportsPreparedConfigPublication =
-    prepareConfigImport &&
-    runtime.config.publishImport &&
-    runtime.config.notifyImportPublished;
-  const configPublication = supportsPreparedConfigPublication
-    ? { type: "prepared" as const, value: prepareConfigImport(document.config) }
-    : { type: "legacy" as const, value: document.config };
+  const configPublication = config.prepareImport(document.config);
   const surfaceFramePublication = surfaceFrameService.prepareImportFrames(
     Object.fromEntries(
       document.surfaces.map((surface) => [surface.id, surface.frames]),
@@ -654,6 +673,7 @@ async function prepareEditorDocumentApplication(
 
   return {
     result,
+    config,
     configPublication,
     surfaceFramePublication,
     renderIntentPublication,
@@ -664,26 +684,19 @@ async function prepareEditorDocumentApplication(
 }
 
 function publishEditorDocumentApplication(
-  runtime: EditorDocumentRuntime,
+  _runtime: EditorDocumentRuntime,
   prepared: PreparedEditorDocumentApplication,
   boundary: EditorDocumentPublicationBoundary,
 ): void {
+  prepared.config.assertImportPublicationCurrent(prepared.configPublication);
+  prepared.surfaceFrameService.assertImportFramesPublicationCurrent(
+    prepared.surfaceFramePublication,
+  );
   prepared.renderIntentService.assertDocumentIntentsPublicationCurrent(
     prepared.renderIntentPublication,
   );
   boundary.publishDocumentState?.(prepared.result.document);
-  if (
-    prepared.configPublication.type === "prepared" &&
-    runtime.config?.publishImport
-  ) {
-    runtime.config.publishImport(prepared.configPublication.value, {
-      notify: false,
-    });
-  } else if (prepared.configPublication.type === "legacy") {
-    runtime.config?.import(prepared.configPublication.value);
-  } else {
-    throw new Error("Prepared configuration publication is unavailable.");
-  }
+  prepared.config.publishImport(prepared.configPublication, { notify: false });
   prepared.surfaceFrameService.publishImportFrames(
     prepared.surfaceFramePublication,
     { notify: false },
@@ -699,15 +712,9 @@ function publishEditorDocumentApplication(
       console.error("EditorDocument publication participant failed.", error);
     }
   });
-  if (
-    prepared.configPublication.type === "prepared" &&
-    runtime.config?.notifyImportPublished
-  ) {
-    const configPublication = prepared.configPublication.value;
-    notifyPublication("configuration", () =>
-      runtime.config?.notifyImportPublished?.(configPublication),
-    );
-  }
+  notifyPublication("configuration", () =>
+    prepared.config.notifyImportPublished(prepared.configPublication),
+  );
   notifyPublication("surface frames", () =>
     prepared.surfaceFrameService.notifyImportFramesPublished(
       prepared.surfaceFramePublication,

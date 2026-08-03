@@ -11,6 +11,7 @@ import {
   SESSION_SERVICE,
   computeSceneLayout,
   computeDragInteraction,
+  ConfigurationService,
   containsPoint,
   containsRect,
   coordinateMatrix,
@@ -2944,6 +2945,59 @@ async function testPreparedRenderIntentPublicationRejectsStaleRuntimePatches() {
   });
 }
 
+async function testPreparedConfigurationPublicationRejectsConcurrentUpdates() {
+  const config = new ConfigurationService();
+  config.update("mode", "stable");
+  const prepared = config.prepareImport({ mode: "candidate" });
+  config.update("session", "concurrent");
+
+  let rejected = false;
+  try {
+    config.publishImport(prepared);
+  } catch (error) {
+    rejected = String(error).includes("configuration changed");
+  }
+  assertEqual(rejected, true, "stale configuration publication should reject");
+  assertDeepEqual(
+    config.export(),
+    { mode: "stable", session: "concurrent" },
+    "stale configuration publication must preserve concurrent updates",
+  );
+}
+
+async function testPreparedSurfaceFramePublicationRejectsConcurrentUpdates() {
+  const frames = new DefaultSurfaceFrameService();
+  const stable = {
+    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
+    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+  };
+  frames.importFrames({ front: stable });
+  const prepared = frames.prepareImportFrames({
+    front: {
+      ...stable,
+      productionFrame: { ...stable.productionFrame, widthMm: 85 },
+    },
+  });
+  const concurrent = {
+    ...stable,
+    productionFrame: { ...stable.productionFrame, widthMm: 88 },
+  };
+  frames.setFrames("front", concurrent);
+
+  let rejected = false;
+  try {
+    frames.publishImportFrames(prepared);
+  } catch (error) {
+    rejected = String(error).includes("frames changed");
+  }
+  assertEqual(rejected, true, "stale surface frame publication should reject");
+  assertDeepEqual(
+    frames.getFrames("front"),
+    concurrent,
+    "stale surface frame publication must preserve concurrent updates",
+  );
+}
+
 async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
   const frames = new DefaultSurfaceFrameService();
   const changes: string[] = [];
@@ -3715,6 +3769,14 @@ async function main() {
     [
       "rejects prepared render intents after concurrent runtime patches",
       testPreparedRenderIntentPublicationRejectsStaleRuntimePatches,
+    ],
+    [
+      "rejects prepared configuration after concurrent updates",
+      testPreparedConfigurationPublicationRejectsConcurrentUpdates,
+    ],
+    [
+      "rejects prepared surface frames after concurrent updates",
+      testPreparedSurfaceFramePublicationRejectsConcurrentUpdates,
     ],
     [
       "sorts render intent patch entries deterministically",

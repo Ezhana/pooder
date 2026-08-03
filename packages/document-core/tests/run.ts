@@ -1,5 +1,6 @@
 import {
   DefaultSurfaceFrameService,
+  ConfigurationService,
   GEOMETRY_SOURCE_SERVICE,
   IMAGE_RESOURCE_SERVICE,
   Pooder,
@@ -22,6 +23,7 @@ import {
   resolveObjectSource,
   sceneFrameToLocalFrame,
   SourceResolver,
+  type EditorDocumentRuntime,
 } from "../src";
 import {
   EffectSchemaRegistry,
@@ -63,6 +65,7 @@ function createRuntime() {
   const renderIntentService = new RenderIntentService();
   const compilerRegistry = new RenderIntentCompilerRegistryService();
   const surfaceFrameService = new DefaultSurfaceFrameService();
+  const configService = new ConfigurationService();
   const services = new Map<ServiceIdentifier<Service>, Service>([
     [RENDER_INTENT_SERVICE, renderIntentService],
     [RENDER_INTENT_COMPILER_REGISTRY_SERVICE, compilerRegistry],
@@ -72,19 +75,18 @@ function createRuntime() {
   return {
     runtime: {
       config: {
-        state: {} as Record<string, unknown>,
-        export() {
-          return { ...this.state };
-        },
-        get<T = unknown>(key: string, defaultValue?: T): T {
-          return (this.state[key] as T) ?? (defaultValue as T);
-        },
-        import(data: Record<string, unknown>) {
-          this.state = { ...data };
-        },
-        update(key: string, value: unknown) {
-          this.state[key] = value;
-        },
+        export: () => configService.export(),
+        get: <T = unknown>(key: string, defaultValue?: T) =>
+          configService.get(key, defaultValue),
+        import: (data: Record<string, unknown>) => configService.import(data),
+        prepareImport: configService.prepareImport.bind(configService),
+        assertImportPublicationCurrent:
+          configService.assertImportPublicationCurrent.bind(configService),
+        publishImport: configService.publishImport.bind(configService),
+        notifyImportPublished:
+          configService.notifyImportPublished.bind(configService),
+        update: (key: string, value: unknown) =>
+          configService.update(key, value),
       },
       services: {
         register<T extends Service>(
@@ -119,6 +121,7 @@ function createRuntime() {
     },
     renderIntentService,
     compilerRegistry,
+    configService,
     surfaceFrameService,
   };
 }
@@ -668,15 +671,14 @@ async function testDocumentPreparationFailuresAreAtomic() {
     runtime,
     renderIntentService,
     compilerRegistry,
+    configService,
     surfaceFrameService,
   } = createRuntime();
-  let configImports = 0;
+  let configEvents = 0;
   let afterPublishCalls = 0;
-  const originalImport = runtime.config.import.bind(runtime.config);
-  runtime.config.import = (data) => {
-    configImports += 1;
-    originalImport(data);
-  };
+  configService.onAnyChange(() => {
+    configEvents += 1;
+  });
   runtime.services.register<ImageResourceService>(
     {
       init() {},
@@ -791,7 +793,7 @@ async function testDocumentPreparationFailuresAreAtomic() {
         ]),
     ),
     graph: renderIntentService.getGraph(),
-    configImports,
+    configEvents,
     eventCounts: [
       documentEvents.length,
       renderEvents.length,
@@ -842,6 +844,143 @@ async function testDocumentPreparationFailuresAreAtomic() {
     afterPublishCalls,
     2,
     "afterPublish should run for the baseline and successful publication only",
+  );
+}
+
+async function testDocumentRejectsLegacyConfigurationRuntime() {
+  const { runtime, renderIntentService, surfaceFrameService } = createRuntime();
+  let legacyImports = 0;
+  const legacyRuntime = {
+    ...runtime,
+    config: {
+      export: () => runtime.config.export(),
+      get: <T = unknown>(key: string, defaultValue?: T) =>
+        runtime.config.get(key, defaultValue),
+      import: (_data: Record<string, unknown>) => {
+        legacyImports += 1;
+      },
+      update: (key: string, value: unknown) =>
+        runtime.config.update(key, value),
+    },
+  } as unknown as EditorDocumentRuntime;
+  const result = await applyEditorDocument(legacyRuntime, {
+    version: 7,
+    config: { mode: "candidate" },
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [],
+      },
+    ],
+  });
+
+  assertEqual(result.ok, false, "legacy configuration runtime must reject");
+  assertEqual(
+    result.diagnostics.some(
+      (diagnostic) => diagnostic.code === "runtime-config-publication-required",
+    ),
+    true,
+    "legacy configuration rejection should identify the missing publication API",
+  );
+  assertEqual(legacyImports, 0, "legacy config.import must never run");
+  assertEqual(
+    surfaceFrameService.listSurfaceIds().length,
+    0,
+    "legacy runtime rejection must not publish frames",
+  );
+  assertEqual(
+    renderIntentService.getGraph().revision,
+    0,
+    "legacy runtime rejection must not publish a graph",
+  );
+}
+
+async function testDocumentPreflightPreservesConcurrentConfigAndFrames() {
+  const { runtime, renderIntentService, surfaceFrameService } = createRuntime();
+  const service = registerEditorDocumentService(runtime, {
+    publicationParticipants: [
+      {
+        prepare({ runtime: participantRuntime, document }) {
+          if (!document.config.triggerConcurrentUpdate) return;
+          participantRuntime.config?.update("concurrent", "preserved");
+          surfaceFrameService.setFrames("front", {
+            ...TEST_SURFACE_FRAMES,
+            productionFrame: {
+              ...TEST_SURFACE_FRAMES.productionFrame,
+              widthMm: 91,
+            },
+          });
+        },
+      },
+    ],
+  });
+  const createDocument = (
+    config: Record<string, unknown>,
+    widthMm: number,
+  ) => ({
+    version: 7 as const,
+    config,
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" as const },
+        frames: {
+          ...TEST_SURFACE_FRAMES,
+          productionFrame: {
+            ...TEST_SURFACE_FRAMES.productionFrame,
+            widthMm,
+          },
+        },
+        layers: [],
+      },
+    ],
+  });
+  assertEqual(
+    (await service.apply(createDocument({ mode: "stable" }, 100))).ok,
+    true,
+    "concurrency fixture baseline should apply",
+  );
+  const committedBefore = service.export();
+  const graphBefore = renderIntentService.getGraph();
+  let documentEvents = 0;
+  let renderEvents = 0;
+  service.onDidChange(() => {
+    documentEvents += 1;
+  });
+  renderIntentService.onDidChange(() => {
+    renderEvents += 1;
+  });
+
+  const result = await service.apply(
+    createDocument({ mode: "candidate", triggerConcurrentUpdate: true }, 82),
+  );
+  assertEqual(result.ok, false, "stale document publication should reject");
+  assertDeepEqual(
+    service.export(),
+    committedBefore,
+    "publication preflight must run before replacing Document state",
+  );
+  assertDeepEqual(
+    runtime.config.export(),
+    { mode: "stable", concurrent: "preserved" },
+    "stale config candidate must not overwrite the concurrent update",
+  );
+  assertEqual(
+    surfaceFrameService.getFrames("front")?.productionFrame.widthMm,
+    91,
+    "stale frame candidate must not overwrite the concurrent frame update",
+  );
+  assertDeepEqual(
+    renderIntentService.getGraph(),
+    graphBefore,
+    "failed preflight must not publish the prepared graph",
+  );
+  assertDeepEqual(
+    [documentEvents, renderEvents],
+    [0, 0],
+    "failed preflight must not emit Document or RenderGraph events",
   );
 }
 
@@ -969,6 +1108,8 @@ async function main() {
   await testControllerUpdatesOnlyChangedRenderIntents();
   await testDocumentGeometryIsAvailableDuringInitialApply();
   await testDocumentPreparationFailuresAreAtomic();
+  await testDocumentRejectsLegacyConfigurationRuntime();
+  await testDocumentPreflightPreservesConcurrentConfigAndFrames();
   await testDocumentServiceDraftIsolation();
   await testDocumentServiceCommitsSceneTranslationBySubject();
   console.log("ok");

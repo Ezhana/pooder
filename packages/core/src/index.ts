@@ -128,6 +128,7 @@ type RuntimeConfigApi = {
   update(key: string, value: any): void;
   import(data: Record<string, any>): void;
   prepareImport: ConfigurationService["prepareImport"];
+  assertImportPublicationCurrent: ConfigurationService["assertImportPublicationCurrent"];
   publishImport: ConfigurationService["publishImport"];
   notifyImportPublished: ConfigurationService["notifyImportPublished"];
   export(): Record<string, any>;
@@ -313,6 +314,8 @@ export class Pooder {
       update: (key, value) => this.configurationService.update(key, value),
       import: (data) => this.configurationService.import(data),
       prepareImport: (data) => this.configurationService.prepareImport(data),
+      assertImportPublicationCurrent: (publication) =>
+        this.configurationService.assertImportPublicationCurrent(publication),
       publishImport: (publication, options) =>
         this.configurationService.publishImport(publication, options),
       notifyImportPublished: (publication) =>

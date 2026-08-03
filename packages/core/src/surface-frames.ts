@@ -18,6 +18,9 @@ export interface SurfaceFrameService extends Service {
   prepareImportFrames(
     framesBySurfaceId: Record<string, SurfaceSceneFrames>,
   ): PreparedSurfaceFramePublication;
+  assertImportFramesPublicationCurrent(
+    publication: PreparedSurfaceFramePublication,
+  ): void;
   publishImportFrames(
     publication: PreparedSurfaceFramePublication,
     options?: { notify?: boolean },
@@ -104,6 +107,7 @@ function normalizeFrames(frames: SurfaceSceneFrames): SurfaceSceneFrames {
 
 export class DefaultSurfaceFrameService implements SurfaceFrameService {
   private readonly framesBySurfaceId = new Map<string, SurfaceSceneFrames>();
+  private revision = 0;
   private readonly listenersBySurfaceId = new Map<
     string,
     Set<(event: SurfaceFrameChangeEvent) => void>
@@ -113,7 +117,11 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
   >();
   private readonly preparedPublications = new WeakMap<
     PreparedSurfaceFramePublication,
-    { frames: Map<string, SurfaceSceneFrames>; changedSurfaceIds: string[] }
+    {
+      frames: Map<string, SurfaceSceneFrames>;
+      changedSurfaceIds: string[];
+      revision: number;
+    }
   >();
   private readonly pendingPublicationNotifications = new WeakMap<
     PreparedSurfaceFramePublication,
@@ -124,7 +132,9 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
 
   clear(): void {
     const previous = Array.from(this.framesBySurfaceId.keys());
+    if (!previous.length) return;
     this.framesBySurfaceId.clear();
+    this.revision += 1;
     previous.forEach((surfaceId) => this.emit(surfaceId));
   }
 
@@ -171,25 +181,28 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
     this.preparedPublications.set(publication, {
       frames: next,
       changedSurfaceIds: Array.from(changed),
+      revision: this.revision,
     });
     return publication;
+  }
+
+  assertImportFramesPublicationCurrent(
+    publication: PreparedSurfaceFramePublication,
+  ): void {
+    this.requireCurrentPublication(publication);
   }
 
   publishImportFrames(
     publication: PreparedSurfaceFramePublication,
     options: { notify?: boolean } = {},
   ): void {
-    const prepared = this.preparedPublications.get(publication);
-    if (!prepared) {
-      throw new Error(
-        "Surface frame publication is invalid or already published.",
-      );
-    }
+    const prepared = this.requireCurrentPublication(publication);
     this.preparedPublications.delete(publication);
     this.framesBySurfaceId.clear();
     prepared.frames.forEach((frames, surfaceId) =>
       this.framesBySurfaceId.set(surfaceId, frames),
     );
+    if (prepared.changedSurfaceIds.length) this.revision += 1;
     if (options.notify === false) {
       this.pendingPublicationNotifications.set(
         publication,
@@ -260,7 +273,25 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
     const current = this.framesBySurfaceId.get(normalized);
     if (current && sameFrames(current, next)) return;
     this.framesBySurfaceId.set(normalized, next);
+    this.revision += 1;
     this.emit(normalized);
+  }
+
+  private requireCurrentPublication(
+    publication: PreparedSurfaceFramePublication,
+  ) {
+    const prepared = this.preparedPublications.get(publication);
+    if (!prepared) {
+      throw new Error(
+        "Surface frame publication is invalid or already published.",
+      );
+    }
+    if (prepared.revision !== this.revision) {
+      throw new Error(
+        "Surface frame publication is stale because frames changed after prepare.",
+      );
+    }
+    return prepared;
   }
 
   private emit(surfaceId: string): void {
