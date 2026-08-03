@@ -51,9 +51,9 @@ function testRepresentativeV7FixtureRoundTrip() {
     "representative v7 fixture should survive serialization and parsing",
   );
   assertDeepEqual(
-    restored.views?.map((view) => view.surfaceIds),
-    [["front"], ["back"]],
-    "representative fixture should preserve front/back view ordering",
+    restored.surfaces.map((surface) => surface.id),
+    ["front", "back"],
+    "representative fixture should preserve front/back surface ordering",
   );
   assertEqual(
     restored.surfaces[0]?.layers[0]?.effects?.[0]?.type,

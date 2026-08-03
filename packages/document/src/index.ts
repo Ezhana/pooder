@@ -134,7 +134,6 @@ export type RuntimeConditionExpr = DocumentRuntimeConditionExpr;
 export const EDITOR_DOCUMENT_VERSION = 7 as const;
 
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
-export type EditorDocumentUnit = "px" | "mm" | "cm" | "in";
 export type EditorDocumentRequirePolicy = "strict" | "warn" | "ignore";
 export type EditorDocumentDiagnosticSeverity = "error" | "warning";
 export type EditorDocumentDiagnosticStage =
@@ -166,6 +165,14 @@ export interface EditorRect {
   height: number;
 }
 
+/** Persisted document-space rectangle. Values are always millimetres. */
+export interface RectMm {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface EditorSize {
   width: number;
   height: number;
@@ -188,46 +195,19 @@ export interface EditorDocument {
   config: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   surfaces: EditorSurface[];
-  views?: EditorView[];
 }
 
 export interface EditorSurface {
   id: string;
   title?: string;
-  size: {
-    width: number;
-    height: number;
-    unit: EditorDocumentUnit;
+  geometry: {
+    canvasBounds: RectMm;
+    productionBounds: RectMm;
+    exportBounds?: RectMm;
+    safeBounds?: RectMm;
   };
-  frame?: {
-    trim?: EditorRect;
-    bleed?: EditorRect;
-    safe?: EditorRect;
-  };
-  frames: EditorSurfaceFrames;
   layers: EditorLayer[];
   effects?: EditorEffect[];
-  metadata?: Record<string, unknown>;
-}
-
-export interface EditorSceneFrameMm {
-  xMm: number;
-  yMm: number;
-  widthMm: number;
-  heightMm: number;
-}
-
-export interface EditorSurfaceFrames {
-  previewBounds: EditorSceneFrameMm;
-  productionFrame: EditorSceneFrameMm;
-  exportFrame?: EditorSceneFrameMm;
-  viewportFocusFrame: EditorSceneFrameMm;
-}
-
-export interface EditorView {
-  id: string;
-  title?: string;
-  surfaceIds: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -463,7 +443,6 @@ export type EditorDocumentObjectVisitor = (
   context: EditorDocumentObjectVisitContext,
 ) => void;
 
-const VALID_UNITS = new Set(["px", "mm", "cm", "in"]);
 const VALID_REQUIRE_POLICIES = new Set(["strict", "warn", "ignore"]);
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -766,59 +745,22 @@ function normalizeImageSlot(value: unknown): EditorImageSlotSpec | undefined {
   };
 }
 
-function normalizeSceneFrameMm(
-  value: unknown,
-): { xMm: number; yMm: number; widthMm: number; heightMm: number } | undefined {
-  if (!isRecord(value)) return undefined;
-  const xMm = normalizeFiniteNumber(value.xMm);
-  const yMm = normalizeFiniteNumber(value.yMm);
-  const widthMm = normalizePositiveNumber(value.widthMm);
-  const heightMm = normalizePositiveNumber(value.heightMm);
-  if (
-    xMm === undefined ||
-    yMm === undefined ||
-    widthMm === undefined ||
-    heightMm === undefined
-  ) {
-    return undefined;
-  }
-  return { xMm, yMm, widthMm, heightMm };
-}
-
-function createDefaultSurfaceFrames(size: {
-  width: number;
-  height: number;
-}): EditorSurfaceFrames {
-  const previewBounds = {
-    xMm: 0,
-    yMm: 0,
-    widthMm: size.width,
-    heightMm: size.height,
-  };
-  return {
-    previewBounds,
-    productionFrame: { ...previewBounds },
-    viewportFocusFrame: { ...previewBounds },
-  };
-}
-
-function normalizeSurfaceFrames(
-  value: unknown,
-  fallback: EditorSurfaceFrames,
-): EditorSurfaceFrames {
+function normalizeSurfaceGeometry(value: unknown): EditorSurface["geometry"] {
   const raw = isRecord(value) ? value : {};
-  const previewBounds =
-    normalizeSceneFrameMm(raw.previewBounds) ?? fallback.previewBounds;
-  const productionFrame =
-    normalizeSceneFrameMm(raw.productionFrame) ?? previewBounds;
-  const viewportFocusFrame =
-    normalizeSceneFrameMm(raw.viewportFocusFrame) ?? productionFrame;
-  const exportFrame = normalizeSceneFrameMm(raw.exportFrame);
+  const canvasBounds = normalizeRect(raw.canvasBounds) ?? {
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+  };
+  const productionBounds = normalizeRect(raw.productionBounds) ?? canvasBounds;
+  const exportBounds = normalizeRect(raw.exportBounds);
+  const safeBounds = normalizeRect(raw.safeBounds);
   return {
-    previewBounds,
-    productionFrame,
-    ...(exportFrame ? { exportFrame } : {}),
-    viewportFocusFrame,
+    canvasBounds,
+    productionBounds,
+    ...(exportBounds ? { exportBounds } : {}),
+    ...(safeBounds ? { safeBounds } : {}),
   };
 }
 
@@ -1347,57 +1289,20 @@ function normalizeLayer(value: unknown, order: number): EditorLayer | null {
 
 function normalizeSurface(value: unknown): EditorSurface | null {
   if (!isRecord(value)) return null;
-  const rawSize = isRecord(value.size) ? value.size : {};
   const layers = Array.isArray(value.layers)
     ? value.layers
         .map((item, index) => normalizeLayer(item, index))
         .filter((item): item is EditorLayer => Boolean(item))
     : [];
-  const size = {
-    width: normalizePositiveNumber(rawSize.width) ?? 1,
-    height: normalizePositiveNumber(rawSize.height) ?? 1,
-    unit: VALID_UNITS.has(String(rawSize.unit))
-      ? (rawSize.unit as EditorDocumentUnit)
-      : "px",
-  };
-  const frame = isRecord(value.frame)
-    ? {
-        trim: normalizeRect(value.frame.trim),
-        bleed: normalizeRect(value.frame.bleed),
-        safe: normalizeRect(value.frame.safe),
-      }
-    : undefined;
-
   return {
     id: normalizeId(value.id),
     title: typeof value.title === "string" ? value.title : undefined,
-    size,
-    frame:
-      frame && (frame.trim || frame.bleed || frame.safe) ? frame : undefined,
-    frames: normalizeSurfaceFrames(
-      value.frames,
-      createDefaultSurfaceFrames(size),
-    ),
+    geometry: normalizeSurfaceGeometry(value.geometry),
     layers,
     effects: normalizeEffects(value.effects),
     metadata: isRecord(value.metadata)
       ? cloneRecord(value.metadata)
       : undefined,
-  };
-}
-
-function normalizeView(value: unknown): EditorView | null {
-  if (!isRecord(value)) return null;
-  const surfaceIds = Array.isArray(value.surfaceIds)
-    ? value.surfaceIds.map(normalizeId).filter(Boolean)
-    : [];
-  return {
-    id: normalizeId(value.id),
-    title: typeof value.title === "string" ? value.title : undefined,
-    surfaceIds,
-    ...(isRecord(value.metadata)
-      ? { metadata: cloneRecord(value.metadata) }
-      : {}),
   };
 }
 
@@ -1409,19 +1314,6 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
         .map(normalizeSurface)
         .filter((item): item is EditorSurface => Boolean(item))
     : [];
-  const explicitViews = Array.isArray(input.views)
-    ? input.views
-        .map(normalizeView)
-        .filter((item): item is EditorView => Boolean(item))
-    : [];
-  const views = explicitViews.length
-    ? explicitViews
-    : surfaces.map((surface) => ({
-        id: surface.id,
-        title: surface.title,
-        surfaceIds: [surface.id],
-      }));
-
   return {
     version: EDITOR_DOCUMENT_VERSION,
     config,
@@ -1429,7 +1321,6 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
       ? { metadata: cloneRecord(input.metadata) }
       : {}),
     surfaces,
-    ...(views.length ? { views } : {}),
   };
 }
 
@@ -2102,7 +1993,6 @@ export function validateEditorDocument(
   const surfaceIds = new Set<string>();
   const layerIds = new Set<string>();
   const objectIds = new Set<string>();
-  const viewIds = new Set<string>();
 
   validateDocumentConfig(diagnostics, input);
   validateV7ImageObjects(diagnostics, input);
@@ -2131,38 +2021,37 @@ export function validateEditorDocument(
       `${surfacePath}.id`,
       "surface",
     );
-    if (surface.size.width <= 0 || surface.size.height <= 0) {
+    if (
+      surface.geometry.canvasBounds.width <= 0 ||
+      surface.geometry.canvasBounds.height <= 0
+    ) {
       addDiagnostic(diagnostics, {
         severity: "error",
-        code: "surface-size-invalid",
-        message: `Surface "${surface.id}" size must be positive.`,
-        path: `${surfacePath}.size`,
+        code: "surface-canvas-bounds-invalid",
+        message: `Surface "${surface.id}" canvas bounds must be positive.`,
+        path: `${surfacePath}.geometry.canvasBounds`,
       });
     }
     if (!isRecord((input.surfaces as unknown[])?.[surfaceIndex])) {
       return;
     }
     const rawSurface = (input.surfaces as unknown[])[surfaceIndex];
-    const rawFrames = isRecord(rawSurface) ? rawSurface.frames : undefined;
-    if (!isRecord(rawFrames)) {
+    const rawGeometry = isRecord(rawSurface) ? rawSurface.geometry : undefined;
+    if (!isRecord(rawGeometry)) {
       addDiagnostic(diagnostics, {
         severity: "error",
-        code: "surface-frames-required",
-        message: `Surface "${surface.id}" requires frames.`,
-        path: `${surfacePath}.frames`,
+        code: "surface-geometry-required",
+        message: `Surface "${surface.id}" requires millimetre geometry.`,
+        path: `${surfacePath}.geometry`,
       });
     }
-    (
-      ["previewBounds", "productionFrame", "viewportFocusFrame"] as const
-    ).forEach((key) => {
-      if (
-        !normalizeSceneFrameMm(isRecord(rawFrames) ? rawFrames[key] : undefined)
-      ) {
+    (["canvasBounds", "productionBounds"] as const).forEach((key) => {
+      if (!normalizeRect(isRecord(rawGeometry) ? rawGeometry[key] : undefined)) {
         addDiagnostic(diagnostics, {
           severity: "error",
-          code: "surface-frame-required",
-          message: `Surface "${surface.id}" requires a valid "${key}" frame.`,
-          path: `${surfacePath}.frames.${key}`,
+          code: "surface-bound-required",
+          message: `Surface "${surface.id}" requires valid "${key}" millimetre bounds.`,
+          path: `${surfacePath}.geometry.${key}`,
         });
       }
     });
@@ -2287,29 +2176,6 @@ export function validateEditorDocument(
     });
   });
   validateObjectReferences(diagnostics, document);
-
-  document.views?.forEach((view, viewIndex) => {
-    const viewPath = `views[${viewIndex}]`;
-    validateUniqueId(diagnostics, viewIds, view.id, `${viewPath}.id`, "view");
-    if (!view.surfaceIds.length) {
-      addDiagnostic(diagnostics, {
-        severity: "error",
-        code: "view-surfaces-required",
-        message: `View "${view.id}" requires at least one surfaceId.`,
-        path: `${viewPath}.surfaceIds`,
-      });
-    }
-    view.surfaceIds.forEach((surfaceId, surfaceIdIndex) => {
-      if (!surfaceIds.has(surfaceId)) {
-        addDiagnostic(diagnostics, {
-          severity: "error",
-          code: "view-surface-missing",
-          message: `View "${view.id}" references missing surface "${surfaceId}".`,
-          path: `${viewPath}.surfaceIds[${surfaceIdIndex}]`,
-        });
-      }
-    });
-  });
 
   return diagnostics.map((diagnostic) => ({
     ...diagnostic,

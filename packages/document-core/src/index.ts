@@ -247,7 +247,7 @@ export interface ApplyEditorDocumentResult {
   ok: boolean;
   document: EditorDocument;
   diagnostics: EditorDocumentDiagnostic[];
-  views: NonNullable<EditorDocument["views"]>;
+  surfaces: EditorSurface[];
   appliedSurfaceIds: string[];
 }
 
@@ -643,7 +643,10 @@ async function prepareEditorDocumentApplication(
   const configPublication = config.prepareImport(document.config);
   const surfaceFramePublication = surfaceFrameService.prepareImportFrames(
     Object.fromEntries(
-      document.surfaces.map((surface) => [surface.id, surface.frames]),
+      document.surfaces.map((surface) => [
+        surface.id,
+        surfaceGeometryToRuntimeFrames(surface),
+      ]),
     ),
   );
   const renderIntentPublication = renderIntentService.prepareDocumentIntents(
@@ -1894,8 +1897,30 @@ function createResult(
     ok,
     document,
     diagnostics,
-    views: document.views ?? [],
+    surfaces: document.surfaces,
     appliedSurfaceIds,
+  };
+}
+
+function surfaceGeometryToRuntimeFrames(surface: EditorSurface) {
+  const toFrame = (bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => ({
+    xMm: bounds.x,
+    yMm: bounds.y,
+    widthMm: bounds.width,
+    heightMm: bounds.height,
+  });
+  return {
+    previewBounds: toFrame(surface.geometry.canvasBounds),
+    productionFrame: toFrame(surface.geometry.productionBounds),
+    ...(surface.geometry.exportBounds
+      ? { exportFrame: toFrame(surface.geometry.exportBounds) }
+      : {}),
+    viewportFocusFrame: toFrame(surface.geometry.canvasBounds),
   };
 }
 
@@ -2363,15 +2388,15 @@ function resolveEditorImageClipFrame(
   objectPlacement: AffinePlacement,
 ) {
   const objectFrame = objectPlacement.localBounds;
-  const production = surface.frames.productionFrame;
+  const production = surface.geometry.productionBounds;
   if (!object.slot) return objectFrame;
   const productionInObject = transformCoordinateRect(
     invertCoordinateMatrix(objectPlacement.localToScene),
     coordinateRect("scene", {
-      left: production.xMm,
-      top: production.yMm,
-      width: production.widthMm,
-      height: production.heightMm,
+      left: production.x,
+      top: production.y,
+      width: production.width,
+      height: production.height,
     }),
   );
   const left = Math.max(objectFrame.left, productionInObject.left);

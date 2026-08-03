@@ -10,20 +10,15 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
   config: {
     scene: { unit: "mm" },
   },
-  views: [
-    { id: "front-view", title: "Front", surfaceIds: ["front"] },
-    { id: "back-view", title: "Back", surfaceIds: ["back"] },
-  ],
   surfaces: [
     {
       id: "front",
       title: "Front",
-      size: { width: 100, height: 120, unit: "mm" },
-      frames: {
-        previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-        productionFrame: { xMm: 3, yMm: 3, widthMm: 94, heightMm: 114 },
-        exportFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-        viewportFocusFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 110 },
+      geometry: {
+        canvasBounds: { x: 0, y: 0, width: 100, height: 120 },
+        productionBounds: { x: 3, y: 3, width: 94, height: 114 },
+        exportBounds: { x: 0, y: 0, width: 100, height: 120 },
+        safeBounds: { x: 5, y: 5, width: 90, height: 110 },
       },
       layers: [
         {
@@ -109,12 +104,11 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
     {
       id: "back",
       title: "Back",
-      size: { width: 100, height: 120, unit: "mm" },
-      frames: {
-        previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-        productionFrame: { xMm: 3, yMm: 3, widthMm: 94, heightMm: 114 },
-        exportFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-        viewportFocusFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 110 },
+      geometry: {
+        canvasBounds: { x: 0, y: 0, width: 100, height: 120 },
+        productionBounds: { x: 3, y: 3, width: 94, height: 114 },
+        exportBounds: { x: 0, y: 0, width: 100, height: 120 },
+        safeBounds: { x: 5, y: 5, width: 90, height: 110 },
       },
       layers: [
         {

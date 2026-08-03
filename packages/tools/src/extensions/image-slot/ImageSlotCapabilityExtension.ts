@@ -998,15 +998,15 @@ function resolveImageSlotClipFrame(
   const objectFrame = objectPlacement.localBounds;
   const production = document.surfaces.find(
     (surface) => surface.id === context.surfaceId,
-  )?.frames.productionFrame;
+  )?.geometry.productionBounds;
   if (!production) return objectFrame;
   const productionInObject = transformCoordinateRect(
     invertCoordinateMatrix(objectPlacement.localToScene),
     coordinateRect("scene", {
-      left: production.xMm,
-      top: production.yMm,
-      width: production.widthMm,
-      height: production.heightMm,
+      left: production.x,
+      top: production.y,
+      width: production.width,
+      height: production.height,
     }),
   );
   const left = Math.max(objectFrame.left, productionInObject.left);
