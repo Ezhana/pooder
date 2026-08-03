@@ -127,6 +127,9 @@ type RuntimeConfigApi = {
   get<T = unknown>(key: string, defaultValue?: T): T;
   update(key: string, value: any): void;
   import(data: Record<string, any>): void;
+  prepareImport: ConfigurationService["prepareImport"];
+  publishImport: ConfigurationService["publishImport"];
+  notifyImportPublished: ConfigurationService["notifyImportPublished"];
   export(): Record<string, any>;
   listDefinitions(): ReturnType<ConfigurationService["listDefinitions"]>;
   getDefinition(id: string): ReturnType<ConfigurationService["getDefinition"]>;
@@ -309,6 +312,11 @@ export class Pooder {
         this.configurationService.get(key, defaultValue),
       update: (key, value) => this.configurationService.update(key, value),
       import: (data) => this.configurationService.import(data),
+      prepareImport: (data) => this.configurationService.prepareImport(data),
+      publishImport: (publication, options) =>
+        this.configurationService.publishImport(publication, options),
+      notifyImportPublished: (publication) =>
+        this.configurationService.notifyImportPublished(publication),
       export: () => this.configurationService.export(),
       listDefinitions: () => this.configurationService.listDefinitions(),
       getDefinition: (id) => this.configurationService.getDefinition(id),

@@ -2891,6 +2891,59 @@ async function testRenderIntentDocumentUpdatesAreScoped() {
   });
 }
 
+async function testPreparedRenderIntentPublicationRejectsStaleRuntimePatches() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createIntent = (src: string) => ({
+      id: "image",
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId: "artwork",
+        objectId: "image",
+      },
+      visual: { type: "image" as const, src },
+      placement: createTestPlacement(0, 0, 10, 10),
+      ordering: { layerId: "artwork" },
+    });
+    intents.setDocumentIntents([createIntent("/before.png")]);
+    const prepared = intents.prepareDocumentIntents(
+      [createIntent("/candidate.png")],
+      "update",
+    );
+    const revisionBeforePatch = intents.getGraph().revision;
+    assertEqual(
+      intents.getGraph().layers[0]?.nodes[0]?.visual?.src,
+      "/before.png",
+      "prepare must not replace the live graph",
+    );
+    intents.patchIntent("session", {
+      id: "image",
+      visual: { replacement: { src: "/runtime.png" } },
+    });
+    const graphAfterPatch = intents.getGraph();
+    let rejected = false;
+    try {
+      intents.publishDocumentIntents(prepared);
+    } catch (error) {
+      rejected = String(error).includes("runtime patches changed");
+    }
+    assertEqual(rejected, true, "stale prepared graph should be rejected");
+    assertEqual(
+      intents.getGraph().revision,
+      revisionBeforePatch + 1,
+      "rejected publication must not increment graph revision",
+    );
+    assertDeepEqual(
+      intents.getGraph(),
+      graphAfterPatch,
+      "rejected publication must preserve the runtime-patched graph",
+    );
+  });
+}
+
 async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
   const frames = new DefaultSurfaceFrameService();
   const changes: string[] = [];
@@ -3658,6 +3711,10 @@ async function main() {
     [
       "emits surface frame changes only for semantic updates",
       testSurfaceFrameImportsOnlyEmitSemanticChanges,
+    ],
+    [
+      "rejects prepared render intents after concurrent runtime patches",
+      testPreparedRenderIntentPublicationRejectsStaleRuntimePatches,
     ],
     [
       "sorts render intent patch entries deterministically",

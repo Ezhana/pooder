@@ -37,6 +37,9 @@ import {
   type RenderIntentPatch,
   type RenderIntentPatchEntry,
   type RenderIntentService,
+  type PreparedRenderIntentDocumentPublication,
+  type PreparedSurfaceFramePublication,
+  type PreparedConfigurationPublication,
   type Service,
   type ServiceContext,
   type ServiceIdentifier,
@@ -184,6 +187,14 @@ export interface EditorDocumentRuntime {
     export(): Record<string, unknown>;
     get<T = unknown>(key: string, defaultValue?: T): T;
     import(data: Record<string, unknown>): void;
+    prepareImport?(
+      data: Record<string, unknown>,
+    ): PreparedConfigurationPublication;
+    publishImport?(
+      publication: PreparedConfigurationPublication,
+      options?: { notify?: boolean },
+    ): void;
+    notifyImportPublished?(publication: PreparedConfigurationPublication): void;
     update(key: string, value: unknown): void;
   };
   readonly services: {
@@ -203,11 +214,27 @@ export interface EditorDocumentRuntime {
   };
 }
 
+export interface EditorDocumentPublication {
+  /** Must be synchronous and non-throwing. All fallible work belongs in prepare. */
+  publish(): void;
+}
+
+export interface EditorDocumentPublicationParticipant {
+  prepare(context: {
+    runtime: EditorDocumentRuntime;
+    document: EditorDocument;
+  }):
+    | EditorDocumentPublication
+    | void
+    | Promise<EditorDocumentPublication | void>;
+}
+
 export interface ApplyEditorDocumentOptions {
   effectSchemaRegistry?: EffectSchemaRegistry;
   resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
   validators?: EditorDocumentValidationOptions["validators"];
-  afterApply?: (
+  publicationParticipants?: readonly EditorDocumentPublicationParticipant[];
+  afterPublish?: (
     runtime: EditorDocumentRuntime,
     document: EditorDocument,
   ) => Promise<void> | void;
@@ -398,13 +425,77 @@ export async function applyEditorDocument(
   return applyEditorDocumentInternal(runtime, value, options, "replace");
 }
 
+interface PreparedEditorDocumentApplication {
+  result: ApplyEditorDocumentResult;
+  configPublication:
+    | { type: "prepared"; value: PreparedConfigurationPublication }
+    | { type: "legacy"; value: Record<string, unknown> };
+  surfaceFramePublication: PreparedSurfaceFramePublication;
+  renderIntentPublication: PreparedRenderIntentDocumentPublication;
+  participantPublications: EditorDocumentPublication[];
+  renderIntentService: RenderIntentService;
+  surfaceFrameService: SurfaceFrameService;
+}
+
+interface EditorDocumentPublicationBoundary {
+  publishDocumentState?(document: EditorDocument): void;
+  notifyDocumentPublished?(): void;
+}
+
 async function applyEditorDocumentInternal(
   runtime: EditorDocumentRuntime,
   value: unknown,
   options: ApplyEditorDocumentOptions,
   renderIntentMode: "replace" | "update",
-  onDocumentPrepared?: (document: EditorDocument) => void,
+  boundary: EditorDocumentPublicationBoundary = {},
 ): Promise<ApplyEditorDocumentResult> {
+  let prepared: PreparedEditorDocumentApplication | ApplyEditorDocumentResult;
+  try {
+    prepared = await prepareEditorDocumentApplication(
+      runtime,
+      value,
+      options,
+      renderIntentMode,
+    );
+  } catch (error) {
+    const document = normalizeEditorDocument(value);
+    return createResult(
+      false,
+      document,
+      [createPublicationDiagnostic("document-prepare-failed", error)],
+      [],
+    );
+  }
+  if (!("renderIntentPublication" in prepared)) return prepared;
+
+  try {
+    publishEditorDocumentApplication(runtime, prepared, boundary);
+  } catch (error) {
+    return createResult(
+      false,
+      prepared.result.document,
+      [
+        ...prepared.result.diagnostics,
+        createPublicationDiagnostic("document-publication-rejected", error),
+      ],
+      [],
+    );
+  }
+
+  try {
+    await options.afterPublish?.(runtime, prepared.result.document);
+  } catch (error) {
+    console.error("EditorDocument afterPublish notification failed.", error);
+  }
+  return prepared.result;
+}
+
+async function prepareEditorDocumentApplication(
+  runtime: EditorDocumentRuntime,
+  value: unknown,
+  options: ApplyEditorDocumentOptions,
+  renderIntentMode: "replace" | "update",
+): Promise<PreparedEditorDocumentApplication | ApplyEditorDocumentResult> {
   const validationOptions = toValidationOptions(options);
   const collectionOptions = toCollectionOptions(options);
   const document = normalizeEditorDocument(value);
@@ -461,18 +552,10 @@ async function applyEditorDocumentInternal(
       [],
     );
   }
-  onDocumentPrepared?.(document);
-  runtime.config.import(document.config);
-  runtime.services
-    .getOrThrow<SurfaceFrameService>(
-      SURFACE_FRAME_SERVICE,
-      "SurfaceFrameService is required to apply an EditorDocument.",
-    )
-    .importFrames(
-      Object.fromEntries(
-        document.surfaces.map((surface) => [surface.id, surface.frames]),
-      ),
-    );
+  const surfaceFrameService = runtime.services.getOrThrow<SurfaceFrameService>(
+    SURFACE_FRAME_SERVICE,
+    "SurfaceFrameService is required to apply an EditorDocument.",
+  );
 
   const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
     RENDER_INTENT_SERVICE,
@@ -525,25 +608,130 @@ async function applyEditorDocumentInternal(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  if (renderIntentMode === "update") {
-    renderIntentService.updateDocumentIntents(mergeResult.drafts);
-  } else {
-    renderIntentService.setDocumentIntents(mergeResult.drafts);
-  }
-  await options.afterApply?.(runtime, document);
-
-  return createResult(
+  const result = createResult(
     true,
     document,
     allDiagnostics,
     collectAppliedSurfaceIds(mergeResult.drafts),
   );
+  const prepareConfigImport = runtime.config.prepareImport;
+  const supportsPreparedConfigPublication =
+    prepareConfigImport &&
+    runtime.config.publishImport &&
+    runtime.config.notifyImportPublished;
+  const configPublication = supportsPreparedConfigPublication
+    ? { type: "prepared" as const, value: prepareConfigImport(document.config) }
+    : { type: "legacy" as const, value: document.config };
+  const surfaceFramePublication = surfaceFrameService.prepareImportFrames(
+    Object.fromEntries(
+      document.surfaces.map((surface) => [surface.id, surface.frames]),
+    ),
+  );
+  const renderIntentPublication = renderIntentService.prepareDocumentIntents(
+    mergeResult.drafts,
+    renderIntentMode,
+  );
+  const participantPublications: EditorDocumentPublication[] = [];
+  for (const participant of options.publicationParticipants ?? []) {
+    try {
+      const publication = await participant.prepare({ runtime, document });
+      if (publication) participantPublications.push(publication);
+    } catch (error) {
+      return createResult(
+        false,
+        document,
+        [
+          ...allDiagnostics,
+          createPublicationDiagnostic(
+            "publication-participant-prepare-failed",
+            error,
+          ),
+        ],
+        [],
+      );
+    }
+  }
+
+  return {
+    result,
+    configPublication,
+    surfaceFramePublication,
+    renderIntentPublication,
+    participantPublications,
+    renderIntentService,
+    surfaceFrameService,
+  };
+}
+
+function publishEditorDocumentApplication(
+  runtime: EditorDocumentRuntime,
+  prepared: PreparedEditorDocumentApplication,
+  boundary: EditorDocumentPublicationBoundary,
+): void {
+  prepared.renderIntentService.assertDocumentIntentsPublicationCurrent(
+    prepared.renderIntentPublication,
+  );
+  boundary.publishDocumentState?.(prepared.result.document);
+  if (
+    prepared.configPublication.type === "prepared" &&
+    runtime.config?.publishImport
+  ) {
+    runtime.config.publishImport(prepared.configPublication.value, {
+      notify: false,
+    });
+  } else if (prepared.configPublication.type === "legacy") {
+    runtime.config?.import(prepared.configPublication.value);
+  } else {
+    throw new Error("Prepared configuration publication is unavailable.");
+  }
+  prepared.surfaceFrameService.publishImportFrames(
+    prepared.surfaceFramePublication,
+    { notify: false },
+  );
+  prepared.renderIntentService.publishDocumentIntents(
+    prepared.renderIntentPublication,
+    { notify: false },
+  );
+  prepared.participantPublications.forEach((publication) => {
+    try {
+      publication.publish();
+    } catch (error) {
+      console.error("EditorDocument publication participant failed.", error);
+    }
+  });
+  if (
+    prepared.configPublication.type === "prepared" &&
+    runtime.config?.notifyImportPublished
+  ) {
+    const configPublication = prepared.configPublication.value;
+    notifyPublication("configuration", () =>
+      runtime.config?.notifyImportPublished?.(configPublication),
+    );
+  }
+  notifyPublication("surface frames", () =>
+    prepared.surfaceFrameService.notifyImportFramesPublished(
+      prepared.surfaceFramePublication,
+    ),
+  );
+  notifyPublication("render intents", () =>
+    prepared.renderIntentService.notifyDocumentIntentsPublished(
+      prepared.renderIntentPublication,
+    ),
+  );
+  boundary.notifyDocumentPublished?.();
+}
+
+function notifyPublication(label: string, notify: () => void): void {
+  try {
+    notify();
+  } catch (error) {
+    console.error(`EditorDocument ${label} notification failed.`, error);
+  }
 }
 
 export class DefaultEditorDocumentService implements EditorDocumentService {
   private committedDocument: EditorDocument | null = null;
   private workingDocument: EditorDocument | null = null;
-  private applyingDocument: EditorDocument | null = null;
   private activeDraftId: string | null = null;
   private activeDraftSnapshot: EditorDocument | null = null;
   private draftSequence = 0;
@@ -571,10 +759,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     );
     this.documentGeometrySubscription = geometrySource?.registerSource(
       createDocumentObjectGeometrySource(
-        () =>
-          this.applyingDocument ??
-          this.workingDocument ??
-          this.committedDocument,
+        () => this.workingDocument ?? this.committedDocument,
         geometrySource,
       ),
     );
@@ -605,15 +790,15 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   async apply(value: unknown): Promise<ApplyEditorDocumentResult> {
     return this.enqueue(async () => {
-      const result = await this.applyDocumentToRuntime(value, "replace");
-      if (result.ok) {
-        this.committedDocument = cloneEditorDocument(result.document);
-        this.workingDocument = cloneEditorDocument(result.document);
-        this.activeDraftId = null;
-        this.activeDraftSnapshot = null;
-        this.emit("replace");
-      }
-      return result;
+      return this.applyDocumentToRuntime(value, "replace", {
+        publishDocumentState: (document) => {
+          this.committedDocument = cloneEditorDocument(document);
+          this.workingDocument = cloneEditorDocument(document);
+          this.activeDraftId = null;
+          this.activeDraftSnapshot = null;
+        },
+        notifyDocumentPublished: () => this.emit("replace"),
+      });
     });
   }
 
@@ -927,17 +1112,18 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         : mutationFailure("mutation-failed");
     }
     const next = returned ? cloneEditorDocument(returned) : candidate;
-    const result = await this.applyDocumentToRuntime(next, "update");
+    const result = await this.applyDocumentToRuntime(next, "update", {
+      publishDocumentState: (document) => {
+        this.workingDocument = cloneEditorDocument(document);
+        if (!draftId) {
+          this.committedDocument = cloneEditorDocument(document);
+        }
+      },
+      notifyDocumentPublished: () =>
+        draftId ? this.emit("mutate", draftId) : this.emit("commit"),
+    });
     if (!result.ok) {
-      await this.applyDocumentToRuntime(this.workingDocument, "update");
       return mutationFailure("validation-failed", result.diagnostics);
-    }
-    this.workingDocument = cloneEditorDocument(result.document);
-    if (draftId) {
-      this.emit("mutate", draftId);
-    } else {
-      this.committedDocument = cloneEditorDocument(result.document);
-      this.emit("commit");
     }
     return { ok: true, document: cloneEditorDocument(result.document) };
   }
@@ -962,14 +1148,17 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       return mutationFailure("draft-inactive");
     }
     const snapshot = cloneEditorDocument(this.activeDraftSnapshot);
-    const result = await this.applyDocumentToRuntime(snapshot, "update");
+    const result = await this.applyDocumentToRuntime(snapshot, "update", {
+      publishDocumentState: (document) => {
+        this.workingDocument = cloneEditorDocument(document);
+        this.activeDraftId = null;
+        this.activeDraftSnapshot = null;
+      },
+      notifyDocumentPublished: () => this.emit("rollback", draftId),
+    });
     if (!result.ok) {
       return mutationFailure("validation-failed", result.diagnostics);
     }
-    this.workingDocument = cloneEditorDocument(snapshot);
-    this.activeDraftId = null;
-    this.activeDraftSnapshot = null;
-    this.emit("rollback", draftId);
     return { ok: true, document: cloneEditorDocument(snapshot) };
   }
 
@@ -1065,20 +1254,15 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private async applyDocumentToRuntime(
     value: unknown,
     mode: "replace" | "update",
+    boundary: EditorDocumentPublicationBoundary,
   ): Promise<ApplyEditorDocumentResult> {
-    try {
-      return await applyEditorDocumentInternal(
-        this.runtime,
-        value,
-        this.options,
-        mode,
-        (document) => {
-          this.applyingDocument = document;
-        },
-      );
-    } finally {
-      this.applyingDocument = null;
-    }
+    return applyEditorDocumentInternal(
+      this.runtime,
+      value,
+      this.options,
+      mode,
+      boundary,
+    );
   }
 
   private enqueue<TResult>(
@@ -1705,6 +1889,19 @@ function createResult(
     diagnostics,
     views: document.views ?? [],
     appliedSurfaceIds,
+  };
+}
+
+function createPublicationDiagnostic(
+  code: string,
+  error: unknown,
+): EditorDocumentDiagnostic {
+  return {
+    severity: "error",
+    stage: "runtime-capability",
+    code,
+    message: error instanceof Error ? error.message : String(error),
+    path: "runtime.publication",
   };
 }
 

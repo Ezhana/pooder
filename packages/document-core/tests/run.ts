@@ -1,6 +1,7 @@
 import {
   DefaultSurfaceFrameService,
   GEOMETRY_SOURCE_SERVICE,
+  IMAGE_RESOURCE_SERVICE,
   Pooder,
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
@@ -9,6 +10,7 @@ import {
   SURFACE_FRAME_SERVICE,
   GeometrySourceService,
   type GeometrySnapshot,
+  type ImageResourceService,
   type Service,
   type ServiceIdentifier,
 } from "@pooder/core";
@@ -117,6 +119,7 @@ function createRuntime() {
     },
     renderIntentService,
     compilerRegistry,
+    surfaceFrameService,
   };
 }
 
@@ -269,7 +272,11 @@ async function testApplyEditorDocument() {
     },
   );
 
-  assertEqual(result.ok, true, "document should apply");
+  assertEqual(
+    result.ok,
+    true,
+    `document should apply: ${JSON.stringify(result.diagnostics)}`,
+  );
   const graph = renderIntentService.getGraph();
   const node = graph.layers[0]?.nodes.find((item) => item.id === "shape");
   const labelNode = graph.layers[0]?.nodes.find((item) => item.id === "label");
@@ -586,12 +593,20 @@ async function testDocumentGeometryIsAvailableDuringInitialApply() {
     GEOMETRY_SOURCE_SERVICE,
   );
   let snapshotDuringApply: GeometrySnapshot | null = null;
+  let runtimeStateVisibleDuringPublish = false;
+  let renderPublications = 0;
   const subscription = renderIntentService.onDidChange(() => {
+    renderPublications += 1;
     snapshotDuringApply = geometrySource.getSnapshot({
       sourceId: "document-object",
       geometryId: "shape",
       purpose: "preview",
     }).value;
+    runtimeStateVisibleDuringPublish =
+      service.export("working")?.surfaces[0]?.id === "front" &&
+      runtime.services
+        .getOrThrow<DefaultSurfaceFrameService>(SURFACE_FRAME_SERVICE)
+        .getFrames("front") !== null;
   });
 
   try {
@@ -623,10 +638,173 @@ async function testDocumentGeometryIsAvailableDuringInitialApply() {
       snapshotDuringApply !== null,
       "document geometry must resolve while the initial RenderGraph is published",
     );
+    assertEqual(
+      runtimeStateVisibleDuringPublish,
+      true,
+      "document and frames must be visible before RenderGraph notification",
+    );
+    assertEqual(
+      renderPublications,
+      1,
+      "one document publication must emit one RenderGraph notification",
+    );
   } finally {
     subscription.dispose();
     await runtime.dispose();
   }
+}
+
+async function testDocumentPreparationFailuresAreAtomic() {
+  const {
+    runtime,
+    renderIntentService,
+    compilerRegistry,
+    surfaceFrameService,
+  } = createRuntime();
+  let configImports = 0;
+  const originalImport = runtime.config.import.bind(runtime.config);
+  runtime.config.import = (data) => {
+    configImports += 1;
+    originalImport(data);
+  };
+  runtime.services.register<ImageResourceService>(
+    {
+      init() {},
+      async resolve(resource) {
+        if (resource.kind === "url" && resource.url === "/fail.png") {
+          throw new Error("injected image resolution failure");
+        }
+        return { ok: false, reason: "unsupported" };
+      },
+    },
+    IMAGE_RESOURCE_SERVICE,
+  );
+  compilerRegistry.registerCompiler("atomic-test", {
+    capabilityId: "test.effect",
+    effectType: "custom",
+    compile({ effect }) {
+      if ((effect as { payload?: { fail?: boolean } }).payload?.fail) {
+        throw new Error("injected effect compilation failure");
+      }
+    },
+  });
+  const service = registerEditorDocumentService(runtime, {
+    effectSchemaRegistry: new EffectSchemaRegistry([
+      {
+        effectType: "custom",
+        capabilityId: "test.effect",
+        validate: () => [],
+      },
+    ]),
+    resolveEffectCapabilityId: resolveTestEffectCapabilityId,
+    publicationParticipants: [
+      {
+        prepare({ document }) {
+          if (document.config.failParticipant) {
+            throw new Error("injected participant prepare failure");
+          }
+          return { publish() {} };
+        },
+      },
+    ],
+  });
+  const createDocument = (
+    options: {
+      config?: Record<string, unknown>;
+      imageUrl?: string;
+      effect?: EditorEffect;
+    } = {},
+  ) => ({
+    version: 7 as const,
+    config: options.config ?? { mode: "stable" },
+    surfaces: [
+      {
+        id: "front",
+        size: { width: 100, height: 100, unit: "mm" as const },
+        frames: TEST_SURFACE_FRAMES,
+        layers: [
+          {
+            id: "artwork",
+            objects: [
+              options.imageUrl
+                ? {
+                    id: "subject",
+                    frame: { x: 10, y: 20, width: 30, height: 40 },
+                    source: {
+                      kind: "image" as const,
+                      resource: { kind: "url" as const, url: options.imageUrl },
+                    },
+                  }
+                : {
+                    id: "subject",
+                    frame: { x: 10, y: 20, width: 30, height: 40 },
+                    source: {
+                      kind: "shape" as const,
+                      shape: "rect" as const,
+                      params: {},
+                    },
+                    ...(options.effect ? { effects: [options.effect] } : {}),
+                  },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assertEqual(
+    (await service.apply(createDocument())).ok,
+    true,
+    "baseline apply should succeed",
+  );
+  const documentEvents: unknown[] = [];
+  const renderEvents: unknown[] = [];
+  const frameEvents: unknown[] = [];
+  service.onDidChange((event) => documentEvents.push(event));
+  renderIntentService.onDidChange((event) => renderEvents.push(event));
+  surfaceFrameService.onAnyFramesChange((event) => frameEvents.push(event));
+  const snapshot = () => ({
+    document: service.export(),
+    config: runtime.config.export(),
+    frames: Object.fromEntries(
+      surfaceFrameService
+        .listSurfaceIds()
+        .map((surfaceId) => [
+          surfaceId,
+          surfaceFrameService.getFrames(surfaceId),
+        ]),
+    ),
+    graph: renderIntentService.getGraph(),
+    configImports,
+    eventCounts: [
+      documentEvents.length,
+      renderEvents.length,
+      frameEvents.length,
+    ],
+  });
+  const stable = snapshot();
+
+  const failures = [
+    await service.apply(createDocument({ imageUrl: "/fail.png" })),
+    await service.apply(
+      createDocument({
+        effect: { type: "custom", payload: { fail: true } },
+      }),
+    ),
+    await service.apply(createDocument({ config: { failParticipant: true } })),
+  ];
+  failures.forEach((result, index) =>
+    assertEqual(
+      result.ok,
+      false,
+      `injected preparation failure ${index} should be rejected: ${JSON.stringify(result.diagnostics)}`,
+    ),
+  );
+  assertDeepEqual(
+    snapshot(),
+    stable,
+    "preparation failures must preserve document, config, frames, graph, revision, and events",
+  );
 }
 
 function testUnresolvedImageUsesFrameGeometry() {
@@ -752,6 +930,7 @@ async function main() {
   await testCompositeRenderIntentFlattening();
   await testControllerUpdatesOnlyChangedRenderIntents();
   await testDocumentGeometryIsAvailableDuringInitialApply();
+  await testDocumentPreparationFailuresAreAtomic();
   await testDocumentServiceDraftIsolation();
   await testDocumentServiceCommitsSceneTranslationBySubject();
   console.log("ok");

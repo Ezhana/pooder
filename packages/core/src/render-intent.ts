@@ -183,6 +183,16 @@ export interface RenderGraph {
   diagnostics: RenderIntentDiagnostic[];
 }
 
+export type RenderIntentDocumentPublicationMode = "replace" | "update";
+
+/**
+ * Opaque candidate produced without mutating the live RenderIntent state.
+ * Publish rejects candidates prepared before a runtime patch changed.
+ */
+export interface PreparedRenderIntentDocumentPublication {
+  readonly graph: RenderGraph;
+}
+
 export interface RenderIntentCompilerContext<
   TEffect = unknown,
   TDocument = unknown,
@@ -391,32 +401,103 @@ export class RenderIntentService implements Service {
   private graph: RenderGraph = createRenderGraph([], 0);
   private revision = 0;
   private runtimePatchSequence = 0;
+  private runtimePatchRevision = 0;
+  private readonly preparedDocumentPublications = new WeakMap<
+    PreparedRenderIntentDocumentPublication,
+    {
+      baseIntents: RenderIntentDraft[];
+      graph: RenderGraph;
+      reason: RenderIntentChangeReason | null;
+      runtimePatchRevision: number;
+    }
+  >();
+  private readonly pendingDocumentPublicationNotifications = new WeakMap<
+    PreparedRenderIntentDocumentPublication,
+    RenderIntentChangeReason | null
+  >();
 
   init(): void {}
 
   setDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
-    this.baseIntents = intents.map(cloneDraft);
-    return this.recompile({ type: "base-replaced" });
+    return this.publishDocumentIntents(
+      this.prepareDocumentIntents(intents, "replace"),
+    );
   }
 
   updateDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
-    const previous = this.graph;
-    this.baseIntents = intents.map(cloneDraft);
-    this.revision += 1;
+    return this.publishDocumentIntents(
+      this.prepareDocumentIntents(intents, "update"),
+    );
+  }
+
+  prepareDocumentIntents(
+    intents: readonly RenderIntentDraft[],
+    mode: RenderIntentDocumentPublicationMode = "replace",
+  ): PreparedRenderIntentDocumentPublication {
+    const baseIntents = intents.map(cloneDraft);
     const merged = mergeRenderIntentPatchEntries(
-      this.baseIntents,
+      baseIntents,
       Array.from(this.runtimePatches.values()),
     );
-    this.graph = createRenderGraph(
+    const graph = createRenderGraph(
       merged.drafts,
-      this.revision,
+      this.revision + 1,
       merged.diagnostics,
     );
-    const intentIds = collectChangedRenderIntentIds(previous, this.graph);
-    if (intentIds.length) {
-      this.emitChange({ type: "base-updated", intentIds });
+    const reason =
+      mode === "replace"
+        ? ({ type: "base-replaced" } as const)
+        : createBaseUpdateReason(this.graph, graph);
+    const publication: PreparedRenderIntentDocumentPublication = {
+      graph: cloneGraph(graph),
+    };
+    this.preparedDocumentPublications.set(publication, {
+      baseIntents,
+      graph,
+      reason,
+      runtimePatchRevision: this.runtimePatchRevision,
+    });
+    return publication;
+  }
+
+  publishDocumentIntents(
+    publication: PreparedRenderIntentDocumentPublication,
+    options: { notify?: boolean } = {},
+  ): RenderGraph {
+    const prepared = this.requireCurrentDocumentPublication(publication);
+    this.preparedDocumentPublications.delete(publication);
+    this.baseIntents = prepared.baseIntents;
+    this.graph = prepared.graph;
+    this.revision = prepared.graph.revision;
+    if (options.notify === false) {
+      this.pendingDocumentPublicationNotifications.set(
+        publication,
+        prepared.reason,
+      );
+    } else if (prepared.reason) {
+      this.emitChange(prepared.reason);
     }
     return this.getGraph();
+  }
+
+  assertDocumentIntentsPublicationCurrent(
+    publication: PreparedRenderIntentDocumentPublication,
+  ): void {
+    this.requireCurrentDocumentPublication(publication);
+  }
+
+  notifyDocumentIntentsPublished(
+    publication: PreparedRenderIntentDocumentPublication,
+  ): void {
+    if (!this.pendingDocumentPublicationNotifications.has(publication)) {
+      throw new Error(
+        "RenderIntent publication has no pending change notification.",
+      );
+    }
+    const reason =
+      this.pendingDocumentPublicationNotifications.get(publication) ?? null;
+    this.pendingDocumentPublicationNotifications.delete(publication);
+    if (reason) this.emitChange(reason);
   }
 
   getDocumentIntents(): RenderIntentDraft[] {
@@ -518,6 +599,7 @@ export class RenderIntentService implements Service {
     const id = normalizeId(intentId, "RenderIntentPatch.id");
     if (!this.runtimePatches.delete(getRuntimePatchKey(source, id)))
       return false;
+    this.runtimePatchRevision += 1;
     this.recompile({
       type: "runtime-patch",
       operation: "remove",
@@ -538,6 +620,7 @@ export class RenderIntentService implements Service {
         ),
       );
       this.runtimePatches.clear();
+      this.runtimePatchRevision += 1;
       this.recompile({
         type: "runtime-patch",
         operation: "clear",
@@ -556,6 +639,7 @@ export class RenderIntentService implements Service {
       }
     }
     if (!removed) return false;
+    this.runtimePatchRevision += 1;
     this.recompile({
       type: "runtime-patch",
       operation: "clear",
@@ -600,7 +684,33 @@ export class RenderIntentService implements Service {
     const sequence =
       entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
     this.runtimePatches.set(key, normalizePatchEntry(entry, sequence));
+    this.runtimePatchRevision += 1;
   }
+
+  private requireCurrentDocumentPublication(
+    publication: PreparedRenderIntentDocumentPublication,
+  ) {
+    const prepared = this.preparedDocumentPublications.get(publication);
+    if (!prepared) {
+      throw new Error(
+        "RenderIntent publication is invalid or already published.",
+      );
+    }
+    if (prepared.runtimePatchRevision !== this.runtimePatchRevision) {
+      throw new Error(
+        "RenderIntent publication is stale because runtime patches changed after prepare.",
+      );
+    }
+    return prepared;
+  }
+}
+
+function createBaseUpdateReason(
+  previous: RenderGraph,
+  next: RenderGraph,
+): RenderIntentChangeReason | null {
+  const intentIds = collectChangedRenderIntentIds(previous, next);
+  return intentIds.length ? { type: "base-updated", intentIds } : null;
 }
 
 function collectChangedRenderIntentIds(

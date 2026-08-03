@@ -72,6 +72,7 @@ export type {
   SceneLayoutService,
 } from "../render";
 export type {
+  PreparedSurfaceFramePublication,
   SurfaceFrameChangeEvent,
   SurfaceFrameService,
 } from "../surface-frames";
@@ -97,5 +98,6 @@ export type {
 export type { SceneChangeEvent } from "./SceneService";
 export type {
   ConfigurationDefinitionsChangeEvent,
+  PreparedConfigurationPublication,
   RegisteredConfigurationDefinition,
 } from "./ConfigurationService";

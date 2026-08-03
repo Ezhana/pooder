@@ -2,8 +2,7 @@ import { Service } from "../service";
 import { ConfigurationContribution } from "../contribution";
 import { TypedEventEmitter } from "../typed-event";
 
-export interface RegisteredConfigurationDefinition
-  extends ConfigurationContribution {
+export interface RegisteredConfigurationDefinition extends ConfigurationContribution {
   extensionId: string;
 }
 
@@ -19,6 +18,10 @@ export interface ConfigurationValueChangeEvent {
   oldValue: any;
 }
 
+export interface PreparedConfigurationPublication {
+  readonly values: Readonly<Record<string, unknown>>;
+}
+
 interface ConfigurationServiceEventMap {
   change: ConfigurationValueChangeEvent;
   definitionsChange: ConfigurationDefinitionsChangeEvent;
@@ -26,7 +29,8 @@ interface ConfigurationServiceEventMap {
 
 export default class ConfigurationService implements Service {
   private readonly configValues: Map<string, any> = new Map();
-  private readonly events = new TypedEventEmitter<ConfigurationServiceEventMap>();
+  private readonly events =
+    new TypedEventEmitter<ConfigurationServiceEventMap>();
   private readonly valueListenersByKey = new Map<
     string,
     Set<(event: ConfigurationValueChangeEvent) => void>
@@ -36,6 +40,17 @@ export default class ConfigurationService implements Service {
     RegisteredConfigurationDefinition
   >();
   private readonly definitionIdsByExtension = new Map<string, Set<string>>();
+  private readonly preparedPublications = new WeakMap<
+    PreparedConfigurationPublication,
+    {
+      values: Map<string, any>;
+      changes: ConfigurationValueChangeEvent[];
+    }
+  >();
+  private readonly pendingPublicationNotifications = new WeakMap<
+    PreparedConfigurationPublication,
+    ConfigurationValueChangeEvent[]
+  >();
 
   get<T = any>(key: string, defaultValue?: T): T {
     if (this.configValues.has(key)) {
@@ -48,11 +63,7 @@ export default class ConfigurationService implements Service {
     const oldValue = this.configValues.get(key);
     if (!sameConfigurationValue(oldValue, value)) {
       this.configValues.set(key, value);
-      const event = { key, value, oldValue };
-      [...(this.valueListenersByKey.get(key) ?? [])].forEach((listener) =>
-        listener(event),
-      );
-      this.events.emit("change", event);
+      this.emitValueChange({ key, value, oldValue });
     }
   }
 
@@ -93,6 +104,56 @@ export default class ConfigurationService implements Service {
     Object.entries(data).forEach(([key, value]) => {
       this.update(key, value);
     });
+  }
+
+  prepareImport(data: Record<string, any>): PreparedConfigurationPublication {
+    if (!data || typeof data !== "object") {
+      throw new Error("ConfigurationService import data must be an object.");
+    }
+    const values = new Map(this.configValues);
+    const changes: ConfigurationValueChangeEvent[] = [];
+    Object.entries(data).forEach(([key, value]) => {
+      const oldValue = values.get(key);
+      if (sameConfigurationValue(oldValue, value)) return;
+      values.set(key, value);
+      changes.push({ key, value, oldValue });
+    });
+    const publication: PreparedConfigurationPublication = {
+      values: Object.fromEntries(values),
+    };
+    this.preparedPublications.set(publication, { values, changes });
+    return publication;
+  }
+
+  publishImport(
+    publication: PreparedConfigurationPublication,
+    options: { notify?: boolean } = {},
+  ): void {
+    const prepared = this.preparedPublications.get(publication);
+    if (!prepared) {
+      throw new Error(
+        "Configuration publication is invalid or already published.",
+      );
+    }
+    this.preparedPublications.delete(publication);
+    this.configValues.clear();
+    prepared.values.forEach((value, key) => this.configValues.set(key, value));
+    if (options.notify === false) {
+      this.pendingPublicationNotifications.set(publication, prepared.changes);
+      return;
+    }
+    prepared.changes.forEach((event) => this.emitValueChange(event));
+  }
+
+  notifyImportPublished(publication: PreparedConfigurationPublication): void {
+    const changes = this.pendingPublicationNotifications.get(publication);
+    if (!changes) {
+      throw new Error(
+        "Configuration publication has no pending notifications.",
+      );
+    }
+    this.pendingPublicationNotifications.delete(publication);
+    changes.forEach((event) => this.emitValueChange(event));
   }
 
   registerDefinitions(
@@ -188,6 +249,13 @@ export default class ConfigurationService implements Service {
     this.definitionIdsByExtension.clear();
     this.valueListenersByKey.clear();
     this.events.clear();
+  }
+
+  private emitValueChange(event: ConfigurationValueChangeEvent): void {
+    [...(this.valueListenersByKey.get(event.key) ?? [])].forEach((listener) =>
+      listener(event),
+    );
+    this.events.emit("change", event);
   }
 }
 
