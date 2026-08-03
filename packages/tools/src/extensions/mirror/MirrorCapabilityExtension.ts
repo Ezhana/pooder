@@ -31,8 +31,7 @@ import {
 const MIRROR_RUNTIME_PATCH_SOURCE = "pooder.kit.mirror.runtime";
 const DEFAULT_EXTENSION_ID = "pooder.kit.mirror";
 
-export interface MirrorCapabilityExtensionOptions
-  extends MirrorCapabilityOptions {
+export interface MirrorCapabilityExtensionOptions extends MirrorCapabilityOptions {
   id?: string;
 }
 
@@ -107,8 +106,11 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
   ): RenderIntentPatch | void {
     if (context.target.kind !== "object" || !context.target.objectId) return;
 
-    const object = findDocumentObject(context.document, context.target.objectId);
-    if (!object?.frame) return;
+    const object = findDocumentObject(
+      context.document,
+      context.target.objectId,
+    );
+    if (!object) return;
 
     const state = normalizeMirrorState(context.effect.payload);
     return {
@@ -223,7 +225,12 @@ function createMirrorTransform(
   const scaleX = flipX ? -1 : 1;
   const scaleY = flipY ? -1 : 1;
   return coordinateMatrix("object-local", "object-local", [
-    scaleX, 0, 0, scaleY, 0, 0,
+    scaleX,
+    0,
+    0,
+    scaleY,
+    0,
+    0,
   ]);
 }
 

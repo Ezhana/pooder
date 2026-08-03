@@ -128,9 +128,9 @@ function testNormalizeDefaults() {
   assertEqual(doc.version, EDITOR_DOCUMENT_VERSION, "version should normalize");
   assertDeepEqual(doc.config, TEST_DOCUMENT_CONFIG, "config should normalize");
   assertEqual(
-    doc.views?.[0]?.id,
+    doc.surfaces[0]?.id,
     "front",
-    "default view should use surface id",
+    "surface should be the document page unit",
   );
   assertEqual(
     doc.surfaces[0].layers[0].visible,
@@ -364,8 +364,7 @@ function testConstraintApplicationValidation() {
 
   assert(
     diagnostics.some(
-      (item) =>
-        item.code === "interaction-constraint-application-mode-invalid",
+      (item) => item.code === "interaction-constraint-application-mode-invalid",
     ),
     "constraint application should reject unsupported modes",
   );
@@ -636,8 +635,10 @@ function testV5DocumentIsRejected() {
     surfaces: [
       {
         id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 1, height: 1 },
+          productionBounds: { x: 0, y: 0, width: 1, height: 1 },
+        },
         layers: [],
       },
     ],
@@ -1130,12 +1131,15 @@ function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
 function testRequirePolicyDiagnostics() {
   const doc: EditorDocument = {
     version: EDITOR_DOCUMENT_VERSION,
+    assets: [],
     config: TEST_DOCUMENT_CONFIG,
     surfaces: [
       {
         id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 1, height: 1 },
+          productionBounds: { x: 0, y: 0, width: 1, height: 1 },
+        },
         layers: [
           {
             id: "layer",

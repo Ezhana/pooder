@@ -5,10 +5,7 @@ export type DocumentConstraintResolvePhase = "preview" | "commit";
 export type DocumentConstraintApplicationMode = "evaluate" | "apply";
 
 export type DocumentConstraintApplicationPolicy = Partial<
-  Record<
-    DocumentConstraintResolvePhase,
-    DocumentConstraintApplicationMode
-  >
+  Record<DocumentConstraintResolvePhase, DocumentConstraintApplicationMode>
 >;
 
 export interface DocumentConstraintSpec {
@@ -178,16 +175,11 @@ export interface EditorSize {
   height: number;
 }
 
-export interface EditorTransform {
-  left?: number;
-  top?: number;
-  scaleX?: number;
-  scaleY?: number;
-  angle?: number;
-  skewX?: number;
-  skewY?: number;
-  originX?: "left" | "center" | "right";
-  originY?: "top" | "center" | "bottom";
+export type AffineMatrix = [number, number, number, number, number, number];
+
+export interface PointMm {
+  x: number;
+  y: number;
 }
 
 export interface EditorDocument {
@@ -215,7 +207,6 @@ export interface EditorSurface {
 export interface EditorLayer {
   id: string;
   role?: EditorLayerRole;
-  order?: number;
   visible?: boolean;
   locked?: boolean;
   tags?: string[];
@@ -226,14 +217,14 @@ export interface EditorLayer {
 
 export interface EditorObjectBase {
   id: string;
-  /** Object geometry is always relative to its containing layer/object. */
-  coordinateSpace: "parent-local";
-  frame?: EditorRect;
-  order?: number;
+  placement: {
+    localBounds: RectMm;
+    localToParent: AffineMatrix;
+    pivot: PointMm;
+  };
   visible?: boolean;
   locked?: boolean;
   tags?: string[];
-  transform?: EditorTransform;
   style?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   interaction?: DocumentInteractionSpec;
@@ -308,20 +299,26 @@ export type ObjectSource =
     };
 
 export interface EditorImageObject extends EditorObjectBase {
-  frame: EditorRect;
   source: { kind: "image"; assetId?: string };
-  placement: EditorImagePlacement;
+  appearance: EditorImagePlacement;
   slot?: EditorImageSlotSpec;
+  children?: never;
 }
 
 export interface EditorPrimitiveObject extends EditorObjectBase {
   source: Exclude<ObjectSource, { kind: "image" }>;
+  children?: never;
+  appearance?: never;
+  slot?: never;
 }
 
 export type EditorVisualObject = EditorImageObject | EditorPrimitiveObject;
 
 export interface EditorCompositeObject extends EditorObjectBase {
   children: EditorObject[];
+  source?: never;
+  appearance?: never;
+  slot?: never;
 }
 
 export type EditorObject = EditorVisualObject | EditorCompositeObject;
@@ -752,37 +749,30 @@ function normalizeSurfaceGeometry(value: unknown): EditorSurface["geometry"] {
   };
 }
 
-function normalizeTransform(value: unknown): EditorTransform | undefined {
-  if (!isRecord(value)) return undefined;
-  const transform: EditorTransform = {};
-  const numericKeys = [
-    "left",
-    "top",
-    "scaleX",
-    "scaleY",
-    "angle",
-    "skewX",
-    "skewY",
-  ] as const;
-  numericKeys.forEach((key) => {
-    const parsed = normalizeFiniteNumber(value[key]);
-    if (parsed !== undefined) transform[key] = parsed;
-  });
-  if (
-    value.originX === "left" ||
-    value.originX === "center" ||
-    value.originX === "right"
-  ) {
-    transform.originX = value.originX;
-  }
-  if (
-    value.originY === "top" ||
-    value.originY === "center" ||
-    value.originY === "bottom"
-  ) {
-    transform.originY = value.originY;
-  }
-  return Object.keys(transform).length ? transform : undefined;
+function normalizeObjectPlacement(
+  value: unknown,
+): EditorObjectBase["placement"] {
+  const raw = isRecord(value) ? value : {};
+  const localBounds = normalizeRect(raw.localBounds) ?? {
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+  };
+  const matrixValues = Array.isArray(raw.localToParent)
+    ? raw.localToParent.map(normalizeFiniteNumber)
+    : [];
+  const localToParent: AffineMatrix =
+    matrixValues.length === 6 &&
+    matrixValues.every((entry) => entry !== undefined)
+      ? (matrixValues as AffineMatrix)
+      : [1, 0, 0, 1, 0, 0];
+  const rawPivot = isRecord(raw.pivot) ? raw.pivot : {};
+  const pivot = {
+    x: normalizeFiniteNumber(rawPivot.x) ?? 0,
+    y: normalizeFiniteNumber(rawPivot.y) ?? 0,
+  };
+  return { localBounds, localToParent, pivot };
 }
 
 function normalizeRuntimeCondition(
@@ -1203,47 +1193,38 @@ function normalizeObjectEffects(
   return effects.length ? effects : undefined;
 }
 
-function normalizeObject(value: unknown, order: number): EditorObject | null {
+function normalizeObject(value: unknown): EditorObject | null {
   if (!isRecord(value)) return null;
   const id = normalizeId(value.id);
   const interaction = normalizeObjectInteraction(value.interaction);
   const base = {
     id,
-    coordinateSpace: "parent-local" as const,
-    order:
-      normalizeFiniteNumber(value.order) !== undefined
-        ? normalizeFiniteNumber(value.order)
-        : order,
+    placement: normalizeObjectPlacement(value.placement),
     visible: typeof value.visible === "boolean" ? value.visible : true,
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
     tags: normalizeIdList(value.tags),
-    transform: normalizeTransform(value.transform),
     style: isRecord(value.style) ? cloneRecord(value.style) : undefined,
     metadata: isRecord(value.metadata)
       ? cloneRecord(value.metadata)
       : undefined,
     ...(interaction ? { interaction } : {}),
     effects: normalizeObjectEffects(value.effects),
-    frame: normalizeRect(value.frame),
   };
   if (Array.isArray(value.children) && value.source === undefined) {
     return {
       ...base,
       children: value.children
-        .map((child, index) => normalizeObject(child, index))
+        .map((child) => normalizeObject(child))
         .filter((child): child is EditorObject => Boolean(child)),
     };
   }
   const source = normalizeObjectSource(value.source);
   if (!source) return null;
   if (source.kind === "image") {
-    const frame = normalizeRect(value.frame);
-    if (!frame) return null;
     return {
       ...base,
-      frame,
       source,
-      placement: normalizeImagePlacement(value.placement),
+      appearance: normalizeImagePlacement(value.appearance),
       ...(isRecord(value.slot)
         ? { slot: normalizeImageSlot(value.slot) ?? {} }
         : {}),
@@ -1252,18 +1233,17 @@ function normalizeObject(value: unknown, order: number): EditorObject | null {
   return { ...base, source };
 }
 
-function normalizeLayer(value: unknown, order: number): EditorLayer | null {
+function normalizeLayer(value: unknown): EditorLayer | null {
   if (!isRecord(value)) return null;
   const objects = Array.isArray(value.objects)
     ? value.objects
-        .map((item, index) => normalizeObject(item, index))
+        .map((item) => normalizeObject(item))
         .filter((item): item is EditorObject => Boolean(item))
     : undefined;
 
   return {
     id: normalizeId(value.id),
     role: typeof value.role === "string" ? value.role.trim() : undefined,
-    order: normalizeFiniteNumber(value.order) ?? order,
     visible: typeof value.visible === "boolean" ? value.visible : true,
     locked: typeof value.locked === "boolean" ? value.locked : undefined,
     tags: normalizeIdList(value.tags),
@@ -1279,7 +1259,7 @@ function normalizeSurface(value: unknown): EditorSurface | null {
   if (!isRecord(value)) return null;
   const layers = Array.isArray(value.layers)
     ? value.layers
-        .map((item, index) => normalizeLayer(item, index))
+        .map((item) => normalizeLayer(item))
         .filter((item): item is EditorLayer => Boolean(item))
     : [];
   return {
@@ -1598,10 +1578,7 @@ function validateObjectReferences(
     }
     object.effects?.forEach((effect, effectIndex) => {
       const effectPath = `${path}.effects[${effectIndex}]`;
-      if (
-        isEditorBuiltinObjectEffect(effect) &&
-        effect.type === "boolean"
-      ) {
+      if (isEditorBuiltinObjectEffect(effect) && effect.type === "boolean") {
         addDependency(object.id, effect.targetId, `${effectPath}.targetId`);
       } else if (
         isEditorBuiltinObjectEffect(effect) &&
@@ -1922,10 +1899,7 @@ function validateV7ImageObjects(
             path: `${path}.source.kind`,
           });
         } else if (source.kind === "image") {
-          if (
-            source.assetId !== undefined &&
-            !normalizeId(source.assetId)
-          ) {
+          if (source.assetId !== undefined && !normalizeId(source.assetId)) {
             addDiagnostic(diagnostics, {
               severity: "error",
               code: "image-asset-id-invalid",
@@ -1933,8 +1907,8 @@ function validateV7ImageObjects(
               path: `${path}.source.assetId`,
             });
           }
-          const placement = isRecord(object.placement)
-            ? object.placement
+          const appearance = isRecord(object.appearance)
+            ? object.appearance
             : undefined;
           const required = [
             "fit",
@@ -1946,14 +1920,14 @@ function validateV7ImageObjects(
             "clip",
           ];
           const missing = required.filter(
-            (key) => !placement || placement[key] === undefined,
+            (key) => !appearance || appearance[key] === undefined,
           );
           if (missing.length) {
             addDiagnostic(diagnostics, {
               severity: "error",
-              code: "image-placement-incomplete",
-              message: `Image placement requires ${missing.join(", ")}.`,
-              path: `${path}.placement`,
+              code: "image-appearance-incomplete",
+              message: `Image appearance requires ${missing.join(", ")}.`,
+              path: `${path}.appearance`,
             });
           }
           if (object.slot !== undefined && !isRecord(object.slot)) {
@@ -2065,7 +2039,9 @@ export function validateEditorDocument(
       });
     }
     (["canvasBounds", "productionBounds"] as const).forEach((key) => {
-      if (!normalizeRect(isRecord(rawGeometry) ? rawGeometry[key] : undefined)) {
+      if (
+        !normalizeRect(isRecord(rawGeometry) ? rawGeometry[key] : undefined)
+      ) {
         addDiagnostic(diagnostics, {
           severity: "error",
           code: "surface-bound-required",
@@ -2128,64 +2104,76 @@ export function validateEditorDocument(
         parentObject?: EditorCompositeObject,
       ) => {
         objects?.forEach((object, objectIndex) => {
-        const objectPath = `${objectsPath}[${objectIndex}]`;
-        const rawObject = Array.isArray(rawObjects)
-          ? rawObjects[objectIndex]
-          : undefined;
-        validateUniqueId(
-          diagnostics,
-          objectIds,
-          object.id,
-          `${objectPath}.id`,
-          "object",
-        );
-        if (!object.frame) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "object-frame-required",
-            message: `Object "${object.id}" requires frame.`,
-            path: `${objectPath}.frame`,
-          });
-        }
-        validateObjectInteraction(
-          diagnostics,
-          isRecord(rawObject) ? rawObject.interaction : undefined,
-          `${objectPath}.interaction`,
-        );
-        validateObjectEffects(diagnostics, object.effects, objectPath);
-        runValidators(diagnostics, options.validators, {
-          document,
-          path: objectPath,
-          surface,
-          layer,
-          object,
-        });
-        object.effects?.forEach((effect, effectIndex) =>
+          const objectPath = `${objectsPath}[${objectIndex}]`;
+          const rawObject = Array.isArray(rawObjects)
+            ? rawObjects[objectIndex]
+            : undefined;
+          validateUniqueId(
+            diagnostics,
+            objectIds,
+            object.id,
+            `${objectPath}.id`,
+            "object",
+          );
+          if (
+            !isRecord(rawObject) ||
+            !isRecord(rawObject.placement) ||
+            !normalizeRect(rawObject.placement.localBounds) ||
+            !Array.isArray(rawObject.placement.localToParent) ||
+            rawObject.placement.localToParent.length !== 6 ||
+            rawObject.placement.localToParent.some(
+              (entry) => normalizeFiniteNumber(entry) === undefined,
+            ) ||
+            !isRecord(rawObject.placement.pivot) ||
+            normalizeFiniteNumber(rawObject.placement.pivot.x) === undefined ||
+            normalizeFiniteNumber(rawObject.placement.pivot.y) === undefined
+          ) {
+            addDiagnostic(diagnostics, {
+              severity: "error",
+              code: "object-placement-required",
+              message: `Object "${object.id}" requires valid affine placement.`,
+              path: `${objectPath}.placement`,
+            });
+          }
+          validateObjectInteraction(
+            diagnostics,
+            isRecord(rawObject) ? rawObject.interaction : undefined,
+            `${objectPath}.interaction`,
+          );
+          validateObjectEffects(diagnostics, object.effects, objectPath);
           runValidators(diagnostics, options.validators, {
             document,
-            path: `${objectPath}.effects[${effectIndex}]`,
+            path: objectPath,
             surface,
             layer,
             object,
-            effect,
-          }),
-        );
-        if (isEditorCompositeObject(object)) {
-          validateObjects(
-            object.children,
-            isRecord(rawObject) ? rawObject.children : undefined,
-            `${objectPath}.children`,
-            object,
-          );
-        } else if (parentObject && object.interaction) {
-          addDiagnostic(diagnostics, {
-            severity: "error",
-            code: "composite-child-interaction-invalid",
-            message: `Composite child "${object.id}" must not define interaction; interaction belongs to composite "${parentObject.id}".`,
-            path: `${objectPath}.interaction`,
           });
-        }
-      });
+          object.effects?.forEach((effect, effectIndex) =>
+            runValidators(diagnostics, options.validators, {
+              document,
+              path: `${objectPath}.effects[${effectIndex}]`,
+              surface,
+              layer,
+              object,
+              effect,
+            }),
+          );
+          if (isEditorCompositeObject(object)) {
+            validateObjects(
+              object.children,
+              isRecord(rawObject) ? rawObject.children : undefined,
+              `${objectPath}.children`,
+              object,
+            );
+          } else if (parentObject && object.interaction) {
+            addDiagnostic(diagnostics, {
+              severity: "error",
+              code: "composite-child-interaction-invalid",
+              message: `Composite child "${object.id}" must not define interaction; interaction belongs to composite "${parentObject.id}".`,
+              path: `${objectPath}.interaction`,
+            });
+          }
+        });
       };
       validateObjects(
         layer.objects,

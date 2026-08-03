@@ -1,5 +1,8 @@
 import type { ExtensionDefinition } from "@pooder/core";
-import { normalizeEditorDocument } from "@pooder/document";
+import {
+  isEditorVisualObject,
+  normalizeEditorDocument,
+} from "@pooder/document";
 import {
   createConfigurableVisualCapability,
   createClipCapability,
@@ -43,7 +46,7 @@ export function createOfficialToolCapabilitiesForDocument(
     surface.layers.some((layer) =>
       layer.objects?.some(
         (object) =>
-          "source" in object &&
+          isEditorVisualObject(object) &&
           object.source.kind === "image" &&
           "slot" in object &&
           Boolean(object.slot),

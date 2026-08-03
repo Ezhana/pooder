@@ -8,7 +8,7 @@ import {
   type CommandService,
   type RenderIntentService,
 } from "@pooder/core";
-import type { EditorDocument } from "@pooder/document";
+import type { EditorDocument, EditorObject } from "@pooder/document";
 import { registerEditorDocumentService } from "../../document-core/src";
 import {
   CLIP_CAPABILITY_ID,
@@ -184,48 +184,59 @@ function createEffectDocument(
   effect: { type: string; payload?: Record<string, unknown> },
   source: Record<string, unknown>,
 ): EditorDocument {
+  const placement: EditorObject["placement"] = {
+    localBounds: { x: 0, y: 0, width: 80, height: 40 },
+    localToParent: [1.15911, 0.31058, -0.20706, 0.77274, 50, 40],
+    pivot: { x: 40, y: 20 },
+  };
+  const visual: EditorObject =
+    source.kind === "image"
+      ? {
+          id: "visual",
+          placement,
+          source: { kind: "image", assetId: "visual.asset" },
+          appearance: {
+            fit: "contain",
+            anchorX: 0.5,
+            anchorY: 0.5,
+            zoom: 1,
+            rotation: 0,
+            opacity: 1,
+            clip: "frame",
+          },
+          effects: [effect],
+        }
+      : {
+          id: "visual",
+          placement,
+          source: source as never,
+          effects: [effect],
+        };
   return {
     version: 7,
+    assets:
+      source.kind === "image"
+        ? [
+            {
+              id: "visual.asset",
+              type: "image",
+              source: { kind: "url", url: "/default-flash.png" },
+              intrinsicSize: { width: 200, height: 100 },
+            },
+          ]
+        : [],
     config: {},
     surfaces: [
       {
         id: "front",
-        size: { width: 200, height: 100, unit: "mm" },
-        frames: FRAMES,
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 200, height: 100 },
+          productionBounds: { x: 0, y: 0, width: 200, height: 100 },
+        },
         layers: [
           {
             id: "artwork",
-            objects: [
-              {
-                id: "visual",
-                coordinateSpace: "parent-local",
-                frame: { x: 10, y: 20, width: 80, height: 40 },
-                transform: {
-                  left: 50,
-                  top: 40,
-                  originX: "center",
-                  originY: "center",
-                  angle: 15,
-                  scaleX: 1.2,
-                  scaleY: 0.8,
-                },
-                source: source as never,
-                ...(source.kind === "image"
-                  ? {
-                      placement: {
-                        fit: "contain" as const,
-                        anchorX: 0.5,
-                        anchorY: 0.5,
-                        zoom: 1,
-                        rotation: 0,
-                        opacity: 1,
-                        clip: "frame" as const,
-                      },
-                    }
-                  : {}),
-                effects: [effect],
-              },
-            ],
+            objects: [visual],
           },
         ],
       },

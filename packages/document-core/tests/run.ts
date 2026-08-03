@@ -140,14 +140,10 @@ function testSourceResolver() {
   assertDeepEqual(
     resolver.resolve({
       kind: "image",
-      resource: {
-        kind: "url",
-        url: "/art.png",
-        intrinsicSize: { width: 120, height: 80 },
-      },
-    })?.bounds,
-    { left: 0, top: 0, width: 120, height: 80 },
-    "url source should resolve intrinsic bounds",
+      assetId: "artwork",
+    }),
+    null,
+    "image source geometry should be resolved from the document asset context",
   );
   assert(
     resolveObjectSource({
@@ -432,19 +428,26 @@ async function testCompositeRenderIntentFlattening() {
   const { runtime, renderIntentService } = createRuntime();
   const result = await applyEditorDocument(runtime, {
     version: 7,
+    assets: [],
     config: {},
     surfaces: [
       {
         id: "front",
-        size: { width: 100, height: 100, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+          productionBounds: { x: 0, y: 0, width: 100, height: 100 },
+        },
         layers: [
           {
             id: "guide",
             objects: [
               {
                 id: "feature",
-                frame: { x: 20, y: 30, width: 20, height: 20 },
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 20, height: 20 },
+                  localToParent: [0, 1, -1, 0, 20, 30],
+                  pivot: { x: 10, y: 10 },
+                },
                 interaction: {
                   hitRegion: { type: "frame", space: "scene" },
                   manipulation: { move: { enabled: true } },
@@ -452,12 +455,20 @@ async function testCompositeRenderIntentFlattening() {
                 children: [
                   {
                     id: "feature.add",
-                    frame: { x: 2, y: 3, width: 10, height: 10 },
+                    placement: {
+                      localBounds: { x: 0, y: 0, width: 10, height: 10 },
+                      localToParent: [-1, 0, 0.5, 1, 2, 3],
+                      pivot: { x: 2, y: 4 },
+                    },
                     source: { kind: "shape", shape: "circle", params: {} },
                   },
                   {
                     id: "feature.subtract",
-                    frame: { x: 4, y: 5, width: 4, height: 4 },
+                    placement: {
+                      localBounds: { x: 0, y: 0, width: 4, height: 4 },
+                      localToParent: [1, 0, 0, 1, 4, 5],
+                      pivot: { x: 0, y: 0 },
+                    },
                     source: { kind: "shape", shape: "circle", params: {} },
                   },
                 ],
@@ -482,11 +493,10 @@ async function testCompositeRenderIntentFlattening() {
     "composite rendering must not create a renderer group",
   );
   assertDeepEqual(
-    nodes
-      .find((node) => node.id === "feature.add")
-      ?.placement.localToScene.values.slice(4),
-    [22, 33],
-    "child placement should compose the complete parent transform",
+    nodes.find((node) => node.id === "feature.add")?.placement.localToScene
+      .values,
+    [0, -1, -1, 0.5, 17, 32],
+    "child placement should preserve nested rotation, skew, negative scale, and translation",
   );
   assertEqual(
     nodes.find((node) => node.id === "feature.add")?.interaction,
@@ -540,7 +550,7 @@ async function testDocumentServiceDraftIsolation() {
   );
   const updated = await draft.mutate((document) => {
     const object = document.surfaces[0]?.layers[0]?.objects?.[0];
-    if (object?.frame) object.frame.x = 25;
+    if (object) object.placement.localToParent[4] = 25;
   });
   assertEqual(
     updated.ok,
@@ -548,25 +558,28 @@ async function testDocumentServiceDraftIsolation() {
     "valid draft mutation should update working state",
   );
   assertEqual(
-    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.placement
+      .localToParent[4],
     10,
     "draft mutation should not change committed state",
   );
   await draft.rollback();
   assertEqual(
-    service.export("working")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    service.export("working")?.surfaces[0]?.layers[0]?.objects?.[0]?.placement
+      .localToParent[4],
     10,
     "rollback should restore committed state",
   );
   const commitDraft = await service.beginDraft();
   const commitMutation = await commitDraft.mutate((document) => {
     const object = document.surfaces[0]?.layers[0]?.objects?.[0];
-    if (object?.frame) object.frame.x = 35;
+    if (object) object.placement.localToParent[4] = 35;
   });
   assertEqual(commitMutation.ok, true, "commit draft mutation should succeed");
   await commitDraft.commit();
   assertEqual(
-    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
+    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.placement
+      .localToParent[4],
     35,
     "commit should atomically promote working state",
   );
@@ -1078,8 +1091,12 @@ async function testDocumentServiceCommitsSceneTranslationBySubject() {
 
   assertEqual(result.ok, true, "scene translation should commit");
   assertDeepEqual(
-    service.export()?.surfaces[0]?.layers[0]?.objects?.[0]?.frame,
-    { x: 20, y: 25, width: 30, height: 40 },
+    service.export()?.surfaces[0]?.layers[0]?.objects?.[0]?.placement,
+    {
+      localBounds: { x: 0, y: 0, width: 30, height: 40 },
+      localToParent: [1, 0, 0, 1, 20, 25],
+      pivot: { x: 0, y: 0 },
+    },
     "scene delta should be converted to parent-local document coordinates",
   );
   assert(

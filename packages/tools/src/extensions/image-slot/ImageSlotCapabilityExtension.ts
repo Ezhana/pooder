@@ -355,7 +355,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       return { ok: false, reason: "session-not-active" };
     }
     if (!source) return { ok: false, reason: "resource-load-failed" };
-    const frame = context.object.frame;
+    const frame = context.object.placement.localBounds;
     const widthScale = frame.width / Math.max(source.width, 1);
     const heightScale = frame.height / Math.max(source.height, 1);
     const absoluteScale =
@@ -397,7 +397,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!source || (!transform && !input.sceneMatrix)) {
       return { ok: false, reason: "resource-load-failed" };
     }
-    const frame = context.object.frame;
+    const frame = context.object.placement.localBounds;
     const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
     if (!objectPlacement) {
       return { ok: false, reason: "geometry-unavailable" };
@@ -525,48 +525,54 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       | Exclude<ImageResourceDescriptor, { kind: "blob-url" }>
       | undefined;
     const result = await this.controller.mutate((document) => {
-        const current = findEditorDocumentObject(document, draft.objectId);
-        if (
-          !current ||
-          !isEditorVisualObject(current) ||
-          current.source.kind !== "image" ||
-          !("placement" in current)
-        )
-          return;
-        const previousAssetId = current.source.assetId;
-        const assetId = previousAssetId || `${current.id}.image`;
-        current.source = stableResource
-          ? { kind: "image", assetId }
-          : { kind: "image" };
-        current.placement = clone(draft.placement);
-        if (stableResource) {
-          const { kind, intrinsicSize, mimeType } = stableResource;
-          const source =
-            kind === "data-url"
-              ? { kind, dataUrl: stableResource.dataUrl }
-              : { kind, url: stableResource.url };
-          const asset = {
-            id: assetId,
-            type: "image" as const,
-            source,
-            ...(mimeType ? { mimeType } : {}),
-            ...(intrinsicSize ? { intrinsicSize: clone(intrinsicSize) } : {}),
-          };
-          const assetIndex = document.assets.findIndex((entry) => entry.id === assetId);
-          if (assetIndex >= 0) document.assets[assetIndex] = asset;
-          else document.assets.push(asset);
-        } else if (previousAssetId) {
-          const stillReferenced = document.surfaces.some((surface) =>
-            surface.layers.some((layer) =>
-              layer.objects?.some((object) => objectReferencesAsset(object, previousAssetId)),
+      const current = findEditorDocumentObject(document, draft.objectId);
+      if (
+        !current ||
+        !isEditorVisualObject(current) ||
+        current.source.kind !== "image" ||
+        !("appearance" in current)
+      )
+        return;
+      const previousAssetId = current.source.assetId;
+      const assetId = previousAssetId || `${current.id}.image`;
+      current.source = stableResource
+        ? { kind: "image", assetId }
+        : { kind: "image" };
+      current.appearance = clone(draft.placement);
+      if (stableResource) {
+        const { kind, intrinsicSize, mimeType } = stableResource;
+        const source =
+          kind === "data-url"
+            ? { kind, dataUrl: stableResource.dataUrl }
+            : { kind, url: stableResource.url };
+        const asset = {
+          id: assetId,
+          type: "image" as const,
+          source,
+          ...(mimeType ? { mimeType } : {}),
+          ...(intrinsicSize ? { intrinsicSize: clone(intrinsicSize) } : {}),
+        };
+        const assetIndex = document.assets.findIndex(
+          (entry) => entry.id === assetId,
+        );
+        if (assetIndex >= 0) document.assets[assetIndex] = asset;
+        else document.assets.push(asset);
+      } else if (previousAssetId) {
+        const stillReferenced = document.surfaces.some((surface) =>
+          surface.layers.some((layer) =>
+            layer.objects?.some((object) =>
+              objectReferencesAsset(object, previousAssetId),
             ),
+          ),
+        );
+        if (!stillReferenced) {
+          document.assets = document.assets.filter(
+            (asset) => asset.id !== previousAssetId,
           );
-          if (!stillReferenced) {
-            document.assets = document.assets.filter((asset) => asset.id !== previousAssetId);
-          }
         }
-        return document;
-      });
+      }
+      return document;
+    });
     if (!result.ok) {
       this.setState(
         { ...this.state, phase: "error", error: "commit-failed" },
@@ -715,8 +721,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         frame: coordinateRect("object-local", {
           left: 0,
           top: 0,
-          width: context.object.frame.width,
-          height: context.object.frame.height,
+          width: context.object.placement.localBounds.width,
+          height: context.object.placement.localBounds.height,
         }),
         fit: draft.placement.fit,
         transform: draft.placement,
@@ -1077,7 +1083,7 @@ function findImageSlot(
       object.id === objectId &&
       isEditorVisualObject(object) &&
       object.source.kind === "image" &&
-      "placement" in object &&
+      "appearance" in object &&
       object.slot
     )
       match = object;
@@ -1096,7 +1102,7 @@ function findImageSlotContext(
       object.id === objectId &&
       isEditorVisualObject(object) &&
       object.source.kind === "image" &&
-      "placement" in object &&
+      "appearance" in object &&
       object.slot
     )
       match = { object, surfaceId: surface.id };
@@ -1118,15 +1124,20 @@ function toDraft(
           resource: {
             ...asset.source,
             ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
-            ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
+            ...(asset.intrinsicSize
+              ? { intrinsicSize: asset.intrinsicSize }
+              : {}),
           },
         }
       : {}),
-    placement: clone(object.placement),
+    placement: clone(object.appearance),
   };
 }
 
-function objectReferencesAsset(object: import("@pooder/document").EditorObject, assetId: string): boolean {
+function objectReferencesAsset(
+  object: import("@pooder/document").EditorObject,
+  assetId: string,
+): boolean {
   if (isEditorVisualObject(object)) {
     return object.source.kind === "image" && object.source.assetId === assetId;
   }
@@ -1195,8 +1206,8 @@ function isDraftOutsideFrame(
     frame: coordinateRect("object-local", {
       left: 0,
       top: 0,
-      width: object.frame.width,
-      height: object.frame.height,
+      width: object.placement.localBounds.width,
+      height: object.placement.localBounds.height,
     }),
     fit: draft.placement.fit,
     transform: draft.placement,
@@ -1209,7 +1220,9 @@ function isDraftOutsideFrame(
   return (
     imageBounds.left < -epsilon ||
     imageBounds.top < -epsilon ||
-    imageBounds.left + imageBounds.width > object.frame.width + epsilon ||
-    imageBounds.top + imageBounds.height > object.frame.height + epsilon
+    imageBounds.left + imageBounds.width >
+      object.placement.localBounds.width + epsilon ||
+    imageBounds.top + imageBounds.height >
+      object.placement.localBounds.height + epsilon
   );
 }

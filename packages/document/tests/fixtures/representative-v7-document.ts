@@ -39,7 +39,11 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
           objects: [
             {
               id: "front.dieline",
-              frame: { x: 3, y: 3, width: 94, height: 114 },
+              placement: {
+                localBounds: { x: 0, y: 0, width: 94, height: 114 },
+                localToParent: [1, 0, 0, 1, 3, 3],
+                pivot: { x: 0, y: 0 },
+              },
               tags: ["dieline"],
               source: {
                 kind: "path",
@@ -50,7 +54,11 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
             },
             {
               id: "front.feature.hole",
-              frame: { x: 46, y: 8, width: 8, height: 8 },
+              placement: {
+                localBounds: { x: 0, y: 0, width: 8, height: 8 },
+                localToParent: [1, 0, 0, 1, 46, 8],
+                pivot: { x: 0, y: 0 },
+              },
               tags: ["feature", "hole"],
               source: { kind: "shape", shape: "circle", params: {} },
             },
@@ -87,12 +95,16 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
           objects: [
             {
               id: "front.image-slot",
-              frame: { x: 10, y: 15, width: 80, height: 90 },
+              placement: {
+                localBounds: { x: 0, y: 0, width: 80, height: 90 },
+                localToParent: [1, 0, 0, 1, 10, 15],
+                pivot: { x: 0, y: 0 },
+              },
               source: {
                 kind: "image",
                 assetId: "front-artwork",
               },
-              placement: {
+              appearance: {
                 fit: "cover",
                 anchorX: 0.5,
                 anchorY: 0.5,
@@ -123,7 +135,11 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
           objects: [
             {
               id: "back.artwork",
-              frame: { x: 10, y: 15, width: 80, height: 90 },
+              placement: {
+                localBounds: { x: 0, y: 0, width: 80, height: 90 },
+                localToParent: [1, 0, 0, 1, 10, 15],
+                pivot: { x: 0, y: 0 },
+              },
               source: { kind: "shape", shape: "rect", params: {} },
             },
           ],

@@ -58,25 +58,21 @@ function assertMatrixClose(
 function createImageSlotDocument(): EditorDocument {
   return {
     version: 7,
+    assets: [
+      {
+        id: "artwork.asset",
+        type: "image",
+        source: { kind: "url", url: "/artwork.png" },
+        intrinsicSize: { width: 240, height: 100 },
+      },
+    ],
     config: {},
     surfaces: [
       {
         id: "front",
-        size: { width: 240, height: 180, unit: "mm" },
-        frames: {
-          previewBounds: { xMm: 0, yMm: 0, widthMm: 240, heightMm: 180 },
-          productionFrame: {
-            xMm: 8,
-            yMm: 12,
-            widthMm: 220,
-            heightMm: 150,
-          },
-          viewportFocusFrame: {
-            xMm: 8,
-            yMm: 12,
-            widthMm: 220,
-            heightMm: 150,
-          },
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 240, height: 180 },
+          productionBounds: { x: 8, y: 12, width: 220, height: 150 },
         },
         layers: [
           {
@@ -84,26 +80,16 @@ function createImageSlotDocument(): EditorDocument {
             objects: [
               {
                 id: IMAGE_SLOT_ID,
-                coordinateSpace: "parent-local",
-                frame: { x: 20, y: 30, width: 120, height: 80 },
-                transform: {
-                  left: 92,
-                  top: 76,
-                  originX: "center",
-                  originY: "center",
-                  angle: 23,
-                  scaleX: 1.15,
-                  scaleY: 0.85,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                  localToParent: [1.05858, 0.44934, -0.33212, 0.78243, 92, 76],
+                  pivot: { x: 60, y: 40 },
                 },
                 source: {
                   kind: "image",
-                  resource: {
-                    kind: "url",
-                    url: "/artwork.png",
-                    intrinsicSize: { width: 240, height: 100 },
-                  },
+                  assetId: "artwork.asset",
                 },
-                placement: {
+                appearance: {
                   fit: "cover",
                   anchorX: 0.5,
                   anchorY: 0.5,
@@ -322,6 +308,11 @@ async function testImageSlotRejectsMissingContainerGeometry(): Promise<void> {
     );
     assert(facade, "image-slot facade should be registered");
     facade.syncDocument(createImageSlotDocument(), {
+      mutate: async () => ({
+        ok: false,
+        reason: "not-used",
+        diagnostics: [],
+      }),
       updateObject: async () => ({
         ok: false,
         reason: "not-used",

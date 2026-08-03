@@ -6,7 +6,7 @@ import {
   type ImageSlotSessionResult,
 } from "../src";
 
-const placement = {
+const appearance = {
   fit: "cover",
   anchorX: 0.5,
   anchorY: 0.5,
@@ -18,25 +18,27 @@ const placement = {
 
 const emptySlot: EditorImageObject = {
   id: "artwork",
-  coordinateSpace: "parent-local",
-  frame: { x: 0, y: 0, width: 100, height: 100 },
+  placement: {
+    localBounds: { x: 0, y: 0, width: 100, height: 100 },
+    localToParent: [1, 0, 0, 1, 0, 0],
+    pivot: { x: 0, y: 0 },
+  },
   source: { kind: "image" },
-  placement,
+  appearance,
   slot: { accepts: ["image/*"] },
   interaction: { hitRegion: { type: "frame", space: "scene" } },
 };
 
 const document: EditorDocument = {
   version: 7,
+  assets: [],
   config: {},
   surfaces: [
     {
       id: "front",
-      size: { width: 100, height: 100, unit: "mm" },
-      frames: {
-        previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-        productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-        viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      geometry: {
+        canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+        productionBounds: { x: 0, y: 0, width: 100, height: 100 },
       },
       layers: [{ id: "artwork", objects: [emptySlot] }],
     },
