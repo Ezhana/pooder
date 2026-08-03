@@ -14,6 +14,7 @@ import {
   type EditorDocument,
   type EditorEffect,
 } from "../src";
+import { REPRESENTATIVE_V7_DOCUMENT_INPUT } from "./fixtures/representative-v7-document";
 
 declare const process: {
   exit(code: number): never;
@@ -37,6 +38,33 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   if (actualJson !== expectedJson) {
     throw new Error(`${message} (expected ${expectedJson}, got ${actualJson})`);
   }
+}
+
+function testRepresentativeV7FixtureRoundTrip() {
+  const document = normalizeEditorDocument(REPRESENTATIVE_V7_DOCUMENT_INPUT);
+  const serialized = JSON.stringify(document);
+  const restored = normalizeEditorDocument(JSON.parse(serialized));
+
+  assertDeepEqual(
+    restored,
+    document,
+    "representative v7 fixture should survive serialization and parsing",
+  );
+  assertDeepEqual(
+    restored.views?.map((view) => view.surfaceIds),
+    [["front"], ["back"]],
+    "representative fixture should preserve front/back view ordering",
+  );
+  assertEqual(
+    restored.surfaces[0]?.layers[0]?.effects?.[0]?.type,
+    "production-mask",
+    "representative fixture should preserve its production mask declaration",
+  );
+  assertEqual(
+    findEditorDocumentObject(restored, "front.feature.hole")?.id,
+    "front.feature.hole",
+    "representative fixture should preserve feature objects",
+  );
 }
 
 const TEST_DOCUMENT_CONFIG = {};
@@ -1237,6 +1265,7 @@ function testCloneAndRecursiveObjectAccessors() {
 }
 
 function main() {
+  testRepresentativeV7FixtureRoundTrip();
   testNormalizeDefaults();
   testObjectInteractionNormalizesSupportedFields();
   testConstraintApplicationValidation();
