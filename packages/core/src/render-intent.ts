@@ -74,7 +74,11 @@ export interface RenderIntentDraft {
   id: string;
   subject: RenderIntentSubject;
   visual?: RenderIntentVisualAspect;
+  /** Logical container geometry, excluding boolean and visual placement. */
+  containerGeometryRef?: GeometryRef;
+  /** Final visual geometry used by interactive preview renderers. */
   previewGeometryRef?: GeometryRef;
+  /** Final visual geometry used by export renderers. */
   exportGeometryRef?: GeometryRef;
   placement?: RenderIntentPlacementAspect;
   effects?: RenderEffectSpec[];
@@ -134,6 +138,7 @@ export interface RenderGraphNode {
   surfaceId: string;
   type: RenderObjectSpec["type"];
   visual?: RenderIntentSource;
+  containerGeometryRef: GeometryRef;
   previewGeometryRef: GeometryRef;
   exportGeometryRef: GeometryRef;
   coordinateSpace: "scene";
@@ -294,6 +299,9 @@ const CRITICAL_PATCH_FIELDS = [
 const CLEARABLE_ROOT_FIELDS = new Set([
   "subject",
   "visual",
+  "containerGeometryRef",
+  "previewGeometryRef",
+  "exportGeometryRef",
   "placement",
   "effects",
   "interaction",
@@ -958,6 +966,7 @@ function createDraftFromPatch(
       stack: ordering.stack,
     },
     visual: patch.visual,
+    containerGeometryRef: patch.containerGeometryRef,
     previewGeometryRef: patch.previewGeometryRef,
     exportGeometryRef: patch.exportGeometryRef,
     placement: patch.placement,
@@ -1019,6 +1028,14 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     surfaceId: draft.subject.surfaceId,
     type,
     visual: source.source,
+    containerGeometryRef: cloneRecord(
+      draft.containerGeometryRef ??
+        draft.previewGeometryRef ?? {
+          sourceId: "render-intent",
+          geometryId: defaultGeometryId,
+          purpose: "preview",
+        },
+    ),
     previewGeometryRef: cloneRecord(
       draft.previewGeometryRef ?? {
         sourceId: "render-intent",
@@ -1105,6 +1122,9 @@ function mergeDraft(
     ...patch,
     subject: { ...base.subject, ...patch.subject },
     visual: mergeOptionalRecord(base.visual, patch.visual),
+    containerGeometryRef: cloneRecord(
+      patch.containerGeometryRef ?? base.containerGeometryRef,
+    ),
     previewGeometryRef: cloneRecord(
       patch.previewGeometryRef ?? base.previewGeometryRef,
     ),
@@ -1145,6 +1165,9 @@ function mergePatch(
       ...clearedBase,
       subject: { ...clearedBase.subject, ...(patch.subject ?? {}) },
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
+      containerGeometryRef: cloneRecord(
+        patch.containerGeometryRef ?? clearedBase.containerGeometryRef,
+      ),
       previewGeometryRef: cloneRecord(
         patch.previewGeometryRef ?? clearedBase.previewGeometryRef,
       ),

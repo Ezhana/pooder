@@ -108,6 +108,9 @@ importers:
         specifier: ^7.0.0
         version: 7.0.0
     devDependencies:
+      '@pooder/document':
+        specifier: workspace:*
+        version: link:../document
       '@types/node':
         specifier: ^24.8.0
         version: 24.12.2

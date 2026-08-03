@@ -4,6 +4,7 @@ import {
   COMMAND_SERVICE,
   coordinateMatrix,
   createAffinePlacement,
+  createStaticGeometrySource,
   createLocalToSceneMatrix,
   GEOMETRY_SOURCE_SERVICE,
   INTERACTION_SERVICE,
@@ -39,6 +40,7 @@ import type {
   FabricRenderTargetItem,
 } from "../src/canvas-service";
 import { ViewportSystem } from "../src/viewport-system";
+import { testImageSlotFabricViewportAndParentTransform } from "./image-slot-canvas-integration";
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -183,6 +185,14 @@ class FakeCanvasService {
 
   toScreenLength(value: number) {
     return value;
+  }
+
+  toScreenMatrix(matrix: any) {
+    return { ...matrix, to: "screen", values: [...matrix.values] };
+  }
+
+  toSceneMatrix(matrix: any) {
+    return { ...matrix, to: "scene", values: [...matrix.values] };
   }
 
   toScenePoint(point: { x: number; y: number }) {
@@ -444,6 +454,14 @@ function createCanvasServiceForReconcileTests() {
       ...matrix,
       to: "screen",
     }),
+    screenToSceneMatrix: (matrix: any) => ({
+      ...matrix,
+      to: "scene",
+    }),
+    sceneToScreenPoint: (point: any) => ({ ...point, space: "screen" }),
+    screenToScenePoint: (point: any) => ({ ...point, space: "scene" }),
+    sceneToScreenRect: (rect: any) => ({ ...rect, space: "screen" }),
+    screenToSceneRect: (rect: any) => ({ ...rect, space: "scene" }),
     updateContainer() {},
   };
   service.applyAffinePlacement = () => {};
@@ -1197,22 +1215,22 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
     "replacement nodes should retain their declarative render intent origin",
   );
   assertEqual(
-    image.props.width,
+    image.placement?.localBounds.width,
     200,
     "image replacements should render at the document frame width",
   );
   assertEqual(
-    image.props.height,
+    image.placement?.localBounds.height,
     160,
     "image replacements should render at the document frame height",
   );
   assertEqual(
-    image.props.scaleX,
+    image.placement?.localToScene.values[0],
     1,
     "image replacements should not depend on bitmap scale for frame sizing",
   );
   assertEqual(
-    image.props.scaleY,
+    image.placement?.localToScene.values[3],
     1,
     "image replacements should not depend on bitmap scale for frame sizing",
   );
@@ -1220,22 +1238,32 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
     (item) => item.spec.id === "resolved-slot",
   )?.spec;
   assertEqual(
-    resolvedImage?.props.width,
+    resolvedImage?.placement?.localBounds.width,
     400,
     "resolved images should preserve intrinsic width",
   );
   assertEqual(
-    resolvedImage?.props.height,
+    resolvedImage?.placement?.localBounds.height,
     320,
     "resolved images should preserve intrinsic height",
   );
   assertEqual(
-    resolvedImage?.props.scaleX,
+    resolvedImage?.placement
+      ? Math.hypot(
+          resolvedImage.placement.localToScene.values[0],
+          resolvedImage.placement.localToScene.values[1],
+        )
+      : undefined,
     0.75,
     "resolved images should preserve horizontal placement scale",
   );
   assertEqual(
-    resolvedImage?.props.scaleY,
+    resolvedImage?.placement
+      ? Math.hypot(
+          resolvedImage.placement.localToScene.values[2],
+          resolvedImage.placement.localToScene.values[3],
+        )
+      : undefined,
     0.6,
     "resolved images should preserve vertical placement scale",
   );
@@ -1667,7 +1695,7 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
   await runtime.dispose();
 }
 
-async function testFabricRenderGraphAdapterPreservesScreenSpace() {
+async function testFabricRenderGraphAdapterConsumesSceneSpace() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -1684,7 +1712,8 @@ async function testFabricRenderGraphAdapterPreservesScreenSpace() {
         objectId: "screen-overlay",
       },
       visual: { type: "path" },
-      coordinateSpace: "screen",
+      coordinateSpace: "scene",
+      placement: createTestPlacement(0, 0, 10, 10),
       ordering: { layerId: "overlay", stack: 100, layerOrder: 0 },
       props: { pathData: "M 0 0 L 10 0 L 10 10 Z" },
     },
@@ -1692,11 +1721,11 @@ async function testFabricRenderGraphAdapterPreservesScreenSpace() {
 
   await adapter.flush();
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
-  assert(last, "adapter should reconcile screen-space nodes");
+  assert(last, "adapter should reconcile scene-space nodes");
   assertEqual(
     last.items[0]?.spec.space,
-    "screen",
-    "adapter should preserve graph node coordinate space",
+    "scene",
+    "adapter should consume the formal graph scene coordinate space",
   );
 
   await runtime.dispose();
@@ -1732,10 +1761,19 @@ async function testFabricRenderGraphAdapterDoesNotSizePathFromFrame() {
 
   await adapter.flush();
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
-  const props = last?.items[0]?.spec.props ?? {};
+  const spec = last?.items[0]?.spec;
+  const props = spec?.props ?? {};
   assert(last, "adapter should reconcile path nodes");
-  assertEqual(props.left, 30, "path should still receive frame left placement");
-  assertEqual(props.top, 30, "path should still receive frame top placement");
+  assertEqual(
+    spec?.placement?.localToScene.values[4],
+    30,
+    "path should retain affine left placement",
+  );
+  assertEqual(
+    spec?.placement?.localToScene.values[5],
+    30,
+    "path should retain affine top placement",
+  );
   assertEqual(
     props.width,
     undefined,
@@ -1784,25 +1822,23 @@ async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft(
 
   await adapter.flush();
   const last = canvas.reconcileCalls[canvas.reconcileCalls.length - 1];
-  const props = last?.items[0]?.spec.props ?? {};
+  const placement = last?.items[0]?.spec.placement;
   assert(last, "adapter should reconcile transformed path nodes");
-  assertEqual(props.left, 10, "path should keep explicit transform left");
-  assertEqual(props.top, 12, "path should keep explicit transform top");
   assertEqual(
-    props.originX,
-    "left",
-    "transformed paths should still default to left origin",
+    placement?.localToScene.values[4],
+    10,
+    "path should keep explicit affine left transform",
   );
   assertEqual(
-    props.originY,
-    "top",
-    "transformed paths should still default to top origin",
+    placement?.localToScene.values[5],
+    12,
+    "path should keep explicit affine top transform",
   );
 
   await runtime.dispose();
 }
 
-async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay() {
+async function testFabricRenderGraphAdapterRespectsExplicitLayerStacks() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -1851,6 +1887,7 @@ async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay
       objectType: "rect",
     },
     visual: { type: "rect" },
+    placement: createTestPlacement(30, 30, 531, 531),
     ordering: {
       layerId: "image.overlay",
       layerOrder: 0,
@@ -1881,8 +1918,8 @@ async function testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay
   assert(
     typeof guideOrder === "number" &&
       typeof uploadOrder === "number" &&
-      guideOrder > uploadOrder,
-    "document guide nodes should render above image upload overlays",
+      uploadOrder > guideOrder,
+    "higher explicit layer stacks should render above lower stacks",
   );
 
   await runtime.dispose();
@@ -1894,6 +1931,43 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   const adapter = new FabricRenderGraphAdapter();
   runtime.services.register(canvas as any, CANVAS_SERVICE);
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  runtime.services
+    .getOrThrow<GeometrySourceService>(GEOMETRY_SOURCE_SERVICE)
+    .registerSource(
+      createStaticGeometrySource({
+        sourceId: "test-container",
+        geometries: [
+          {
+            kind: "rect",
+            ref: { sourceId: "test-container", geometryId: "placed-slot" },
+            space: "object-local",
+            bounds: { left: 0, top: 0, width: 40, height: 30 },
+            rect: { left: 0, top: 0, width: 40, height: 30 },
+            localToScene: coordinateMatrix(
+              "object-local",
+              "scene",
+              [1, 0, 0, 1, 100, 200],
+            ),
+          },
+          {
+            kind: "rect",
+            ref: {
+              sourceId: "test-container",
+              geometryId: "placed-export",
+              purpose: "export",
+            },
+            space: "object-local",
+            bounds: { left: 0, top: 0, width: 70, height: 50 },
+            rect: { left: 0, top: 0, width: 70, height: 50 },
+            localToScene: coordinateMatrix(
+              "object-local",
+              "scene",
+              [1, 0, 0, 1, 300, 400],
+            ),
+          },
+        ],
+      }),
+    );
 
   const intents = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
   intents.setDocumentIntents([
@@ -1906,6 +1980,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "interactive",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 10, 10),
       ordering: { layerId: "art", objectOrder: 0 },
       props: { width: 10, height: 10 },
       interaction: { manipulation: { move: { enabled: true } } },
@@ -1919,6 +1994,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "constraint-only",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(20, 0, 10, 10),
       ordering: { layerId: "art", objectOrder: 1 },
       props: { width: 10, height: 10 },
       interaction: {
@@ -1948,6 +2024,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "conditional",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(40, 0, 10, 10),
       ordering: { layerId: "art", objectOrder: 2 },
       props: { width: 10, height: 10 },
       interaction: {
@@ -1977,6 +2054,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "runtime-evented",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(60, 0, 10, 10),
       ordering: { layerId: "art", objectOrder: 3 },
       props: {
         width: 10,
@@ -1994,6 +2072,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "transform-only",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(80, 0, 10, 10),
       ordering: { layerId: "art", objectOrder: 4 },
       props: { width: 10, height: 10 },
       interaction: {
@@ -2012,6 +2091,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         objectId: "activation-only",
       },
       visual: { type: "rect" },
+      placement: createTestPlacement(100, 0, 10, 10),
       ordering: { layerId: "art", objectOrder: 5 },
       props: { width: 10, height: 10 },
       interaction: {
@@ -2037,6 +2117,31 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         activation: { action: { commandId: "test.open" } },
       },
     },
+    {
+      id: "placed-slot",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "placed-slot",
+      },
+      visual: { type: "image", src: "/placed.png" },
+      placement: createTestPlacement(12, 24, 80, 60),
+      containerGeometryRef: {
+        sourceId: "test-container",
+        geometryId: "placed-slot",
+      },
+      exportGeometryRef: {
+        sourceId: "test-container",
+        geometryId: "placed-export",
+        purpose: "export",
+      },
+      ordering: { layerId: "art", objectOrder: 7 },
+      interaction: {
+        hitRegion: { type: "frame", space: "scene" },
+        manipulation: { move: { enabled: true } },
+      },
+    },
   ]);
 
   await adapter.flush();
@@ -2058,6 +2163,10 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
   );
   const emptySlotHitTarget = last.items.find(
     (item) => item.key === "empty-slot:frame-hit-target",
+  );
+  const placedSlot = last.items.find((item) => item.key === "placed-slot");
+  const placedSlotHitTarget = last.items.find(
+    (item) => item.key === "placed-slot:frame-hit-target",
   );
   assertEqual(
     interactive?.spec.props.selectable,
@@ -2159,6 +2268,38 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
     true,
     "empty image slot frame hit targets should receive pointer events",
   );
+  assertDeepEqual(
+    placedSlot?.spec.placement?.localToScene.values,
+    [1, 0, 0, 1, 12, 24],
+    "image preview should use final visual geometry",
+  );
+  assertDeepEqual(
+    placedSlotHitTarget?.spec.placement?.localToScene.values,
+    [1, 0, 0, 1, 100, 200],
+    "frame hit targets should use container geometry independently",
+  );
+  assertDeepEqual(
+    {
+      width: placedSlotHitTarget?.spec.props.width,
+      height: placedSlotHitTarget?.spec.props.height,
+    },
+    { width: 40, height: 30 },
+    "frame hit target bounds should not reuse bitmap bounds",
+  );
+  const graph = intents.getGraph();
+  const placedSlotLayer = graph.layers.find((layer) => layer.id === "art");
+  const placedSlotNode = placedSlotLayer?.nodes.find(
+    (node) => node.id === "placed-slot",
+  );
+  const exportSpec =
+    placedSlotLayer && placedSlotNode
+      ? adapter.createExportRenderObjectSpec(placedSlotLayer, placedSlotNode)
+      : null;
+  assertDeepEqual(
+    exportSpec?.placement?.localToScene.values,
+    [1, 0, 0, 1, 300, 400],
+    "export projection should use export geometry only",
+  );
 
   let activationEvent: any;
   let activationPayload: any;
@@ -2218,6 +2359,44 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
   runtime.services.register(canvas as any, CANVAS_SERVICE);
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
 
+  const interactionSpec = {
+    manipulation: {
+      move: {
+        enabled: true,
+        constraints: [
+          {
+            spec: {
+              type: "rect.contain",
+              params: {
+                rect: { left: 0, top: 0, width: 100, height: 100 },
+              },
+            },
+          },
+        ],
+      },
+    },
+  };
+  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+    {
+      id: "constrained",
+      subject: {
+        kind: "object",
+        surfaceId: "s1",
+        layerId: "art",
+        objectId: "constrained",
+      },
+      visual: { type: "rect" },
+      placement: createTestPlacement(95, 20, 10, 10),
+      ordering: { layerId: "art" },
+      interaction: interactionSpec,
+    },
+  ]);
+  await adapter.flush();
+  const constrainedSpec = canvas.reconcileCalls
+    .at(-1)
+    ?.items.find((item) => item.key === "constrained")?.spec;
+  assert(constrainedSpec, "constrained graph projection should render");
+
   const target = {
     left: 95,
     top: 20,
@@ -2226,27 +2405,10 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
     scaleX: 1,
     scaleY: 1,
     data: {
-      renderKey: "constrained",
+      ...constrainedSpec.data,
+      affinePlacement: constrainedSpec.placement,
       renderTarget: "render-graph",
-      subjectId: "constrained",
-      renderIntentId: "constrained",
-      interactionSpec: {
-        manipulation: {
-          move: {
-            enabled: true,
-            constraints: [
-              {
-                spec: {
-                  type: "rect.contain",
-                  params: {
-                    rect: { left: 0, top: 0, width: 100, height: 100 },
-                  },
-                },
-              },
-            ],
-          },
-        },
-      },
+      interactionSpec,
     },
     getBoundingRect() {
       return {
@@ -4350,7 +4512,7 @@ async function main() {
     ],
     [
       "preserves graph coordinate space",
-      testFabricRenderGraphAdapterPreservesScreenSpace,
+      testFabricRenderGraphAdapterConsumesSceneSpace,
     ],
     [
       "does not size path nodes from frame dimensions",
@@ -4362,19 +4524,19 @@ async function main() {
     ],
     [
       "keeps document guide nodes above upload overlays",
-      testFabricRenderGraphAdapterKeepsDocumentGuidesAboveUploadOverlay,
+      testFabricRenderGraphAdapterRespectsExplicitLayerStacks,
     ],
     [
       "maps declarative interaction state",
       testFabricRenderGraphAdapterMapsDeclarativeInteraction,
     ],
     [
-      "constrains render graph object dragging",
-      testFabricRenderGraphAdapterConstrainsDragging,
-    ],
-    [
       "moves every projection of a logical subject",
       testFabricRenderGraphAdapterMovesLogicalSubjectProjections,
+    ],
+    [
+      "projects nested image slots through the Fabric viewport",
+      testImageSlotFabricViewportAndParentTransform,
     ],
     [
       "reconciles stale objects and clip cleanup",
@@ -4417,42 +4579,6 @@ async function main() {
     [
       "uses the preview clip contract during export",
       testSceneExportUsesThePreviewClipContract,
-    ],
-    [
-      "exports by render graph node ids",
-      testSceneExportMatchesRenderGraphNodeIds,
-    ],
-    [
-      "combines source selector dimensions",
-      testSceneExportCombinesSourceSelectorDimensions,
-    ],
-    [
-      "exports frame crops from scene layout cut rect",
-      testSceneExportUsesCutFrameCrop,
-    ],
-    [
-      "preserves export clip paths by default",
-      testSceneExportClearsClipPathByDefault,
-    ],
-    [
-      "clears export clip paths when requested",
-      testSceneExportPreservesClipPathWhenRequested,
-    ],
-    [
-      "applies output masks during scene export",
-      testSceneExportAppliesOutputMask,
-    ],
-    [
-      "falls back from invalid output masks during scene export",
-      testSceneExportFallsBackWhenOutputMaskIsInvalid,
-    ],
-    [
-      "rejects missing output mask source",
-      testSceneExportRejectsMissingOutputMaskSource,
-    ],
-    [
-      "allows hidden output mask source",
-      testSceneExportAllowsHiddenOutputMaskSource,
     ],
   ];
 

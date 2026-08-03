@@ -50,6 +50,9 @@ export function patchRenderObjectSpecs(
       },
       effects: spec.effects,
       placement: spec.placement,
+      containerGeometryRef: spec.containerGeometryRef,
+      previewGeometryRef: spec.previewGeometryRef,
+      exportGeometryRef: spec.exportGeometryRef,
       props: { ...(spec.props || {}) },
       data: {
         ...(spec.data || {}),

@@ -1,12 +1,13 @@
 import {
   CANVAS_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
+  coordinateMatrix,
   coordinateRect,
   createAffinePlacement,
-  createLocalToSceneMatrix,
   invertCoordinateMatrix,
   multiplyCoordinateMatrices,
   resolveImageFitScale,
@@ -19,6 +20,7 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
+  type GeometrySourceService,
   type InteractionOperationPhase,
   type SceneHandle,
   type SceneLayoutService,
@@ -87,7 +89,9 @@ interface ImageSlotRectSnapFeedback {
 export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   readonly id = IMAGE_SLOT_CAPABILITY_ID;
   readonly metadata = { name: "ImageSlotCapabilityExtension" };
-  readonly activation = { requiresServices: [SCENE_SERVICE, SESSION_SERVICE] };
+  readonly activation = {
+    requiresServices: [GEOMETRY_SOURCE_SERVICE, SCENE_SERVICE, SESSION_SERVICE],
+  };
   private document: EditorDocument | null = null;
   private controller: ImageSlotDocumentController | null = null;
   private original: ImageSlotSessionDraft | null = null;
@@ -100,6 +104,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private sceneService?: SceneService;
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
+  private geometrySource?: GeometrySourceService;
   private renderIntentService?: RenderIntentService;
   private sessionService?: SessionService;
   private sceneHandle: SceneHandle | null = null;
@@ -116,6 +121,9 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
     this.sceneService =
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    this.geometrySource = context.services.getOrThrow<GeometrySourceService>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
     this.renderIntentService = context.services.get<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
@@ -131,6 +139,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     this.sessionHandle = null;
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
+    this.geometrySource = undefined;
     this.sceneService = undefined;
     this.renderIntentService = undefined;
     this.sessionService = undefined;
@@ -253,6 +262,9 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       this.state.draft?.objectId !== objectId
     ) {
       return { ok: false as const, reason: "session-owner-conflict" };
+    }
+    if (!this.resolveDocumentObjectPlacement(objectId)) {
+      return { ok: false as const, reason: "geometry-unavailable" };
     }
     const draft = toDraft(object);
     const sessionId = `image-slot:${objectId}`;
@@ -383,9 +395,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       return { ok: false, reason: "resource-load-failed" };
     }
     const frame = context.object.frame;
-    const objectPlacement =
-      this.resolveDocumentObjectPlacement(draft.objectId) ??
-      createFallbackObjectPlacement(context.object);
+    const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
+    if (!objectPlacement) {
+      return { ok: false, reason: "geometry-unavailable" };
+    }
     const imageLocalToObjectLocal = input.sceneMatrix
       ? multiplyCoordinateMatrices(
           invertCoordinateMatrix(objectPlacement.localToScene),
@@ -647,9 +660,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     const resource = draft.resource;
     if (resource?.intrinsicSize) {
       const src = resourceLocation(resource);
-      const objectPlacement =
-        this.resolveDocumentObjectPlacement(draft.objectId) ??
-        createFallbackObjectPlacement(context.object);
+      const objectPlacement = this.resolveDocumentObjectPlacement(
+        draft.objectId,
+      );
+      if (!objectPlacement) return;
       const objectSceneBounds = transformCoordinateRect(
         objectPlacement.localToScene,
         objectPlacement.localBounds,
@@ -774,10 +788,23 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       const node = layer.nodes.find(
         (candidate) => candidate.subjectId === objectId,
       );
-      const placement = node?.data.documentObjectPlacement as
-        | AffinePlacement
-        | undefined;
-      if (placement?.localBounds?.space === "object-local") return placement;
+      if (!node) continue;
+      const snapshot = this.geometrySource?.getSnapshot(
+        node.containerGeometryRef,
+      ).value;
+      if (!snapshot || snapshot.space !== "object-local") return undefined;
+      return createAffinePlacement({
+        localBounds: coordinateRect("object-local", snapshot.bounds),
+        localToScene: coordinateMatrix(
+          "object-local",
+          "scene",
+          snapshot.localToScene.values,
+        ),
+        pivot: {
+          x: snapshot.bounds.left + snapshot.bounds.width / 2,
+          y: snapshot.bounds.top + snapshot.bounds.height / 2,
+        },
+      });
     }
     return undefined;
   }
@@ -1000,25 +1027,6 @@ function resolveImageSlotClipFrame(
         height: bottom - top,
       })
     : objectFrame;
-}
-
-function createFallbackObjectPlacement(
-  object: EditorImageObject,
-): AffinePlacement {
-  const localBounds = coordinateRect("object-local", {
-    left: 0,
-    top: 0,
-    width: object.frame.width,
-    height: object.frame.height,
-  });
-  return createAffinePlacement({
-    localBounds,
-    localToScene: createLocalToSceneMatrix({
-      position: { x: object.frame.x, y: object.frame.y },
-      pivot: { x: 0, y: 0 },
-    }),
-    pivot: { x: localBounds.width / 2, y: localBounds.height / 2 },
-  });
 }
 
 function findImageSlot(

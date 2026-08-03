@@ -1862,6 +1862,11 @@ function createCompositeInteractionProxyDraft(
       objectType: "composite",
     },
     visual: { type: "rect" },
+    containerGeometryRef: {
+      sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+      geometryId: object.id,
+      variant: "base",
+    },
     placement,
     interaction: object.interaction,
     export: { visible: true, tags: object.tags },
@@ -1882,7 +1887,6 @@ function createCompositeInteractionProxyDraft(
       id: object.id,
       compositeProxy: true,
       compositeMemberNodeIds: memberNodeIds,
-      documentObjectPlacement: placement,
       documentSurfaceId: surface.id,
       layerId: layer.id,
     },
@@ -1931,6 +1935,11 @@ function createObjectRenderIntentDraft(
       objectType: object.source.kind,
     },
     placement: framePlacement,
+    containerGeometryRef: {
+      sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+      geometryId: object.id,
+      variant: "base",
+    },
     previewGeometryRef: {
       sourceId: "document-object",
       geometryId: object.id,
@@ -1968,7 +1977,6 @@ function createObjectRenderIntentDraft(
       documentSurfaceId: surface.id,
       documentObjectSourceKind: object.source.kind,
       documentLayerRole: layer.role,
-      documentObjectPlacement: framePlacement,
       ...(compositeId ? { compositeId } : {}),
       ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
@@ -2089,6 +2097,16 @@ function createImageRenderIntentDraft(
   return {
     ...base,
     visual: { type: "image", ...(image ? { src: image.src } : {}) },
+    previewGeometryRef: {
+      sourceId: "render-intent",
+      geometryId: object.id,
+      purpose: "preview",
+    },
+    exportGeometryRef: {
+      sourceId: "render-intent",
+      geometryId: object.id,
+      purpose: "export",
+    },
     export: { ...base.export },
     effects: geometry?.clip
       ? [

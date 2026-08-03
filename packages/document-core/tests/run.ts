@@ -230,6 +230,27 @@ async function testApplyEditorDocument() {
                   slot: {},
                   interaction: { hitRegion: { type: "frame" } },
                 },
+                {
+                  id: "placed-image",
+                  frame: { x: 10, y: 20, width: 50, height: 60 },
+                  source: {
+                    kind: "image",
+                    resource: {
+                      kind: "url",
+                      url: "/placed.png",
+                      intrinsicSize: { width: 100, height: 80 },
+                    },
+                  },
+                  placement: {
+                    fit: "cover",
+                    anchorX: 0.25,
+                    anchorY: 0.75,
+                    zoom: 1.5,
+                    rotation: 15,
+                    opacity: 1,
+                    clip: "frame",
+                  },
+                },
               ],
             },
           ],
@@ -254,6 +275,9 @@ async function testApplyEditorDocument() {
   const labelNode = graph.layers[0]?.nodes.find((item) => item.id === "label");
   const emptySlotNode = graph.layers[0]?.nodes.find(
     (item) => item.id === "empty-image-slot",
+  );
+  const placedImageNode = graph.layers[0]?.nodes.find(
+    (item) => item.id === "placed-image",
   );
   assertEqual(node?.id, "shape", "source object should become a render node");
   assertEqual(node?.type, "path", "shape source should render as path");
@@ -292,6 +316,60 @@ async function testApplyEditorDocument() {
     emptySlotNode?.visual?.src,
     undefined,
     "empty image slots should not synthesize content resources",
+  );
+  assertEqual(
+    placedImageNode?.previewGeometryRef.sourceId,
+    "render-intent",
+    "placed images should project their derived bitmap placement",
+  );
+  assertEqual(
+    placedImageNode?.exportGeometryRef.sourceId,
+    "render-intent",
+    "placed image export should preserve the committed bitmap placement",
+  );
+  assertDeepEqual(
+    placedImageNode?.containerGeometryRef,
+    {
+      sourceId: "document-object",
+      geometryId: "placed-image",
+      variant: "base",
+    },
+    "placed images should expose their Document frame as container geometry",
+  );
+  assertDeepEqual(
+    node?.containerGeometryRef,
+    {
+      sourceId: "document-object",
+      geometryId: "shape",
+      variant: "base",
+    },
+    "all Document objects should expose uncombined logical geometry",
+  );
+  assertEqual(
+    "documentObjectPlacement" in (placedImageNode?.data ?? {}),
+    false,
+    "render nodes should not carry a parallel Document placement payload",
+  );
+  const geometrySource = new GeometrySourceService();
+  geometrySource.registerSource(
+    createDocumentObjectGeometrySource(() => result.document, geometrySource),
+  );
+  const containerGeometry = placedImageNode
+    ? geometrySource.getSnapshot(placedImageNode.containerGeometryRef).value
+    : null;
+  assertDeepEqual(
+    containerGeometry?.bounds,
+    { left: 0, top: 0, width: 50, height: 60 },
+    "image container geometry should equal its Document frame",
+  );
+  assert(
+    placedImageNode?.placement.localToScene.values.some(
+      (value, index) =>
+        Math.abs(
+          value - (containerGeometry?.localToScene.values[index] ?? value),
+        ) > 1e-6,
+    ),
+    "placed image visual geometry should differ from its container frame",
   );
 }
 

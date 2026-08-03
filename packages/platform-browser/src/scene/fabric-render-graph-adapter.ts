@@ -834,8 +834,7 @@ export class FabricRenderGraphAdapter implements Service {
             intentId: String(node.data.renderIntentId || node.id),
           },
           order:
-            orderBase +
-            this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex),
+            orderBase + this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex),
           spec,
         });
       });
@@ -850,6 +849,8 @@ export class FabricRenderGraphAdapter implements Service {
     >,
   ): RenderObjectSpec | null {
     if (node.interaction?.hitRegion?.type !== "frame") return null;
+    const geometry = this.resolveGeometryProjection(node.containerGeometryRef);
+    if (!geometry) return null;
     const state = this.requireInteractionService().resolveState(
       node.interaction,
       conditionContext,
@@ -859,7 +860,8 @@ export class FabricRenderGraphAdapter implements Service {
       id: `${node.id}:frame-hit-target`,
       type: "rect",
       space: node.coordinateSpace,
-      placement: node.placement,
+      containerGeometryRef: node.containerGeometryRef,
+      placement: geometry.placement,
       data: {
         ...node.data,
         frameHitTarget: true,
@@ -871,8 +873,8 @@ export class FabricRenderGraphAdapter implements Service {
         surfaceId: node.surfaceId,
       },
       props: {
-        width: node.placement.localBounds.width,
-        height: node.placement.localBounds.height,
+        width: geometry.placement.localBounds.width,
+        height: geometry.placement.localBounds.height,
         fill: "rgba(0,0,0,0)",
         stroke: null,
         selectable: state.selectionEnabled,
@@ -1533,10 +1535,7 @@ export class FabricRenderGraphAdapter implements Service {
       ...layerEffects,
       ...this.normalizeActiveEffects(node.effects, conditionContext),
     ].map((effect) =>
-      this.materializeGeometryEffect(
-        effect,
-        readOnly ? "export" : "preview",
-      ),
+      this.materializeGeometryEffect(effect, readOnly ? "export" : "preview"),
     );
 
     if (node.type === "image") {
@@ -1548,6 +1547,7 @@ export class FabricRenderGraphAdapter implements Service {
         src,
         space: node.coordinateSpace,
         placement: geometry.placement,
+        containerGeometryRef: node.containerGeometryRef,
         previewGeometryRef: node.previewGeometryRef,
         exportGeometryRef: node.exportGeometryRef,
         data: commonData,
@@ -1562,6 +1562,7 @@ export class FabricRenderGraphAdapter implements Service {
         type: "path",
         space: node.coordinateSpace,
         placement: geometry.placement,
+        containerGeometryRef: node.containerGeometryRef,
         previewGeometryRef: node.previewGeometryRef,
         exportGeometryRef: node.exportGeometryRef,
         data: commonData,
@@ -1576,6 +1577,7 @@ export class FabricRenderGraphAdapter implements Service {
         type: "rect",
         space: node.coordinateSpace,
         placement: geometry.placement,
+        containerGeometryRef: node.containerGeometryRef,
         previewGeometryRef: node.previewGeometryRef,
         exportGeometryRef: node.exportGeometryRef,
         data: commonData,
@@ -1589,6 +1591,7 @@ export class FabricRenderGraphAdapter implements Service {
       type: "text",
       space: node.coordinateSpace,
       placement: geometry.placement,
+      containerGeometryRef: node.containerGeometryRef,
       previewGeometryRef: node.previewGeometryRef,
       exportGeometryRef: node.exportGeometryRef,
       data: commonData,

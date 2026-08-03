@@ -58,7 +58,11 @@ export interface RenderObjectSpec {
   id: string;
   subjectId?: string;
   type: RenderObjectType;
+  /** Logical container geometry, excluding visual fit and placement. */
+  containerGeometryRef?: GeometryRef;
+  /** Final visual geometry used by interactive preview renderers. */
   previewGeometryRef?: GeometryRef;
+  /** Final visual geometry used by export renderers. */
   exportGeometryRef?: GeometryRef;
   props: RenderProps;
   data?: Record<string, any>;
@@ -205,13 +209,11 @@ export interface RenderEffectRendererContribution<
   ): void | Promise<void>;
 }
 
-export interface RegisteredRenderEffectDefinition
-  extends RenderEffectDefinition {
+export interface RegisteredRenderEffectDefinition extends RenderEffectDefinition {
   extensionId: string;
 }
 
-export interface RegisteredRenderEffectRenderer
-  extends RenderEffectRendererContribution {
+export interface RegisteredRenderEffectRenderer extends RenderEffectRendererContribution {
   extensionId: string;
 }
 
