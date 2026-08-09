@@ -656,6 +656,26 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     this.disposeScene();
     if (!this.sceneService || !this.sessionHandle) return;
     const sceneId = `image-slot:${object.id}:scene`;
+    const graphNodesBeforeWorkingImage = new Set<string>();
+    let reachedWorkingImage = false;
+    for (const layer of this.renderIntentService?.getGraph().layers ?? []) {
+      for (const node of layer.nodes) {
+        if (node.surfaceId !== surfaceId) continue;
+        if (node.subjectId === object.id) {
+          reachedWorkingImage = true;
+          continue;
+        }
+        if (!reachedWorkingImage) graphNodesBeforeWorkingImage.add(node.id);
+      }
+    }
+    const isVisibleSessionDocumentNode = ({
+      node,
+    }: {
+      node: { id: string; subjectId: string; surfaceId: string; tags: string[] };
+    }) =>
+      node.surfaceId === surfaceId &&
+      node.subjectId !== object.id &&
+      node.tags.some((tag) => tag === "mockup" || tag === "design");
     this.sceneService.getSceneHandle(sceneId)?.dispose();
     this.sceneHandle = this.sceneService.createScene({
       id: sceneId,
@@ -665,15 +685,21 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       },
       composition: {
         entries: [
+          {
+            source: "render-graph",
+            interaction: "disabled",
+            filter: (context) =>
+              isVisibleSessionDocumentNode(context) &&
+              graphNodesBeforeWorkingImage.has(context.node.id),
+          },
           { source: "local", layerIds: ["image-slot.underlay"] },
           { source: "local", layerIds: ["image-slot.working"] },
           {
             source: "render-graph",
             interaction: "disabled",
-            filter: ({ node }) =>
-              node.surfaceId === surfaceId &&
-              node.subjectId !== object.id &&
-              node.tags.some((tag) => tag === "mockup" || tag === "design"),
+            filter: (context) =>
+              isVisibleSessionDocumentNode(context) &&
+              !graphNodesBeforeWorkingImage.has(context.node.id),
           },
           { source: "local", layerIds: ["image-slot.overlay"] },
           { source: "local", layerIds: ["image-slot.controls"] },

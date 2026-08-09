@@ -289,6 +289,124 @@ function createEmptySlotDocument(): EditorDocument {
   };
 }
 
+function createLayeredSlotDocument(): EditorDocument {
+  const createVisualObject = (id: string, assetId: string): EditorImageObject => ({
+    id,
+    visible: true,
+    locked: true,
+    placement: {
+      localBounds: { x: 0, y: 0, width: 340, height: 120 },
+      localToParent: [1, 0, 0, 1, 0, 0] as MatrixValues,
+      pivot: { x: 170, y: 60 },
+    },
+    source: { kind: "image" as const, assetId },
+    appearance: {
+      fit: "cover" as const,
+      anchorX: 0.5,
+      anchorY: 0.5,
+      zoom: 1,
+      rotation: 0,
+      opacity: 1,
+      clip: "frame" as const,
+    },
+    traits: [{ type: "core.export" as const, scopes: ["mockup"] }],
+  });
+  const document = createEmptySlotDocument();
+  document.assets.push(
+    {
+      id: "background.asset",
+      type: "image",
+      source: { kind: "url", url: "/background.png" },
+      intrinsicSize: { width: 340, height: 120 },
+    },
+    {
+      id: "foreground.asset",
+      type: "image",
+      source: { kind: "url", url: "/foreground.png" },
+      intrinsicSize: { width: 340, height: 120 },
+    },
+  );
+  const surface = document.surfaces[0]!;
+  const slotLayer = surface.layers[0]!;
+  surface.layers = [
+    {
+      id: "front.background",
+      role: "content",
+      visible: true,
+      locked: true,
+      objects: [createVisualObject("background", "background.asset")],
+    },
+    slotLayer,
+    {
+      id: "front.foreground",
+      role: "overlay",
+      visible: true,
+      locked: true,
+      objects: [createVisualObject("foreground", "foreground.asset")],
+    },
+  ];
+  return document;
+}
+
+async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> {
+  const runtime = new Pooder();
+  const canvas = new ViewportCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as never, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  runtime.extensions.register(new ImageSlotCapabilityExtension());
+  await runtime.extensions.flushActivation();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const applied = await controller.apply(createLayeredSlotDocument());
+    assert(
+      applied.ok,
+      `layered image-slot document should apply (${JSON.stringify(applied.diagnostics)})`,
+    );
+    const facade = runtime.capabilities.get<ImageSlotCapabilityApi>(
+      IMAGE_SLOT_CAPABILITY_ID,
+    );
+    assert(facade, "image-slot facade should exist");
+    facade.syncDocument(applied.document, controller);
+    assertEqual(
+      (await facade.openSession({ objectId: OBJECT_ID })).ok,
+      true,
+      "layered image-slot session should open",
+    );
+    await facade.setResource({
+      kind: "data-url",
+      dataUrl: "data:image/png;base64,AA==",
+      intrinsicSize: { width: 120, height: 80 },
+    });
+    await adapter.flush();
+    const visibleItems = (canvas.reconcileCalls.at(-1)?.items ?? []).filter(
+      (item) => item.spec?.props?.visible !== false,
+    );
+    const backgroundIndex = visibleItems.findIndex(
+      (item) => item.spec?.id === "background",
+    );
+    const workingIndex = visibleItems.findIndex(
+      (item) => item.spec?.data?.imageSlotObjectId === OBJECT_ID,
+    );
+    const foregroundIndex = visibleItems.findIndex(
+      (item) => item.spec?.id === "foreground",
+    );
+    assert(
+      backgroundIndex >= 0 && workingIndex >= 0 && foregroundIndex >= 0,
+      `layered session items should render (${JSON.stringify(
+        visibleItems.map((item) => ({ id: item.spec?.id, data: item.spec?.data })),
+      )})`,
+    );
+    assert(
+      backgroundIndex < workingIndex && workingIndex < foregroundIndex,
+      "working image should preserve its document position between background and foreground layers",
+    );
+    await facade.rollbackSession();
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 async function testEmptyImageSlotPointerActivation(): Promise<void> {
   const runtime = new Pooder();
   const canvas = new ViewportCanvasService();
@@ -553,6 +671,7 @@ function transformBounds(
 
 export async function testImageSlotFabricViewportAndParentTransform(): Promise<void> {
   await testEmptyImageSlotPointerActivation();
+  await testImageSlotSessionPreservesDocumentLayerOrder();
   const runtime = new Pooder();
   const canvas = new ViewportCanvasService();
   const adapter = new FabricRenderGraphAdapter();
