@@ -13,7 +13,7 @@ import {
 } from "@pooder/core";
 import type {
   EditorDocument,
-  EditorEffect,
+  EditorExtensionObjectEffect,
   EditorObject,
 } from "@pooder/document";
 import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
@@ -92,7 +92,7 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
   }
 
   private createRenderIntentCompiler(): RenderIntentCompilerContribution<
-    EditorEffect<MirrorEffectPayload>,
+    EditorExtensionObjectEffect<MirrorEffectPayload>,
     EditorDocument
   > {
     return {
@@ -104,7 +104,7 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
 
   private compileDocumentMirrorEffect(
     context: RenderIntentCompilerContext<
-      EditorEffect<MirrorEffectPayload>,
+      EditorExtensionObjectEffect<MirrorEffectPayload>,
       EditorDocument
     >,
   ): RenderIntentPatch | void {

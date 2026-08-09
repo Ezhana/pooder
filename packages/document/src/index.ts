@@ -145,24 +145,12 @@ export type EditorDocumentDiagnosticStage =
   | "effect-schema"
   | "extension-schema"
   | "runtime-capability";
-export type EditorEffectPhase =
-  | "document"
-  | "layout"
-  | "render"
-  | "interaction"
-  | "export";
-export type EditorEffectTarget =
-  | "self"
-  | { objectId: string }
-  | { layerId: string }
-  | { surfaceId: string };
 export type EditorLayerRole =
   | "background"
   | "content"
   | "guide"
   | "overlay"
-  | "production"
-  | string;
+  | "production";
 export interface EditorRect {
   x: number;
   y: number;
@@ -194,7 +182,6 @@ export interface EditorDocument {
   version: EditorDocumentVersion;
   assets: EditorAsset[];
   extensions: Record<string, JsonValue>;
-  metadata?: Record<string, unknown>;
   surfaces: EditorSurface[];
 }
 
@@ -208,19 +195,14 @@ export interface EditorSurface {
     safeBounds?: RectMm;
   };
   layers: EditorLayer[];
-  effects?: EditorEffect[];
-  metadata?: Record<string, unknown>;
 }
 
 export interface EditorLayer {
   id: string;
-  role?: EditorLayerRole;
-  visible?: boolean;
-  locked?: boolean;
-  tags?: string[];
-  objects?: EditorObject[];
-  effects?: EditorEffect[];
-  metadata?: Record<string, unknown>;
+  role: EditorLayerRole;
+  visible: boolean;
+  locked: boolean;
+  objects: EditorObject[];
 }
 
 export interface EditorObjectBase {
@@ -230,11 +212,9 @@ export interface EditorObjectBase {
     localToParent: AffineMatrix;
     pivot: PointMm;
   };
-  visible?: boolean;
-  locked?: boolean;
-  tags?: string[];
-  style?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
+  visible: boolean;
+  locked: boolean;
+  traits?: EditorObjectTrait[];
   interaction?: DocumentInteractionSpec;
   effects?: EditorObjectEffect[];
 }
@@ -267,6 +247,14 @@ export interface EditorImagePlacement {
   rotation: number;
   opacity: number;
   clip: "frame" | "none";
+}
+
+export interface EditorPrimitiveAppearance {
+  fill?: string | null;
+  stroke?: string | null;
+  strokeWidth?: number;
+  opacity?: number;
+  dash?: number[];
 }
 
 export interface EditorImageSlotSpec {
@@ -316,7 +304,7 @@ export interface EditorImageObject extends EditorObjectBase {
 export interface EditorPrimitiveObject extends EditorObjectBase {
   source: Exclude<ObjectSource, { kind: "image" }>;
   children?: never;
-  appearance?: never;
+  appearance?: EditorPrimitiveAppearance;
   slot?: never;
 }
 
@@ -343,38 +331,49 @@ export function isEditorVisualObject(
   return "source" in object;
 }
 
-export interface EditorEffect<TPayload = Record<string, unknown>> {
-  id?: string;
+export interface EditorExtensionObjectEffect<TPayload = JsonValue> {
   type: string;
-  capabilityId?: string;
-  require?: EditorDocumentRequirePolicy;
-  order?: number;
-  phase?: EditorEffectPhase;
-  target?: EditorEffectTarget;
   payload?: TPayload;
-  metadata?: Record<string, unknown>;
 }
 
-type EditorObjectEffectCommon = Partial<Omit<EditorEffect, "type">>;
-
-export type EditorBuiltinObjectEffect =
-  | (EditorObjectEffectCommon & {
-      type: "clip-source";
-      targetIds: string[];
-    })
-  | (EditorObjectEffectCommon & {
-      type: "boolean";
-      targetId: string;
+export type CoreGeometryEffect =
+  | {
+      type: "core.geometry.clip";
+      sourceObjectId: string;
+      participation?: "preview" | "export" | "both";
+    }
+  | {
+      type: "core.geometry.boolean";
+      operandObjectId: string;
       operation: "add" | "subtract" | "intersect" | "exclude";
       participation?: "preview" | "export" | "both";
-    })
-  | (EditorObjectEffectCommon & {
-      type: "guide";
-      role: "cut" | "bleed" | "safe-area";
-      style?: Record<string, unknown>;
-    });
+    };
 
-export type EditorObjectEffect = EditorEffect | EditorBuiltinObjectEffect;
+export type EditorObjectEffect = CoreGeometryEffect | EditorExtensionObjectEffect;
+
+export type CoreObjectTrait =
+  | {
+      type: "core.guide";
+      role: "cut" | "bleed" | "safe-area";
+    }
+  | {
+      type: "core.output-mask";
+      keys: string[];
+    }
+  | {
+      type: "core.export";
+      scopes: string[];
+    };
+
+export interface EditorExtensionObjectTrait<TPayload = JsonValue> {
+  type: string;
+  payload?: TPayload;
+}
+
+export type EditorObjectTrait = CoreObjectTrait | EditorExtensionObjectTrait;
+
+/** @deprecated Effects are object-owned and represented by EditorObjectEffect. */
+export type EditorEffect = EditorExtensionObjectEffect;
 
 export interface EditorDocumentDiagnostic {
   severity: EditorDocumentDiagnosticSeverity;
@@ -681,6 +680,32 @@ function normalizeImagePlacement(value: unknown): EditorImagePlacement {
     opacity: normalizeFiniteNumber(placement.opacity) ?? 1,
     clip: placement.clip === "none" ? "none" : "frame",
   };
+}
+
+function normalizePrimitiveAppearance(
+  value: unknown,
+): EditorPrimitiveAppearance | undefined {
+  if (!isRecord(value)) return undefined;
+  const appearance: EditorPrimitiveAppearance = {};
+  if (typeof value.fill === "string" || value.fill === null) {
+    appearance.fill = value.fill;
+  }
+  if (typeof value.stroke === "string" || value.stroke === null) {
+    appearance.stroke = value.stroke;
+  }
+  const strokeWidth = normalizeFiniteNumber(value.strokeWidth);
+  if (strokeWidth !== undefined && strokeWidth >= 0) {
+    appearance.strokeWidth = strokeWidth;
+  }
+  const opacity = normalizeFiniteNumber(value.opacity);
+  if (opacity !== undefined) appearance.opacity = opacity;
+  if (
+    Array.isArray(value.dash) &&
+    value.dash.every((entry) => normalizeFiniteNumber(entry) !== undefined)
+  ) {
+    appearance.dash = value.dash.map(Number);
+  }
+  return Object.keys(appearance).length ? appearance : undefined;
 }
 
 function normalizeUnitCoordinate(value: unknown): number {
@@ -1077,118 +1102,50 @@ function normalizeObjectInteraction(
   return Object.keys(interaction).length ? interaction : undefined;
 }
 
-function normalizeEffectTarget(value: unknown): EditorEffectTarget | undefined {
-  if (value === undefined || value === "self") return "self";
-  if (!isRecord(value)) return undefined;
-  const objectId = normalizeId(value.objectId);
-  if (objectId) return { objectId };
-  const layerId = normalizeId(value.layerId);
-  if (layerId) return { layerId };
-  const surfaceId = normalizeId(value.surfaceId);
-  if (surfaceId) return { surfaceId };
-  return undefined;
-}
-
-function normalizeEffect(value: unknown): EditorEffect | null {
-  if (!isRecord(value)) return null;
-  const type = normalizeId(value.type);
-  const capabilityId = normalizeId(value.capabilityId);
-  const effect: EditorEffect = {
-    type,
-    require: VALID_REQUIRE_POLICIES.has(String(value.require))
-      ? (value.require as EditorDocumentRequirePolicy)
-      : "strict",
-  };
-  const id = normalizeId(value.id);
-  const order = normalizeFiniteNumber(value.order);
-  const target = normalizeEffectTarget(value.target);
-  if (id) effect.id = id;
-  if (capabilityId) effect.capabilityId = capabilityId;
-  if (order !== undefined) effect.order = order;
-  if (
-    value.phase === "document" ||
-    value.phase === "layout" ||
-    value.phase === "render" ||
-    value.phase === "interaction" ||
-    value.phase === "export"
-  ) {
-    effect.phase = value.phase;
-  }
-  if (target) effect.target = target;
-  if (isRecord(value.payload)) effect.payload = cloneRecord(value.payload);
-  if (isRecord(value.metadata)) effect.metadata = cloneRecord(value.metadata);
-  return effect;
-}
-
-function normalizeEffects(value: unknown): EditorEffect[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const effects = value
-    .map((item) => normalizeEffect(item))
-    .filter((item): item is EditorEffect => Boolean(item));
-  return effects.length ? effects : undefined;
-}
-
 function normalizeObjectEffect(value: unknown): EditorObjectEffect | null {
   if (!isRecord(value)) return null;
   const type = normalizeId(value.type);
-  const common = normalizeObjectEffectCommon(value);
-
-  if (type === "clip-source") {
-    const targetIds = normalizeIdList(value.targetIds);
-    return targetIds ? { ...common, type, targetIds } : null;
+  if (type === "core.geometry.clip") {
+    const sourceObjectId = normalizeId(value.sourceObjectId);
+    const participation = normalizeParticipation(value.participation);
+    return sourceObjectId
+      ? { type, sourceObjectId, ...(participation ? { participation } : {}) }
+      : null;
   }
 
-  if (type === "boolean") {
-    const targetId = normalizeId(value.targetId);
+  if (type === "core.geometry.boolean") {
+    const operandObjectId = normalizeId(value.operandObjectId);
     const operation = normalizeId(value.operation);
     if (
-      !targetId ||
+      !operandObjectId ||
       !["add", "subtract", "intersect", "exclude"].includes(operation)
     ) {
       return null;
     }
 
-    const participation = normalizeId(value.participation);
+    const participation = normalizeParticipation(value.participation);
     return {
-      ...common,
       type,
-      targetId,
+      operandObjectId,
       operation: operation as "add" | "subtract" | "intersect" | "exclude",
-      ...(participation === "preview" ||
-      participation === "export" ||
-      participation === "both"
-        ? { participation }
-        : {}),
+      ...(participation ? { participation } : {}),
     };
   }
-
-  if (type === "guide") {
-    const role = normalizeId(value.role);
-    if (role !== "cut" && role !== "bleed" && role !== "safe-area") {
-      return null;
-    }
-
-    return {
-      ...common,
-      type,
-      role,
-      ...(isRecord(value.style) ? { style: cloneRecord(value.style) } : {}),
-    };
-  }
-
-  return normalizeEffect(value);
+  if (!type) return null;
+  return {
+    type,
+    ...(value.payload !== undefined
+      ? { payload: cloneSerializableValue(value.payload) as JsonValue }
+      : {}),
+  };
 }
 
-function normalizeObjectEffectCommon(
-  value: Record<string, unknown>,
-): EditorObjectEffectCommon {
-  const common: EditorObjectEffectCommon = {};
-  const id = normalizeId(value.id);
-  const order = normalizeFiniteNumber(value.order);
-  if (id) common.id = id;
-  if (order !== undefined) common.order = order;
-  if (isRecord(value.metadata)) common.metadata = cloneRecord(value.metadata);
-  return common;
+function normalizeParticipation(
+  value: unknown,
+): "preview" | "export" | "both" | undefined {
+  return value === "preview" || value === "export" || value === "both"
+    ? value
+    : undefined;
 }
 
 function normalizeObjectEffects(
@@ -1201,6 +1158,40 @@ function normalizeObjectEffects(
   return effects.length ? effects : undefined;
 }
 
+function normalizeObjectTrait(value: unknown): EditorObjectTrait | null {
+  if (!isRecord(value)) return null;
+  const type = normalizeId(value.type);
+  if (type === "core.guide") {
+    const role = normalizeId(value.role);
+    return role === "cut" || role === "bleed" || role === "safe-area"
+      ? { type, role }
+      : null;
+  }
+  if (type === "core.output-mask") {
+    const keys = normalizeIdList(value.keys);
+    return keys ? { type, keys } : null;
+  }
+  if (type === "core.export") {
+    const scopes = normalizeIdList(value.scopes);
+    return scopes ? { type, scopes } : null;
+  }
+  if (!type) return null;
+  return {
+    type,
+    ...(value.payload !== undefined
+      ? { payload: cloneSerializableValue(value.payload) as JsonValue }
+      : {}),
+  };
+}
+
+function normalizeObjectTraits(value: unknown): EditorObjectTrait[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const traits = value
+    .map(normalizeObjectTrait)
+    .filter((item): item is EditorObjectTrait => Boolean(item));
+  return traits.length ? traits : undefined;
+}
+
 function normalizeObject(value: unknown): EditorObject | null {
   if (!isRecord(value)) return null;
   const id = normalizeId(value.id);
@@ -1209,14 +1200,14 @@ function normalizeObject(value: unknown): EditorObject | null {
     id,
     placement: normalizeObjectPlacement(value.placement),
     visible: typeof value.visible === "boolean" ? value.visible : true,
-    locked: typeof value.locked === "boolean" ? value.locked : undefined,
-    tags: normalizeIdList(value.tags),
-    style: isRecord(value.style) ? cloneRecord(value.style) : undefined,
-    metadata: isRecord(value.metadata)
-      ? cloneRecord(value.metadata)
-      : undefined,
+    locked: typeof value.locked === "boolean" ? value.locked : false,
+    ...(normalizeObjectTraits(value.traits)
+      ? { traits: normalizeObjectTraits(value.traits) }
+      : {}),
     ...(interaction ? { interaction } : {}),
-    effects: normalizeObjectEffects(value.effects),
+    ...(normalizeObjectEffects(value.effects)
+      ? { effects: normalizeObjectEffects(value.effects) }
+      : {}),
   };
   if (Array.isArray(value.children) && value.source === undefined) {
     return {
@@ -1238,7 +1229,8 @@ function normalizeObject(value: unknown): EditorObject | null {
         : {}),
     };
   }
-  return { ...base, source };
+  const appearance = normalizePrimitiveAppearance(value.appearance);
+  return { ...base, source, ...(appearance ? { appearance } : {}) };
 }
 
 function normalizeLayer(value: unknown): EditorLayer | null {
@@ -1247,19 +1239,14 @@ function normalizeLayer(value: unknown): EditorLayer | null {
     ? value.objects
         .map((item) => normalizeObject(item))
         .filter((item): item is EditorObject => Boolean(item))
-    : undefined;
+    : [];
 
   return {
     id: normalizeId(value.id),
-    role: typeof value.role === "string" ? value.role.trim() : undefined,
+    role: isEditorLayerRole(value.role) ? value.role : "content",
     visible: typeof value.visible === "boolean" ? value.visible : true,
-    locked: typeof value.locked === "boolean" ? value.locked : undefined,
-    tags: normalizeIdList(value.tags),
-    objects: objects?.length ? objects : undefined,
-    effects: normalizeEffects(value.effects),
-    metadata: isRecord(value.metadata)
-      ? cloneRecord(value.metadata)
-      : undefined,
+    locked: typeof value.locked === "boolean" ? value.locked : false,
+    objects,
   };
 }
 
@@ -1275,10 +1262,6 @@ function normalizeSurface(value: unknown): EditorSurface | null {
     title: typeof value.title === "string" ? value.title : undefined,
     geometry: normalizeSurfaceGeometry(value.geometry),
     layers,
-    effects: normalizeEffects(value.effects),
-    metadata: isRecord(value.metadata)
-      ? cloneRecord(value.metadata)
-      : undefined,
   };
 }
 
@@ -1301,11 +1284,18 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
     version: EDITOR_DOCUMENT_VERSION,
     assets,
     extensions,
-    ...(isRecord(input.metadata)
-      ? { metadata: cloneRecord(input.metadata) }
-      : {}),
     surfaces,
   };
+}
+
+function isEditorLayerRole(value: unknown): value is EditorLayerRole {
+  return (
+    value === "background" ||
+    value === "content" ||
+    value === "guide" ||
+    value === "overlay" ||
+    value === "production"
+  );
 }
 
 /** Creates a fully detached copy without relying on browser or runtime APIs. */
@@ -1424,16 +1414,15 @@ function resolveEffectCapabilityId(
   effect: EditorEffect,
   options: EditorDocumentCapabilityCollectionOptions,
 ): string | undefined {
-  return effect.capabilityId || options.resolveEffectCapabilityId?.(effect);
+  return options.resolveEffectCapabilityId?.(effect);
 }
 
 export function isEditorBuiltinObjectEffect(
   effect: EditorObjectEffect,
-): effect is EditorBuiltinObjectEffect {
+): effect is CoreGeometryEffect {
   return (
-    effect.type === "clip-source" ||
-    effect.type === "boolean" ||
-    effect.type === "guide"
+    effect.type === "core.geometry.clip" ||
+    effect.type === "core.geometry.boolean"
   );
 }
 
@@ -1470,16 +1459,6 @@ function validateDocumentExtensions(
       path: "extensions",
     });
   }
-}
-
-function validateEffects(
-  diagnostics: EditorDocumentDiagnostic[],
-  effects: EditorEffect[] | undefined,
-  path: string,
-) {
-  effects?.forEach((effect, index) =>
-    validateEffect(diagnostics, effect, `${path}.effects[${index}]`),
-  );
 }
 
 function validateObjectEffects(
@@ -1531,12 +1510,26 @@ function validateRawEffectEnvelopes(
   surfaces.forEach((surface, surfaceIndex) => {
     if (!isRecord(surface)) return;
     const surfacePath = `surfaces[${surfaceIndex}]`;
-    validateRawEffectArray(diagnostics, surface.effects, surfacePath);
+    if (surface.effects !== undefined) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "surface-effects-forbidden",
+        message: "Effects may only be attached to objects.",
+        path: `${surfacePath}.effects`,
+      });
+    }
     const layers = Array.isArray(surface.layers) ? surface.layers : [];
     layers.forEach((layer, layerIndex) => {
       if (!isRecord(layer)) return;
       const layerPath = `${surfacePath}.layers[${layerIndex}]`;
-      validateRawEffectArray(diagnostics, layer.effects, layerPath);
+      if (layer.effects !== undefined) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "layer-effects-forbidden",
+          message: "Effects may only be attached to objects.",
+          path: `${layerPath}.effects`,
+        });
+      }
       validateObjects(layer.objects, `${layerPath}.objects`);
     });
   });
@@ -1548,9 +1541,11 @@ function validateObjectReferences(
 ): void {
   const objects = new Map<string, EditorObject>();
   const paths = new Map<string, string>();
-  visitEditorDocumentObjects(document, ({ object, path }) => {
+  const surfaceByObjectId = new Map<string, string>();
+  visitEditorDocumentObjects(document, ({ object, path, surface }) => {
     objects.set(object.id, object);
     paths.set(object.id, path);
+    surfaceByObjectId.set(object.id, surface.id);
   });
   const dependencies = new Map<string, Set<string>>();
   const assetIds = new Set(document.assets.map((asset) => asset.id));
@@ -1564,6 +1559,15 @@ function validateObjectReferences(
         severity: "error",
         code: "object-effect-target-missing",
         message: `Object "${sourceId}" references missing object "${targetId}".`,
+        path: effectPath,
+      });
+      return;
+    }
+    if (surfaceByObjectId.get(sourceId) !== surfaceByObjectId.get(targetId)) {
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "object-effect-cross-surface",
+        message: `Object "${sourceId}" references object "${targetId}" on another surface.`,
         path: effectPath,
       });
       return;
@@ -1588,29 +1592,23 @@ function validateObjectReferences(
     }
     object.effects?.forEach((effect, effectIndex) => {
       const effectPath = `${path}.effects[${effectIndex}]`;
-      if (isEditorBuiltinObjectEffect(effect) && effect.type === "boolean") {
-        addDependency(object.id, effect.targetId, `${effectPath}.targetId`);
-      } else if (
+      if (
         isEditorBuiltinObjectEffect(effect) &&
-        effect.type === "clip-source"
-      ) {
-        effect.targetIds.forEach((targetId: string, targetIndex: number) =>
-          addDependency(
-            object.id,
-            targetId,
-            `${effectPath}.targetIds[${targetIndex}]`,
-          ),
-        );
-      } else if (
-        isGenericEditorEffect(effect) &&
-        typeof effect.target === "object" &&
-        effect.target &&
-        "objectId" in effect.target
+        effect.type === "core.geometry.boolean"
       ) {
         addDependency(
           object.id,
-          effect.target.objectId,
-          `${effectPath}.target.objectId`,
+          effect.operandObjectId,
+          `${effectPath}.operandObjectId`,
+        );
+      } else if (
+        isEditorBuiltinObjectEffect(effect) &&
+        effect.type === "core.geometry.clip"
+      ) {
+        addDependency(
+          object.id,
+          effect.sourceObjectId,
+          `${effectPath}.sourceObjectId`,
         );
       }
     });
@@ -1670,6 +1668,24 @@ function validateRawEffectArray(
         message: "Effect type is required.",
         path: `${path}.type`,
       });
+    }
+    for (const field of [
+      "id",
+      "capabilityId",
+      "require",
+      "order",
+      "phase",
+      "target",
+      "metadata",
+    ]) {
+      if (effect[field] !== undefined) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "effect-instance-field-forbidden",
+          message: `Effect field "${field}" belongs to its definition, not the document instance.`,
+          path: `${path}.${field}`,
+        });
+      }
     }
   });
 }
@@ -2060,21 +2076,11 @@ export function validateEditorDocument(
         });
       }
     });
-    validateEffects(diagnostics, surface.effects, surfacePath);
     runValidators(diagnostics, options.validators, {
       document,
       path: surfacePath,
       surface,
     });
-    surface.effects?.forEach((effect, effectIndex) =>
-      runValidators(diagnostics, options.validators, {
-        document,
-        path: `${surfacePath}.effects[${effectIndex}]`,
-        surface,
-        effect,
-      }),
-    );
-
     surface.layers.forEach((layer, layerIndex) => {
       const layerPath = `${surfacePath}.layers[${layerIndex}]`;
       validateUniqueId(
@@ -2084,22 +2090,12 @@ export function validateEditorDocument(
         `${layerPath}.id`,
         "layer",
       );
-      validateEffects(diagnostics, layer.effects, layerPath);
       runValidators(diagnostics, options.validators, {
         document,
         path: layerPath,
         surface,
         layer,
       });
-      layer.effects?.forEach((effect, effectIndex) =>
-        runValidators(diagnostics, options.validators, {
-          document,
-          path: `${layerPath}.effects[${effectIndex}]`,
-          surface,
-          layer,
-          effect,
-        }),
-      );
       const rawLayer = Array.isArray(
         (rawSurface as Record<string, unknown>).layers,
       )
@@ -2206,14 +2202,8 @@ function collectEffects(
 ) {
   document.surfaces.forEach((surface, surfaceIndex) => {
     const surfacePath = `surfaces[${surfaceIndex}]`;
-    surface.effects?.forEach((effect, effectIndex) =>
-      visit(effect, `${surfacePath}.effects[${effectIndex}]`),
-    );
     surface.layers.forEach((layer, layerIndex) => {
       const layerPath = `${surfacePath}.layers[${layerIndex}]`;
-      layer.effects?.forEach((effect, effectIndex) =>
-        visit(effect, `${layerPath}.effects[${effectIndex}]`),
-      );
       const collectObjectEffects = (
         objects: EditorObject[] | undefined,
         objectsPath: string,
@@ -2248,7 +2238,7 @@ export function collectEditorDocumentCapabilityRequirements(
 
   collectEffects(document, (effect, path) => {
     const capabilityId = resolveEffectCapabilityId(effect, options);
-    const require = effect.require ?? "strict";
+    const require: EditorDocumentRequirePolicy = "strict";
     if (!capabilityId) {
       addDiagnostic(diagnostics, {
         severity: "error",
@@ -2260,15 +2250,12 @@ export function collectEditorDocumentCapabilityRequirements(
       return;
     }
 
-    if (require !== "ignore" || options.includeIgnored) {
-      requirements.push({
-        capabilityId,
-        effectType: effect.type,
-        require,
-        path,
-        ...(effect.id ? { effectId: effect.id } : {}),
-      });
-    }
+    requirements.push({
+      capabilityId,
+      effectType: effect.type,
+      require,
+      path,
+    });
 
     if (available && !available.has(capabilityId)) {
       if (require === "strict") {
@@ -2276,15 +2263,6 @@ export function collectEditorDocumentCapabilityRequirements(
           severity: "error",
           code: "capability-required",
           message: `Capability "${capabilityId}" is required by effect "${effect.type}".`,
-          path,
-          capabilityId,
-          effectType: effect.type,
-        });
-      } else if (require === "warn") {
-        addDiagnostic(diagnostics, {
-          severity: "warning",
-          code: "capability-optional-missing",
-          message: `Optional capability "${capabilityId}" is missing for effect "${effect.type}".`,
           path,
           capabilityId,
           effectType: effect.type,

@@ -19,6 +19,8 @@ export interface EditorEffectSchemaValidationContext {
 export interface EditorEffectSchema {
   effectType: string;
   capabilityId?: string;
+  phase?: "document" | "layout" | "render" | "interaction" | "export";
+  require?: "strict" | "warn" | "ignore";
   validate(
     payload: unknown,
     context: EditorEffectSchemaValidationContext,
@@ -61,6 +63,12 @@ export class EffectSchemaRegistry {
 
   resolveCapabilityId(effectType: string): string | undefined {
     return normalizeIdentifier(this.get(effectType)?.capabilityId) || undefined;
+  }
+
+  resolvePhase(
+    effectType: string,
+  ): "document" | "layout" | "render" | "interaction" | "export" {
+    return this.get(effectType)?.phase ?? "layout";
   }
 }
 
@@ -115,22 +123,26 @@ function visitRawEffects(
   if (!isRecord(value) || !Array.isArray(value.surfaces)) return;
   value.surfaces.forEach((surface, surfaceIndex) => {
     if (!isRecord(surface)) return;
-    visitEffectArray(surface.effects, `surfaces[${surfaceIndex}]`, visitor);
     if (!Array.isArray(surface.layers)) return;
     surface.layers.forEach((layer, layerIndex) => {
       if (!isRecord(layer)) return;
       const layerPath = `surfaces[${surfaceIndex}].layers[${layerIndex}]`;
-      visitEffectArray(layer.effects, layerPath, visitor);
-      if (!Array.isArray(layer.objects)) return;
-      layer.objects.forEach((object, objectIndex) => {
-        if (!isRecord(object)) return;
-        visitEffectArray(
-          object.effects,
-          `${layerPath}.objects[${objectIndex}]`,
-          visitor,
-        );
-      });
+      visitObjectEffects(layer.objects, `${layerPath}.objects`, visitor);
     });
+  });
+}
+
+function visitObjectEffects(
+  value: unknown,
+  objectsPath: string,
+  visitor: (effect: Readonly<Record<string, unknown>>, path: string) => void,
+): void {
+  if (!Array.isArray(value)) return;
+  value.forEach((object, objectIndex) => {
+    if (!isRecord(object)) return;
+    const objectPath = `${objectsPath}[${objectIndex}]`;
+    visitEffectArray(object.effects, objectPath, visitor);
+    visitObjectEffects(object.children, `${objectPath}.children`, visitor);
   });
 }
 
@@ -156,9 +168,8 @@ function appendPayloadPath(effectPath: string, relativePath?: string): string {
 
 function isDocumentBuiltinEffect(effectType: string): boolean {
   return (
-    effectType === "clip-source" ||
-    effectType === "boolean" ||
-    effectType === "guide"
+    effectType === "core.geometry.clip" ||
+    effectType === "core.geometry.boolean"
   );
 }
 

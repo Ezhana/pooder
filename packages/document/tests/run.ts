@@ -83,7 +83,7 @@ const TEST_SURFACE_FRAMES = {
 function resolveTestEffectCapabilityId(
   effect: EditorEffect,
 ): string | undefined {
-  return effect.capabilityId || TEST_EFFECT_CAPABILITY_IDS[effect.type];
+  return TEST_EFFECT_CAPABILITY_IDS[effect.type];
 }
 
 function testNormalizeDefaults() {
@@ -99,15 +99,29 @@ function testNormalizeDefaults() {
         layers: [
           {
             id: "artwork",
-            exportable: false,
-            tags: [" layer-tag ", "", "layer-tag"],
+            role: "content",
+            visible: true,
+            locked: false,
             objects: [
               {
                 id: "image-1",
-                exportable: false,
-                tags: [" mockup ", "", "mockup"],
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: { kind: "url", url: "/image.png" },
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 20, height: 20 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
+                source: { kind: "image" },
+                appearance: {
+                  fit: "cover",
+                  anchorX: 0.5,
+                  anchorY: 0.5,
+                  zoom: 1,
+                  rotation: 0,
+                  opacity: 1,
+                  clip: "frame",
+                },
                 effects: [
                   {
                     type: "image-placement",
@@ -136,11 +150,7 @@ function testNormalizeDefaults() {
     true,
     "layer visibility should default",
   );
-  assertDeepEqual(
-    doc.surfaces[0].layers[0].tags,
-    ["layer-tag"],
-    "layer tags should normalize",
-  );
+  assert(!("tags" in doc.surfaces[0].layers[0]), "layers must not persist tags");
   assertEqual(
     "exportable" in
       (doc.surfaces[0].layers[0] as unknown as Record<string, unknown>),
@@ -152,10 +162,9 @@ function testNormalizeDefaults() {
     true,
     "object visibility should default",
   );
-  assertDeepEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.tags,
-    ["mockup"],
-    "object tags should normalize",
+  assert(
+    !("tags" in doc.surfaces[0].layers[0].objects[0]),
+    "objects must not persist tags",
   );
   assertEqual(
     "exportable" in
@@ -167,24 +176,24 @@ function testNormalizeDefaults() {
     "object exportable should be ignored",
   );
   assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.require,
-    "strict",
-    "effect require should default",
+    "require" in (doc.surfaces[0].layers[0].objects[0].effects?.[0] ?? {}),
+    false,
+    "effect instances must not persist require",
   );
   assertDeepEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.target,
-    { objectId: "image-1" },
-    "effect target should normalize",
+    "target" in (doc.surfaces[0].layers[0].objects[0].effects?.[0] ?? {}),
+    false,
+    "effect instances must not persist remote targets",
   );
   assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.order,
-    20,
-    "effect order should normalize",
+    "order" in (doc.surfaces[0].layers[0].objects[0].effects?.[0] ?? {}),
+    false,
+    "effect array position must be the only order",
   );
   assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.phase,
-    "interaction",
-    "effect phase should normalize",
+    "phase" in (doc.surfaces[0].layers[0].objects[0].effects?.[0] ?? {}),
+    false,
+    "effect phase belongs to its definition",
   );
   assert(
     !("interaction" in (doc.surfaces[0].layers[0].objects?.[0] ?? {})),
@@ -798,41 +807,87 @@ function testCompositeStructureAndEffectDependencies() {
     surfaces: [
       {
         id: "front",
-        size: { width: 100, height: 100, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+          productionBounds: { x: 0, y: 0, width: 100, height: 100 },
+        },
         layers: [
           {
             id: "objects",
+            role: "content",
+            visible: true,
+            locked: false,
             objects: [
               {
-                id: "feature",
-                frame: { x: 0, y: 0, width: 10, height: 10 },
-                children: [
+                id: "owner-a",
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 10, height: 10 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
+                source: { kind: "shape", shape: "rect", params: {} },
+                effects: [
                   {
-                    id: "operand",
-                    frame: { x: 0, y: 0, width: 10, height: 10 },
-                    source: { kind: "shape", shape: "circle", params: {} },
-                    effects: [
-                      {
-                        type: "boolean",
-                        targetId: "cutline",
-                        operation: "add",
-                      },
-                    ],
+                    type: "core.geometry.boolean",
+                    operandObjectId: "owner-b",
+                    operation: "add",
+                  },
+                  {
+                    type: "core.geometry.clip",
+                    sourceObjectId: "missing",
                   },
                 ],
               },
               {
-                id: "cutline",
-                frame: { x: 0, y: 0, width: 10, height: 10 },
+                id: "owner-b",
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 10, height: 10 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
                 source: { kind: "shape", shape: "rect", params: {} },
-                children: [],
                 effects: [
                   {
-                    type: "clip-source",
-                    targetIds: ["operand"],
+                    type: "core.geometry.clip",
+                    sourceObjectId: "owner-a",
+                  },
+                  {
+                    type: "core.geometry.clip",
+                    sourceObjectId: "back-object",
                   },
                 ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: "back",
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+          productionBounds: { x: 0, y: 0, width: 100, height: 100 },
+        },
+        layers: [
+          {
+            id: "objects",
+            role: "content",
+            visible: true,
+            locked: false,
+            objects: [
+              {
+                id: "back-object",
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 10, height: 10 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
+                source: { kind: "shape", shape: "rect", params: {} },
               },
             ],
           },
@@ -842,12 +897,16 @@ function testCompositeStructureAndEffectDependencies() {
   });
   const codes = diagnostics.map((item) => item.code);
   assert(
-    codes.includes("object-structure-invalid"),
-    "visual objects must not contain children",
+    codes.includes("object-effect-target-missing"),
+    "core geometry effects must reject missing references",
+  );
+  assert(
+    codes.includes("object-effect-cross-surface"),
+    "core geometry effects must reject cross-surface references",
   );
   assert(
     codes.includes("object-effect-dependency-cycle"),
-    "boolean and clip-source dependency cycles must be rejected",
+    "owner-owned boolean and clip dependency cycles must be rejected",
   );
 }
 
@@ -1142,10 +1201,26 @@ function testRequirePolicyDiagnostics() {
         layers: [
           {
             id: "layer",
-            effects: [
-              { type: "dieline", require: "strict" },
-              { type: "configurable-visual", require: "warn" },
-              { type: "image-placement", require: "ignore" },
+            role: "content",
+            visible: true,
+            locked: false,
+            objects: [
+              {
+                id: "subject",
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 1, height: 1 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
+                source: { kind: "shape", shape: "rect", params: {} },
+                effects: [
+                  { type: "dieline" },
+                  { type: "configurable-visual" },
+                  { type: "image-placement" },
+                ],
+              },
             ],
           },
         ],
@@ -1169,17 +1244,17 @@ function testRequirePolicyDiagnostics() {
   assert(
     result.diagnostics.some(
       (item) =>
-        item.code === "capability-optional-missing" &&
-        item.severity === "warning" &&
+        item.code === "capability-required" &&
+        item.severity === "error" &&
         item.capabilityId === "test.configurable-visual",
     ),
-    "warn missing capability should produce warning",
+    "all definition-owned requirements should be strict",
   );
   assert(
-    !result.diagnostics.some(
+    result.diagnostics.some(
       (item) => item.capabilityId === "test.image-placement",
     ),
-    "ignore missing capability should not produce diagnostic",
+    "image placement should also produce a strict missing-capability diagnostic",
   );
 
   const generic = collectEditorDocumentCapabilityRequirements(doc, {
@@ -1187,8 +1262,8 @@ function testRequirePolicyDiagnostics() {
   });
   assertEqual(
     generic.requirements.length,
-    2,
-    "ignored effect should be skipped",
+    3,
+    "every extension effect should produce a capability requirement",
   );
 }
 
@@ -1197,7 +1272,6 @@ function testCloneAndRecursiveObjectAccessors() {
     version: EDITOR_DOCUMENT_VERSION,
     assets: [],
     extensions: { test: { nested: { enabled: true } } },
-    metadata: { nested: { label: "original" } },
     surfaces: [
       {
         id: "front",
@@ -1240,7 +1314,6 @@ function testCloneAndRecursiveObjectAccessors() {
   assert(clone !== document, "clone should detach the document root");
   assert(
     clone.extensions !== document.extensions &&
-      clone.metadata !== document.metadata &&
       clone.surfaces[0] !== document.surfaces[0],
     "clone should recursively detach nested values",
   );

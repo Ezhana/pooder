@@ -77,9 +77,14 @@ function createImageSlotDocument(): EditorDocument {
         layers: [
           {
             id: "artwork",
+            role: "content",
+            visible: true,
+            locked: false,
             objects: [
               {
                 id: IMAGE_SLOT_ID,
+                visible: true,
+                locked: false,
                 placement: {
                   localBounds: { x: 0, y: 0, width: 120, height: 80 },
                   localToParent: [1.05858, 0.44934, -0.33212, 0.78243, 92, 76],

@@ -18,6 +18,8 @@ const appearance = {
 
 const emptySlot: EditorImageObject = {
   id: "artwork",
+  visible: true,
+  locked: false,
   placement: {
     localBounds: { x: 0, y: 0, width: 100, height: 100 },
     localToParent: [1, 0, 0, 1, 0, 0],
@@ -40,7 +42,15 @@ const document: EditorDocument = {
         canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
         productionBounds: { x: 0, y: 0, width: 100, height: 100 },
       },
-      layers: [{ id: "artwork", objects: [emptySlot] }],
+      layers: [
+        {
+          id: "artwork",
+          role: "content",
+          visible: true,
+          locked: false,
+          objects: [emptySlot],
+        },
+      ],
     },
   ],
 };

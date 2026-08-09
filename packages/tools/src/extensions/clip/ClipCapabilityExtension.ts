@@ -22,8 +22,10 @@ import {
   type SceneService,
   type SurfaceFrameService,
 } from "@pooder/core";
-import type { EditorDocument, EditorEffect } from "@pooder/document";
-import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
+import type {
+  EditorDocument,
+  EditorExtensionObjectEffect,
+} from "@pooder/document";
 import {
   CLIP_CAPABILITY_ID,
   createClipCapabilityDefinition,
@@ -114,10 +116,6 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
           capabilityId: this.capabilityId,
         }),
       ],
-      documentExtensions: [
-        { id: this.id, effects: [getOfficialToolEffectSchema("clip")] },
-      ],
-      renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
   }
 
@@ -128,7 +126,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
   }
 
   private createRenderIntentCompiler(): RenderIntentCompilerContribution<
-    EditorEffect<ClipEffectPayload>,
+    EditorExtensionObjectEffect<ClipEffectPayload>,
     EditorDocument
   > {
     return {
@@ -140,7 +138,7 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
 
   private compileDocumentClipEffect(
     context: RenderIntentCompilerContext<
-      EditorEffect<ClipEffectPayload>,
+      EditorExtensionObjectEffect<ClipEffectPayload>,
       EditorDocument
     >,
   ): RenderIntentPatch | void {

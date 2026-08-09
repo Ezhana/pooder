@@ -12,7 +12,7 @@ import {
 } from "@pooder/core";
 import type {
   EditorDocument,
-  EditorEffect,
+  EditorExtensionObjectEffect,
 } from "@pooder/document";
 import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
@@ -137,7 +137,7 @@ export class ConfigurableVisualCapabilityExtension implements ExtensionDefinitio
   };
 
   private createRenderIntentCompiler(): RenderIntentCompilerContribution<
-    EditorEffect<ConfigurableVisualEffectPayload>,
+    EditorExtensionObjectEffect<ConfigurableVisualEffectPayload>,
     EditorDocument
   > {
     return {
@@ -149,7 +149,7 @@ export class ConfigurableVisualCapabilityExtension implements ExtensionDefinitio
 
   private compileDocumentConfigurableVisualEffect(
     context: RenderIntentCompilerContext<
-      EditorEffect<ConfigurableVisualEffectPayload>,
+      EditorExtensionObjectEffect<ConfigurableVisualEffectPayload>,
       EditorDocument
     >,
   ): RenderIntentPatch | void {
@@ -314,7 +314,7 @@ export class ConfigurableVisualCapabilityExtension implements ExtensionDefinitio
   }
 
   private readConfigurableVisualPayload(
-    effect: EditorEffect<ConfigurableVisualEffectPayload>,
+    effect: EditorExtensionObjectEffect<ConfigurableVisualEffectPayload>,
   ): { configKey: string; key: string } {
     const payload =
       effect.payload && typeof effect.payload === "object" ? effect.payload : {};

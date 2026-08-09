@@ -1,8 +1,6 @@
 /**
- * Pre-convergence v7 fixture kept as the stage-0 contract baseline.
- *
- * Later stages deliberately update this fixture in lockstep with the public
- * EditorDocument contract. It covers ordering, two-sided surfaces, custom
+ * Representative converged v7 fixture. It covers ordering, two-sided
+ * surfaces, custom
  * dieline/feature objects, an image slot, and a production-mask declaration.
  */
 export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
@@ -60,40 +58,69 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
         {
           id: "front.production",
           role: "production",
+          visible: true,
+          locked: true,
           objects: [
             {
               id: "front.dieline",
+              visible: true,
+              locked: true,
               placement: {
                 localBounds: { x: 0, y: 0, width: 94, height: 114 },
                 localToParent: [1, 0, 0, 1, 3, 3],
                 pivot: { x: 0, y: 0 },
               },
-              tags: ["dieline"],
               source: {
                 kind: "path",
                 pathData: "M 3 3 H 97 V 117 H 3 Z",
                 sourceBounds: { x: 3, y: 3, width: 94, height: 114 },
               },
-              effects: [{ type: "guide", role: "cut" }],
+              appearance: {
+                fill: "none",
+                stroke: "#ff00ff",
+                strokeWidth: 0.2,
+                opacity: 1,
+                dash: [],
+              },
+              traits: [{ type: "core.guide", role: "cut" }],
+              effects: [
+                {
+                  type: "core.geometry.boolean",
+                  operandObjectId: "front.feature.hole",
+                  operation: "subtract",
+                },
+              ],
             },
             {
               id: "front.feature.hole",
+              visible: false,
+              locked: true,
               placement: {
                 localBounds: { x: 0, y: 0, width: 8, height: 8 },
                 localToParent: [1, 0, 0, 1, 46, 8],
                 pivot: { x: 0, y: 0 },
               },
-              tags: ["feature", "hole"],
               source: { kind: "shape", shape: "circle", params: {} },
+              appearance: { fill: "#000000", opacity: 1 },
+              traits: [
+                {
+                  type: "popecho.feature-operand",
+                  payload: { operation: "subtract" },
+                },
+              ],
             },
           ],
         },
         {
           id: "front.content",
           role: "content",
+          visible: true,
+          locked: false,
           objects: [
             {
               id: "front.image-slot",
+              visible: true,
+              locked: false,
               placement: {
                 localBounds: { x: 0, y: 0, width: 80, height: 90 },
                 localToParent: [1, 0, 0, 1, 10, 15],
@@ -131,9 +158,13 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
         {
           id: "back.content",
           role: "content",
+          visible: true,
+          locked: false,
           objects: [
             {
               id: "back.artwork",
+              visible: true,
+              locked: false,
               placement: {
                 localBounds: { x: 0, y: 0, width: 80, height: 90 },
                 localToParent: [1, 0, 0, 1, 10, 15],

@@ -5,18 +5,12 @@ import {
 } from "@pooder/document";
 
 export const OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS = {
-  clip: "pooder.kit.clip",
   "image-placement": "pooder.kit.image-slot",
   "configurable-visual": "pooder.kit.configurable-visual",
   mirror: "pooder.kit.mirror",
 } as const;
 
 export const OFFICIAL_TOOL_EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
-  {
-    effectType: "clip",
-    capabilityId: OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS.clip,
-    validate: validateClipPayload,
-  },
   {
     effectType: "configurable-visual",
     capabilityId:
@@ -56,58 +50,6 @@ export function getOfficialToolEffectSchema(
 
 export function createOfficialToolEffectSchemaRegistry(): EffectSchemaRegistry {
   return new EffectSchemaRegistry(OFFICIAL_TOOL_EFFECT_SCHEMAS);
-}
-
-function validateClipPayload(payload: unknown): EditorEffectSchemaIssue[] {
-  const issues = validateOptionalRecordFields(payload, { enabled: "boolean" });
-  if (
-    payload === undefined ||
-    !isRecord(payload) ||
-    payload.source === undefined
-  ) {
-    return issues;
-  }
-  if (!isRecord(payload.source)) {
-    issues.push(invalidType("source", "an object"));
-    return issues;
-  }
-  const source = payload.source;
-  if (
-    source.type !== "image" &&
-    source.type !== "path"
-  ) {
-    issues.push({
-      code: "effect-payload-invalid",
-      message: 'Clip source.type must be "image" or "path".',
-      path: "source.type",
-    });
-    return issues;
-  }
-  if (source.type === "image" && !isNonEmptyString(source.src)) {
-    issues.push(invalidRequiredString("source.src"));
-  }
-  if (
-    source.type === "image" &&
-    source.props !== undefined &&
-    !isRecord(source.props)
-  ) {
-    issues.push(invalidType("source.props", "an object"));
-  }
-  if (source.type === "path" && !isNonEmptyString(source.pathData)) {
-    issues.push(invalidRequiredString("source.pathData"));
-  }
-  if (
-    source.space !== undefined &&
-    source.space !== "scene" &&
-    source.space !== "screen"
-  ) {
-    issues.push({
-      code: "effect-payload-invalid",
-      message: 'Clip source.space must be "scene" or "screen".',
-      path: "source.space",
-    });
-  }
-  return issues;
 }
 
 function validateImagePlacementPayload(

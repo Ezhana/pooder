@@ -8,7 +8,11 @@ import {
   type CommandService,
   type RenderIntentService,
 } from "@pooder/core";
-import type { EditorDocument, EditorObject } from "@pooder/document";
+import type {
+  EditorDocument,
+  EditorObject,
+  EditorObjectEffect,
+} from "@pooder/document";
 import { registerEditorDocumentService } from "../../document-core/src";
 import {
   CLIP_CAPABILITY_ID,
@@ -181,7 +185,7 @@ async function testSharedCurrentCapabilityUtilities(): Promise<void> {
 }
 
 function createEffectDocument(
-  effect: { type: string; payload?: Record<string, unknown> },
+  effect: EditorObjectEffect,
   source: Record<string, unknown>,
 ): EditorDocument {
   const placement: EditorObject["placement"] = {
@@ -193,6 +197,8 @@ function createEffectDocument(
     source.kind === "image"
       ? {
           id: "visual",
+          visible: true,
+          locked: false,
           placement,
           source: { kind: "image", assetId: "visual.asset" },
           appearance: {
@@ -208,6 +214,8 @@ function createEffectDocument(
         }
       : {
           id: "visual",
+          visible: true,
+          locked: false,
           placement,
           source: source as never,
           effects: [effect],
@@ -236,6 +244,9 @@ function createEffectDocument(
         layers: [
           {
             id: "artwork",
+            role: "content",
+            visible: true,
+            locked: false,
             objects: [visual],
           },
         ],

@@ -8,6 +8,7 @@ import {
   type EditorDocumentDiagnostic,
   type EditorDocumentValidationOptions,
   type EditorEffect,
+  type EditorExtensionObjectEffect,
   type EditorObject,
   type ObjectSource,
 } from "@pooder/document";
@@ -34,7 +35,7 @@ export type OfficialToolDocumentEffectType =
   keyof typeof OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS;
 
 export type OfficialToolDocumentEffect<TPayload = Record<string, unknown>> =
-  EditorEffect<TPayload> & {
+  EditorExtensionObjectEffect<TPayload> & {
     type: OfficialToolDocumentEffectType;
   };
 
@@ -50,7 +51,6 @@ export function isOfficialToolDocumentEffectType(
 export function resolveOfficialToolDocumentEffectCapabilityId(
   effect: EditorEffect,
 ): string | undefined {
-  if (effect.capabilityId) return effect.capabilityId;
   return isOfficialToolDocumentEffectType(effect.type)
     ? OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS[effect.type]
     : undefined;

@@ -71,12 +71,12 @@ import {
   type DocumentInteractionSpec,
   type EditorEffect,
   type EditorLayer,
-  type EditorBuiltinObjectEffect,
   type EditorCompositeObject,
   type EditorImageObject,
   type EditorImageAsset,
   type EditorObject,
   type EditorObjectEffect,
+  type EditorObjectTrait,
   type EditorSurface,
   type DocumentExtensionContribution,
   type ObjectSource,
@@ -539,13 +539,11 @@ async function prepareEditorDocumentApplication(
     );
   const resolvedImages = await resolveDocumentImageResources(runtime, document);
   const intentDrafts = createBaseRenderIntentDrafts(document, resolvedImages);
-  const effectEntries =
-    collectEffectEntries(document).sort(compareEffectEntries);
+  const effectEntries = collectEffectEntries(document);
   const patchEntries: RenderIntentPatchEntry[] = [];
   let patchSequence = 0;
 
   for (const entry of effectEntries) {
-    if (entry.effect.require === "ignore") continue;
     const capabilityId = resolveEffectCapabilityId(
       entry.effect,
       options,
@@ -566,7 +564,7 @@ async function prepareEditorDocumentApplication(
         sourceId: `capability:${capabilityId}`,
         patch,
         priority: 0,
-        phase: entry.effect.phase ?? "layout",
+        phase: effectSchemaRegistry.resolvePhase(entry.effect.type),
         sequence: patchSequence++,
         reason: entry.effect.type,
         debugLabel: entry.path,
@@ -1339,7 +1337,6 @@ function resolveEffectCapabilityId(
   effectSchemaRegistry: EffectSchemaRegistry,
 ): string | undefined {
   return (
-    effect.capabilityId ||
     options.resolveEffectCapabilityId?.(effect) ||
     effectSchemaRegistry.resolveCapabilityId(effect.type)
   );
@@ -1431,7 +1428,6 @@ function removeSourceObject(
   for (const surface of document.surfaces) {
     for (const layer of surface.layers) {
       if (removeFrom(layer.objects)) {
-        if (layer.objects && !layer.objects.length) delete layer.objects;
         return true;
       }
     }
@@ -1742,32 +1738,27 @@ export function createDocumentObjectGeometrySource(
     const operands: Array<{
       objectId: string;
       operation: "add" | "subtract" | "intersect" | "exclude";
-      order: number;
       sequence: number;
     }> = [];
     let sequence = 0;
     visitDocumentVisualObjects(document, (object) => {
+      if (object.id !== targetId) return;
       object.effects?.forEach((effect) => {
         if (
           !isEditorBuiltinObjectEffect(effect) ||
-          effect.type !== "boolean" ||
-          effect.targetId !== targetId
+          effect.type !== "core.geometry.boolean"
         )
           return;
         const participation = effect.participation ?? "both";
         if (participation !== "both" && participation !== purpose) return;
         operands.push({
-          objectId: object.id,
+          objectId: effect.operandObjectId,
           operation: effect.operation,
-          order: effect.order ?? 0,
           sequence: sequence++,
         });
       });
     });
-    return operands.sort(
-      (left, right) =>
-        left.order - right.order || left.sequence - right.sequence,
-    );
+    return operands.sort((left, right) => left.sequence - right.sequence);
   };
 
   return {
@@ -2016,36 +2007,46 @@ function createBaseRenderIntentDrafts(
   const draftsById = new Map(drafts.map((draft) => [draft.id, draft]));
   visitDocumentVisualObjects(document, (object) => {
     object.effects?.forEach((effect, effectIndex) => {
-      if (!isEditorBuiltinObjectEffect(effect) || effect.type !== "clip-source")
+      if (
+        !isEditorBuiltinObjectEffect(effect) ||
+        effect.type !== "core.geometry.clip"
+      )
         return;
-      effect.targetIds.forEach((targetId: string) => {
-        const target = draftsById.get(targetId);
-        if (!target) return;
-        target.effects = [
-          ...(target.effects ?? []),
-          {
-            type: "clipPath",
-            id: effect.id ?? `document-object:${object.id}:clip:${effectIndex}`,
-            coordinateMode: "absolute",
+      const target = draftsById.get(object.id);
+      if (!target) return;
+      const participation = effect.participation ?? "both";
+      target.effects = [
+        ...(target.effects ?? []),
+        {
+          type: "clipPath",
+          id: `document-object:${object.id}:clip:${effectIndex}`,
+          coordinateMode: "absolute",
+          ...(participation !== "export"
+            ? {
             previewGeometryRef: {
               sourceId: "document-object",
-              geometryId: object.id,
+                  geometryId: effect.sourceObjectId,
               purpose: "preview",
             },
+              }
+            : {}),
+          ...(participation !== "preview"
+            ? {
             exportGeometryRef: {
               sourceId: "document-object",
-              geometryId: object.id,
+                  geometryId: effect.sourceObjectId,
               purpose: "export",
             },
+              }
+            : {}),
             source: {
-              id: `document-object:${object.id}:clip-placeholder`,
+            id: `document-object:${effect.sourceObjectId}:clip-placeholder`,
               type: "path",
               space: "scene",
               props: {},
             },
           },
-        ];
-      });
+      ];
     });
   });
   return drafts;
@@ -2097,7 +2098,7 @@ function createCompositeInteractionProxyDraft(
     },
     placement,
     interaction: object.interaction,
-    export: { visible: true, tags: object.tags },
+    export: { visible: true, tags: [] },
     ordering: {
       layerId: layer.id,
       layerOrder: layerIndex,
@@ -2139,22 +2140,31 @@ function createObjectRenderIntentDraft(
   const locked = object.locked === true || layer.locked === true;
   const interaction = createObjectInteractionAspect(object);
   const objectEffects = cloneObjectEffects(object.effects);
-  const guideEffects =
-    object.effects?.filter(
-      (
-        effect,
-      ): effect is Extract<EditorBuiltinObjectEffect, { type: "guide" }> =>
-        isEditorBuiltinObjectEffect(effect) && effect.type === "guide",
+  const guideTraits =
+    object.traits?.filter(
+      (trait): trait is Extract<EditorObjectTrait, { type: "core.guide" }> =>
+        trait.type === "core.guide",
     ) ?? [];
-  const outputMaskKeys = normalizeOutputMaskKeys(
-    object.metadata?.outputMaskKeys ?? object.metadata?.outputMaskKey,
+  const outputMaskKeys = Array.from(
+    new Set(
+      object.traits
+        ?.filter(
+          (
+            trait,
+          ): trait is Extract<EditorObjectTrait, { type: "core.output-mask" }> =>
+            trait.type === "core.output-mask",
+        )
+        .flatMap((trait) => trait.keys) ?? [],
+    ),
   );
   const tags = normalizeTags(
-    layer.tags,
-    object.tags,
-    guideEffects.flatMap((effect) =>
-      effect.type === "guide" ? [effect.role, `guide:${effect.role}`] : [],
-    ),
+    guideTraits.flatMap((trait) => [trait.role, `guide:${trait.role}`]),
+    object.traits
+      ?.filter(
+        (trait): trait is Extract<EditorObjectTrait, { type: "core.export" }> =>
+          trait.type === "core.export",
+      )
+      .flatMap((trait) => trait.scopes),
   );
   const base = {
     id: object.id,
@@ -2195,12 +2205,7 @@ function createObjectRenderIntentDraft(
     },
     ...(interaction ? { interaction } : {}),
     props: {
-      ...(object.style ?? {}),
-      ...guideEffects.reduce(
-        (style, effect) =>
-          effect.type === "guide" ? { ...style, ...effect.style } : style,
-        {} as Record<string, unknown>,
-      ),
+      ...(object.appearance ?? {}),
     },
     data: {
       id: object.id,
@@ -2576,21 +2581,7 @@ function normalizeRenderIntentPatches(
 function collectEffectEntries(document: EditorDocument): EffectEntry[] {
   const entries: EffectEntry[] = [];
   document.surfaces.forEach((surface, surfaceIndex) => {
-    surface.effects?.forEach((effect, effectIndex) =>
-      entries.push({
-        effect,
-        context: { surface },
-        path: `/surfaces/${surfaceIndex}/effects/${effectIndex}`,
-      }),
-    );
     surface.layers.forEach((layer, layerIndex) => {
-      layer.effects?.forEach((effect, effectIndex) =>
-        entries.push({
-          effect,
-          context: { surface, layer },
-          path: `/surfaces/${surfaceIndex}/layers/${layerIndex}/effects/${effectIndex}`,
-        }),
-      );
       const collectObjectEntries = (
         objects: EditorObject[] | undefined,
         objectsPath: string,
@@ -2625,71 +2616,21 @@ function createObjectInteractionAspect(
   return object.interaction;
 }
 
-function compareEffectEntries(a: EffectEntry, b: EffectEntry) {
-  const phaseDelta =
-    (EFFECT_PHASE_ORDER[a.effect.phase ?? "layout"] ?? 1) -
-    (EFFECT_PHASE_ORDER[b.effect.phase ?? "layout"] ?? 1);
-  return phaseDelta || (a.effect.order ?? 0) - (b.effect.order ?? 0);
-}
-
 function resolveRenderIntentTarget(
-  effect: EditorEffect,
+  _effect: EditorEffect,
   context: EffectContext,
-  document: EditorDocument,
+  _document: EditorDocument,
 ): RenderIntentDraft["subject"] | null {
-  const target = effect.target ?? "self";
-  if (target === "self") {
-    if (context.object && context.layer) {
-      return {
-        kind: "object",
-        surfaceId: context.surface.id,
-        layerId: context.layer.id,
-        objectId: context.object.id,
-        objectType: isEditorCompositeObject(context.object)
-          ? "composite"
-          : context.object.source.kind,
-      };
-    }
-    if (context.layer) {
-      return {
-        kind: "layer",
-        surfaceId: context.surface.id,
-        layerId: context.layer.id,
-      };
-    }
-    return { kind: "surface", surfaceId: context.surface.id };
-  }
-
-  if ("objectId" in target) {
-    const resolved = findObjectContext(document, target.objectId);
-    return resolved
-      ? {
-          kind: "object",
-          surfaceId: resolved.surface.id,
-          layerId: resolved.layer.id,
-          objectId: resolved.object.id,
-          objectType: isEditorCompositeObject(resolved.object)
-            ? "composite"
-            : resolved.object.source.kind,
-        }
-      : null;
-  }
-  if ("layerId" in target) {
-    const resolved = findLayerContext(document, target.layerId);
-    return resolved
-      ? {
-          kind: "layer",
-          surfaceId: resolved.surface.id,
-          layerId: resolved.layer.id,
-        }
-      : null;
-  }
-  if ("surfaceId" in target) {
-    return document.surfaces.some((surface) => surface.id === target.surfaceId)
-      ? { kind: "surface", surfaceId: target.surfaceId }
-      : null;
-  }
-  return null;
+  if (!context.object || !context.layer) return null;
+  return {
+    kind: "object",
+    surfaceId: context.surface.id,
+    layerId: context.layer.id,
+    objectId: context.object.id,
+    objectType: isEditorCompositeObject(context.object)
+      ? "composite"
+      : context.object.source.kind,
+  };
 }
 
 function findLayerContext(document: EditorDocument, layerId: string) {
@@ -2717,9 +2658,9 @@ function findObjectContext(document: EditorDocument, objectId: string) {
 }
 
 function severityForEffect(
-  effect: EditorEffect,
+  _effect: EditorEffect,
 ): EditorDocumentDiagnostic["severity"] {
-  return effect.require === "warn" ? "warning" : "error";
+  return "error";
 }
 
 function createDiagnostic(

@@ -129,10 +129,7 @@ function createRuntime() {
 function resolveTestEffectCapabilityId(
   effect: EditorEffect,
 ): string | undefined {
-  return (
-    effect.capabilityId ||
-    (effect.type === "custom" ? "test.effect" : undefined)
-  );
+  return effect.type === "custom" ? "test.effect" : undefined;
 }
 
 function testSourceResolver() {
@@ -431,7 +428,7 @@ async function testControllerUpdatesOnlyChangedRenderIntents() {
 
   const updated = await controller.updateObject("first", (current) => ({
     ...current,
-    style: { ...(current.style ?? {}), opacity: 0.5 },
+    visible: false,
   }));
   assertEqual(updated.ok, true, "controller object update should succeed");
   assertDeepEqual(
