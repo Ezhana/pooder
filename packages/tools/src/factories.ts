@@ -1,16 +1,9 @@
-import { ConfigurableVisualCapabilityExtension } from "./extensions/configurable-visual";
 import { DesignExportCapabilityExtension } from "./extensions/design-export";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
 import { ImageSlotCapabilityExtension } from "./extensions/image-slot";
 import { MirrorCapabilityExtension } from "./extensions/mirror";
 import { SceneExportCapabilityExtension } from "./extensions/scene-export";
-
-export const createConfigurableVisualCapability = (
-  options?: ConstructorParameters<
-    typeof ConfigurableVisualCapabilityExtension
-  >[0],
-) => new ConfigurableVisualCapabilityExtension(options);
 
 export const createDesignExportCapability = (
   options?: ConstructorParameters<typeof DesignExportCapabilityExtension>[0],

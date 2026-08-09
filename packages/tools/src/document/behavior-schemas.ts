@@ -1,27 +1,21 @@
-import type {
-  DocumentValueSchemaIssue,
-  EditorImageSlotBehaviorConfig,
-  EditorObjectBehavior,
-  ObjectBehaviorDefinition,
+import {
+  selectEditorDocumentObjects,
+  type DocumentValueSchemaIssue,
+  type EditorImageSlotBehaviorConfig,
+  type EditorObjectBehavior,
+  type ObjectSelector,
+  type ObjectBehaviorDefinition,
 } from "@pooder/document";
 
-import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-visual";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
 } from "../extensions/image-slot";
 
 export const IMAGE_SLOT_BEHAVIOR_TYPE = "pooder.image-slot";
-export const CONFIGURABLE_VISUAL_BEHAVIOR_TYPE = "pooder.configurable-visual";
 
 export interface ImageSlotObjectBehavior extends EditorObjectBehavior<EditorImageSlotBehaviorConfig> {
   type: typeof IMAGE_SLOT_BEHAVIOR_TYPE;
-}
-
-export interface ConfigurableVisualObjectBehavior extends EditorObjectBehavior<{
-  key: string;
-}> {
-  type: typeof CONFIGURABLE_VISUAL_BEHAVIOR_TYPE;
 }
 
 export const IMAGE_SLOT_BEHAVIOR_DEFINITION: ObjectBehaviorDefinition = {
@@ -40,25 +34,23 @@ export const IMAGE_SLOT_BEHAVIOR_DEFINITION: ObjectBehaviorDefinition = {
       },
     },
   }),
-  validate: (behavior) => validateImageSlotConfig(behavior.config),
+  validate: (behavior, context) =>
+    validateImageSlotConfig(behavior.config, context.document),
 };
 
-export const CONFIGURABLE_VISUAL_BEHAVIOR_DEFINITION: ObjectBehaviorDefinition =
-  {
-    behaviorType: CONFIGURABLE_VISUAL_BEHAVIOR_TYPE,
-    capabilityId: CONFIGURABLE_VISUAL_CAPABILITY_ID,
-    validate: (behavior) => {
-      const config = behavior.config;
-      return isRecord(config) && isNonEmptyString(config.key)
-        ? []
-        : [invalid("config.key", "a non-empty string")];
-    },
-  };
-
-function validateImageSlotConfig(value: unknown): DocumentValueSchemaIssue[] {
-  if (value === undefined) return [];
+function validateImageSlotConfig(
+  value: unknown,
+  document: Parameters<typeof selectEditorDocumentObjects>[0],
+): DocumentValueSchemaIssue[] {
   if (!isRecord(value)) return [invalid("config", "an object")];
   const issues: DocumentValueSchemaIssue[] = [];
+  if (
+    Object.keys(value).some(
+      (key) => key !== "accepts" && key !== "placeholderSelector",
+    )
+  ) {
+    issues.push(invalid("config", "an object containing only accepts and placeholderSelector"));
+  }
   if (
     value.accepts !== undefined &&
     (!Array.isArray(value.accepts) ||
@@ -66,31 +58,41 @@ function validateImageSlotConfig(value: unknown): DocumentValueSchemaIssue[] {
   ) {
     issues.push(invalid("config.accepts", "an array of non-empty strings"));
   }
-  if (value.emptyPresentation !== undefined) {
-    const empty = value.emptyPresentation;
-    if (!isRecord(empty)) {
-      issues.push(invalid("config.emptyPresentation", "an object"));
-    } else {
-      if (!isNonEmptyString(empty.assetId)) {
-        issues.push(
-          invalid("config.emptyPresentation.assetId", "a non-empty asset id"),
-        );
-      }
-      if (
-        empty.fit !== "cover" &&
-        empty.fit !== "contain" &&
-        empty.fit !== "stretch"
-      ) {
-        issues.push(
-          invalid(
-            "config.emptyPresentation.fit",
-            '"cover", "contain", or "stretch"',
-          ),
-        );
-      }
-    }
+  const selector = parseObjectSelector(value.placeholderSelector);
+  if (!selector) {
+    issues.push(invalid("config.placeholderSelector", "a non-empty object selector"));
+    return issues;
+  }
+  const placeholders = selectEditorDocumentObjects(document, selector);
+  if (!placeholders.length) {
+    issues.push(invalid("config.placeholderSelector", "a selector matching at least one object"));
+  } else if (
+    placeholders.some(
+      (object) => !object.traits?.some((trait) => trait.type === "core.placeholder"),
+    )
+  ) {
+    issues.push(invalid("config.placeholderSelector", "a selector matching only core.placeholder objects"));
   }
   return issues;
+}
+
+function parseObjectSelector(value: unknown): ObjectSelector | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => !["ids", "tags", "tagMatch"].includes(key))) {
+    return null;
+  }
+  const parseValues = (entry: unknown) =>
+    Array.isArray(entry) && entry.length > 0 && entry.every(isNonEmptyString)
+      ? entry as string[]
+      : undefined;
+  const ids = value.ids === undefined ? undefined : parseValues(value.ids);
+  const tags = value.tags === undefined ? undefined : parseValues(value.tags);
+  if ((value.ids !== undefined && !ids) || (value.tags !== undefined && !tags)) return null;
+  if (value.tagMatch !== undefined && value.tagMatch !== "all" && value.tagMatch !== "any") {
+    return null;
+  }
+  if (!ids && !tags) return null;
+  return { ...(ids ? { ids } : {}), ...(tags ? { tags } : {}), ...(value.tagMatch ? { tagMatch: value.tagMatch } : {}) };
 }
 
 function invalid(path: string, expected: string): DocumentValueSchemaIssue {

@@ -75,6 +75,7 @@ const createDocument = (): EditorDocument => ({
           objects: [
             {
               id: "front.image",
+              tags: ["export:design"],
               visible: true,
               locked: false,
               placement: {

@@ -183,6 +183,52 @@ export interface RenderGraph {
   diagnostics: RenderIntentDiagnostic[];
 }
 
+export interface RenderGraphNodeSelector {
+  /** Logical document/runtime subject ids. */
+  ids?: readonly string[];
+  /** Runtime projection ids; use only for projection-specific diagnostics. */
+  projectionIds?: readonly string[];
+  tags?: readonly string[];
+  tagMatch?: "all" | "any";
+  visible?: boolean;
+}
+
+export function selectRenderGraphNodes(
+  graph: RenderGraph,
+  selector: RenderGraphNodeSelector = {},
+): RenderGraphNode[] {
+  const ids = selectorValues(selector.ids);
+  const projectionIds = selectorValues(selector.projectionIds);
+  const tags = selectorValues(selector.tags);
+  return graph.layers.flatMap((layer) =>
+    layer.nodes.filter((node) => {
+      if (ids && !ids.has(node.subjectId)) return false;
+      if (projectionIds && !projectionIds.has(node.id)) return false;
+      if (selector.visible !== undefined && node.visible !== selector.visible) return false;
+      if (!tags) return true;
+      const nodeTags = new Set(node.tags);
+      return selector.tagMatch === "any"
+        ? Array.from(tags).some((tag) => nodeTags.has(tag))
+        : Array.from(tags).every((tag) => nodeTags.has(tag));
+    }),
+  );
+}
+
+export function selectOneRenderGraphNode(
+  graph: RenderGraph,
+  selector: RenderGraphNodeSelector,
+): RenderGraphNode | undefined {
+  const nodes = selectRenderGraphNodes(graph, selector);
+  if (nodes.length > 1) throw new Error("render-graph-selector-ambiguous");
+  return nodes[0];
+}
+
+function selectorValues(values: readonly string[] | undefined): Set<string> | undefined {
+  if (!values?.length) return undefined;
+  const normalized = new Set(values.map((value) => value.trim()).filter(Boolean));
+  return normalized.size ? normalized : undefined;
+}
+
 export type RenderIntentDocumentPublicationMode = "replace" | "update";
 
 /**
@@ -1162,7 +1208,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     ),
     coordinateSpace: "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
-    tags: normalizeIdList(draft.export?.tags),
+    tags: cloneTagList(draft.export?.tags),
     placement: cloneRecord(draft.placement),
     props: {
       ...(draft.props ?? {}),
@@ -1171,7 +1217,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       ...(draft.data ?? {}),
       renderIntentId: draft.id,
       subject: draft.subject,
-      tags: normalizeIdList(draft.export?.tags),
+      tags: cloneTagList(draft.export?.tags),
     },
     effects: draft.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
@@ -1185,6 +1231,10 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       subOrder: draft.ordering.subOrder ?? 0,
     },
   };
+}
+
+function cloneTagList(tags: readonly string[] | undefined): string[] {
+  return tags ? [...tags] : [];
 }
 
 function resolveVisualSource(draft: RenderIntentDraft): {

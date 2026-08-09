@@ -922,7 +922,7 @@ export default class SceneService implements Service {
     if (selector.visible !== undefined && layer.visible !== selector.visible) {
       return false;
     }
-    if (!this.matchesTags(layer.tags, selector.tags)) return false;
+    if (!this.matchesTags(layer.tags, selector.tags, selector.tagMatch)) return false;
     if (!this.matchesMetadata(layer.metadata, selector.metadata)) return false;
     return true;
   }
@@ -932,7 +932,10 @@ export default class SceneService implements Service {
     selector: SceneElementSelector,
   ): boolean {
     const ids = this.normalizeSelectorValues(selector.ids);
-    if (ids && !ids.has(element.id)) return false;
+    const subjectId = element.renderGraphProjection?.subjectId ?? element.id;
+    if (ids && !ids.has(subjectId)) return false;
+    const projectionIds = this.normalizeSelectorValues(selector.projectionIds);
+    if (projectionIds && !projectionIds.has(element.id)) return false;
     const layerIds = this.normalizeSelectorValues(selector.layerIds);
     if (layerIds && !layerIds.has(element.layerId)) return false;
     const types = this.normalizeSelectorValues(selector.types);
@@ -943,7 +946,7 @@ export default class SceneService implements Service {
     ) {
       return false;
     }
-    if (!this.matchesTags(element.tags, selector.tags)) return false;
+    if (!this.matchesTags(element.tags, selector.tags, selector.tagMatch)) return false;
     if (!this.matchesMetadata(element.metadata, selector.metadata))
       return false;
     return true;
@@ -952,10 +955,14 @@ export default class SceneService implements Service {
   private matchesTags(
     value: readonly string[] | undefined,
     selectorValue: readonly string[] | undefined,
+    tagMatch: "all" | "any" = "all",
   ): boolean {
     const tags = this.normalizeSelectorValues(selectorValue);
     if (!tags) return true;
-    return (value ?? []).some((tag) => tags.has(tag));
+    const values = new Set(value ?? []);
+    return tagMatch === "any"
+      ? Array.from(tags).some((tag) => values.has(tag))
+      : Array.from(tags).every((tag) => values.has(tag));
   }
 
   private matchesMetadata(

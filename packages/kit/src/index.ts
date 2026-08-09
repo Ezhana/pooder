@@ -3,7 +3,6 @@
  * Applications should prefer direct Tool package dependencies.
  */
 export {
-  createConfigurableVisualCapability,
   createDesignExportCapability,
   createEdgeDetectionCapability,
   createImageMaskCapability,

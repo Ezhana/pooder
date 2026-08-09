@@ -114,6 +114,7 @@ export interface EditorLayer {
 
 export interface EditorObjectBase {
   id: string;
+  tags: string[];
   visible: boolean;
   locked: boolean;
   placement: {
@@ -161,10 +162,13 @@ export interface EditorPrimitiveAppearance {
 
 export interface EditorImageSlotBehaviorConfig {
   accepts?: string[];
-  emptyPresentation?: {
-    assetId: string;
-    fit: EditorImagePlacement["fit"];
-  };
+  placeholderSelector: ObjectSelector;
+}
+
+export interface ObjectSelector {
+  ids?: readonly string[];
+  tags?: readonly string[];
+  tagMatch?: "all" | "any";
 }
 
 export type ObjectSource =
@@ -225,9 +229,9 @@ export type CoreGeometryEffect =
 export type EditorObjectEffect = CoreGeometryEffect | EditorExtensionObjectEffect;
 
 export type CoreObjectTrait =
-  | { type: "core.guide"; role: "cut" | "bleed" | "safe-area" }
-  | { type: "core.output-mask"; keys: string[] }
-  | { type: "core.export"; scopes: string[] };
+  | { type: "core.guide" }
+  | { type: "core.placeholder" }
+  | { type: "core.output-mask"; keys: string[] };
 
 export interface EditorExtensionObjectTrait<TPayload = JsonValue> {
   type: string;
@@ -393,6 +397,48 @@ export function findEditorDocumentObject(
     if (!result && object.id === objectId) result = object;
   });
   return result;
+}
+
+export function matchesObjectSelector(
+  object: EditorObject,
+  selector: ObjectSelector,
+): boolean {
+  const ids = normalizeSelectorValues(selector.ids);
+  if (ids && !ids.has(object.id)) return false;
+  const tags = normalizeSelectorValues(selector.tags);
+  if (!tags) return true;
+  const objectTags = new Set(object.tags);
+  return selector.tagMatch === "any"
+    ? Array.from(tags).some((tag) => objectTags.has(tag))
+    : Array.from(tags).every((tag) => objectTags.has(tag));
+}
+
+export function selectEditorDocumentObjects(
+  document: EditorDocument,
+  selector: ObjectSelector = {},
+): EditorObject[] {
+  return getEditorDocumentObjects(document).filter((object) =>
+    matchesObjectSelector(object, selector),
+  );
+}
+
+export function selectOneEditorDocumentObject(
+  document: EditorDocument,
+  selector: ObjectSelector,
+): EditorObject | undefined {
+  const objects = selectEditorDocumentObjects(document, selector);
+  if (objects.length > 1) throw new Error("document-object-selector-ambiguous");
+  return objects[0];
+}
+
+function normalizeSelectorValues(
+  values: readonly string[] | undefined,
+): Set<string> | undefined {
+  if (!values?.length) return undefined;
+  const normalized = new Set(
+    values.map((value) => value.trim()).filter((value) => value.length > 0),
+  );
+  return normalized.size ? normalized : undefined;
 }
 
 export function collectEditorDocumentCapabilityRequirements(

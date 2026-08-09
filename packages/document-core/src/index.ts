@@ -61,6 +61,7 @@ import {
   isEditorVisualObject,
   isEditorExtensionObjectEffect,
   parseEditorDocument,
+  selectEditorDocumentObjects,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
   validateEditorDocumentExtensions,
@@ -77,6 +78,7 @@ import {
   type EditorImageObject,
   type EditorImageSlotBehaviorConfig,
   type EditorImageAsset,
+  type EditorAssetSource,
   type EditorObject,
   type EditorObjectEffect,
   type EditorObjectTrait,
@@ -85,6 +87,7 @@ import {
   type ObjectSchemaContext,
   type ObjectSchemaRegistry,
   type ObjectSource,
+  type ObjectSelector,
 } from "@pooder/document";
 
 export interface ObjectSize {
@@ -243,6 +246,8 @@ export type EditorDocumentMutationFailureReason =
   | "draft-inactive"
   | "layer-not-found"
   | "object-not-found"
+  | "selector-count-mismatch"
+  | "object-type-mismatch"
   | "mutation-failed"
   | "validation-failed";
 
@@ -317,6 +322,17 @@ export interface EditorDocumentObjectInsertOptions {
   index?: number;
 }
 
+export interface EditorDocumentSelectorMutationOptions {
+  expectedCount?: number;
+}
+
+export interface EditorDocumentImageResourceUpdate {
+  source?: EditorAssetSource;
+  mimeType?: string;
+  intrinsicSize?: EditorImageAsset["intrinsicSize"];
+  visible?: boolean;
+}
+
 export interface EditorDocumentManipulationCommit {
   subjectId: string;
   sceneTransformPatch: SceneTransformPatch;
@@ -360,6 +376,24 @@ export interface EditorDocumentService extends Service {
     update: (current: Readonly<EditorObject>) => EditorObject,
   ): Promise<EditorDocumentMutationResult>;
   removeObject(objectId: string): Promise<EditorDocumentMutationResult>;
+  selectObjects(
+    selector: ObjectSelector,
+    source?: EditorDocumentSource,
+  ): EditorObject[];
+  selectOneObject(
+    selector: ObjectSelector,
+    source?: EditorDocumentSource,
+  ): EditorObject | undefined;
+  updateObjects(
+    selector: ObjectSelector,
+    update: (current: Readonly<EditorObject>) => EditorObject,
+    options?: EditorDocumentSelectorMutationOptions,
+  ): Promise<EditorDocumentMutationResult>;
+  updateImageResources(
+    selector: ObjectSelector,
+    update: EditorDocumentImageResourceUpdate,
+    options?: EditorDocumentSelectorMutationOptions,
+  ): Promise<EditorDocumentMutationResult>;
   validateObjectConstraints(
     objectId: string,
     source?: EditorDocumentSource,
@@ -985,6 +1019,95 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     });
   }
 
+  selectObjects(
+    selector: ObjectSelector,
+    source: EditorDocumentSource = "working",
+  ): EditorObject[] {
+    const document = this.export(source);
+    return document ? selectEditorDocumentObjects(document, selector) : [];
+  }
+
+  selectOneObject(
+    selector: ObjectSelector,
+    source: EditorDocumentSource = "working",
+  ): EditorObject | undefined {
+    const objects = this.selectObjects(selector, source);
+    if (objects.length > 1) throw new Error("document-object-selector-ambiguous");
+    return objects[0];
+  }
+
+  updateObjects(
+    selector: ObjectSelector,
+    update: (current: Readonly<EditorObject>) => EditorObject,
+    options: EditorDocumentSelectorMutationOptions = {},
+  ): Promise<EditorDocumentMutationResult> {
+    if (!selector.ids?.length && !selector.tags?.length) {
+      return Promise.resolve(mutationFailure("object-not-found"));
+    }
+    return this.mutate((document) => {
+      const objects = selectEditorDocumentObjects(document, selector);
+      assertSelectorCount(objects.length, options.expectedCount);
+      if (!objects.length) throw new DocumentMutationError("object-not-found");
+      objects.forEach((object) =>
+        replaceSourceObject(
+          document,
+          object.id,
+          cloneDocumentObject(update(cloneDocumentObject(object))),
+        ),
+      );
+    });
+  }
+
+  updateImageResources(
+    selector: ObjectSelector,
+    update: EditorDocumentImageResourceUpdate,
+    options: EditorDocumentSelectorMutationOptions = {},
+  ): Promise<EditorDocumentMutationResult> {
+    if (!selector.ids?.length && !selector.tags?.length) {
+      return Promise.resolve(mutationFailure("object-not-found"));
+    }
+    return this.mutate((document) => {
+      const objects = selectEditorDocumentObjects(document, selector);
+      assertSelectorCount(objects.length, options.expectedCount);
+      if (!objects.length) throw new DocumentMutationError("object-not-found");
+      if (
+        objects.some(
+          (object) => !isEditorVisualObject(object) || object.source.kind !== "image",
+        )
+      ) {
+        throw new DocumentMutationError("object-type-mismatch");
+      }
+      const replacedAssetIds = new Set<string>();
+      objects.forEach((object) => {
+        if (!isEditorVisualObject(object) || object.source.kind !== "image") return;
+        if (object.source.assetId) replacedAssetIds.add(object.source.assetId);
+        const assetId = object.source.assetId ?? `asset:${object.id}`;
+        object.source = update.source
+          ? { kind: "image", assetId }
+          : { kind: "image" };
+        if (update.visible !== undefined) object.visible = update.visible;
+        if (update.source) {
+          const asset: EditorImageAsset = {
+            id: assetId,
+            type: "image",
+            source: { ...update.source },
+            ...(update.mimeType ? { mimeType: update.mimeType } : {}),
+            ...(update.intrinsicSize
+              ? { intrinsicSize: { ...update.intrinsicSize } }
+              : {}),
+          };
+          const assetIndex = document.assets.findIndex((item) => item.id === assetId);
+          if (assetIndex >= 0) document.assets[assetIndex] = asset;
+          else document.assets.push(asset);
+        }
+      });
+      document.assets = document.assets.filter(
+        (asset) =>
+          !replacedAssetIds.has(asset.id) || isAssetReferenced(document, asset.id),
+      );
+    });
+  }
+
   validateObjectConstraints(
     objectId: string,
     source: EditorDocumentSource = "working",
@@ -1443,6 +1566,33 @@ class DocumentMutationError extends Error {
   constructor(readonly reason: EditorDocumentMutationFailureReason) {
     super(reason);
   }
+}
+
+function assertSelectorCount(actual: number, expected: number | undefined): void {
+  if (expected !== undefined && actual !== expected) {
+    throw new DocumentMutationError("selector-count-mismatch");
+  }
+}
+
+function isAssetReferenced(document: EditorDocument, assetId: string): boolean {
+  const referencedByObject = selectEditorDocumentObjects(document).some(
+    (object) =>
+      isEditorVisualObject(object) &&
+      object.source.kind === "image" &&
+      object.source.assetId === assetId,
+  );
+  return referencedByObject || jsonContainsString(document.extensions, assetId);
+}
+
+function jsonContainsString(value: unknown, expected: string): boolean {
+  if (value === expected) return true;
+  if (Array.isArray(value)) {
+    return value.some((entry) => jsonContainsString(entry, expected));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((entry) => jsonContainsString(entry, expected));
+  }
+  return false;
 }
 
 class EditorDocumentSessionMutationError extends Error {
@@ -1947,6 +2097,21 @@ function createBaseRenderIntentDrafts(
 ): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
   const assetsById = new Map(document.assets.map((asset) => [asset.id, asset]));
+  const placeholderVisibility = new Map<string, boolean>();
+  visitDocumentVisualObjects(document, (object) => {
+    if (object.source.kind !== "image") return;
+    const config = getImageSlotBehaviorConfig(object as EditorImageObject);
+    if (!config?.placeholderSelector) return;
+    const empty = !object.source.assetId;
+    selectEditorDocumentObjects(document, config.placeholderSelector).forEach(
+      (placeholder) => {
+        placeholderVisibility.set(
+          placeholder.id,
+          (placeholderVisibility.get(placeholder.id) ?? false) || empty,
+        );
+      },
+    );
+  });
   document.surfaces.forEach((surface, surfaceIndex) => {
     surface.layers.forEach((layer, layerIndex) => {
       const visit = (
@@ -2006,17 +2171,10 @@ function createBaseRenderIntentDrafts(
             object.source.kind === "image" && object.source.assetId
               ? assetsById.get(object.source.assetId)
               : undefined,
-            object.source.kind === "image" &&
-              getImageSlotBehaviorConfig(object as EditorImageObject)
-                ?.emptyPresentation
-              ? assetsById.get(
-                  getImageSlotBehaviorConfig(object as EditorImageObject)!
-                    .emptyPresentation!.assetId,
-                )
-              : undefined,
             framePlacement,
             compositeId,
             interaction,
+            placeholderVisibility.get(object.id),
           );
           if (draft) drafts.push(draft);
         });
@@ -2119,7 +2277,7 @@ function createCompositeInteractionProxyDraft(
     },
     placement,
     interaction,
-    export: { visible: true, tags: [] },
+    export: { visible: true, tags: [...object.tags] },
     ordering: {
       layerId: layer.id,
       layerOrder: layerIndex,
@@ -2151,21 +2309,19 @@ function createObjectRenderIntentDraft(
   index: number,
   imageResolution?: ImageResourceResolution,
   imageAsset?: EditorImageAsset,
-  presentationAsset?: EditorImageAsset,
   framePlacement: AffinePlacement = createFrameAffinePlacement(object),
   compositeId?: string,
   interaction?: InteractionSpec,
+  behaviorVisible?: boolean,
 ): RenderIntentDraft | null {
   if (!isEditorVisualObject(object)) return null;
   const objectOrder = index;
   const layerOrder = layerIndex;
   const locked = object.locked === true || layer.locked === true;
   const objectEffects = cloneObjectEffects(object.effects);
-  const guideTraits =
-    object.traits?.filter(
-      (trait): trait is Extract<EditorObjectTrait, { type: "core.guide" }> =>
-        trait.type === "core.guide",
-    ) ?? [];
+  const isGuide = object.traits?.some((trait) => trait.type === "core.guide") ?? false;
+  const isPlaceholder =
+    object.traits?.some((trait) => trait.type === "core.placeholder") ?? false;
   const outputMaskKeys = Array.from(
     new Set(
       object.traits
@@ -2180,15 +2336,7 @@ function createObjectRenderIntentDraft(
         .flatMap((trait) => trait.keys) ?? [],
     ),
   );
-  const tags = normalizeTags(
-    guideTraits.flatMap((trait) => [trait.role, `guide:${trait.role}`]),
-    object.traits
-      ?.filter(
-        (trait): trait is Extract<EditorObjectTrait, { type: "core.export" }> =>
-          trait.type === "core.export",
-      )
-      .flatMap((trait) => trait.scopes),
-  );
+  const tags = [...object.tags];
   const base = {
     id: object.id,
     subject: {
@@ -2223,12 +2371,16 @@ function createObjectRenderIntentDraft(
       stack: resolveLayerStack(layer),
     },
     export: {
-      visible: (layer.visible ?? true) && (object.visible ?? true),
+      visible:
+        (layer.visible ?? true) &&
+        (object.visible ?? true) &&
+        (behaviorVisible ?? true),
       tags,
     },
     ...(interaction ? { interaction } : {}),
     props: {
       ...(object.appearance ?? {}),
+      ...(isGuide || isPlaceholder ? { excludeFromExport: true } : {}),
     },
     data: {
       id: object.id,
@@ -2249,7 +2401,6 @@ function createObjectRenderIntentDraft(
       object as EditorImageObject,
       imageResolution,
       imageAsset,
-      presentationAsset,
       resolveEditorImageClipFrame(
         surface,
         object as EditorImageObject,
@@ -2304,7 +2455,6 @@ function createImageRenderIntentDraft(
   object: EditorImageObject,
   resolution?: ImageResourceResolution,
   resource?: EditorImageAsset,
-  presentationResource?: EditorImageAsset,
   clipFrame?: import("@pooder/core").CoordinateRect<"object-local">,
 ): RenderIntentDraft {
   const resolved = resolution?.ok
@@ -2320,24 +2470,8 @@ function createImageRenderIntentDraft(
           height: resource.intrinsicSize.height,
         }
       : undefined;
-  const presentation =
-    !resource && presentationResource?.intrinsicSize
-      ? {
-          src:
-            presentationResource.source.kind === "data-url"
-              ? presentationResource.source.dataUrl
-              : presentationResource.source.url,
-          width: presentationResource.intrinsicSize.width,
-          height: presentationResource.intrinsicSize.height,
-          fit:
-            getImageSlotBehaviorConfig(object)?.emptyPresentation?.fit ??
-            "cover",
-        }
-      : undefined;
-  const image = resolved ?? presentation;
-  const fit = resolved
-    ? object.appearance.fit
-    : (presentation?.fit ?? object.appearance.fit);
+  const image = resolved;
+  const fit = object.appearance.fit;
   const geometryDescriptor = image
     ? {
         source: {
@@ -2406,12 +2540,10 @@ function createImageRenderIntentDraft(
       source: object.source,
       opacity: geometry?.opacity ?? object.appearance.opacity,
       ...(geometry?.clip ? { clip: geometry.clip } : {}),
-      ...(presentation ? { excludeFromExport: true } : {}),
     },
     data: {
       ...base.data,
       emptyImageSlot: !resource,
-      presentationOnly: Boolean(presentation),
       ...(resolved && geometryDescriptor
         ? { [IMAGE_GEOMETRY_DATA_KEY]: geometryDescriptor }
         : {}),
@@ -2463,10 +2595,8 @@ function getImageSlotBehaviorConfig(
     (candidate) => candidate.type === "pooder.image-slot",
   );
   return behavior?.config && typeof behavior.config === "object"
-    ? (behavior.config as EditorImageSlotBehaviorConfig)
-    : behavior
-      ? {}
-      : undefined;
+    ? (behavior.config as unknown as EditorImageSlotBehaviorConfig)
+    : undefined;
 }
 
 function createEditorImageClipEffect(
@@ -2771,17 +2901,6 @@ function normalizeOutputMaskKeys(value: unknown): string[] {
   return Array.from(
     new Set(
       values
-        .map((item) => String(item || "").trim())
-        .filter((item) => item.length > 0),
-    ),
-  );
-}
-
-function normalizeTags(...values: unknown[]): string[] {
-  return Array.from(
-    new Set(
-      values
-        .flatMap((value) => (Array.isArray(value) ? value : []))
         .map((item) => String(item || "").trim())
         .filter((item) => item.length > 0),
     ),

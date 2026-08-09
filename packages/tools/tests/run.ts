@@ -65,6 +65,12 @@ function createImageSlotDocument(): EditorDocument {
         source: { kind: "url", url: "/artwork.png" },
         intrinsicSize: { width: 240, height: 100 },
       },
+      {
+        id: "artwork.placeholder.asset",
+        type: "image",
+        source: { kind: "url", url: "/placeholder.png" },
+        intrinsicSize: { width: 120, height: 80 },
+      },
     ],
     extensions: {},
     surfaces: [
@@ -83,6 +89,7 @@ function createImageSlotDocument(): EditorDocument {
             objects: [
               {
                 id: IMAGE_SLOT_ID,
+                tags: ["slot:artwork"],
                 visible: true,
                 locked: false,
                 placement: {
@@ -106,9 +113,49 @@ function createImageSlotDocument(): EditorDocument {
                 behaviors: [
                   {
                     type: "pooder.image-slot",
-                    config: { accepts: ["image/*"] },
+                    config: {
+                      accepts: ["image/*"],
+                      placeholderSelector: {
+                        ids: ["artwork.placeholder", "artwork.image-placeholder"],
+                      },
+                    },
                   },
                 ],
+              },
+              {
+                id: "artwork.placeholder",
+                tags: ["placeholder:artwork"],
+                visible: true,
+                locked: true,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
+                source: { kind: "shape", shape: "rect", params: {} },
+                traits: [{ type: "core.placeholder" }],
+              },
+              {
+                id: "artwork.image-placeholder",
+                tags: ["placeholder:artwork"],
+                visible: true,
+                locked: true,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
+                source: { kind: "image", assetId: "artwork.placeholder.asset" },
+                appearance: {
+                  fit: "stretch",
+                  anchorX: 0.5,
+                  anchorY: 0.5,
+                  zoom: 1,
+                  rotation: 0,
+                  opacity: 1,
+                  clip: "frame",
+                },
+                traits: [{ type: "core.placeholder" }],
               },
             ],
           },
@@ -158,6 +205,104 @@ async function testStrictPolicyAcceptsAFrameCoveringCrop(): Promise<void> {
   } finally {
     await runtime.dispose();
   }
+}
+
+async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
+  const { runtime, controller } = await createHarness();
+  const getPlaceholder = () =>
+    runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find((node) => node.subjectId === "artwork.placeholder");
+  const getImagePlaceholder = () =>
+    runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find((node) => node.subjectId === "artwork.image-placeholder");
+  try {
+    assertEqual(getPlaceholder()?.visible, false, "filled slot should hide its placeholder");
+    assertEqual(getImagePlaceholder()?.visible, false, "filled slot should hide image placeholders");
+    const cleared = await controller.updateImageResources(
+      { ids: [IMAGE_SLOT_ID] },
+      { visible: true },
+      { expectedCount: 1 },
+    );
+    assertEqual(cleared.ok, true, "slot resource should clear atomically");
+    assertEqual(getPlaceholder()?.visible, true, "empty slot should show its placeholder");
+    assertEqual(getImagePlaceholder()?.visible, true, "empty slot should show image placeholders");
+    assertEqual(getPlaceholder()?.props.excludeFromExport, true, "shape placeholder should not export");
+    assertEqual(getImagePlaceholder()?.props.excludeFromExport, true, "image placeholder should not export");
+    assertEqual(
+      controller.export()?.assets.some((asset) => asset.id === "artwork.asset"),
+      false,
+      "clearing the slot should reclaim its orphaned asset",
+    );
+    const filled = await controller.updateImageResources(
+      { tags: ["slot:artwork"] },
+      {
+        source: { kind: "url", url: "/replacement.png" },
+        intrinsicSize: { width: 300, height: 200 },
+        visible: true,
+      },
+      { expectedCount: 1 },
+    );
+    assertEqual(filled.ok, true, "slot resource should replace atomically");
+    assertEqual(getPlaceholder()?.visible, false, "refilled slot should hide its placeholder");
+    assertEqual(getImagePlaceholder()?.visible, false, "refilled slot should hide image placeholders");
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
+  const apply = async (document: EditorDocument) => {
+    const runtime = new Pooder();
+    runtime.extensions.register(createImageSlotCapability());
+    await runtime.extensions.flushActivation();
+    try {
+      return await registerEditorDocumentService(runtime).apply(document);
+    } finally {
+      await runtime.dispose();
+    }
+  };
+  const emptyPresentation = createImageSlotDocument();
+  const slot = emptyPresentation.surfaces[0]!.layers[0]!.objects[0]!;
+  const behavior = slot.behaviors?.find(
+    (candidate) => candidate.type === "pooder.image-slot",
+  )!;
+  behavior.config = {
+    ...(behavior.config as Record<string, unknown>),
+    emptyPresentation: { assetId: "legacy", fit: "stretch" },
+  };
+  assertEqual(
+    (await apply(emptyPresentation)).ok,
+    false,
+    "emptyPresentation should be rejected",
+  );
+
+  const configurableVisual = createImageSlotDocument();
+  configurableVisual.surfaces[0]!.layers[0]!.objects[0]!.behaviors!.push({
+    type: "pooder.configurable-visual",
+    config: { key: "legacy" },
+  });
+  assertEqual(
+    (await apply(configurableVisual)).ok,
+    false,
+    "configurable visual behavior should be rejected",
+  );
+
+  const missingPlaceholder = createImageSlotDocument();
+  missingPlaceholder.surfaces[0]!.layers[0]!.objects =
+    missingPlaceholder.surfaces[0]!.layers[0]!.objects.filter(
+      (object) => !object.traits?.some((trait) => trait.type === "core.placeholder"),
+    );
+  assertEqual(
+    (await apply(missingPlaceholder)).ok,
+    false,
+    "image slot without a business placeholder should be rejected",
+  );
 }
 
 function getWorkingMatrix(runtime: Pooder): number[] {
@@ -365,6 +510,8 @@ async function main(): Promise<void> {
   await runExistingCapabilityRegressions();
   await testImageSlotRejectsMissingContainerGeometry();
   await testStrictPolicyAcceptsAFrameCoveringCrop();
+  await testPlaceholderVisibilityAndResourceLifecycle();
+  await testRemovedImageSlotContractsAreRejected();
   await testImageSlotCommitAndReopenMatrices();
   await testImageSlotRollbackDoesNotDrift();
   console.log("ok");

@@ -490,12 +490,13 @@ export interface CanvasServiceEventMap {
 }
 
 export interface CanvasObjectSelector {
+  /** Logical subject ids, never backend projection ids. */
   ids?: readonly string[];
+  projectionIds?: readonly string[];
   layerIds?: readonly string[];
-  subjectIds?: readonly string[];
-  renderIntentIds?: readonly string[];
   types?: readonly string[];
   tags?: readonly string[];
+  tagMatch?: "all" | "any";
   visible?: boolean;
   data?: Record<string, unknown>;
 }

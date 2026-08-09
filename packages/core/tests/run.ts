@@ -29,6 +29,8 @@ import {
   resolveImageGeometry,
   resolveImageFitScale,
   resolveViewPaddingPx,
+  selectOneRenderGraphNode,
+  selectRenderGraphNodes,
   createServiceToken,
   type CanvasService,
   type CoordinatePoint,
@@ -1006,6 +1008,7 @@ async function testSceneSelectors() {
       scene
         .selectLayers({
           tags: ["design", "missing"],
+          tagMatch: "any",
           metadata: { owner: "app" },
         })
         .map((layer) => layer.id),
@@ -1024,6 +1027,7 @@ async function testSceneSelectors() {
           types: ["image", "path"],
           visible: false,
           tags: ["helper", "mockup"],
+          tagMatch: "any",
           metadata: { selected: true },
         })
         .map((element) => element.id),
@@ -2506,6 +2510,12 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
         objectId: "logical-object",
       },
       visual: { type: "rect" as const },
+      export: {
+        tags: [
+          "subject:logical-object",
+          `projection:${id.slice(id.lastIndexOf(":") + 1)}`,
+        ],
+      },
       placement: createAffinePlacement({
         localBounds: { left: 0, top: 0, width: 10, height: 10 },
         localToScene: coordinateMatrix("object-local", "scene", [
@@ -2532,6 +2542,37 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
         },
       ],
       "RenderGraph should explicitly index every projection of a logical subject",
+    );
+    assertEqual(
+      selectRenderGraphNodes(graph, { ids: ["logical-object"] }).length,
+      2,
+      "subject selectors should return every runtime projection",
+    );
+    assertThrows(
+      () => selectOneRenderGraphNode(graph, { ids: ["logical-object"] }),
+      "render-graph-selector-ambiguous",
+    );
+    assertEqual(
+      selectOneRenderGraphNode(graph, {
+        projectionIds: ["logical-object:outline"],
+      })?.subjectId,
+      "logical-object",
+      "projection selectors should remain available for diagnostics",
+    );
+    assertEqual(
+      selectRenderGraphNodes(graph, {
+        tags: ["subject:logical-object", "projection:fill"],
+      })[0]?.id,
+      "logical-object:fill",
+      "runtime tag selectors should match every requested tag by default",
+    );
+    assertEqual(
+      selectRenderGraphNodes(graph, {
+        tags: ["projection:missing", "projection:outline"],
+        tagMatch: "any",
+      })[0]?.id,
+      "logical-object:outline",
+      "runtime tag selectors should support explicit any matching",
     );
 
     const interaction =
@@ -3337,8 +3378,8 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
     );
     assertDeepEqual(
       node?.tags,
-      ["design", "mockup"],
-      "render intent export tags should normalize into graph node state",
+      [" design ", "design", "mockup"],
+      "render intent export tags should pass through to graph node state",
     );
     assertEqual(
       "exportable" in ((node ?? {}) as unknown as Record<string, unknown>),

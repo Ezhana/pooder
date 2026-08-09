@@ -675,7 +675,9 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     }) =>
       node.surfaceId === surfaceId &&
       node.subjectId !== object.id &&
-      node.tags.some((tag) => tag === "mockup" || tag === "design");
+      node.tags.some(
+        (tag) => tag === "export:mockup" || tag === "export:design",
+      );
     this.sceneService.getSceneHandle(sceneId)?.dispose();
     this.sceneHandle = this.sceneService.createScene({
       id: sceneId,

@@ -217,6 +217,7 @@ class ViewportCanvasService {
 function createEmptySlotObject(id: string, left: number): EditorImageObject {
   return {
     id,
+    tags: ["slot:image"],
     visible: true,
     locked: false,
     placement: {
@@ -239,10 +240,7 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
         type: "pooder.image-slot",
         config: {
           accepts: ["image/*"],
-          emptyPresentation: {
-            assetId: "empty-presentation",
-            fit: "stretch",
-          },
+          placeholderSelector: { ids: [`${id}.placeholder`] },
         },
       },
     ],
@@ -252,18 +250,7 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
 function createEmptySlotDocument(): EditorDocument {
   return {
     version: 7,
-    assets: [
-      {
-        id: "empty-presentation",
-        type: "image",
-        source: {
-          kind: "data-url",
-          dataUrl:
-            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80'/%3E",
-        },
-        intrinsicSize: { width: 120, height: 80 },
-      },
-    ],
+    assets: [],
     extensions: {},
     surfaces: [
       {
@@ -280,7 +267,33 @@ function createEmptySlotDocument(): EditorDocument {
             locked: false,
             objects: [
               createEmptySlotObject(OBJECT_ID, 20),
+              {
+                id: `${OBJECT_ID}.placeholder`,
+                tags: ["placeholder:image-slot"],
+                visible: true,
+                locked: true,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                  localToParent: [1, 0, 0, 1, 20, 20],
+                  pivot: { x: 60, y: 40 },
+                },
+                source: { kind: "shape", shape: "rect", params: {} },
+                traits: [{ type: "core.placeholder" }],
+              },
               createEmptySlotObject(SECOND_OBJECT_ID, 180),
+              {
+                id: `${SECOND_OBJECT_ID}.placeholder`,
+                tags: ["placeholder:image-slot"],
+                visible: true,
+                locked: true,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                  localToParent: [1, 0, 0, 1, 180, 20],
+                  pivot: { x: 60, y: 40 },
+                },
+                source: { kind: "shape", shape: "rect", params: {} },
+                traits: [{ type: "core.placeholder" }],
+              },
             ],
           },
         ],
@@ -292,6 +305,7 @@ function createEmptySlotDocument(): EditorDocument {
 function createLayeredSlotDocument(): EditorDocument {
   const createVisualObject = (id: string, assetId: string): EditorImageObject => ({
     id,
+    tags: ["export:mockup"],
     visible: true,
     locked: true,
     placement: {
@@ -309,7 +323,6 @@ function createLayeredSlotDocument(): EditorDocument {
       opacity: 1,
       clip: "frame" as const,
     },
-    traits: [{ type: "core.export" as const, scopes: ["mockup"] }],
   });
   const document = createEmptySlotDocument();
   document.assets.push(
@@ -562,6 +575,7 @@ function createNestedDocument(): EditorDocument {
             objects: [
               {
                 id: "composite-parent",
+                tags: ["composite:test"],
                 visible: true,
                 locked: false,
                 placement: {
@@ -583,6 +597,7 @@ function createNestedDocument(): EditorDocument {
                 children: [
                   {
                     id: OBJECT_ID,
+                    tags: ["slot:image"],
                     visible: true,
                     locked: false,
                     placement: {
@@ -611,9 +626,25 @@ function createNestedDocument(): EditorDocument {
                     behaviors: [
                       {
                         type: "pooder.image-slot",
-                        config: { accepts: ["image/*"] },
+                        config: {
+                          accepts: ["image/*"],
+                          placeholderSelector: { ids: [`${OBJECT_ID}.placeholder`] },
+                        },
                       },
                     ],
+                  },
+                  {
+                    id: `${OBJECT_ID}.placeholder`,
+                    tags: ["placeholder:image-slot"],
+                    visible: true,
+                    locked: true,
+                    placement: {
+                      localBounds: { x: 18, y: 26, width: 110, height: 72 },
+                      localToParent: [1, 0, 0, 1, 0, 0],
+                      pivot: { x: 73, y: 62 },
+                    },
+                    source: { kind: "shape", shape: "rect", params: {} },
+                    traits: [{ type: "core.placeholder" }],
                   },
                 ],
               },

@@ -7,6 +7,7 @@ extension-owned `EditorObject.behaviors`.
 ```ts
 const imageSlot: EditorObject = {
   id: "front.image",
+  tags: ["slot:image"],
   placement: {
     localBounds: { x: 0, y: 0, width: 100, height: 100 },
     localToParent: [1, 0, 0, 1, 0, 0],
@@ -18,7 +19,10 @@ const imageSlot: EditorObject = {
   behaviors: [
     {
       type: "pooder.image-slot",
-      config: { accepts: ["image/*"] },
+      config: {
+        accepts: ["image/*"],
+        placeholderSelector: { ids: ["front.image.placeholder"] },
+      },
     },
   ],
   interaction: {

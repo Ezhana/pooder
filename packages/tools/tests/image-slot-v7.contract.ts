@@ -18,6 +18,7 @@ const appearance = {
 
 const emptySlot: EditorImageObject = {
   id: "artwork",
+  tags: ["slot:artwork"],
   visible: true,
   locked: false,
   placement: {
@@ -27,7 +28,13 @@ const emptySlot: EditorImageObject = {
   },
   source: { kind: "image" },
   appearance,
-  behaviors: [{ type: "pooder.image-slot", config: { accepts: ["image/*"] } }],
+  behaviors: [{
+    type: "pooder.image-slot",
+    config: {
+      accepts: ["image/*"],
+      placeholderSelector: { ids: ["artwork.placeholder"] },
+    },
+  }],
 };
 
 const document: EditorDocument = {
@@ -47,7 +54,18 @@ const document: EditorDocument = {
           role: "content",
           visible: true,
           locked: false,
-          objects: [emptySlot],
+          objects: [
+            emptySlot,
+            {
+              id: "artwork.placeholder",
+              tags: ["placeholder:artwork"],
+              visible: true,
+              locked: true,
+              placement: emptySlot.placement,
+              source: { kind: "shape", shape: "rect", params: {} },
+              traits: [{ type: "core.placeholder" }],
+            },
+          ],
         },
       ],
     },

@@ -60,6 +60,7 @@ function createDocument(): EditorDocument {
             objects: [
               {
                 id: "clip-source",
+                tags: ["clip:source"],
                 visible: false,
                 locked: true,
                 placement: {
@@ -71,6 +72,7 @@ function createDocument(): EditorDocument {
               },
               {
                 id: "artwork",
+                tags: ["artwork:test"],
                 visible: true,
                 locked: false,
                 placement: {

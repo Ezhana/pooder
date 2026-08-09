@@ -246,6 +246,7 @@ function parseObject(value: unknown, path: string): EditorObject {
   const input = record(value, path);
   const commonFields = [
     "id",
+    "tags",
     "visible",
     "locked",
     "placement",
@@ -265,6 +266,7 @@ function parseObject(value: unknown, path: string): EditorObject {
   }
   const base = {
     id: identifier(input.id, `${path}.id`),
+    tags: parseTags(input.tags, `${path}.tags`),
     visible: boolean(input.visible, `${path}.visible`),
     locked: boolean(input.locked, `${path}.locked`),
     placement: parsePlacement(input.placement, `${path}.placement`),
@@ -446,19 +448,16 @@ function parseTrait(value: unknown, path: string): EditorObjectTrait {
   const input = record(value, path);
   const type = identifier(input.type, `${path}.type`);
   if (type === "core.guide") {
-    exact(input, ["type", "role"], path);
-    if (!["cut", "bleed", "safe-area"].includes(input.role as string)) {
-      fail("guide-role-invalid", "Guide role is invalid.", `${path}.role`);
-    }
-    return { type, role: input.role as "cut" | "bleed" | "safe-area" };
+    exact(input, ["type"], path);
+    return { type };
+  }
+  if (type === "core.placeholder") {
+    exact(input, ["type"], path);
+    return { type };
   }
   if (type === "core.output-mask") {
     exact(input, ["type", "keys"], path);
     return { type, keys: identifiers(input.keys, `${path}.keys`) };
-  }
-  if (type === "core.export") {
-    exact(input, ["type", "scopes"], path);
-    return { type, scopes: identifiers(input.scopes, `${path}.scopes`) };
   }
   exact(input, ["type", "payload"], path);
   return {
@@ -779,6 +778,19 @@ function identifiers(value: unknown, path: string): string[] {
   return array(value, path).map((entry, index) =>
     identifier(entry, `${path}[${index}]`),
   );
+}
+
+function parseTags(value: unknown, path: string): string[] {
+  const result = identifiers(value, path);
+  const invalidIndex = result.findIndex((tag) => !tag.includes(":"));
+  if (invalidIndex >= 0) {
+    fail(
+      "object-tag-namespace-required",
+      "Object tags must use a namespace followed by a colon.",
+      `${path}[${invalidIndex}]`,
+    );
+  }
+  return result;
 }
 
 function record(value: unknown, path: string): Record<string, unknown> {

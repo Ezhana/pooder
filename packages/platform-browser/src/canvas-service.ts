@@ -708,35 +708,24 @@ export default class CanvasService implements Service, CanvasServiceContract {
     }
     const data = object?.data ?? {};
     const ids = this.normalizeSelectorValues(selector.ids);
-    if (ids && !ids.has(String(data.id || "").trim())) return false;
+    const subjectId = String(
+      data.subjectId ||
+        data.subject?.objectId ||
+        data.subject?.layerId ||
+        data.subject?.surfaceId ||
+        data.id ||
+        "",
+    ).trim();
+    if (ids && !ids.has(subjectId)) return false;
+    const projectionIds = this.normalizeSelectorValues(selector.projectionIds);
+    if (
+      projectionIds &&
+      !projectionIds.has(String(data.renderGraphNodeId || data.renderIntentId || data.id || "").trim())
+    ) return false;
     const layerIds = this.normalizeSelectorValues(selector.layerIds);
     if (
       layerIds &&
       !layerIds.has(String(data.layerId || data.passId || "").trim())
-    ) {
-      return false;
-    }
-    const subjectIds = this.normalizeSelectorValues(selector.subjectIds);
-    if (
-      subjectIds &&
-      !subjectIds.has(
-        String(
-          data.subjectId ||
-            data.subject?.objectId ||
-            data.subject?.layerId ||
-            data.subject?.surfaceId ||
-            "",
-        ).trim(),
-      )
-    ) {
-      return false;
-    }
-    const renderIntentIds = this.normalizeSelectorValues(
-      selector.renderIntentIds,
-    );
-    if (
-      renderIntentIds &&
-      !renderIntentIds.has(String(data.renderIntentId || "").trim())
     ) {
       return false;
     }
@@ -747,9 +736,13 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const tags = this.normalizeSelectorValues(selector.tags);
     if (tags) {
       const objectTags = Array.isArray(data.tags) ? data.tags : [];
-      if (
-        !objectTags.some((tag: unknown) => tags.has(String(tag || "").trim()))
-      ) {
+      const normalizedObjectTags = new Set(
+        objectTags.map((tag: unknown) => String(tag || "").trim()),
+      );
+      const matches = selector.tagMatch === "any"
+        ? Array.from(tags).some((tag) => normalizedObjectTags.has(tag))
+        : Array.from(tags).every((tag) => normalizedObjectTags.has(tag));
+      if (!matches) {
         return false;
       }
     }

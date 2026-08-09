@@ -15,7 +15,6 @@ import type {
 } from "@pooder/document";
 import { registerEditorDocumentService } from "../../document-core/src";
 import {
-  CONFIGURABLE_VISUAL_CAPABILITY_ID,
   DESIGN_EXPORT_CAPABILITY_ID,
   EDGE_DETECTION_CAPABILITY_ID,
   IMAGE_MASK_CAPABILITY_ID,
@@ -26,12 +25,10 @@ import {
   ImageMaskCapabilityExtension,
   MirrorCapabilityExtension,
   SceneExportCapabilityExtension,
-  createConfigurableVisualCapability,
   createOfficialToolEffectSchemaRegistry,
   mapImageMaskAlpha,
   normalizeImageMaskAlpha,
   resolveOfficialToolDocumentEffectCapabilityId,
-  type ConfigurableVisualCapabilityApi,
   type DesignExportCapabilityApi,
   type EdgeDetectionCapabilityApi,
   type ImageMaskCapabilityApi,
@@ -195,6 +192,7 @@ function createEffectDocument(
     source.kind === "image"
       ? {
           id: "visual",
+          tags: ["visual:test"],
           visible: true,
           locked: false,
           placement,
@@ -212,6 +210,7 @@ function createEffectDocument(
         }
       : {
           id: "visual",
+          tags: ["visual:test"],
           visible: true,
           locked: false,
           placement,
@@ -492,63 +491,6 @@ async function testMirrorCapability(): Promise<void> {
   }
 }
 
-async function testConfigurableVisualCapability(): Promise<void> {
-  const runtime = new Pooder();
-  runtime.extensions.register(createConfigurableVisualCapability());
-  await runtime.extensions.flushActivation();
-  const controller = registerEditorDocumentService(runtime, {
-    effectSchemaRegistry: createOfficialToolEffectSchemaRegistry(),
-    resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
-  });
-  try {
-    const document = createEffectDocument(
-      { type: "mirror", payload: {} },
-      {
-          kind: "image",
-          resource: {
-            kind: "url",
-            url: "/default-flash.png",
-            intrinsicSize: { width: 200, height: 100 },
-          },
-      },
-    );
-    const visual = document.surfaces[0]!.layers[0]!.objects[0]!;
-    visual.effects = undefined;
-    visual.behaviors = [
-      { type: "pooder.configurable-visual", config: { key: "flash-base" } },
-    ];
-    const applied = await controller.apply(document);
-    assert(
-      applied.ok,
-      `configurable visual document should apply (${JSON.stringify(applied.diagnostics)})`,
-    );
-    const renderIntents = runtime.services.getOrThrow<RenderIntentService>(
-      RENDER_INTENT_SERVICE,
-    );
-    const getNode = () =>
-      renderIntents
-        .getGraph()
-        .layers.flatMap((layer) => layer.nodes)
-        .find((node) => node.subjectId === "visual");
-    assertEqual(
-      getNode()?.visual?.src,
-      "/default-flash.png",
-      "document visual should be preserved before configuration",
-    );
-    const facade = runtime.capabilities.get<ConfigurableVisualCapabilityApi>(
-      CONFIGURABLE_VISUAL_CAPABILITY_ID,
-    );
-    assert(facade, "configurable visual facade should be registered");
-    assertEqual(
-      facade.getBehaviorKey(applied.document.surfaces[0]!.layers[0]!.objects[0]!),
-      "flash-base",
-      "configurable visual behavior should identify its document-owned visual",
-    );
-  } finally {
-    await runtime.dispose();
-  }
-}
-
 async function testImageMaskCapability(): Promise<void> {
   assertEqual(
     mapImageMaskAlpha(
@@ -656,7 +598,6 @@ export async function runExistingCapabilityRegressions(): Promise<void> {
     ["DesignExport", testDesignExportCapability],
     ["SceneExport", testSceneExportCapability],
     ["Mirror", testMirrorCapability],
-    ["ConfigurableVisual", testConfigurableVisualCapability],
     ["ImageMask", testImageMaskCapability],
     ["EdgeDetection", testEdgeDetectionCapability],
   ];

@@ -731,7 +731,7 @@ export class FabricRenderGraphAdapter implements Service {
         item.origin?.type === "scene-element"
           ? this.sceneService?.selectOneElement({
               sceneId: item.origin.sceneId,
-              ids: [item.origin.elementId],
+              projectionIds: [item.origin.elementId],
             })
           : undefined;
       const projection = sceneElement?.renderGraphProjection;

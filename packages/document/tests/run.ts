@@ -6,6 +6,8 @@ import {
   findEditorDocumentObject,
   getEditorDocumentObjects,
   parseEditorDocument,
+  selectEditorDocumentObjects,
+  selectOneEditorDocumentObject,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
   validateEditorDocumentObjectSchemas,
@@ -80,6 +82,48 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
     validateEditorDocument(input)[0]?.path,
     "surfaces[0].layers[0].objects[0].frame",
     "legacy object frame should be rejected at its exact path",
+  );
+
+  const guideRole = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const guide = ((((guideRole.surfaces as Array<Record<string, unknown>>)[0]!
+    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
+    Record<string, unknown>
+  >)[0]!.traits as Array<Record<string, unknown>>)[0]!;
+  guide.role = "cut";
+  assertEqual(
+    validateEditorDocument(guideRole)[0]?.code,
+    "unknown-field",
+    "guide role should be rejected",
+  );
+
+  const exportScope = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const exportObject = (((exportScope.surfaces as Array<Record<string, unknown>>)[0]!
+    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
+    Record<string, unknown>
+  >)[1]!;
+  exportObject.traits = [{ type: "core.export", scopes: ["design"] }];
+  assertEqual(
+    validateEditorDocument(exportScope)[0]?.code,
+    "unknown-field",
+    "core.export scopes should be rejected",
+  );
+
+  const unnamespacedTag = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const taggedObject = (((unnamespacedTag.surfaces as Array<Record<string, unknown>>)[0]!
+    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
+    Record<string, unknown>
+  >)[0]!;
+  taggedObject.tags = ["cut"];
+  assertEqual(
+    validateEditorDocument(unnamespacedTag)[0]?.code,
+    "object-tag-namespace-required",
+    "object tags should require namespaces",
   );
 }
 
@@ -209,6 +253,29 @@ function testCloneAndVisitors(): void {
   );
 }
 
+function testObjectSelectors(): void {
+  const document = representativeDocument();
+  assertDeepEqual(
+    selectEditorDocumentObjects(document, { tags: ["slot:front"] }).map(
+      (object) => object.id,
+    ),
+    ["front.image-slot", "front.image-placeholder"],
+    "tag selector should match all objects in a category",
+  );
+  assertEqual(
+    selectOneEditorDocumentObject(document, { ids: ["front.dieline"] })?.id,
+    "front.dieline",
+    "id selector should resolve one exact object",
+  );
+  let ambiguous = false;
+  try {
+    selectOneEditorDocumentObject(document, { tags: ["slot:front"] });
+  } catch {
+    ambiguous = true;
+  }
+  assert(ambiguous, "single-object selector should reject multiple matches");
+}
+
 function main(): void {
   testStrictRoundTrip();
   testUnknownAndLegacyFieldsAreRejected();
@@ -216,6 +283,7 @@ function main(): void {
   testGlobalIdsAndReferencesAreStrict();
   testExtensionSchemasAreStrict();
   testCloneAndVisitors();
+  testObjectSelectors();
   console.log("ok");
 }
 

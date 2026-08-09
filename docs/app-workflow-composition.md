@@ -10,8 +10,8 @@ group.
 
 ## Document-owned dieline and feature
 
-- A cutline is a normal Visual Object with a path/shape `source` and a
-  `core.guide` trait whose role is `cut`.
+- A cutline is a normal Visual Object with a path/shape `source`, a
+  `core.guide` trait, and the namespaced `guide:cut` tag.
 - A Feature is a Composite Object. The cutline owns ordered
   `core.geometry.boolean` effects that reference Feature operands by object id.
 - A clipped artwork Object owns `core.geometry.clip` and references the

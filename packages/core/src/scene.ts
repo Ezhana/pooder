@@ -185,16 +185,19 @@ export interface SceneLayerSelector {
   layerIds?: readonly LayerId[];
   visible?: boolean;
   tags?: readonly string[];
+  tagMatch?: "all" | "any";
   metadata?: SceneMetadata;
 }
 
 export interface SceneElementSelector {
   sceneId?: SceneId;
   ids?: readonly ElementId[];
+  projectionIds?: readonly ElementId[];
   layerIds?: readonly LayerId[];
   types?: readonly SceneElementType[];
   visible?: boolean;
   tags?: readonly string[];
+  tagMatch?: "all" | "any";
   metadata?: SceneMetadata;
 }
 
