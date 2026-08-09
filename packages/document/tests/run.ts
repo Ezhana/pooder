@@ -1,6 +1,7 @@
 import {
   EDITOR_DOCUMENT_VERSION,
   EffectSchemaRegistry,
+  ObjectSchemaRegistry,
   cloneEditorDocument,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
@@ -10,6 +11,7 @@ import {
   normalizeEditorDocument,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
+  validateEditorDocumentObjectSchemas,
   visitEditorDocumentObjects,
   type EditorDocument,
   type EditorEffect,
@@ -1341,6 +1343,73 @@ function testCloneAndRecursiveObjectAccessors() {
   );
 }
 
+function testBehaviorAndConstraintDefinitionsAreStrict() {
+  const document = normalizeEditorDocument({
+    version: EDITOR_DOCUMENT_VERSION,
+    assets: [],
+    extensions: {},
+    surfaces: [
+      {
+        id: "front",
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 10, height: 10 },
+          productionBounds: { x: 0, y: 0, width: 10, height: 10 },
+        },
+        layers: [
+          {
+            id: "content",
+            role: "content",
+            visible: true,
+            locked: false,
+            objects: [
+              {
+                id: "subject",
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 1, height: 1 },
+                  localToParent: [1, 0, 0, 1, 0, 0],
+                  pivot: { x: 0, y: 0 },
+                },
+                source: { kind: "shape", shape: "rect", params: {} },
+                behaviors: [{ type: "test.behavior" }],
+                interaction: {
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [{ spec: { type: "test.constraint" } }],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const missing = validateEditorDocumentObjectSchemas(
+    document,
+    new ObjectSchemaRegistry(),
+  );
+  assertDeepEqual(
+    missing.map((diagnostic) => diagnostic.code),
+    ["object-behavior-unregistered", "object-constraint-unregistered"],
+    "missing behavior and constraint definitions should be strict",
+  );
+  const registry = new ObjectSchemaRegistry()
+    .registerBehavior({
+      behaviorType: "test.behavior",
+      capabilityId: "test.capability",
+    })
+    .registerConstraint({ constraintType: "test.constraint" });
+  assertDeepEqual(
+    validateEditorDocumentObjectSchemas(document, registry),
+    [],
+    "registered behavior and constraint definitions should validate",
+  );
+}
+
 function main() {
   testRepresentativeV7FixtureRoundTrip();
   testNormalizeDefaults();
@@ -1363,6 +1432,7 @@ function main() {
   testObjectInteractionNormalizesSeparatelyFromGenericEffects();
   testRequirePolicyDiagnostics();
   testCloneAndRecursiveObjectAccessors();
+  testBehaviorAndConstraintDefinitionsAreStrict();
   console.log("ok");
 }
 

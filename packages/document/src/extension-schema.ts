@@ -5,6 +5,12 @@ import type {
   JsonValue,
 } from "./index";
 import { EffectSchemaRegistry, type EditorEffectSchema } from "./effect-schema";
+import {
+  ObjectSchemaRegistry,
+  type ObjectBehaviorDefinition,
+  type ObjectConstraintDefinition,
+  type ObjectTraitDefinition,
+} from "./object-schema";
 
 export interface DocumentValueSchemaIssue {
   code: string;
@@ -40,6 +46,9 @@ export interface DocumentExtensionContribution<
   id: string;
   stateSchema?: DocumentValueSchema<TState>;
   effects?: readonly EditorEffectSchema[];
+  traits?: readonly ObjectTraitDefinition[];
+  behaviors?: readonly ObjectBehaviorDefinition[];
+  constraints?: readonly ObjectConstraintDefinition[];
   validateReferences?(
     state: TState,
     document: EditorDocument,
@@ -89,6 +98,23 @@ export class DocumentExtensionRegistry {
     return new EffectSchemaRegistry(
       this.list().flatMap((contribution) => contribution.effects ?? []),
     );
+  }
+
+  createObjectSchemaRegistry(): ObjectSchemaRegistry {
+    const registry = new ObjectSchemaRegistry();
+    registry.registerConstraint({ constraintType: "rect.contain" });
+    for (const contribution of this.list()) {
+      contribution.traits?.forEach((definition) =>
+        registry.registerTrait(definition),
+      );
+      contribution.behaviors?.forEach((definition) =>
+        registry.registerBehavior(definition),
+      );
+      contribution.constraints?.forEach((definition) =>
+        registry.registerConstraint(definition),
+      );
+    }
+    return registry;
   }
 }
 

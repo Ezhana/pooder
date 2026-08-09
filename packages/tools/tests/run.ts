@@ -103,10 +103,12 @@ function createImageSlotDocument(): EditorDocument {
                   opacity: 1,
                   clip: "frame",
                 },
-                slot: { accepts: ["image/*"] },
-                interaction: {
-                  hitRegion: { type: "frame", space: "scene" },
-                },
+                behaviors: [
+                  {
+                    type: "pooder.image-slot",
+                    config: { accepts: ["image/*"] },
+                  },
+                ],
               },
             ],
           },

@@ -16,6 +16,7 @@ import {
   OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
   createOfficialToolEffectSchemaRegistry,
 } from "./effect-schemas";
+export * from "./behavior-schemas";
 export {
   OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
   OFFICIAL_TOOL_EFFECT_SCHEMAS,

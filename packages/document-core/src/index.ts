@@ -63,6 +63,7 @@ import {
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
   validateEditorDocumentExtensions,
+  validateEditorDocumentObjectSchemas,
   type EditorDocument,
   type EditorDocumentCapabilityCollectionOptions,
   type EditorDocumentDiagnostic,
@@ -73,6 +74,7 @@ import {
   type EditorLayer,
   type EditorCompositeObject,
   type EditorImageObject,
+  type EditorImageSlotBehaviorConfig,
   type EditorImageAsset,
   type EditorObject,
   type EditorObjectEffect,
@@ -494,6 +496,13 @@ async function prepareEditorDocumentApplication(
   if (hasErrors(extensionDiagnostics)) {
     return createResult(false, document, extensionDiagnostics, []);
   }
+  const objectSchemaDiagnostics = validateEditorDocumentObjectSchemas(
+    document,
+    extensionRegistry.createObjectSchemaRegistry(),
+  );
+  if (hasErrors(objectSchemaDiagnostics)) {
+    return createResult(false, document, objectSchemaDiagnostics, []);
+  }
   const effectSchemaDiagnostics = validateEditorDocumentEffectSchemas(
     value,
     effectSchemaRegistry,
@@ -501,6 +510,7 @@ async function prepareEditorDocumentApplication(
   const diagnostics = [
     ...documentSchemaDiagnostics,
     ...extensionDiagnostics,
+    ...objectSchemaDiagnostics,
     ...effectSchemaDiagnostics,
   ];
   if (hasErrors(effectSchemaDiagnostics)) {
@@ -1989,10 +1999,11 @@ function createBaseRenderIntentDrafts(
               ? assetsById.get(object.source.assetId)
               : undefined,
             object.source.kind === "image" &&
-              (object as EditorImageObject).slot?.emptyPresentation
+              getImageSlotBehaviorConfig(object as EditorImageObject)
+                ?.emptyPresentation
               ? assetsById.get(
-                  (object as EditorImageObject).slot!.emptyPresentation!
-                    .assetId,
+                  getImageSlotBehaviorConfig(object as EditorImageObject)!
+                    .emptyPresentation!.assetId,
                 )
               : undefined,
             framePlacement,
@@ -2306,7 +2317,9 @@ function createImageRenderIntentDraft(
               : presentationResource.source.url,
           width: presentationResource.intrinsicSize.width,
           height: presentationResource.intrinsicSize.height,
-          fit: object.slot?.emptyPresentation?.fit ?? "cover",
+          fit:
+            getImageSlotBehaviorConfig(object)?.emptyPresentation?.fit ??
+            "cover",
         }
       : undefined;
   const image = resolved ?? presentation;
@@ -2401,7 +2414,7 @@ function resolveEditorImageClipFrame(
 ) {
   const objectFrame = objectPlacement.localBounds;
   const production = surface.geometry.productionBounds;
-  if (!object.slot) return objectFrame;
+  if (!getImageSlotBehaviorConfig(object)) return objectFrame;
   const productionInObject = transformCoordinateRect(
     invertCoordinateMatrix(objectPlacement.localToScene),
     coordinateRect("scene", {
@@ -2429,6 +2442,19 @@ function resolveEditorImageClipFrame(
         height: bottom - top,
       })
     : objectFrame;
+}
+
+function getImageSlotBehaviorConfig(
+  object: EditorImageObject,
+): EditorImageSlotBehaviorConfig | undefined {
+  const behavior = object.behaviors?.find(
+    (candidate) => candidate.type === "pooder.image-slot",
+  );
+  return behavior?.config && typeof behavior.config === "object"
+    ? (behavior.config as EditorImageSlotBehaviorConfig)
+    : behavior
+      ? {}
+      : undefined;
 }
 
 function createEditorImageClipEffect(

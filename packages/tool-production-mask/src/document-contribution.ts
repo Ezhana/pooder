@@ -13,6 +13,21 @@ import {
 export const POODER_PRODUCTION_MASK_DOCUMENT_CONTRIBUTION: DocumentExtensionContribution<ProductionMaskDocumentState> =
   {
     id: POODER_PRODUCTION_MASK_CAPABILITY_ID,
+    behaviors: [
+      {
+        behaviorType: "pooder.production-mask",
+        capabilityId: POODER_PRODUCTION_MASK_CAPABILITY_ID,
+        validate: (behavior) => {
+          const config = behavior.config;
+          return isRecord(config) &&
+            Array.isArray(config.maskIds) &&
+            config.maskIds.length > 0 &&
+            config.maskIds.every(isNonEmptyString)
+            ? []
+            : [invalidType("config.maskIds", "a non-empty array of mask ids")];
+        },
+      },
+    ],
     stateSchema: {
       validate: validateProductionMaskDocumentState,
     },

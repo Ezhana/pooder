@@ -37,8 +37,12 @@ import {
   type EditorDocument,
   type EditorImageObject,
   type EditorImagePlacement,
+  type EditorObject,
 } from "@pooder/document";
-import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
+import {
+  IMAGE_SLOT_BEHAVIOR_DEFINITION,
+  IMAGE_SLOT_BEHAVIOR_TYPE,
+} from "../../document/behavior-schemas";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
@@ -163,7 +167,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       documentExtensions: [
         {
           id: this.id,
-          effects: [getOfficialToolEffectSchema("image-placement")],
+          behaviors: [IMAGE_SLOT_BEHAVIOR_DEFINITION],
         },
       ],
       commands: [
@@ -649,32 +653,6 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!this.sceneService || !this.sessionHandle) return;
     const sceneId = `image-slot:${object.id}:scene`;
     this.sceneService.getSceneHandle(sceneId)?.dispose();
-    const projections = object.slot?.sessionProjections ?? [];
-    const renderGraphEntries = (placement: "underlay" | "overlay") =>
-      projections
-        .filter((projection) => projection.placement === placement)
-        .map((projection) => ({
-          source: "render-graph" as const,
-          interaction: "disabled" as const,
-          filter: ({
-            node,
-          }: {
-            node: { subjectId: string; surfaceId: string; tags: string[] };
-          }) => {
-            if (node.subjectId === object.id) return false;
-            if (
-              projection.surfaceScope !== "all" &&
-              node.surfaceId !== surfaceId
-            )
-              return false;
-            return (
-              projection.source.objectIds?.includes(node.subjectId) === true ||
-              node.tags.some(
-                (tag) => projection.source.tags?.includes(tag) === true,
-              )
-            );
-          },
-        }));
     this.sceneHandle = this.sceneService.createScene({
       id: sceneId,
       owner: {
@@ -683,10 +661,16 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       },
       composition: {
         entries: [
-          ...renderGraphEntries("underlay"),
           { source: "local", layerIds: ["image-slot.underlay"] },
           { source: "local", layerIds: ["image-slot.working"] },
-          ...renderGraphEntries("overlay"),
+          {
+            source: "render-graph",
+            interaction: "disabled",
+            filter: ({ node }) =>
+              node.surfaceId === surfaceId &&
+              node.subjectId !== object.id &&
+              node.tags.some((tag) => tag === "mockup" || tag === "design"),
+          },
           { source: "local", layerIds: ["image-slot.overlay"] },
           { source: "local", layerIds: ["image-slot.controls"] },
         ],
@@ -1099,9 +1083,9 @@ function findImageSlot(
       isEditorVisualObject(object) &&
       object.source.kind === "image" &&
       "appearance" in object &&
-      object.slot
+      hasImageSlotBehavior(object)
     )
-      match = object;
+      match = object as EditorImageObject;
   });
   return match;
 }
@@ -1118,11 +1102,19 @@ function findImageSlotContext(
       isEditorVisualObject(object) &&
       object.source.kind === "image" &&
       "appearance" in object &&
-      object.slot
+      hasImageSlotBehavior(object)
     )
-      match = { object, surfaceId: surface.id };
+      match = { object: object as EditorImageObject, surfaceId: surface.id };
   });
   return match;
+}
+
+function hasImageSlotBehavior(object: EditorObject): boolean {
+  return (
+    object.behaviors?.some(
+      (behavior) => behavior.type === IMAGE_SLOT_BEHAVIOR_TYPE,
+    ) === true
+  );
 }
 
 function toDraft(

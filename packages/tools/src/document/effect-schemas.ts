@@ -5,22 +5,10 @@ import {
 } from "@pooder/document";
 
 export const OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS = {
-  "image-placement": "pooder.kit.image-slot",
-  "configurable-visual": "pooder.kit.configurable-visual",
   mirror: "pooder.kit.mirror",
 } as const;
 
 export const OFFICIAL_TOOL_EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
-  {
-    effectType: "configurable-visual",
-    capabilityId:
-      OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS["configurable-visual"],
-    validate: (payload) =>
-      validateOptionalRecordFields(payload, {
-        configKey: "string",
-        key: "string",
-      }),
-  },
   {
     effectType: "mirror",
     capabilityId: OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS.mirror,
@@ -29,12 +17,6 @@ export const OFFICIAL_TOOL_EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
         horizontal: "boolean",
         vertical: "boolean",
       }),
-  },
-  {
-    effectType: "image-placement",
-    capabilityId:
-      OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS["image-placement"],
-    validate: validateImagePlacementPayload,
   },
 ];
 
@@ -50,25 +32,6 @@ export function getOfficialToolEffectSchema(
 
 export function createOfficialToolEffectSchemaRegistry(): EffectSchemaRegistry {
   return new EffectSchemaRegistry(OFFICIAL_TOOL_EFFECT_SCHEMAS);
-}
-
-function validateImagePlacementPayload(
-  payload: unknown,
-): EditorEffectSchemaIssue[] {
-  const issues = validateOptionalRecord(payload);
-  if (payload === undefined || !isRecord(payload)) return issues;
-  if (
-    payload.accepts !== undefined &&
-    (!Array.isArray(payload.accepts) ||
-      payload.accepts.some((value) => !isNonEmptyString(value)))
-  ) {
-    issues.push({
-      code: "effect-payload-invalid",
-      message: "Image placement payload.accepts must be an array of strings.",
-      path: "accepts",
-    });
-  }
-  return issues;
 }
 
 function validateOptionalRecord(payload: unknown): EditorEffectSchemaIssue[] {
@@ -129,9 +92,6 @@ function invalidEnum(
   };
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

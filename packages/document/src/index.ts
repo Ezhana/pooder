@@ -1,5 +1,6 @@
 export * from "./effect-schema";
 export * from "./extension-schema";
+export * from "./object-schema";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -89,32 +90,16 @@ export interface DocumentInteractionSessionIntent {
 }
 
 export interface DocumentInteractionConstraintSpec {
-  activeWhen?: DocumentRuntimeConditionExpr;
   spec: DocumentConstraintSpec;
 }
 
 export interface DocumentInteractionOperationSpec {
   enabled: boolean;
   constraints?: DocumentInteractionConstraintSpec[];
-  action?: {
-    commandId: string;
-    payload?: Record<string, unknown>;
-  };
 }
 
 export interface DocumentInteractionSpec {
-  hitRegion?: { type: "frame"; space: "scene" };
-  enabledWhen?: DocumentRuntimeConditionExpr;
   selection?: { enabled: boolean };
-  activation?: {
-    enabled?: boolean;
-    trigger?: "primary-pointer" | "double-click";
-    action: {
-      commandId: string;
-      payload?: Record<string, unknown>;
-    };
-    session?: DocumentInteractionSessionIntent;
-  };
   manipulation?: {
     move?: DocumentInteractionOperationSpec;
     resize?: DocumentInteractionOperationSpec;
@@ -215,6 +200,7 @@ export interface EditorObjectBase {
   visible: boolean;
   locked: boolean;
   traits?: EditorObjectTrait[];
+  behaviors?: EditorObjectBehavior[];
   interaction?: DocumentInteractionSpec;
   effects?: EditorObjectEffect[];
 }
@@ -257,20 +243,12 @@ export interface EditorPrimitiveAppearance {
   dash?: number[];
 }
 
-export interface EditorImageSlotSpec {
+export interface EditorImageSlotBehaviorConfig {
   accepts?: string[];
   emptyPresentation?: {
     assetId: string;
     fit: EditorImagePlacement["fit"];
   };
-  sessionProjections?: Array<{
-    placement: "underlay" | "overlay" | "controls";
-    source: {
-      objectIds?: string[];
-      tags?: string[];
-    };
-    surfaceScope?: "same-surface" | "all";
-  }>;
 }
 
 export type ObjectSource =
@@ -297,7 +275,6 @@ export type ObjectSource =
 export interface EditorImageObject extends EditorObjectBase {
   source: { kind: "image"; assetId?: string };
   appearance: EditorImagePlacement;
-  slot?: EditorImageSlotSpec;
   children?: never;
 }
 
@@ -305,7 +282,6 @@ export interface EditorPrimitiveObject extends EditorObjectBase {
   source: Exclude<ObjectSource, { kind: "image" }>;
   children?: never;
   appearance?: EditorPrimitiveAppearance;
-  slot?: never;
 }
 
 export type EditorVisualObject = EditorImageObject | EditorPrimitiveObject;
@@ -314,7 +290,6 @@ export interface EditorCompositeObject extends EditorObjectBase {
   children: EditorObject[];
   source?: never;
   appearance?: never;
-  slot?: never;
 }
 
 export type EditorObject = EditorVisualObject | EditorCompositeObject;
@@ -371,6 +346,11 @@ export interface EditorExtensionObjectTrait<TPayload = JsonValue> {
 }
 
 export type EditorObjectTrait = CoreObjectTrait | EditorExtensionObjectTrait;
+
+export interface EditorObjectBehavior<TConfig = JsonValue> {
+  type: string;
+  config?: TConfig;
+}
 
 /** @deprecated Effects are object-owned and represented by EditorObjectEffect. */
 export type EditorEffect = EditorExtensionObjectEffect;
@@ -712,57 +692,6 @@ function normalizeUnitCoordinate(value: unknown): number {
   return Math.min(1, Math.max(0, normalizeFiniteNumber(value) ?? 0.5));
 }
 
-function normalizeImageSlot(value: unknown): EditorImageSlotSpec | undefined {
-  if (!isRecord(value)) return undefined;
-  const accepts = normalizeIdList(value.accepts);
-  const empty = isRecord(value.emptyPresentation)
-    ? value.emptyPresentation
-    : undefined;
-  const emptyAssetId = normalizeId(empty?.assetId);
-  const sessionProjections = Array.isArray(value.sessionProjections)
-    ? value.sessionProjections.flatMap((item) => {
-        if (!isRecord(item) || !isRecord(item.source)) return [];
-        if (
-          item.placement !== "underlay" &&
-          item.placement !== "overlay" &&
-          item.placement !== "controls"
-        )
-          return [];
-        const objectIds = normalizeIdList(item.source.objectIds);
-        const tags = normalizeIdList(item.source.tags);
-        if (!objectIds && !tags) return [];
-        return [
-          {
-            placement: item.placement as "underlay" | "overlay" | "controls",
-            source: {
-              ...(objectIds ? { objectIds } : {}),
-              ...(tags ? { tags } : {}),
-            },
-            surfaceScope:
-              item.surfaceScope === "all"
-                ? ("all" as const)
-                : ("same-surface" as const),
-          },
-        ];
-      })
-    : undefined;
-  return {
-    ...(accepts ? { accepts } : {}),
-    ...(emptyAssetId
-      ? {
-          emptyPresentation: {
-            assetId: emptyAssetId,
-            fit:
-              empty?.fit === "contain" || empty?.fit === "stretch"
-                ? empty.fit
-                : "cover",
-          },
-        }
-      : {}),
-    ...(sessionProjections?.length ? { sessionProjections } : {}),
-  };
-}
-
 function normalizeSurfaceGeometry(value: unknown): EditorSurface["geometry"] {
   const raw = isRecord(value) ? value : {};
   const canvasBounds = normalizeRect(raw.canvasBounds) ?? {
@@ -945,9 +874,6 @@ function normalizeInteractionConstraint(
   const source = normalizeGeometryRef(rawSpec.source);
   const application = normalizeConstraintApplication(rawSpec.application);
   return {
-    ...(normalizeRuntimeCondition(value.activeWhen)
-      ? { activeWhen: normalizeRuntimeCondition(value.activeWhen) }
-      : {}),
     spec: {
       type,
       ...(source ? { source } : {}),
@@ -994,54 +920,9 @@ function normalizeInteractionOperation(
 ): InteractionOperationSpec | undefined {
   if (!isRecord(value) || typeof value.enabled !== "boolean") return undefined;
   const constraints = normalizeInteractionConstraints(value.constraints);
-  const rawAction = isRecord(value.action) ? value.action : undefined;
-  const commandId = normalizeId(rawAction?.commandId);
   return {
     enabled: value.enabled,
     ...(constraints ? { constraints } : {}),
-    ...(commandId
-      ? {
-          action: {
-            commandId,
-            ...(isRecord(rawAction?.payload)
-              ? { payload: cloneRecord(rawAction.payload) }
-              : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-function normalizeInteractionSession(
-  value: unknown,
-): InteractionSessionIntent | undefined {
-  if (!isRecord(value)) return undefined;
-  const channel = normalizeId(value.channel);
-  const groupId = normalizeId(value.groupId);
-  const sessionId = normalizeId(value.sessionId);
-  if (
-    !channel ||
-    !groupId ||
-    (value.mode !== "exclusive" &&
-      value.mode !== "cooperative" &&
-      value.mode !== "passive") ||
-    (value.scope !== "subject" &&
-      value.scope !== "surface" &&
-      value.scope !== "editor")
-  ) {
-    return undefined;
-  }
-  return {
-    channel,
-    groupId,
-    ...(sessionId ? { sessionId } : {}),
-    mode: value.mode,
-    scope: value.scope,
-    ...(value.leavePolicy === "block" ||
-    value.leavePolicy === "commit" ||
-    value.leavePolicy === "rollback"
-      ? { leavePolicy: value.leavePolicy }
-      : {}),
   };
 }
 
@@ -1050,40 +931,11 @@ function normalizeObjectInteraction(
 ): InteractionSpec | undefined {
   if (!isRecord(value)) return undefined;
   const interaction: InteractionSpec = {};
-  if (isRecord(value.hitRegion) && value.hitRegion.type === "frame") {
-    interaction.hitRegion = { type: "frame", space: "scene" };
-  }
-  const enabledWhen = normalizeRuntimeCondition(value.enabledWhen);
-  if (enabledWhen) interaction.enabledWhen = enabledWhen;
-
   if (
     isRecord(value.selection) &&
     typeof value.selection.enabled === "boolean"
   ) {
     interaction.selection = { enabled: value.selection.enabled };
-  }
-
-  if (isRecord(value.activation) && isRecord(value.activation.action)) {
-    const commandId = normalizeId(value.activation.action.commandId);
-    if (commandId) {
-      const session = normalizeInteractionSession(value.activation.session);
-      interaction.activation = {
-        ...(typeof value.activation.enabled === "boolean"
-          ? { enabled: value.activation.enabled }
-          : {}),
-        ...(value.activation.trigger === "primary-pointer" ||
-        value.activation.trigger === "double-click"
-          ? { trigger: value.activation.trigger }
-          : {}),
-        action: {
-          commandId,
-          ...(isRecord(value.activation.action.payload)
-            ? { payload: cloneRecord(value.activation.action.payload) }
-            : {}),
-        },
-        ...(session ? { session } : {}),
-      };
-    }
   }
 
   if (isRecord(value.manipulation)) {
@@ -1192,6 +1044,26 @@ function normalizeObjectTraits(value: unknown): EditorObjectTrait[] | undefined 
   return traits.length ? traits : undefined;
 }
 
+function normalizeObjectBehaviors(
+  value: unknown,
+): EditorObjectBehavior[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const behaviors = value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const type = normalizeId(item.type);
+    if (!type) return [];
+    return [
+      {
+        type,
+        ...(item.config !== undefined
+          ? { config: cloneSerializableValue(item.config) as JsonValue }
+          : {}),
+      },
+    ];
+  });
+  return behaviors.length ? behaviors : undefined;
+}
+
 function normalizeObject(value: unknown): EditorObject | null {
   if (!isRecord(value)) return null;
   const id = normalizeId(value.id);
@@ -1203,6 +1075,9 @@ function normalizeObject(value: unknown): EditorObject | null {
     locked: typeof value.locked === "boolean" ? value.locked : false,
     ...(normalizeObjectTraits(value.traits)
       ? { traits: normalizeObjectTraits(value.traits) }
+      : {}),
+    ...(normalizeObjectBehaviors(value.behaviors)
+      ? { behaviors: normalizeObjectBehaviors(value.behaviors) }
       : {}),
     ...(interaction ? { interaction } : {}),
     ...(normalizeObjectEffects(value.effects)
@@ -1224,9 +1099,6 @@ function normalizeObject(value: unknown): EditorObject | null {
       ...base,
       source,
       appearance: normalizeImagePlacement(value.appearance),
-      ...(isRecord(value.slot)
-        ? { slot: normalizeImageSlot(value.slot) ?? {} }
-        : {}),
     };
   }
   const appearance = normalizePrimitiveAppearance(value.appearance);
@@ -1706,13 +1578,7 @@ function validateObjectInteraction(
     return;
   }
 
-  const allowedFields = new Set([
-    "hitRegion",
-    "enabledWhen",
-    "selection",
-    "activation",
-    "manipulation",
-  ]);
+  const allowedFields = new Set(["selection", "manipulation"]);
   Object.keys(value).forEach((field) => {
     if (allowedFields.has(field)) return;
     addDiagnostic(diagnostics, {
@@ -1724,18 +1590,6 @@ function validateObjectInteraction(
   });
 
   if (
-    value.hitRegion !== undefined &&
-    (!isRecord(value.hitRegion) || value.hitRegion.type !== "frame")
-  ) {
-    addDiagnostic(diagnostics, {
-      severity: "error",
-      code: "interaction-hit-region-invalid",
-      message: 'Interaction hitRegion must be { type: "frame" }.',
-      path: `${path}.hitRegion`,
-    });
-  }
-
-  if (
     value.selection !== undefined &&
     (!isRecord(value.selection) || typeof value.selection.enabled !== "boolean")
   ) {
@@ -1745,42 +1599,6 @@ function validateObjectInteraction(
       message: "Interaction selection requires a boolean enabled field.",
       path: `${path}.selection`,
     });
-  }
-
-  if (
-    value.enabledWhen !== undefined &&
-    !normalizeRuntimeCondition(value.enabledWhen)
-  ) {
-    addDiagnostic(diagnostics, {
-      severity: "error",
-      code: "interaction-condition-invalid",
-      message: "Interaction enabledWhen is not a valid condition expression.",
-      path: `${path}.enabledWhen`,
-    });
-  }
-
-  if (value.activation !== undefined) {
-    const activation = isRecord(value.activation)
-      ? value.activation
-      : undefined;
-    const action = isRecord(activation?.action) ? activation.action : undefined;
-    if (!activation || !action || !normalizeId(action.commandId)) {
-      addDiagnostic(diagnostics, {
-        severity: "error",
-        code: "interaction-activation-invalid",
-        message: "Interaction activation requires action.commandId.",
-        path: `${path}.activation.action.commandId`,
-      });
-    }
-    if (action && Object.prototype.hasOwnProperty.call(action, "command")) {
-      addDiagnostic(diagnostics, {
-        severity: "error",
-        code: "interaction-action-command-legacy",
-        message:
-          "Interaction action.command is not supported; use action.commandId.",
-        path: `${path}.activation.action.command`,
-      });
-    }
   }
 
   if (value.manipulation === undefined) return;
@@ -1813,6 +1631,15 @@ function validateObjectInteraction(
       });
       return;
     }
+    for (const field of Object.keys(operation)) {
+      if (field === "enabled" || field === "constraints") continue;
+      addDiagnostic(diagnostics, {
+        severity: "error",
+        code: "interaction-operation-field-invalid",
+        message: `Interaction ${kind} field "${field}" is not persisted in EditorDocument v7.`,
+        path: `${operationPath}.${field}`,
+      });
+    }
     if (operation.constraints === undefined) return;
     if (!Array.isArray(operation.constraints)) {
       addDiagnostic(diagnostics, {
@@ -1829,6 +1656,14 @@ function validateObjectInteraction(
         isRecord(constraint) && isRecord(constraint.spec)
           ? constraint.spec
           : undefined;
+      if (isRecord(constraint) && constraint.activeWhen !== undefined) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "interaction-constraint-condition-forbidden",
+          message: "Constraint activation conditions belong to its definition.",
+          path: `${constraintPath}.activeWhen`,
+        });
+      }
       if (!spec || !normalizeId(spec.type)) {
         addDiagnostic(diagnostics, {
           severity: "error",
@@ -1956,15 +1791,30 @@ function validateV7ImageObjects(
               path: `${path}.appearance`,
             });
           }
-          if (object.slot !== undefined && !isRecord(object.slot)) {
-            addDiagnostic(diagnostics, {
-              severity: "error",
-              code: "image-slot-invalid",
-              message: "Image slot must be an object.",
-              path: `${path}.slot`,
-            });
-          }
         }
+      }
+      if (object.slot !== undefined) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "object-slot-forbidden",
+          message: "Image slot semantics must use an Object Behavior.",
+          path: `${path}.slot`,
+        });
+      }
+      if (
+        object.behaviors !== undefined &&
+        (!Array.isArray(object.behaviors) ||
+          object.behaviors.some(
+            (behavior) =>
+              !isRecord(behavior) || !normalizeId(behavior.type),
+          ))
+      ) {
+        addDiagnostic(diagnostics, {
+          severity: "error",
+          code: "object-behaviors-invalid",
+          message: "Object behaviors must be typed behavior instances.",
+          path: `${path}.behaviors`,
+        });
       }
       validateObjects(object.children, `${path}.children`);
     });

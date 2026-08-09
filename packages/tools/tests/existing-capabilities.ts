@@ -503,19 +503,23 @@ async function testConfigurableVisualCapability(): Promise<void> {
     resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
   });
   try {
-    const applied = await controller.apply(
-      createEffectDocument(
-        { type: "configurable-visual", payload: { key: "flash-base" } },
-        {
+    const document = createEffectDocument(
+      { type: "mirror", payload: {} },
+      {
           kind: "image",
           resource: {
             kind: "url",
             url: "/default-flash.png",
             intrinsicSize: { width: 200, height: 100 },
           },
-        },
-      ),
+      },
     );
+    const visual = document.surfaces[0]!.layers[0]!.objects[0]!;
+    visual.effects = undefined;
+    visual.behaviors = [
+      { type: "pooder.configurable-visual", config: { key: "flash-base" } },
+    ];
+    const applied = await controller.apply(document);
     assert(
       applied.ok,
       `configurable visual document should apply (${JSON.stringify(applied.diagnostics)})`,
@@ -537,27 +541,10 @@ async function testConfigurableVisualCapability(): Promise<void> {
       CONFIGURABLE_VISUAL_CAPABILITY_ID,
     );
     assert(facade, "configurable visual facade should be registered");
-    facade.setCommittedVisual({
-      configKey: "configurableVisual",
-      key: "flash-base",
-      src: "/runtime-flash.png",
-      enabled: true,
-      opacity: 0.6,
-    });
     assertEqual(
-      getNode()?.visual?.src,
-      "/runtime-flash.png",
-      "configuration should replace the document image",
-    );
-    assertEqual(getNode()?.props.opacity, 0.6, "configuration opacity");
-    facade.clearCommittedVisual({
-      configKey: "configurableVisual",
-      key: "flash-base",
-    });
-    assertEqual(
-      getNode()?.visible,
-      false,
-      "cleared configurable visual should hide",
+      facade.getBehaviorKey(applied.document.surfaces[0]!.layers[0]!.objects[0]!),
+      "flash-base",
+      "configurable visual behavior should identify its document-owned visual",
     );
   } finally {
     await runtime.dispose();

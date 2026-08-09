@@ -211,10 +211,7 @@ async function testApplyEditorDocument() {
                   },
                   effects: [{ type: "custom" }],
                   interaction: {
-                    selection: { enabled: false },
-                    activation: {
-                      action: { commandId: "test.open-session" },
-                    },
+                    selection: { enabled: true },
                     manipulation: {
                       move: {
                         enabled: true,
@@ -243,8 +240,7 @@ async function testApplyEditorDocument() {
                     opacity: 1,
                     clip: "frame",
                   },
-                  slot: {},
-                  interaction: { hitRegion: { type: "frame" } },
+                  behaviors: [{ type: "test.image-slot" }],
                 },
                 {
                   id: "placed-image",
@@ -463,7 +459,6 @@ async function testCompositeRenderIntentFlattening() {
                   pivot: { x: 10, y: 10 },
                 },
                 interaction: {
-                  hitRegion: { type: "frame", space: "scene" },
                   manipulation: { move: { enabled: true } },
                 },
                 children: [

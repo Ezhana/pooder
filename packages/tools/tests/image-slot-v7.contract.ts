@@ -27,8 +27,9 @@ const emptySlot: EditorImageObject = {
   },
   source: { kind: "image" },
   appearance,
-  slot: { accepts: ["image/*"] },
-  interaction: { hitRegion: { type: "frame", space: "scene" } },
+  behaviors: [
+    { type: "pooder.image-slot", config: { accepts: ["image/*"] } },
+  ],
 };
 
 const document: EditorDocument = {

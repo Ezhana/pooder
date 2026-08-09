@@ -1,7 +1,7 @@
 import type { ExtensionDefinition } from "@pooder/core";
 import {
-  isEditorVisualObject,
   normalizeEditorDocument,
+  visitEditorDocumentObjects,
 } from "@pooder/document";
 import {
   createConfigurableVisualCapability,
@@ -14,6 +14,10 @@ import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-vi
 import { IMAGE_SLOT_CAPABILITY_ID } from "../extensions/image-slot";
 import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
 import { collectOfficialToolDocumentCapabilityRequirements } from "./index";
+import {
+  CONFIGURABLE_VISUAL_BEHAVIOR_TYPE,
+  IMAGE_SLOT_BEHAVIOR_TYPE,
+} from "./behavior-schemas";
 
 const OFFICIAL_TOOL_EFFECT_FACTORIES: Record<
   string,
@@ -47,19 +51,25 @@ export function createOfficialToolCapabilitiesForDocument(
       : OFFICIAL_TOOL_EFFECT_FACTORIES[id](),
   );
   const document = normalizeEditorDocument(value);
-  const hasImageSlots = document.surfaces.some((surface) =>
-    surface.layers.some((layer) =>
-      layer.objects?.some(
-        (object) =>
-          isEditorVisualObject(object) &&
-          object.source.kind === "image" &&
-          "slot" in object &&
-          Boolean(object.slot),
-      ),
-    ),
-  );
+  const behaviorCapabilityIds = new Set<string>();
+  visitEditorDocumentObjects(document, ({ object }) => {
+    object.behaviors?.forEach((behavior) => {
+      if (behavior.type === IMAGE_SLOT_BEHAVIOR_TYPE) {
+        behaviorCapabilityIds.add(IMAGE_SLOT_CAPABILITY_ID);
+      } else if (behavior.type === CONFIGURABLE_VISUAL_BEHAVIOR_TYPE) {
+        behaviorCapabilityIds.add(CONFIGURABLE_VISUAL_CAPABILITY_ID);
+      }
+    });
+  });
+  const hasImageSlots = behaviorCapabilityIds.has(IMAGE_SLOT_CAPABILITY_ID);
   if (hasImageSlots && !capabilityIds.includes(IMAGE_SLOT_CAPABILITY_ID)) {
     capabilities.push(createImageSlotCapability(options.imageSlot));
+  }
+  if (
+    behaviorCapabilityIds.has(CONFIGURABLE_VISUAL_CAPABILITY_ID) &&
+    !capabilityIds.includes(CONFIGURABLE_VISUAL_CAPABILITY_ID)
+  ) {
+    capabilities.push(createConfigurableVisualCapability());
   }
   return capabilities;
 }

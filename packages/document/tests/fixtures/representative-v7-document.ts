@@ -139,7 +139,12 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                 opacity: 1,
                 clip: "frame",
               },
-              slot: { accepts: ["image/png", "image/jpeg"] },
+              behaviors: [
+                {
+                  type: "pooder.image-slot",
+                  config: { accepts: ["image/png", "image/jpeg"] },
+                },
+              ],
             },
           ],
         },
