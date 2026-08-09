@@ -225,7 +225,7 @@ function createEffectDocument(
             },
           ]
         : [],
-    config: {},
+    extensions: {},
     surfaces: [
       {
         id: "front",

@@ -48,6 +48,32 @@ export type ProductionMaskSource =
   | { type: "reference-object" }
   | { type: "asset"; assetId: string };
 
+export type ProductionMaskProcess = "white-ink" | "reverse" | "spot-uv";
+
+export interface ProductionMaskPresentationState {
+  originalVisible: boolean;
+  originalMaskVisible: boolean;
+  currentMaskVisible: boolean;
+}
+
+export interface ProductionMaskDocumentEntry {
+  surfaceId: string;
+  process: ProductionMaskProcess;
+  production: {
+    enabled: boolean;
+    referenceObjectId: string;
+    source:
+      | { kind: "reference-object" }
+      | { kind: "asset"; assetId: string };
+    alpha: ProductionMaskAlphaParameters;
+  };
+  presentation: ProductionMaskPresentationState;
+}
+
+export interface ProductionMaskDocumentState {
+  masks: Record<string, ProductionMaskDocumentEntry>;
+}
+
 export interface ProductionMaskProjectionSource {
   objectIds?: string[];
   tags?: string[];
@@ -96,6 +122,7 @@ export interface ProductionMaskDescriptor {
   layerId: string | null;
   surfaceId: string;
   payload: ProductionMaskEffectPayload;
+  presentation: ProductionMaskPresentationState;
 }
 
 export interface ProductionMaskSessionDraft {
@@ -181,7 +208,7 @@ export interface ProductionMaskCapabilityApi {
     originalVisible?: boolean;
     originalMaskVisible?: boolean;
     currentMaskVisible?: boolean;
-  }): ProductionMaskOperationResult;
+  }): Promise<ProductionMaskOperationResult>;
   commitSession(): Promise<ProductionMaskOperationResult>;
   rollbackSession(): Promise<ProductionMaskOperationResult>;
   generateMask(

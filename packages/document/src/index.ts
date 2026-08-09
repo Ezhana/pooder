@@ -1,4 +1,11 @@
 export * from "./effect-schema";
+export * from "./extension-schema";
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue =
+  | JsonPrimitive
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 export type DocumentConstraintResolvePhase = "preview" | "commit";
 
@@ -136,6 +143,7 @@ export type EditorDocumentDiagnosticSeverity = "error" | "warning";
 export type EditorDocumentDiagnosticStage =
   | "document-schema"
   | "effect-schema"
+  | "extension-schema"
   | "runtime-capability";
 export type EditorEffectPhase =
   | "document"
@@ -185,7 +193,7 @@ export interface PointMm {
 export interface EditorDocument {
   version: EditorDocumentVersion;
   assets: EditorAsset[];
-  config: Record<string, unknown>;
+  extensions: Record<string, JsonValue>;
   metadata?: Record<string, unknown>;
   surfaces: EditorSurface[];
 }
@@ -1281,7 +1289,9 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
         .map(normalizeAsset)
         .filter((asset): asset is EditorAsset => Boolean(asset))
     : [];
-  const config = isRecord(input.config) ? cloneRecord(input.config) : {};
+  const extensions = isRecord(input.extensions)
+    ? (cloneSerializableValue(input.extensions) as Record<string, JsonValue>)
+    : {};
   const surfaces = Array.isArray(input.surfaces)
     ? input.surfaces
         .map(normalizeSurface)
@@ -1290,7 +1300,7 @@ export function normalizeEditorDocument(value: unknown): EditorDocument {
   return {
     version: EDITOR_DOCUMENT_VERSION,
     assets,
-    config,
+    extensions,
     ...(isRecord(input.metadata)
       ? { metadata: cloneRecord(input.metadata) }
       : {}),
@@ -1448,16 +1458,16 @@ function validateEffect(
   }
 }
 
-function validateDocumentConfig(
+function validateDocumentExtensions(
   diagnostics: EditorDocumentDiagnostic[],
   input: Record<string, unknown>,
 ) {
-  if (!isRecord(input.config)) {
+  if (!isRecord(input.extensions)) {
     addDiagnostic(diagnostics, {
       severity: "error",
-      code: "document-config-required",
-      message: "EditorDocument config is required.",
-      path: "config",
+      code: "document-extensions-required",
+      message: "EditorDocument extensions container is required.",
+      path: "extensions",
     });
   }
 }
@@ -1977,7 +1987,7 @@ export function validateEditorDocument(
   const objectIds = new Set<string>();
   const assetIds = new Set<string>();
 
-  validateDocumentConfig(diagnostics, input);
+  validateDocumentExtensions(diagnostics, input);
   validateV7ImageObjects(diagnostics, input);
   validateRawEffectEnvelopes(diagnostics, input);
 

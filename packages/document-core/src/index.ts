@@ -39,7 +39,6 @@ import {
   type RenderIntentService,
   type PreparedRenderIntentDocumentPublication,
   type PreparedSurfaceFramePublication,
-  type PreparedConfigurationPublication,
   type Service,
   type ServiceContext,
   type ServiceIdentifier,
@@ -52,6 +51,7 @@ import {
 } from "@pooder/core";
 import {
   EffectSchemaRegistry,
+  DocumentExtensionRegistry,
   cloneEditorDocument,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
@@ -62,6 +62,7 @@ import {
   normalizeEditorDocument,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
+  validateEditorDocumentExtensions,
   type EditorDocument,
   type EditorDocumentCapabilityCollectionOptions,
   type EditorDocumentDiagnostic,
@@ -77,6 +78,7 @@ import {
   type EditorObject,
   type EditorObjectEffect,
   type EditorSurface,
+  type DocumentExtensionContribution,
   type ObjectSource,
 } from "@pooder/document";
 
@@ -171,22 +173,8 @@ export function resolveObjectSource(
 }
 
 export interface EditorDocumentRuntime {
-  readonly config?: {
-    export(): Record<string, unknown>;
-    get<T = unknown>(key: string, defaultValue?: T): T;
-    import(data: Record<string, unknown>): void;
-    prepareImport(
-      data: Record<string, unknown>,
-    ): PreparedConfigurationPublication;
-    assertImportPublicationCurrent(
-      publication: PreparedConfigurationPublication,
-    ): void;
-    publishImport(
-      publication: PreparedConfigurationPublication,
-      options?: { notify?: boolean },
-    ): void;
-    notifyImportPublished(publication: PreparedConfigurationPublication): void;
-    update(key: string, value: unknown): void;
+  readonly extensions?: {
+    listDocumentContributions(): unknown[];
   };
   readonly services: {
     register?<T extends Service>(
@@ -418,8 +406,6 @@ export async function applyEditorDocument(
 
 interface PreparedEditorDocumentApplication {
   result: ApplyEditorDocumentResult;
-  config: NonNullable<EditorDocumentRuntime["config"]>;
-  configPublication: PreparedConfigurationPublication;
   surfaceFramePublication: PreparedSurfaceFramePublication;
   renderIntentPublication: PreparedRenderIntentDocumentPublication;
   participantPublications: EditorDocumentPublication[];
@@ -487,8 +473,13 @@ async function prepareEditorDocumentApplication(
   renderIntentMode: "replace" | "update",
 ): Promise<PreparedEditorDocumentApplication | ApplyEditorDocumentResult> {
   const validationOptions = toValidationOptions(options);
-  const collectionOptions = toCollectionOptions(options);
   const document = normalizeEditorDocument(value);
+  const extensionRegistry = createRuntimeDocumentExtensionRegistry(runtime);
+  const effectSchemaRegistry = mergeEffectSchemaRegistries(
+    extensionRegistry.createEffectSchemaRegistry(),
+    options.effectSchemaRegistry,
+  );
+  const collectionOptions = toCollectionOptions(options, effectSchemaRegistry);
   const documentSchemaDiagnostics = validateEditorDocument(
     value,
     validationOptions,
@@ -496,12 +487,20 @@ async function prepareEditorDocumentApplication(
   if (hasErrors(documentSchemaDiagnostics)) {
     return createResult(false, document, documentSchemaDiagnostics, []);
   }
+  const extensionDiagnostics = validateEditorDocumentExtensions(
+    value,
+    extensionRegistry,
+  );
+  if (hasErrors(extensionDiagnostics)) {
+    return createResult(false, document, extensionDiagnostics, []);
+  }
   const effectSchemaDiagnostics = validateEditorDocumentEffectSchemas(
     value,
-    options.effectSchemaRegistry ?? new EffectSchemaRegistry(),
+    effectSchemaRegistry,
   );
   const diagnostics = [
     ...documentSchemaDiagnostics,
+    ...extensionDiagnostics,
     ...effectSchemaDiagnostics,
   ];
   if (hasErrors(effectSchemaDiagnostics)) {
@@ -524,48 +523,6 @@ async function prepareEditorDocumentApplication(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  if (!runtime.config) {
-    return createResult(
-      false,
-      document,
-      [
-        ...allDiagnostics,
-        {
-          severity: "error",
-          stage: "runtime-capability",
-          code: "runtime-config-required",
-          message:
-            "ConfigurationService runtime facade is required to apply an EditorDocument.",
-          path: "config",
-        },
-      ],
-      [],
-    );
-  }
-  const config = runtime.config;
-  if (
-    typeof config.prepareImport !== "function" ||
-    typeof config.assertImportPublicationCurrent !== "function" ||
-    typeof config.publishImport !== "function" ||
-    typeof config.notifyImportPublished !== "function"
-  ) {
-    return createResult(
-      false,
-      document,
-      [
-        ...allDiagnostics,
-        {
-          severity: "error",
-          stage: "runtime-capability",
-          code: "runtime-config-publication-required",
-          message:
-            "Prepared Configuration publication is required to apply an EditorDocument atomically.",
-          path: "config",
-        },
-      ],
-      [],
-    );
-  }
   const surfaceFrameService = runtime.services.getOrThrow<SurfaceFrameService>(
     SURFACE_FRAME_SERVICE,
     "SurfaceFrameService is required to apply an EditorDocument.",
@@ -589,7 +546,11 @@ async function prepareEditorDocumentApplication(
 
   for (const entry of effectEntries) {
     if (entry.effect.require === "ignore") continue;
-    const capabilityId = resolveEffectCapabilityId(entry.effect, options);
+    const capabilityId = resolveEffectCapabilityId(
+      entry.effect,
+      options,
+      effectSchemaRegistry,
+    );
     if (!capabilityId || !runtime.capabilities.has(capabilityId)) continue;
 
     const patches = await compileRenderIntentPatches(
@@ -628,7 +589,6 @@ async function prepareEditorDocumentApplication(
     allDiagnostics,
     collectAppliedSurfaceIds(mergeResult.drafts),
   );
-  const configPublication = config.prepareImport(document.config);
   const surfaceFramePublication = surfaceFrameService.prepareImportFrames(
     Object.fromEntries(
       document.surfaces.map((surface) => [
@@ -642,6 +602,30 @@ async function prepareEditorDocumentApplication(
     renderIntentMode,
   );
   const participantPublications: EditorDocumentPublication[] = [];
+  for (const contribution of extensionRegistry.list()) {
+    const state = document.extensions[contribution.id];
+    if (state === undefined || !contribution.preparePublication) continue;
+    try {
+      const publication = await contribution.preparePublication(state, {
+        document,
+        extensionId: contribution.id,
+      });
+      if (publication) participantPublications.push(publication);
+    } catch (error) {
+      return createResult(
+        false,
+        document,
+        [
+          ...allDiagnostics,
+          createPublicationDiagnostic(
+            "document-extension-publication-prepare-failed",
+            error,
+          ),
+        ],
+        [],
+      );
+    }
+  }
   for (const participant of options.publicationParticipants ?? []) {
     try {
       const publication = await participant.prepare({ runtime, document });
@@ -664,8 +648,6 @@ async function prepareEditorDocumentApplication(
 
   return {
     result,
-    config,
-    configPublication,
     surfaceFramePublication,
     renderIntentPublication,
     participantPublications,
@@ -679,7 +661,6 @@ function publishEditorDocumentApplication(
   prepared: PreparedEditorDocumentApplication,
   boundary: EditorDocumentPublicationBoundary,
 ): void {
-  prepared.config.assertImportPublicationCurrent(prepared.configPublication);
   prepared.surfaceFrameService.assertImportFramesPublicationCurrent(
     prepared.surfaceFramePublication,
   );
@@ -687,7 +668,6 @@ function publishEditorDocumentApplication(
     prepared.renderIntentPublication,
   );
   boundary.publishDocumentState?.(prepared.result.document);
-  prepared.config.publishImport(prepared.configPublication, { notify: false });
   prepared.surfaceFrameService.publishImportFrames(
     prepared.surfaceFramePublication,
     { notify: false },
@@ -703,9 +683,6 @@ function publishEditorDocumentApplication(
       console.error("EditorDocument publication participant failed.", error);
     }
   });
-  notifyPublication("configuration", () =>
-    prepared.config.notifyImportPublished(prepared.configPublication),
-  );
   notifyPublication("surface frames", () =>
     prepared.surfaceFrameService.notifyImportFramesPublished(
       prepared.surfaceFramePublication,
@@ -1110,7 +1087,6 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   ): Promise<EditorDocumentMutationResult> {
     if (!this.workingDocument) return mutationFailure("document-not-found");
     const candidate = cloneEditorDocument(this.workingDocument);
-    candidate.config = this.runtime.config?.export() ?? candidate.config;
     let returned: EditorDocument | void;
     try {
       returned = await callback(candidate);
@@ -1348,23 +1324,56 @@ function toValidationOptions(
 
 function toCollectionOptions(
   options: ApplyEditorDocumentOptions,
+  effectSchemaRegistry: EffectSchemaRegistry,
 ): EditorDocumentCapabilityCollectionOptions {
   return {
     resolveEffectCapabilityId: (effect) =>
       options.resolveEffectCapabilityId?.(effect) ||
-      options.effectSchemaRegistry?.resolveCapabilityId(effect.type),
+      effectSchemaRegistry.resolveCapabilityId(effect.type),
   };
 }
 
 function resolveEffectCapabilityId(
   effect: EditorEffect,
   options: ApplyEditorDocumentOptions,
+  effectSchemaRegistry: EffectSchemaRegistry,
 ): string | undefined {
   return (
     effect.capabilityId ||
     options.resolveEffectCapabilityId?.(effect) ||
-    options.effectSchemaRegistry?.resolveCapabilityId(effect.type)
+    effectSchemaRegistry.resolveCapabilityId(effect.type)
   );
+}
+
+function createRuntimeDocumentExtensionRegistry(
+  runtime: EditorDocumentRuntime,
+): DocumentExtensionRegistry {
+  const contributions =
+    runtime.extensions?.listDocumentContributions() ?? [];
+  return new DocumentExtensionRegistry(
+    contributions.filter(isDocumentExtensionContribution),
+  );
+}
+
+function isDocumentExtensionContribution(
+  value: unknown,
+): value is DocumentExtensionContribution {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { id?: unknown }).id === "string"
+  );
+}
+
+function mergeEffectSchemaRegistries(
+  primary: EffectSchemaRegistry,
+  fallback?: EffectSchemaRegistry,
+): EffectSchemaRegistry {
+  const merged = new EffectSchemaRegistry(primary.list());
+  for (const schema of fallback?.list() ?? []) {
+    if (!merged.get(schema.effectType)) merged.register(schema);
+  }
+  return merged;
 }
 
 function normalizeObjectId(value: unknown): string {

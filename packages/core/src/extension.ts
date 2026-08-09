@@ -65,6 +65,7 @@ interface NormalizedExtensionContributions {
   renderIntentCompilers: NonNullable<
     ExtensionContributions["renderIntentCompilers"]
   >;
+  documentExtensions: NonNullable<ExtensionContributions["documentExtensions"]>;
 }
 
 interface ExtensionRecord {
@@ -128,6 +129,7 @@ class ExtensionManager {
         renderEffectDefinitions: [],
         renderEffectRenderers: [],
         renderIntentCompilers: [],
+        documentExtensions: [],
       });
       this.records.set(extension.id, record);
       this.applyState(record, "failed", {
@@ -210,6 +212,12 @@ class ExtensionManager {
     return this.listRecords().map((record) => this.toSnapshot(record));
   }
 
+  listDocumentContributions(): unknown[] {
+    return this.listRecords()
+      .filter((record) => record.state === "active")
+      .flatMap((record) => record.contributions.documentExtensions);
+  }
+
   on<TKey extends keyof ExtensionManagerEventMap>(
     type: TKey,
     listener: (event: ExtensionManagerEventMap[TKey]) => void,
@@ -276,6 +284,7 @@ class ExtensionManager {
       renderIntentCompilers: [
         ...(contributions?.renderIntentCompilers ?? []),
       ],
+      documentExtensions: [...(contributions?.documentExtensions ?? [])],
     };
   }
 

@@ -32,7 +32,7 @@ const emptySlot: EditorImageObject = {
 const document: EditorDocument = {
   version: 7,
   assets: [],
-  config: {},
+  extensions: {},
   surfaces: [
     {
       id: "front",

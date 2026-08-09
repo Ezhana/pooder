@@ -193,7 +193,7 @@ class ViewportCanvasService {
 function createNestedDocument(): EditorDocument {
   return {
     version: 7,
-    config: {},
+    extensions: {},
     surfaces: [
       {
         id: "front",

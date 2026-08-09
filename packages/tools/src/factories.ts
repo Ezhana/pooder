@@ -25,8 +25,9 @@ export const createEdgeDetectionCapability = (
   options?: ConstructorParameters<typeof EdgeDetectionCapabilityExtension>[0],
 ) => new EdgeDetectionCapabilityExtension(options);
 
-export const createImageSlotCapability = () =>
-  new ImageSlotCapabilityExtension();
+export const createImageSlotCapability = (
+  options?: ConstructorParameters<typeof ImageSlotCapabilityExtension>[0],
+) => new ImageSlotCapabilityExtension(options);
 
 export const createImageMaskCapability = (
   options?: ConstructorParameters<typeof ImageMaskCapabilityExtension>[0],

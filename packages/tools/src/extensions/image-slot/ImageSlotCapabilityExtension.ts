@@ -38,6 +38,7 @@ import {
   type EditorImageObject,
   type EditorImagePlacement,
 } from "@pooder/document";
+import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
@@ -89,6 +90,10 @@ interface ImageSlotRectSnapFeedback {
   }>;
 }
 
+export interface ImageSlotCapabilityExtensionOptions {
+  outsideFramePolicy?: "free" | "warn" | "strict";
+}
+
 export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   readonly id = IMAGE_SLOT_CAPABILITY_ID;
   readonly metadata = { name: "ImageSlotCapabilityExtension" };
@@ -117,6 +122,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     objectId: string;
     promise: Promise<ImageSlotOpenSessionResult>;
   } | null = null;
+
+  constructor(
+    private readonly options: ImageSlotCapabilityExtensionOptions = {},
+  ) {}
 
   activate(context: ExtensionContext): void {
     this.canvasService = context.services.get<CanvasService>(CANVAS_SERVICE);
@@ -151,6 +160,12 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   contribute(): ExtensionContributions {
     return {
       capabilities: [createImageSlotCapabilityDefinition(this.facade())],
+      documentExtensions: [
+        {
+          id: this.id,
+          effects: [getOfficialToolEffectSchema("image-placement")],
+        },
+      ],
       commands: [
         {
           id: IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
@@ -479,7 +494,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       );
       return { ok: false as const, reason: "resource-load-failed" };
     }
-    const policy = this.document?.config["imageSlot.outsideFramePolicy"];
+    const policy = this.options.outsideFramePolicy;
     if (
       policy === "strict" &&
       this.document &&

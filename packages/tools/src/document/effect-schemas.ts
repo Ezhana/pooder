@@ -44,6 +44,16 @@ export const OFFICIAL_TOOL_EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
   },
 ];
 
+export function getOfficialToolEffectSchema(
+  effectType: string,
+): EditorEffectSchema {
+  const schema = OFFICIAL_TOOL_EFFECT_SCHEMAS.find(
+    (candidate) => candidate.effectType === effectType,
+  );
+  if (!schema) throw new Error(`Unknown official tool effect "${effectType}".`);
+  return schema;
+}
+
 export function createOfficialToolEffectSchemaRegistry(): EffectSchemaRegistry {
   return new EffectSchemaRegistry(OFFICIAL_TOOL_EFFECT_SCHEMAS);
 }

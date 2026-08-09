@@ -14,6 +14,7 @@ import type {
   EditorDocument,
   EditorEffect,
 } from "@pooder/document";
+import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
 import { SubscriptionBag } from "../../shared/runtime/subscriptions";
 import {
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
@@ -114,6 +115,12 @@ export class ConfigurableVisualCapabilityExtension implements ExtensionDefinitio
             capabilityId: this.capabilityId,
           },
         ),
+      ],
+      documentExtensions: [
+        {
+          id: this.id,
+          effects: [getOfficialToolEffectSchema("configurable-visual")],
+        },
       ],
       renderIntentCompilers: [this.createRenderIntentCompiler()],
     };

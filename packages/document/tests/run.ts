@@ -56,9 +56,9 @@ function testRepresentativeV7FixtureRoundTrip() {
     "representative fixture should preserve front/back surface ordering",
   );
   assertEqual(
-    restored.surfaces[0]?.layers[0]?.effects?.[0]?.type,
-    "production-mask",
-    "representative fixture should preserve its production mask declaration",
+    Object.keys(restored.extensions["pooder.production-mask"] as object)[0],
+    "masks",
+    "representative fixture should preserve its production mask state",
   );
   assertEqual(
     findEditorDocumentObject(restored, "front.feature.hole")?.id,
@@ -67,7 +67,6 @@ function testRepresentativeV7FixtureRoundTrip() {
   );
 }
 
-const TEST_DOCUMENT_CONFIG = {};
 const TEST_EFFECT_CAPABILITY_IDS: Record<string, string> = {
   dieline: "test.dieline",
   feature: "test.feature",
@@ -90,7 +89,7 @@ function resolveTestEffectCapabilityId(
 function testNormalizeDefaults() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -126,7 +125,7 @@ function testNormalizeDefaults() {
   });
 
   assertEqual(doc.version, EDITOR_DOCUMENT_VERSION, "version should normalize");
-  assertDeepEqual(doc.config, TEST_DOCUMENT_CONFIG, "config should normalize");
+  assertDeepEqual(doc.extensions, {}, "extensions should normalize");
   assertEqual(
     doc.surfaces[0]?.id,
     "front",
@@ -196,7 +195,7 @@ function testNormalizeDefaults() {
 function testObjectInteractionNormalizesSupportedFields() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -318,7 +317,7 @@ function testObjectInteractionNormalizesSupportedFields() {
 function testConstraintApplicationValidation() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -380,7 +379,7 @@ function testConstraintApplicationValidation() {
 function testLegacyObjectConstraintsAreIgnored() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -454,7 +453,7 @@ function testLegacyObjectConstraintsAreIgnored() {
 function testImagePlacementObjectDoesNotRequireLegacySrc() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -491,7 +490,7 @@ function testImagePlacementObjectDoesNotRequireLegacySrc() {
 function testObjectWithoutSourceIsDropped() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -546,7 +545,7 @@ function testObjectWithoutSourceIsDropped() {
 function testSourceObjectNormalizesSource() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -631,7 +630,7 @@ function testSourceObjectNormalizesSource() {
 function testV5DocumentIsRejected() {
   const diagnostics = validateEditorDocument({
     version: 5,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -653,7 +652,7 @@ function testV5DocumentIsRejected() {
 function testLegacyInteractionFieldsAreRejected() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -716,7 +715,7 @@ function testDocumentConfigIsRequired() {
 function testImageObjectRequiresFrame() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -747,7 +746,7 @@ function testImageObjectRequiresFrame() {
 function testValidationStructureAndReferences() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -795,7 +794,7 @@ function testValidationStructureAndReferences() {
 function testCompositeStructureAndEffectDependencies() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -856,7 +855,7 @@ function testCustomValidatorDiagnostics() {
   const diagnostics = validateEditorDocument(
     {
       version: EDITOR_DOCUMENT_VERSION,
-      config: TEST_DOCUMENT_CONFIG,
+      extensions: {},
       surfaces: [
         {
           id: "front",
@@ -895,7 +894,7 @@ function testCustomValidatorDiagnostics() {
 function testStructuralValidationDoesNotResolveCapabilities() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -916,7 +915,7 @@ function testStructuralValidationDoesNotResolveCapabilities() {
 function testEffectsValidateWithoutCapabilityResolver() {
   const diagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -963,7 +962,7 @@ function testEffectsValidateWithoutCapabilityResolver() {
 function testValidationStagesRemainIndependent() {
   const documentDiagnostics = validateEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -981,7 +980,7 @@ function testValidationStagesRemainIndependent() {
 
   const invalidPayloadDocument = {
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -1060,7 +1059,7 @@ function testValidationStagesRemainIndependent() {
 function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
   const doc = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -1132,7 +1131,7 @@ function testRequirePolicyDiagnostics() {
   const doc: EditorDocument = {
     version: EDITOR_DOCUMENT_VERSION,
     assets: [],
-    config: TEST_DOCUMENT_CONFIG,
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -1196,7 +1195,8 @@ function testRequirePolicyDiagnostics() {
 function testCloneAndRecursiveObjectAccessors() {
   const document = normalizeEditorDocument({
     version: EDITOR_DOCUMENT_VERSION,
-    config: { nested: { enabled: true } },
+    assets: [],
+    extensions: { test: { nested: { enabled: true } } },
     metadata: { nested: { label: "original" } },
     surfaces: [
       {
@@ -1239,7 +1239,7 @@ function testCloneAndRecursiveObjectAccessors() {
   assertDeepEqual(clone, document, "clone should preserve document data");
   assert(clone !== document, "clone should detach the document root");
   assert(
-    clone.config !== document.config &&
+    clone.extensions !== document.extensions &&
       clone.metadata !== document.metadata &&
       clone.surfaces[0] !== document.surfaces[0],
     "clone should recursively detach nested values",

@@ -102,6 +102,7 @@ type RuntimeExtensionsApi = {
   flushActivation(): Promise<ExtensionStateSnapshot[]>;
   getState(id: string): ExtensionStateSnapshot | undefined;
   listStates(): ExtensionStateSnapshot[];
+  listDocumentContributions(): unknown[];
   unregister(id: string): Promise<boolean>;
   onDidChange: ExtensionManager["onDidChange"];
 };
@@ -289,6 +290,8 @@ export class Pooder {
       flushActivation: () => this.extensionManager.flushActivation(),
       getState: (id) => this.extensionManager.getState(id),
       listStates: () => this.extensionManager.listStates(),
+      listDocumentContributions: () =>
+        this.extensionManager.listDocumentContributions(),
       unregister: (id) => this.extensionManager.unregister(id),
       onDidChange: (listener) => this.extensionManager.onDidChange(listener),
     };

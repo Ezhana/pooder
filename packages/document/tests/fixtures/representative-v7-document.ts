@@ -19,8 +19,32 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
       source: { kind: "url", url: "https://example.test/front-white-ink.png" },
     },
   ],
-  config: {
-    scene: { unit: "mm" },
+  extensions: {
+    "pooder.production-mask": {
+      masks: {
+        "front.white-ink": {
+          surfaceId: "front",
+          process: "white-ink",
+          production: {
+            enabled: true,
+            referenceObjectId: "front.image-slot",
+            source: { kind: "asset", assetId: "front-white-ink" },
+            alpha: {
+              selection: "transparent",
+              mapping: "threshold",
+              threshold: 0.2,
+              softness: 0.05,
+              outputOpacity: 1,
+            },
+          },
+          presentation: {
+            originalVisible: true,
+            originalMaskVisible: true,
+            currentMaskVisible: true,
+          },
+        },
+      },
+    },
   },
   surfaces: [
     {
@@ -61,31 +85,6 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
               },
               tags: ["feature", "hole"],
               source: { kind: "shape", shape: "circle", params: {} },
-            },
-          ],
-          effects: [
-            {
-              id: "front.production-mask.white-ink",
-              type: "production-mask",
-              payload: {
-                process: "white-ink",
-                enabled: true,
-                reference: {
-                  type: "document-object",
-                  objectId: "front.image-slot",
-                },
-                source: {
-                  type: "asset",
-                  assetId: "front-white-ink",
-                },
-                alpha: {
-                  selection: "transparent",
-                  mapping: "threshold",
-                  threshold: 0.2,
-                  softness: 0.05,
-                  outputOpacity: 1,
-                },
-              },
             },
           ],
         },

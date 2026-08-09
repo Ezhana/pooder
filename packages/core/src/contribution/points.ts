@@ -38,4 +38,5 @@ export interface ExtensionContributions {
   renderEffectDefinitions?: RenderEffectDefinition[];
   renderEffectRenderers?: RenderEffectRendererContribution[];
   renderIntentCompilers?: RenderIntentCompilerContribution[];
+  documentExtensions?: unknown[];
 }

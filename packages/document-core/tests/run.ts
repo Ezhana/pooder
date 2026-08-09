@@ -160,6 +160,23 @@ function testSourceResolver() {
   );
 }
 
+async function testUnknownDocumentExtensionIsRejected() {
+  const { runtime } = createRuntime();
+  const result = await applyEditorDocument(runtime, {
+    version: 7,
+    assets: [],
+    extensions: { "test.unknown": {} },
+    surfaces: [],
+  });
+  assertEqual(result.ok, false, "unregistered document extensions must reject");
+  assert(
+    result.diagnostics.some(
+      (diagnostic) => diagnostic.code === "document-extension-unregistered",
+    ),
+    "unknown extension rejection should identify its contract diagnostic",
+  );
+}
+
 async function testApplyEditorDocument() {
   const { runtime, renderIntentService, compilerRegistry } = createRuntime();
   compilerRegistry.registerCompiler("test", {
@@ -384,7 +401,7 @@ async function testControllerUpdatesOnlyChangedRenderIntents() {
   const controller = createEditorDocumentController(runtime);
   const document = {
     version: 7 as const,
-    config: {},
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -429,7 +446,7 @@ async function testCompositeRenderIntentFlattening() {
   const result = await applyEditorDocument(runtime, {
     version: 7,
     assets: [],
-    config: {},
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -510,7 +527,7 @@ async function testDocumentServiceDraftIsolation() {
   const service = createEditorDocumentController(runtime);
   const applied = await service.apply({
     version: 7,
-    config: {},
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -587,7 +604,7 @@ async function testDocumentServiceDraftIsolation() {
   const committedBeforeInvalidApply = service.export("committed");
   const invalidApply = await service.apply({
     version: 7,
-    config: {},
+    extensions: {},
     surfaces: [],
   });
   assertEqual(invalidApply.ok, false, "invalid document apply should fail");
@@ -637,7 +654,7 @@ async function testDocumentGeometryIsAvailableDuringInitialApply() {
   try {
     const applied = await service.apply({
       version: 7,
-      config: {},
+      extensions: {},
       surfaces: [
         {
           id: "front",
@@ -725,7 +742,7 @@ async function testDocumentPreparationFailuresAreAtomic() {
     publicationParticipants: [
       {
         prepare({ document }) {
-          if (document.config.failParticipant) {
+          if (document.surfaces[0]?.title === "fail-participant") {
             throw new Error("injected participant prepare failure");
           }
           return { publish() {} };
@@ -734,23 +751,24 @@ async function testDocumentPreparationFailuresAreAtomic() {
     ],
     afterPublish: (_runtime, document) => {
       afterPublishCalls += 1;
-      if (document.config.failAfterPublish) {
+      if (document.surfaces[0]?.title === "fail-after-publish") {
         throw new Error("injected afterPublish failure");
       }
     },
   });
   const createDocument = (
     options: {
-      config?: Record<string, unknown>;
+      marker?: string;
       imageUrl?: string;
       effect?: EditorEffect;
     } = {},
   ) => ({
     version: 7 as const,
-    config: options.config ?? { mode: "stable" },
+    extensions: {},
     surfaces: [
       {
         id: "front",
+        ...(options.marker ? { title: options.marker } : {}),
         size: { width: 100, height: 100, unit: "mm" as const },
         frames: TEST_SURFACE_FRAMES,
         layers: [
@@ -822,7 +840,7 @@ async function testDocumentPreparationFailuresAreAtomic() {
         effect: { type: "custom", payload: { fail: true } },
       }),
     ),
-    await service.apply(createDocument({ config: { failParticipant: true } })),
+    await service.apply(createDocument({ marker: "fail-participant" })),
   ];
   failures.forEach((result, index) =>
     assertEqual(
@@ -840,7 +858,7 @@ async function testDocumentPreparationFailuresAreAtomic() {
   const originalConsoleError = console.error;
   console.error = () => undefined;
   const afterPublishFailure = await service.apply(
-    createDocument({ config: { failAfterPublish: true } }),
+    createDocument({ marker: "fail-after-publish" }),
   );
   console.error = originalConsoleError;
   assertEqual(
@@ -849,8 +867,8 @@ async function testDocumentPreparationFailuresAreAtomic() {
     "afterPublish failures must not reject or roll back published state",
   );
   assertEqual(
-    service.export()?.config.failAfterPublish,
-    true,
+    service.export()?.surfaces[0]?.title,
+    "fail-after-publish",
     "published document must remain committed after afterPublish failure",
   );
   assertEqual(
@@ -860,7 +878,7 @@ async function testDocumentPreparationFailuresAreAtomic() {
   );
 }
 
-async function testDocumentRejectsLegacyConfigurationRuntime() {
+async function testDocumentIgnoresLegacyConfigurationRuntime() {
   const { runtime, renderIntentService, surfaceFrameService } = createRuntime();
   let legacyImports = 0;
   const legacyRuntime = {
@@ -878,7 +896,7 @@ async function testDocumentRejectsLegacyConfigurationRuntime() {
   } as unknown as EditorDocumentRuntime;
   const result = await applyEditorDocument(legacyRuntime, {
     version: 7,
-    config: { mode: "candidate" },
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -889,35 +907,29 @@ async function testDocumentRejectsLegacyConfigurationRuntime() {
     ],
   });
 
-  assertEqual(result.ok, false, "legacy configuration runtime must reject");
-  assertEqual(
-    result.diagnostics.some(
-      (diagnostic) => diagnostic.code === "runtime-config-publication-required",
-    ),
-    true,
-    "legacy configuration rejection should identify the missing publication API",
-  );
+  assertEqual(result.ok, true, "document apply must ignore host configuration APIs");
   assertEqual(legacyImports, 0, "legacy config.import must never run");
   assertEqual(
     surfaceFrameService.listSurfaceIds().length,
-    0,
-    "legacy runtime rejection must not publish frames",
+    1,
+    "document publication should publish frames without importing host config",
   );
   assertEqual(
     renderIntentService.getGraph().revision,
-    0,
-    "legacy runtime rejection must not publish a graph",
+    1,
+    "document publication should publish a graph without importing host config",
   );
 }
 
 async function testDocumentPreflightPreservesConcurrentConfigAndFrames() {
   const { runtime, renderIntentService, surfaceFrameService } = createRuntime();
+  runtime.config.import({ mode: "stable" });
   const service = registerEditorDocumentService(runtime, {
     publicationParticipants: [
       {
-        prepare({ runtime: participantRuntime, document }) {
-          if (!document.config.triggerConcurrentUpdate) return;
-          participantRuntime.config?.update("concurrent", "preserved");
+        prepare({ document }) {
+          if (document.surfaces[0]?.title !== "trigger-concurrent-update") return;
+          runtime.config.update("concurrent", "preserved");
           surfaceFrameService.setFrames("front", {
             ...TEST_SURFACE_FRAMES,
             productionFrame: {
@@ -930,14 +942,15 @@ async function testDocumentPreflightPreservesConcurrentConfigAndFrames() {
     ],
   });
   const createDocument = (
-    config: Record<string, unknown>,
+    triggerConcurrentUpdate: boolean,
     widthMm: number,
   ) => ({
     version: 7 as const,
-    config,
+    extensions: {},
     surfaces: [
       {
         id: "front",
+        ...(triggerConcurrentUpdate ? { title: "trigger-concurrent-update" } : {}),
         size: { width: 100, height: 100, unit: "mm" as const },
         frames: {
           ...TEST_SURFACE_FRAMES,
@@ -951,7 +964,7 @@ async function testDocumentPreflightPreservesConcurrentConfigAndFrames() {
     ],
   });
   assertEqual(
-    (await service.apply(createDocument({ mode: "stable" }, 100))).ok,
+    (await service.apply(createDocument(false, 100))).ok,
     true,
     "concurrency fixture baseline should apply",
   );
@@ -967,7 +980,7 @@ async function testDocumentPreflightPreservesConcurrentConfigAndFrames() {
   });
 
   const result = await service.apply(
-    createDocument({ mode: "candidate", triggerConcurrentUpdate: true }, 82),
+    createDocument(true, 82),
   );
   assertEqual(result.ok, false, "stale document publication should reject");
   assertDeepEqual(
@@ -1001,7 +1014,7 @@ function testUnresolvedImageUsesFrameGeometry() {
   const geometryService = new GeometrySourceService();
   const document = normalizeEditorDocument({
     version: 7,
-    config: {},
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -1055,7 +1068,7 @@ async function testDocumentServiceCommitsSceneTranslationBySubject() {
   const service = createEditorDocumentController(runtime);
   const applied = await service.apply({
     version: 7,
-    config: {},
+    extensions: {},
     surfaces: [
       {
         id: "front",
@@ -1118,6 +1131,7 @@ function testSceneFrameUsesInverseParentMatrix() {
 
 async function main() {
   testSourceResolver();
+  await testUnknownDocumentExtensionIsRejected();
   testSceneFrameUsesInverseParentMatrix();
   testUnresolvedImageUsesFrameGeometry();
   await testApplyEditorDocument();
@@ -1125,7 +1139,7 @@ async function main() {
   await testControllerUpdatesOnlyChangedRenderIntents();
   await testDocumentGeometryIsAvailableDuringInitialApply();
   await testDocumentPreparationFailuresAreAtomic();
-  await testDocumentRejectsLegacyConfigurationRuntime();
+  await testDocumentIgnoresLegacyConfigurationRuntime();
   await testDocumentPreflightPreservesConcurrentConfigAndFrames();
   await testDocumentServiceDraftIsolation();
   await testDocumentServiceCommitsSceneTranslationBySubject();

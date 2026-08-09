@@ -82,7 +82,7 @@ const contracts = [
       const documentService = vueRoot.installPooderDocument(runtime);
       const result = await documentService.apply({
         version: 7,
-        config: {},
+        extensions: {},
         surfaces: [
           {
             id: "front",

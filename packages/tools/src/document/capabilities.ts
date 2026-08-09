@@ -28,6 +28,9 @@ const OFFICIAL_TOOL_EFFECT_FACTORIES: Record<
 
 export function createOfficialToolCapabilitiesForDocument(
   value: unknown,
+  options: {
+    imageSlot?: Parameters<typeof createImageSlotCapability>[0];
+  } = {},
 ): ExtensionDefinition[] {
   const result = collectOfficialToolDocumentCapabilityRequirements(value);
   const capabilityIds = Array.from(
@@ -39,7 +42,9 @@ export function createOfficialToolCapabilitiesForDocument(
   );
 
   const capabilities = capabilityIds.map((id) =>
-    OFFICIAL_TOOL_EFFECT_FACTORIES[id](),
+    id === IMAGE_SLOT_CAPABILITY_ID
+      ? createImageSlotCapability(options.imageSlot)
+      : OFFICIAL_TOOL_EFFECT_FACTORIES[id](),
   );
   const document = normalizeEditorDocument(value);
   const hasImageSlots = document.surfaces.some((surface) =>
@@ -53,7 +58,9 @@ export function createOfficialToolCapabilitiesForDocument(
       ),
     ),
   );
-  if (hasImageSlots) capabilities.push(createImageSlotCapability());
+  if (hasImageSlots && !capabilityIds.includes(IMAGE_SLOT_CAPABILITY_ID)) {
+    capabilities.push(createImageSlotCapability(options.imageSlot));
+  }
   return capabilities;
 }
 

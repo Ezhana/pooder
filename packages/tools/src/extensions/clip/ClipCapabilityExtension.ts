@@ -23,6 +23,7 @@ import {
   type SurfaceFrameService,
 } from "@pooder/core";
 import type { EditorDocument, EditorEffect } from "@pooder/document";
+import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
 import {
   CLIP_CAPABILITY_ID,
   createClipCapabilityDefinition,
@@ -112,6 +113,9 @@ export class ClipCapabilityExtension implements ExtensionDefinition {
         createClipCapabilityDefinition(this.getFacade(), {
           capabilityId: this.capabilityId,
         }),
+      ],
+      documentExtensions: [
+        { id: this.id, effects: [getOfficialToolEffectSchema("clip")] },
       ],
       renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
