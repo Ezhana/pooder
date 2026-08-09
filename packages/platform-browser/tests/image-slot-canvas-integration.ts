@@ -9,16 +9,18 @@ import {
   type RenderIntentService,
   type SceneService,
 } from "@pooder/core";
-import type { EditorDocument } from "@pooder/document";
+import type { EditorDocument, EditorImageObject } from "@pooder/document";
 import { registerEditorDocumentService } from "../../document-core/src";
 import { FABRIC_RENDER_GRAPH_ADAPTER, FabricRenderGraphAdapter } from "../src";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
+  IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
   ImageSlotCapabilityExtension,
   type ImageSlotCapabilityApi,
 } from "../../tools/src/extensions/image-slot";
 
 const OBJECT_ID = "nested-artwork";
+const SECOND_OBJECT_ID = "nested-artwork-2";
 const EPSILON = 1e-6;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -195,6 +197,56 @@ class ViewportCanvasService {
       height: rect.height / this.scale,
     };
   }
+
+  toScreenRect(rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) {
+    return {
+      space: "screen" as const,
+      left: rect.left * this.scale + this.offsetX,
+      top: rect.top * this.scale + this.offsetY,
+      width: rect.width * this.scale,
+      height: rect.height * this.scale,
+    };
+  }
+}
+
+function createEmptySlotObject(id: string, left: number): EditorImageObject {
+  return {
+    id,
+    visible: true,
+    locked: false,
+    placement: {
+      localBounds: { x: 0, y: 0, width: 120, height: 80 },
+      localToParent: [1, 0, 0, 1, left, 20],
+      pivot: { x: 60, y: 40 },
+    },
+    source: { kind: "image" },
+    appearance: {
+      fit: "cover",
+      anchorX: 0.5,
+      anchorY: 0.5,
+      zoom: 1,
+      rotation: 0,
+      opacity: 1,
+      clip: "frame",
+    },
+    behaviors: [
+      {
+        type: "pooder.image-slot",
+        config: {
+          accepts: ["image/*"],
+          emptyPresentation: {
+            assetId: "empty-presentation",
+            fit: "stretch",
+          },
+        },
+      },
+    ],
+  };
 }
 
 function createEmptySlotDocument(): EditorDocument {
@@ -217,8 +269,8 @@ function createEmptySlotDocument(): EditorDocument {
       {
         id: "front",
         geometry: {
-          canvasBounds: { x: 0, y: 0, width: 160, height: 120 },
-          productionBounds: { x: 0, y: 0, width: 160, height: 120 },
+          canvasBounds: { x: 0, y: 0, width: 340, height: 120 },
+          productionBounds: { x: 0, y: 0, width: 340, height: 120 },
         },
         layers: [
           {
@@ -227,38 +279,8 @@ function createEmptySlotDocument(): EditorDocument {
             visible: true,
             locked: false,
             objects: [
-              {
-                id: OBJECT_ID,
-                visible: true,
-                locked: false,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
-                  localToParent: [1, 0, 0, 1, 20, 20],
-                  pivot: { x: 60, y: 40 },
-                },
-                source: { kind: "image" },
-                appearance: {
-                  fit: "cover",
-                  anchorX: 0.5,
-                  anchorY: 0.5,
-                  zoom: 1,
-                  rotation: 0,
-                  opacity: 1,
-                  clip: "frame",
-                },
-                behaviors: [
-                  {
-                    type: "pooder.image-slot",
-                    config: {
-                      accepts: ["image/*"],
-                      emptyPresentation: {
-                        assetId: "empty-presentation",
-                        fit: "stretch",
-                      },
-                    },
-                  },
-                ],
-              },
+              createEmptySlotObject(OBJECT_ID, 20),
+              createEmptySlotObject(SECOND_OBJECT_ID, 180),
             ],
           },
         ],
@@ -291,7 +313,7 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
     const hitTarget = canvas.reconcileCalls
       .at(-1)
       ?.items.find(
-        (candidate) => candidate.key === `${OBJECT_ID}:frame-hit-target`,
+        (candidate) => candidate.key === `${SECOND_OBJECT_ID}:frame-hit-target`,
       );
     assert(hitTarget, "empty image-slot should expose a frame hit target");
     assertEqual(
@@ -310,8 +332,83 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
     );
     assertEqual(
       facade.getViewState().draft?.objectId,
-      OBJECT_ID,
+      SECOND_OBJECT_ID,
       "clicking an empty image-slot should open its session",
+    );
+    const scene = runtime.services
+      .getOrThrow<SceneService>(SCENE_SERVICE)
+      .getSceneHandle(`image-slot:${SECOND_OBJECT_ID}:scene`);
+    const cropFrame = scene
+      ?.selectElements()
+      .find(
+        (element) => element.id === `image-slot:${SECOND_OBJECT_ID}:crop-frame`,
+      );
+    assert(cropFrame?.transform, "active image-slot crop frame should render");
+    const expectedScreenFrame = canvas.toScreenRect({
+      left: 180,
+      top: 20,
+      width: 120,
+      height: 80,
+    });
+    assertEqual(
+      cropFrame.transform.left,
+      expectedScreenFrame.left,
+      "multi-slot crop frame should use the active object x position",
+    );
+    assertEqual(
+      cropFrame.transform.top,
+      expectedScreenFrame.top,
+      "multi-slot crop frame should use the active object y position",
+    );
+    await facade.setResource({
+      kind: "data-url",
+      dataUrl: "data:image/png;base64,AA==",
+      intrinsicSize: { width: 120, height: 80 },
+    });
+    await runtime.commands.execute(IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID, {
+      objectId: SECOND_OBJECT_ID,
+      phase: "preview",
+      transform: {
+        centerX: 240,
+        centerY: 60,
+        rotation: 0,
+        scaleX: 1,
+        scaleY: 1,
+      },
+      metadata: {
+        rectSnap: {
+          guides: [
+            { axis: "x", position: 225 },
+            { axis: "y", position: 55 },
+          ],
+        },
+      },
+    });
+    const verticalGuide = scene
+      ?.selectElements()
+      .find(
+        (element) =>
+          element.id === `image-slot:${SECOND_OBJECT_ID}:snap-guide:x`,
+      );
+    const horizontalGuide = scene
+      ?.selectElements()
+      .find(
+        (element) =>
+          element.id === `image-slot:${SECOND_OBJECT_ID}:snap-guide:y`,
+      );
+    assert(
+      verticalGuide?.transform && horizontalGuide?.transform,
+      "active image-slot snap guides should render",
+    );
+    assertEqual(
+      verticalGuide.transform.top,
+      20,
+      "vertical guide should use scene y",
+    );
+    assertEqual(
+      horizontalGuide.transform.left,
+      180,
+      "horizontal guide should use scene x",
     );
     await facade.rollbackSession();
   } finally {

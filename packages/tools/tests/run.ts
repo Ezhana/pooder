@@ -118,13 +118,15 @@ function createImageSlotDocument(): EditorDocument {
   };
 }
 
-async function createHarness(): Promise<{
+async function createHarness(
+  imageSlotOptions: Parameters<typeof createImageSlotCapability>[0] = {},
+): Promise<{
   runtime: Pooder;
   controller: EditorDocumentService;
   facade: ImageSlotCapabilityApi;
 }> {
   const runtime = new Pooder();
-  runtime.extensions.register(createImageSlotCapability());
+  runtime.extensions.register(createImageSlotCapability(imageSlotOptions));
   await runtime.extensions.flushActivation();
   const controller = registerEditorDocumentService(runtime);
   const applied = await controller.apply(createImageSlotDocument());
@@ -135,6 +137,27 @@ async function createHarness(): Promise<{
   assert(facade, "image-slot facade should be registered");
   facade.syncDocument(applied.document, controller);
   return { runtime, controller, facade };
+}
+
+async function testStrictPolicyAcceptsAFrameCoveringCrop(): Promise<void> {
+  const { runtime, facade } = await createHarness({
+    outsideFramePolicy: "strict",
+  });
+  try {
+    assertEqual(
+      (await facade.openSession({ objectId: IMAGE_SLOT_ID })).ok,
+      true,
+      "strict cover session should open",
+    );
+    const committed = await facade.commitSession();
+    assertEqual(
+      committed.type,
+      "placed",
+      "strict policy should accept an image that fully covers the crop frame",
+    );
+  } finally {
+    await runtime.dispose();
+  }
 }
 
 function getWorkingMatrix(runtime: Pooder): number[] {
@@ -341,6 +364,7 @@ async function testImageSlotRejectsMissingContainerGeometry(): Promise<void> {
 async function main(): Promise<void> {
   await runExistingCapabilityRegressions();
   await testImageSlotRejectsMissingContainerGeometry();
+  await testStrictPolicyAcceptsAFrameCoveringCrop();
   await testImageSlotCommitAndReopenMatrices();
   await testImageSlotRollbackDoesNotDrift();
   console.log("ok");

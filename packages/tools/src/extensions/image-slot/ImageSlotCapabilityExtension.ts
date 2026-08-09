@@ -421,6 +421,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!objectPlacement) {
       return { ok: false, reason: "geometry-unavailable" };
     }
+    const objectSceneBounds = transformCoordinateRect(
+      objectPlacement.localToScene,
+      objectPlacement.localBounds,
+    );
     const imageLocalToObjectLocal = input.sceneMatrix
       ? multiplyCoordinateMatrices(
           invertCoordinateMatrix(objectPlacement.localToScene),
@@ -475,7 +479,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     this.renderSnapGuides(
       phase === "commit" ? undefined : input.metadata?.rectSnap,
       draft.objectId,
-      frame,
+      objectSceneBounds,
     );
     return { ok: true };
   }
@@ -502,7 +506,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (
       policy === "strict" &&
       this.document &&
-      isDraftOutsideFrame(this.document, draft)
+      doesDraftLeaveFrameUncovered(this.document, draft)
     ) {
       this.setState(
         {
@@ -810,7 +814,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         },
       });
     }
-    this.renderSessionFrame(scene, draft.objectId, context.surfaceId);
+    this.renderSessionFrame(scene, draft.objectId);
     for (const contribution of this.decorations.values()) {
       contribution
         .provide({ objectId: draft.objectId, surfaceId: context.surfaceId })
@@ -851,14 +855,17 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     return undefined;
   }
 
-  private renderSessionFrame(
-    scene: SceneHandle,
-    objectId: string,
-    surfaceId: string,
-  ): void {
-    const viewport = this.canvasService?.getScreenViewportRect();
-    const cutRect = this.sceneLayoutService?.getLayout(surfaceId)?.cutRect;
-    if (!viewport || !cutRect) return;
+  private renderSessionFrame(scene: SceneHandle, objectId: string): void {
+    const canvas = this.canvasService;
+    const viewport = canvas?.getScreenViewportRect();
+    const objectPlacement = this.resolveDocumentObjectPlacement(objectId);
+    if (!canvas || !viewport || !objectPlacement) return;
+    const cutRect = canvas.toScreenRect(
+      transformCoordinateRect(
+        objectPlacement.localToScene,
+        objectPlacement.localBounds,
+      ),
+    );
 
     scene.addElement({
       id: `image-slot:${objectId}:crop-mask`,
@@ -915,7 +922,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private renderSnapGuides(
     snap: ImageSlotRectSnapFeedback | undefined,
     objectId: string,
-    frame: { x: number; y: number; width: number; height: number },
+    frame: { left: number; top: number; width: number; height: number },
   ): void {
     const scene = this.sceneHandle;
     if (!scene) return;
@@ -945,8 +952,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           imageSlotObjectId: objectId,
         },
         transform: {
-          left: vertical ? position : frame.x,
-          top: vertical ? frame.y : position,
+          left: vertical ? position : frame.left,
+          top: vertical ? frame.top : position,
           originX: "left",
           originY: "top",
         },
@@ -1200,7 +1207,7 @@ function resourceLocation(resource: EditorImageResource | undefined): string {
     : "";
 }
 
-function isDraftOutsideFrame(
+function doesDraftLeaveFrameUncovered(
   document: EditorDocument,
   draft: ImageSlotSessionDraft,
 ): boolean {
@@ -1219,17 +1226,33 @@ function isDraftOutsideFrame(
     fit: draft.placement.fit,
     transform: draft.placement,
   });
-  const imageBounds = transformCoordinateRect(
+  const objectLocalToImageLocal = invertCoordinateMatrix(
     geometry.imageLocalToObjectLocal,
-    geometry.imageLocalBounds,
   );
+  const frameWidth = object.placement.localBounds.width;
+  const frameHeight = object.placement.localBounds.height;
+  const frameCorners = [
+    { space: "object-local" as const, x: 0, y: 0 },
+    { space: "object-local" as const, x: frameWidth, y: 0 },
+    { space: "object-local" as const, x: 0, y: frameHeight },
+    {
+      space: "object-local" as const,
+      x: frameWidth,
+      y: frameHeight,
+    },
+  ];
+  const imageBounds = geometry.imageLocalBounds;
   const epsilon = 1e-6;
-  return (
-    imageBounds.left < -epsilon ||
-    imageBounds.top < -epsilon ||
-    imageBounds.left + imageBounds.width >
-      object.placement.localBounds.width + epsilon ||
-    imageBounds.top + imageBounds.height >
-      object.placement.localBounds.height + epsilon
-  );
+  return frameCorners.some((corner) => {
+    const imagePoint = transformCoordinatePoint(
+      objectLocalToImageLocal,
+      corner,
+    );
+    return (
+      imagePoint.x < imageBounds.left - epsilon ||
+      imagePoint.y < imageBounds.top - epsilon ||
+      imagePoint.x > imageBounds.left + imageBounds.width + epsilon ||
+      imagePoint.y > imageBounds.top + imageBounds.height + epsilon
+    );
+  });
 }
