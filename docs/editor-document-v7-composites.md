@@ -9,16 +9,17 @@ IDs are globally unique across the document tree. Object effects and
 `GeometryRef` address those IDs. Missing targets, invalid source/children
 combinations, and dependency cycles are schema errors.
 
-Composite frames are parent-local and child frames are Composite-local. The
-document compiler recursively multiplies the transforms and gives each Visual
-RenderIntent an absolute scene placement. Composite itself has no renderer
-native representation.
+Composite placement is parent-local and child placement is Composite-local.
+The document compiler recursively multiplies `localToParent` matrices and gives
+each Visual RenderIntent an absolute scene placement. Composite itself has no
+renderer-native representation.
 
 The built-in `document-object` GeometrySource resolves rect, path, and compound
 snapshots from Object Source and the complete parent transform. Boolean
-operands are ordered by effect `order`; `participation` independently selects
-preview and export chains. `clip-source` uses the final geometry for the
-requested purpose.
+effects are applied in array order; `participation` independently selects
+preview and export chains. A target Object owns `core.geometry.clip` or
+`core.geometry.boolean` and references the source/operand Object by id. The
+referenced object's final geometry is used for the requested purpose.
 
 An interactive Composite produces a transparent proxy node. Member nodes carry
 `compositeId`, remain non-interactive, and receive the same scene-space

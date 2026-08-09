@@ -444,14 +444,6 @@ export function evaluateRuntimeCondition(
   }
 }
 
-/** @deprecated Use CoordinatePoint with an explicit space. */
-export type CanvasPoint<TSpace extends CoordinateSpace = CoordinateSpace> =
-  CoordinatePoint<TSpace>;
-
-/** @deprecated Use CoordinateRect with an explicit space. */
-export type CanvasRect<TSpace extends CoordinateSpace = CoordinateSpace> =
-  CoordinateRect<TSpace>;
-
 export interface CanvasSize {
   width: number;
   height: number;

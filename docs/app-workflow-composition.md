@@ -11,11 +11,11 @@ group.
 ## Document-owned dieline and feature
 
 - A cutline is a normal Visual Object with a path/shape `source` and a
-  `guide` effect whose role is `cut`.
-- A Feature is a Composite Object. Its Visual children use ordered `boolean`
-  effects to modify the cutline by object id.
-- `clip-source` on the cutline targets artwork objects. Preview and export use
-  the source object's final geometry for their respective purpose.
+  `core.guide` trait whose role is `cut`.
+- A Feature is a Composite Object. The cutline owns ordered
+  `core.geometry.boolean` effects that reference Feature operands by object id.
+- A clipped artwork Object owns `core.geometry.clip` and references the
+  cutline. Preview and export use the referenced object's final geometry.
 - Layer remains the coarse render partition. Composite provides local
   coordinates, logical selection, and linked interaction only.
 
@@ -42,7 +42,7 @@ Composite movement declares `path.follow` or `path.lowest-tangent` against:
 
 Interactive preview and completion validation both use the core
 `ConstraintResolverService`. Applications subscribe to
-`EditorDocumentService.onDidChange()` instead of legacy global events.
+`EditorDocumentService.onDidChange()`.
 
 ## Edge detection
 
@@ -56,6 +56,5 @@ document creation only and is not mutated after the document exists.
 - Object Source and Document transforms are persisted facts.
 - Geometry snapshots, RenderIntent, RenderGraph, and Fabric objects are
   rebuildable projections.
-- Tool availability is derived from image slots, cut guides, Composite tags,
-  Interaction, and remaining generic effects.
-- Other Kit extensions still using legacy wrappers are separate migrations.
+- Tool availability is derived from Object behaviors, guide/feature traits,
+  Interaction, extension state, and extension-owned Object effects.

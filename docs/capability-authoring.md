@@ -7,8 +7,7 @@ Capabilities should use transient scenes for session-owned interaction visuals.
 Status: P6.S2 documentation
 Date: 2026-05-11
 
-This guide describes how to add reusable Pooder behavior without recreating the
-legacy kit-owned `*Tool` pattern.
+This guide describes how to add reusable Pooder behavior through capabilities.
 
 ## Ownership
 
@@ -20,7 +19,7 @@ legacy kit-owned `*Tool` pattern.
 - Individual Tool packages own optional reusable capabilities. Each package
   owns its capability and command ids, typed facade, factory, tests, and any
   persisted Document schema. Tool capabilities may expose config defaults,
-  command bridges, and render producers, but must not define product toolbar
+  commands, and render producers, but must not define product toolbar
   items or workflow semantics.
 - `@pooder/tools` is a migration aggregate for implementations that predate the
   package contract; new Tools must not be added to that monolith.
@@ -127,20 +126,15 @@ createCropPreviewCapability({
 });
 ```
 
-## Commands And Compatibility
+## Commands
 
 Prefer typed facade methods for new behavior. Add command contributions only
-when a host integration or compatibility bridge needs command bus access.
+when a host integration needs command bus access.
 
 - New command ids should be namespaced by package or capability.
-- Legacy global command ids may stay only as bridges while compatibility
-  behavior is still supported.
-- A command bridge should delegate to the same typed facade implementation used
-  by applications.
-- Kit legacy command bridges are centralized in
-  `packages/tools/src/extensions/legacyCommandBridge.ts`; adding a new
-  unnamespaced command requires adding an explicit bridge entry and typed
-  facade replacement.
+- Commands delegate to the same typed facade implementation used by
+  applications.
+- Do not add unnamespaced global commands.
 
 ## Checklist
 

@@ -1,21 +1,20 @@
 import {
   collectEditorDocumentCapabilityRequirements,
-  normalizeEditorDocument,
+  parseEditorDocument,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
   type EditorDocument,
   type EditorDocumentCapabilityCollectionOptions,
-  type EditorDocumentDiagnostic,
   type EditorDocumentValidationOptions,
-  type EditorEffect,
   type EditorExtensionObjectEffect,
-  type EditorObject,
-  type ObjectSource,
 } from "@pooder/document";
+
+import type { ImageSlotDocumentController } from "../extensions/image-slot/capability";
 import {
   OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
   createOfficialToolEffectSchemaRegistry,
 } from "./effect-schemas";
+
 export * from "./behavior-schemas";
 export {
   OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
@@ -26,7 +25,6 @@ export {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
 } from "../extensions/image-slot/capability";
-import type { ImageSlotDocumentController } from "../extensions/image-slot/capability";
 
 export type OfficialToolCapabilityResolver = <T = unknown>(
   id: string,
@@ -50,15 +48,15 @@ export function isOfficialToolDocumentEffectType(
 }
 
 export function resolveOfficialToolDocumentEffectCapabilityId(
-  effect: EditorEffect,
+  effect: EditorExtensionObjectEffect,
 ): string | undefined {
   return isOfficialToolDocumentEffectType(effect.type)
     ? OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS[effect.type]
     : undefined;
 }
 
-export function normalizeOfficialToolDocument(value: unknown) {
-  return normalizeEditorDocument(value);
+export function parseOfficialToolDocument(value: unknown): EditorDocument {
+  return parseEditorDocument(value);
 }
 
 export function validateOfficialToolDocument(
@@ -66,9 +64,7 @@ export function validateOfficialToolDocument(
   options: EditorDocumentValidationOptions = {},
 ) {
   const documentDiagnostics = validateEditorDocument(value, options);
-  if (
-    documentDiagnostics.some((diagnostic) => diagnostic.severity === "error")
-  ) {
+  if (documentDiagnostics.some((item) => item.severity === "error")) {
     return documentDiagnostics;
   }
   return [
@@ -87,12 +83,11 @@ export function collectOfficialToolDocumentCapabilityRequirements(
     "resolveEffectCapabilityId"
   > = {},
 ) {
-  const document = normalizeEditorDocument(value);
-  const result = collectEditorDocumentCapabilityRequirements(document, {
+  const document = parseEditorDocument(value);
+  return collectEditorDocumentCapabilityRequirements(document, {
     ...options,
     resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
   });
-  return result;
 }
 
 export async function synchronizeOfficialToolsForDocument(
@@ -100,41 +95,19 @@ export async function synchronizeOfficialToolsForDocument(
   document: EditorDocument,
   controller?: ImageSlotDocumentController,
 ): Promise<void> {
-  if (controller) {
-    getCapability<{
-      syncDocument(
-        document: EditorDocument,
-        controller: ImageSlotDocumentController,
-      ): void;
-    }>("pooder.kit.image-slot")?.syncDocument(document, controller);
-  }
+  if (!controller) return;
+  getCapability<{
+    syncDocument(
+      document: EditorDocument,
+      controller: ImageSlotDocumentController,
+    ): void;
+  }>("pooder.kit.image-slot")?.syncDocument(document, controller);
 }
-
-/** @deprecated Use OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS. */
-export const KIT_EDITOR_DOCUMENT_EFFECT_CAPABILITY_IDS =
-  OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS;
-/** @deprecated Use OfficialToolDocumentEffectType. */
-export type KitEditorDocumentEffectType = OfficialToolDocumentEffectType;
-/** @deprecated Use OfficialToolDocumentEffect. */
-export type KitEditorDocumentEffect<TPayload = Record<string, unknown>> =
-  OfficialToolDocumentEffect<TPayload>;
-/** @deprecated Use isOfficialToolDocumentEffectType. */
-export const isKitEditorDocumentEffectType = isOfficialToolDocumentEffectType;
-/** @deprecated Use resolveOfficialToolDocumentEffectCapabilityId. */
-export const resolveKitEditorDocumentEffectCapabilityId =
-  resolveOfficialToolDocumentEffectCapabilityId;
-/** @deprecated Use normalizeOfficialToolDocument. */
-export const normalizeKitEditorDocument = normalizeOfficialToolDocument;
-/** @deprecated Use validateOfficialToolDocument. */
-export const validateKitEditorDocument = validateOfficialToolDocument;
-/** @deprecated Use collectOfficialToolDocumentCapabilityRequirements. */
-export const collectKitEditorDocumentCapabilityRequirements =
-  collectOfficialToolDocumentCapabilityRequirements;
 
 export type {
   EditorDocument,
   EditorDocumentDiagnostic,
-  EditorEffect,
+  EditorExtensionObjectEffect,
   EditorObject,
   EditorObjectEffect,
   ObjectSource,

@@ -15,7 +15,6 @@ import type {
 } from "@pooder/document";
 import { registerEditorDocumentService } from "../../document-core/src";
 import {
-  CLIP_CAPABILITY_ID,
   CONFIGURABLE_VISUAL_CAPABILITY_ID,
   DESIGN_EXPORT_CAPABILITY_ID,
   EDGE_DETECTION_CAPABILITY_ID,
@@ -30,7 +29,6 @@ import {
   createConfigurableVisualCapability,
   createOfficialToolEffectSchemaRegistry,
   mapImageMaskAlpha,
-  normalizeClipEffectPayload,
   normalizeImageMaskAlpha,
   resolveOfficialToolDocumentEffectCapabilityId,
   type ConfigurableVisualCapabilityApi,
@@ -622,7 +620,7 @@ async function testImageMaskCapability(): Promise<void> {
   }
 }
 
-async function testEdgeDetectionAndClipCapabilities(): Promise<void> {
+async function testEdgeDetectionCapability(): Promise<void> {
   const runtime = new Pooder();
   runtime.services.register(
     {
@@ -647,18 +645,6 @@ async function testEdgeDetectionAndClipCapabilities(): Promise<void> {
       ),
       "edge detection facade should be registered",
     );
-    assertEqual(CLIP_CAPABILITY_ID, "pooder.kit.clip", "clip capability id");
-    assertDeepEqual(
-      normalizeClipEffectPayload({
-        enabled: true,
-        source: { type: "path", pathData: "M0 0 L10 0 Z", space: "scene" },
-      }),
-      {
-        enabled: true,
-        source: { type: "path", pathData: "M0 0 L10 0 Z", space: "scene" },
-      },
-      "clip payload normalization should preserve a valid path mask",
-    );
   } finally {
     await runtime.dispose();
   }
@@ -672,7 +658,7 @@ export async function runExistingCapabilityRegressions(): Promise<void> {
     ["Mirror", testMirrorCapability],
     ["ConfigurableVisual", testConfigurableVisualCapability],
     ["ImageMask", testImageMaskCapability],
-    ["EdgeDetection and Clip", testEdgeDetectionAndClipCapabilities],
+    ["EdgeDetection", testEdgeDetectionCapability],
   ];
   for (const [name, run] of tests) {
     await run();

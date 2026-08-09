@@ -57,10 +57,9 @@ import {
   type ProductionMaskDescriptor,
   type ProductionMaskDocumentState,
   type ProductionMaskDocumentController,
-  type ProductionMaskEffectPayload,
+  type ProductionMaskSettings,
   type ProductionMaskOperationResult,
   type ProductionMaskSessionDraft,
-  type ProductionMaskSessionProjection,
   type ProductionMaskSource,
   type ProductionMaskViewState,
 } from "./capability";
@@ -95,26 +94,12 @@ const COVER_MASK_TINT: MaskTint = { r: 52, g: 136, b: 255, key: "cover" };
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
-
 const cloneReferenceClipEffects = (
   node: RenderGraphNode,
 ): RenderEffectSpec[] =>
   node.effects
     .filter((effect) => effect.type === "clipPath")
     .map((effect) => clone(effect));
-
-const normalizeStringList = (value: unknown): string[] =>
-  Array.isArray(value)
-    ? Array.from(
-        new Set(
-          value
-            .map((item) => String(item || "").trim())
-            .filter((item) => item.length > 0),
-        ),
-      )
-    : [];
 
 const normalizeUnitInterval = (value: unknown, fallback: number): number => {
   const numeric = Number(value);
@@ -146,26 +131,9 @@ const normalizeTint = (value: Partial<ImageMaskTint> | undefined): MaskTint => {
   return { r, g, b, key: `${r},${g},${b}` };
 };
 
-const normalizeProjection = (
-  value: unknown,
-): ProductionMaskSessionProjection | null => {
-  if (!isRecord(value) || !isRecord(value.source)) return null;
-  const objectIds = normalizeStringList(value.source.objectIds);
-  const tags = normalizeStringList(value.source.tags);
-  if (objectIds.length === 0 && tags.length === 0) return null;
-  return {
-    placement: value.placement === "above" ? "above" : "below",
-    source: {
-      ...(objectIds.length ? { objectIds } : {}),
-      ...(tags.length ? { tags } : {}),
-    },
-    ...(value.surfaceScope === "all" ? { surfaceScope: "all" as const } : {}),
-  };
-};
-
-const normalizePayload = (
-  value: ProductionMaskEffectPayload,
-): ProductionMaskEffectPayload => ({
+const normalizeSettings = (
+  value: ProductionMaskSettings,
+): ProductionMaskSettings => ({
   process: String(value.process || "").trim(),
   enabled: value.enabled === true,
   reference: {
@@ -191,13 +159,6 @@ const normalizePayload = (
         },
       }
     : {}),
-  sessionProjections: Array.isArray(value.sessionProjections)
-    ? value.sessionProjections
-        .map(normalizeProjection)
-        .filter((item): item is ProductionMaskSessionProjection =>
-          Boolean(item),
-        )
-    : [],
 });
 
 const resourceLocation = (resource: EditorImageResource | undefined): string =>
@@ -214,11 +175,11 @@ const listDescriptors = (
   const state = document.extensions[
     POODER_PRODUCTION_MASK_CAPABILITY_ID
   ] as unknown as ProductionMaskDocumentState | undefined;
-  return Object.entries(state?.masks ?? {}).map(([effectId, mask]) => ({
-    effectId,
+  return Object.entries(state?.masks ?? {}).map(([maskId, mask]) => ({
+    maskId,
     layerId: null,
     surfaceId: mask.surfaceId,
-    payload: normalizePayload({
+    settings: normalizeSettings({
       process: mask.process,
       enabled: mask.production.enabled,
       reference: {
@@ -238,23 +199,23 @@ const listDescriptors = (
 
 const replaceMaskProduction = (
   document: EditorDocument,
-  effectId: string,
-  payload: ProductionMaskEffectPayload,
+  maskId: string,
+  settings: ProductionMaskSettings,
 ): boolean => {
   const state = document.extensions[
     POODER_PRODUCTION_MASK_CAPABILITY_ID
   ] as unknown as ProductionMaskDocumentState | undefined;
-  const mask = state?.masks[effectId];
+  const mask = state?.masks[maskId];
   if (!mask) return false;
-  mask.process = payload.process as typeof mask.process;
+  mask.process = settings.process as typeof mask.process;
   mask.production = {
-    enabled: payload.enabled,
-    referenceObjectId: payload.reference.objectId,
+    enabled: settings.enabled,
+    referenceObjectId: settings.reference.objectId,
     source:
-      payload.source?.type === "asset"
-        ? { kind: "asset", assetId: payload.source.assetId }
+      settings.source?.type === "asset"
+        ? { kind: "asset", assetId: settings.source.assetId }
         : { kind: "reference-object" },
-    alpha: clone(payload.alpha),
+    alpha: clone(settings.alpha),
   };
   return true;
 };
@@ -271,7 +232,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   private document: EditorDocument | null = null;
   private documentController: ProductionMaskDocumentController | null = null;
   private readonly pendingAssets = new Map<string, EditorImageResource>();
-  private selectedEffectId: string | null = null;
+  private selectedMaskId: string | null = null;
   private previewMaskBySource = new Map<string, string>();
   private pendingPreviewMaskBySource = new Map<string, Promise<string>>();
   private canvasService?: CanvasService;
@@ -427,8 +388,8 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     this.document = clone(document);
     this.documentController = controller;
     const descriptors = listDescriptors(this.document);
-    if (!descriptors.some((item) => item.effectId === this.selectedEffectId)) {
-      this.selectedEffectId = descriptors[0]?.effectId ?? null;
+    if (!descriptors.some((item) => item.maskId === this.selectedMaskId)) {
+      this.selectedMaskId = descriptors[0]?.maskId ?? null;
     }
     this.emitStateChange();
     if (this.sessionHandle) void this.refresh();
@@ -439,18 +400,18 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   }
 
   private resolveDescriptor(input: {
-    effectId?: string;
+    maskId?: string;
     process?: string;
   }): ProductionMaskDescriptor | null {
-    const effectId = String(input.effectId || "").trim();
+    const maskId = String(input.maskId || "").trim();
     const process = String(input.process || "").trim();
     const descriptors = this.listMasks();
     return (
-      (effectId
-        ? descriptors.find((item) => item.effectId === effectId)
+      (maskId
+        ? descriptors.find((item) => item.maskId === maskId)
         : undefined) ??
       (process
-        ? descriptors.find((item) => item.payload.process === process)
+        ? descriptors.find((item) => item.settings.process === process)
         : undefined) ??
       descriptors[0] ??
       null
@@ -458,7 +419,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   }
 
   private async openSession(input: {
-    effectId?: string;
+    maskId?: string;
     process?: string;
   }): Promise<ProductionMaskOperationResult> {
     if (!this.document || !this.documentController) {
@@ -468,11 +429,11 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       return { ok: false, reason: "session-not-active" };
     }
     const descriptor = this.resolveDescriptor(input);
-    if (!descriptor) return { ok: false, reason: "effect-not-found" };
+    if (!descriptor) return { ok: false, reason: "mask-not-found" };
     if (!this.getReferenceNode(descriptor)) {
       return { ok: false, reason: "reference-not-found" };
     }
-    const sessionId = `${PRODUCTION_MASK_SESSION_CHANNEL}:${descriptor.effectId}`;
+    const sessionId = `${PRODUCTION_MASK_SESSION_CHANNEL}:${descriptor.maskId}`;
     if (
       this.sessionHandle &&
       this.sessionHandle.descriptor.sessionId !== sessionId &&
@@ -490,7 +451,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
           ownerId: this.id,
           scope: {
             surfaceId: descriptor.surfaceId,
-            subjectId: descriptor.effectId,
+            subjectId: descriptor.maskId,
             channel: PRODUCTION_MASK_SESSION_CHANNEL,
             groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
           },
@@ -513,15 +474,15 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       throw error;
     }
 
-    this.selectedEffectId = descriptor.effectId;
+    this.selectedMaskId = descriptor.maskId;
     const sessionHandle = this.sessionHandle;
     if (!sessionHandle) return { ok: false, reason: "session-not-active" };
     this.ensureSessionScene(descriptor, sessionId, sessionHandle);
     this.events.emit("change", {
       type: "session-opened",
       event: {
-        effectId: descriptor.effectId,
-        process: descriptor.payload.process,
+        maskId: descriptor.maskId,
+        process: descriptor.settings.process,
         sessionId,
         source: "api",
         surfaceId: descriptor.surfaceId,
@@ -558,12 +519,12 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       ...draft,
       descriptor: {
         ...draft.descriptor,
-        payload: {
-          ...draft.descriptor.payload,
+        settings: {
+          ...draft.descriptor.settings,
           enabled: true,
           source: {
             type: "asset",
-            assetId: this.stageMaskAsset(draft.descriptor.effectId, resource),
+            assetId: this.stageMaskAsset(draft.descriptor.maskId, resource),
           },
         },
       },
@@ -575,8 +536,8 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       ...draft,
       descriptor: {
         ...draft.descriptor,
-        payload: {
-          ...draft.descriptor.payload,
+        settings: {
+          ...draft.descriptor.settings,
           enabled: true,
           source: { type: "reference-object" },
         },
@@ -588,12 +549,12 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     this.previewMaskBySource.clear();
     this.pendingPreviewMaskBySource.clear();
     return this.updateDraft((draft) => {
-      const { source: _source, ...payload } = draft.descriptor.payload;
+      const { source: _source, ...settings } = draft.descriptor.settings;
       return {
         ...draft,
         descriptor: {
           ...draft.descriptor,
-          payload: { ...payload, enabled: false },
+          settings: { ...settings, enabled: false },
         },
       };
     });
@@ -606,10 +567,10 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       ...draft,
       descriptor: {
         ...draft.descriptor,
-        payload: {
-          ...draft.descriptor.payload,
+        settings: {
+          ...draft.descriptor.settings,
           alpha: normalizeAlphaParameters({
-            ...draft.descriptor.payload.alpha,
+            ...draft.descriptor.settings.alpha,
             ...parameters,
           }),
         },
@@ -622,7 +583,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       ...draft,
       descriptor: {
         ...draft.descriptor,
-        payload: { ...draft.descriptor.payload, enabled },
+        settings: { ...draft.descriptor.settings, enabled },
       },
     }));
   }
@@ -634,9 +595,9 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   }): Promise<ProductionMaskOperationResult> {
     const controller = this.documentController;
     const descriptor = this.resolveDescriptor({
-      effectId:
-        this.sessionHandle?.getDraft().descriptor.effectId ??
-        this.selectedEffectId ??
+      maskId:
+        this.sessionHandle?.getDraft().descriptor.maskId ??
+        this.selectedMaskId ??
         "",
     });
     if (!controller || !descriptor) {
@@ -660,7 +621,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       const state = document.extensions[
         POODER_PRODUCTION_MASK_CAPABILITY_ID
       ] as unknown as ProductionMaskDocumentState | undefined;
-      const mask = state?.masks[descriptor.effectId];
+      const mask = state?.masks[descriptor.maskId];
       if (!mask) throw new Error("production-mask-state-not-found");
       mask.presentation = clone(presentation);
     });
@@ -690,7 +651,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     if (!controller) return { ok: false, reason: "document-not-bound" };
     const draft = clone(handle.getDraft());
     const result = await controller.mutate((document) => {
-      const source = draft.descriptor.payload.source;
+      const source = draft.descriptor.settings.source;
       if (source?.type === "asset") {
         const resource = this.pendingAssets.get(source.assetId);
         if (resource && resource.kind !== "blob-url") {
@@ -716,17 +677,17 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       if (
         !replaceMaskProduction(
           document,
-          draft.descriptor.effectId,
-          draft.descriptor.payload,
+          draft.descriptor.maskId,
+          draft.descriptor.settings,
         )
       ) {
-        throw new Error("production-mask-effect-not-found");
+        throw new Error("production-mask-not-found");
       }
     });
     if (!result.ok) return { ok: false, reason: "document-update-failed" };
     this.document = clone(result.document);
-    if (draft.descriptor.payload.source?.type === "asset") {
-      this.pendingAssets.delete(draft.descriptor.payload.source.assetId);
+    if (draft.descriptor.settings.source?.type === "asset") {
+      this.pendingAssets.delete(draft.descriptor.settings.source.assetId);
     }
     await handle.commit();
     return { ok: true };
@@ -737,7 +698,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     if (!handle || handle.phase === "closed") {
       return { ok: false, reason: "session-not-active" };
     }
-    const source = handle.getDraft().descriptor.payload.source;
+    const source = handle.getDraft().descriptor.settings.source;
     if (source?.type === "asset") this.pendingAssets.delete(source.assetId);
     await handle.rollback();
     return { ok: true };
@@ -747,7 +708,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     const draft = this.sessionHandle?.getDraft() ?? null;
     const descriptor =
       draft?.descriptor ??
-      this.resolveDescriptor({ effectId: this.selectedEffectId ?? "" });
+      this.resolveDescriptor({ maskId: this.selectedMaskId ?? "" });
     return {
       dirty: this.sessionHandle?.dirty ?? false,
       descriptor: descriptor ? clone(descriptor) : null,
@@ -773,13 +734,13 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     reason: "committed" | "rolled-back" | "cancelled",
   ): void {
     if (this.sessionHandle?.descriptor.sessionId !== sessionId) return;
-    const effectId = this.sessionHandle.getDraft().descriptor.effectId;
+    const maskId = this.sessionHandle.getDraft().descriptor.maskId;
     this.sessionHandle = undefined;
     this.sessionScene = undefined;
     this.clearRenderedMask();
     this.events.emit("change", {
       type: "session-closed",
-      event: { effectId, reason, sessionId },
+      event: { maskId, reason, sessionId },
     });
     this.emitStateChange();
   }
@@ -819,15 +780,13 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     if (existing && this.sceneService.getSceneHandle(existing.id) === existing)
       return;
     const scene = this.sceneService.createScene({
-      id: `${PRODUCTION_MASK_SESSION_SCENE_PREFIX}:${descriptor.effectId}`,
+      id: `${PRODUCTION_MASK_SESSION_SCENE_PREFIX}:${descriptor.maskId}`,
       owner: { type: "session", sessionId },
       composition: {
         entries: [
-          ...this.createDocumentProjectionEntries(descriptor, "below"),
           { source: "local", layerIds: [this.originalLayerId] },
           { source: "local", layerIds: [this.coverLayerId] },
           { source: "local", layerIds: [this.maskLayerId] },
-          ...this.createDocumentProjectionEntries(descriptor, "above"),
           { source: "local", layerIds: [this.overlayLayerId] },
         ],
       },
@@ -838,64 +797,6 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     scene.addLayer({ id: this.overlayLayerId, order: 3 });
     session.own(scene);
     this.sessionScene = scene;
-  }
-
-  private createDocumentProjectionEntries(
-    descriptor: ProductionMaskDescriptor,
-    placement: ProductionMaskSessionProjection["placement"],
-  ) {
-    const referenceObjectId = descriptor.payload.reference.objectId;
-    const projections = descriptor.payload.sessionProjections ?? [];
-    return projections
-      .filter((projection) => projection.placement === placement)
-      .map((projection) => {
-        const objectIds = (projection.source.objectIds ?? []).filter(
-          (objectId) => objectId !== referenceObjectId,
-        );
-        const tags = projection.source.tags ?? [];
-        if (objectIds.length === 0 && tags.length === 0) {
-          return null;
-        }
-        const nextProjection: ProductionMaskSessionProjection = {
-          ...projection,
-          source: {
-            ...(objectIds.length > 0 ? { objectIds } : {}),
-            ...(tags.length > 0 ? { tags } : {}),
-          },
-        };
-        return {
-          source: "render-graph" as const,
-          interaction: "disabled" as const,
-          filter: ({ node }: { node: RenderGraphNode }) =>
-            this.matchesProjection(descriptor, nextProjection, node),
-        };
-      })
-      .filter(
-        (
-          entry,
-        ): entry is {
-          source: "render-graph";
-          interaction: "disabled";
-          filter: (input: { node: RenderGraphNode }) => boolean;
-        } => entry !== null,
-      );
-  }
-
-  private matchesProjection(
-    descriptor: ProductionMaskDescriptor,
-    projection: ProductionMaskSessionProjection,
-    node: RenderGraphNode,
-  ): boolean {
-    if (
-      projection.surfaceScope !== "all" &&
-      node.surfaceId !== descriptor.surfaceId
-    )
-      return false;
-    const objectIds = new Set(projection.source.objectIds ?? []);
-    const tags = new Set(projection.source.tags ?? []);
-    return (
-      objectIds.has(node.subjectId) || node.tags.some((tag) => tags.has(tag))
-    );
   }
 
   private getReferenceNode(
@@ -909,7 +810,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         .find(
           (node) =>
             node.surfaceId === descriptor.surfaceId &&
-            node.subjectId === descriptor.payload.reference.objectId,
+            node.subjectId === descriptor.settings.reference.objectId,
         ) ?? null
     );
   }
@@ -917,7 +818,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   private async createReferenceSnapshot(
     descriptor: ProductionMaskDescriptor,
   ): Promise<ImageSnapshot | null> {
-    const objectId = descriptor.payload.reference.objectId;
+    const objectId = descriptor.settings.reference.objectId;
     const referenceNode = this.getReferenceNode(descriptor);
     if (!objectId || !referenceNode || !this.objectImageResolver) return null;
     try {
@@ -930,7 +831,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         representation: "original-resource",
       });
       const effects =
-        descriptor.payload.alignment === "reference-source"
+        descriptor.settings.alignment === "reference-source"
           ? []
           : cloneReferenceClipEffects(referenceNode);
       return {
@@ -958,8 +859,8 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       : asset.source.url;
   }
 
-  private stageMaskAsset(effectId: string, resource: EditorImageResource): string {
-    const assetId = `${effectId}.source`;
+  private stageMaskAsset(maskId: string, resource: EditorImageResource): string {
+    const assetId = `${maskId}.source`;
     this.pendingAssets.set(assetId, clone(resource));
     return assetId;
   }
@@ -1084,7 +985,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     if (reference && draft.previewOriginalVisible) {
       originalSpecs = [
         this.buildImageSpec(
-          `production-mask-original:${descriptor.effectId}`,
+          `production-mask-original:${descriptor.maskId}`,
           reference,
           reference.src,
           1,
@@ -1093,25 +994,25 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         ),
       ];
     }
-    if (reference && descriptor.payload.enabled && descriptor.payload.source) {
-      const sourceUrl = this.sourceUrl(descriptor.payload.source, reference);
-      const tint = normalizeTint(descriptor.payload.preview?.tint);
+    if (reference && descriptor.settings.enabled && descriptor.settings.source) {
+      const sourceUrl = this.sourceUrl(descriptor.settings.source, reference);
+      const tint = normalizeTint(descriptor.settings.preview?.tint);
       if (draft.previewCurrentMaskVisible) {
         const maskSource = await this.getMaskSource(
           sourceUrl,
-          descriptor.payload.alpha,
+          descriptor.settings.alpha,
           tint,
         );
         if (sequence !== this.renderSequence) return;
         if (maskSource) {
           maskSpecs = [
             this.buildImageSpec(
-              `production-mask:${descriptor.effectId}`,
+              `production-mask:${descriptor.maskId}`,
               reference,
               maskSource,
-              descriptor.payload.preview?.opacity ?? DEFAULT_MASK_OPACITY,
+              descriptor.settings.preview?.opacity ?? DEFAULT_MASK_OPACITY,
               this.maskLayerId,
-              descriptor.payload.process,
+              descriptor.settings.process,
             ),
           ];
         }
@@ -1129,7 +1030,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         if (coverSource) {
           coverSpecs = [
             this.buildImageSpec(
-              `production-mask-cover:${descriptor.effectId}`,
+              `production-mask-cover:${descriptor.maskId}`,
               reference,
               coverSource,
               0.38,

@@ -211,9 +211,6 @@ export type SceneTransformPatch =
       matrix: CoordinateMatrix<"object-local", "scene">;
     };
 
-/** @deprecated Use SceneTransformPatch. */
-export type InteractionCommitTransform = SceneTransformPatch;
-
 export interface InteractionManipulationCommitEvent {
   kind: InteractionManipulationKind;
   subject: InteractionSubject;

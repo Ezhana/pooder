@@ -1,15 +1,13 @@
 import type { ExtensionDefinition } from "@pooder/core";
 import {
-  normalizeEditorDocument,
+  parseEditorDocument,
   visitEditorDocumentObjects,
 } from "@pooder/document";
 import {
   createConfigurableVisualCapability,
-  createClipCapability,
   createImageSlotCapability,
   createMirrorCapability,
 } from "../factories";
-import { CLIP_CAPABILITY_ID } from "../extensions/clip";
 import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-visual";
 import { IMAGE_SLOT_CAPABILITY_ID } from "../extensions/image-slot";
 import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
@@ -23,7 +21,6 @@ const OFFICIAL_TOOL_EFFECT_FACTORIES: Record<
   string,
   () => ExtensionDefinition
 > = {
-  [CLIP_CAPABILITY_ID]: () => createClipCapability(),
   [CONFIGURABLE_VISUAL_CAPABILITY_ID]: () =>
     createConfigurableVisualCapability(),
   [IMAGE_SLOT_CAPABILITY_ID]: () => createImageSlotCapability(),
@@ -50,7 +47,7 @@ export function createOfficialToolCapabilitiesForDocument(
       ? createImageSlotCapability(options.imageSlot)
       : OFFICIAL_TOOL_EFFECT_FACTORIES[id](),
   );
-  const document = normalizeEditorDocument(value);
+  const document = parseEditorDocument(value);
   const behaviorCapabilityIds = new Set<string>();
   visitEditorDocumentObjects(document, ({ object }) => {
     object.behaviors?.forEach((behavior) => {
@@ -73,7 +70,3 @@ export function createOfficialToolCapabilitiesForDocument(
   }
   return capabilities;
 }
-
-/** @deprecated Use createOfficialToolCapabilitiesForDocument. */
-export const createKitCapabilitiesForDocument =
-  createOfficialToolCapabilitiesForDocument;

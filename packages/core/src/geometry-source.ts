@@ -99,9 +99,6 @@ export interface GeometrySource {
   listGeometries?(): GeometryDescriptor[];
 }
 
-/** @deprecated Use GeometrySource. */
-export type GeometrySourceProvider = GeometrySource;
-
 export interface GeometryBackend {
   backendId: string;
   supports(snapshot: GeometryPathSnapshot): boolean;
@@ -517,9 +514,6 @@ export function createStaticGeometrySource(options: {
     },
   };
 }
-
-/** @deprecated Use createStaticGeometrySource. */
-export const createStaticGeometrySourceProvider = createStaticGeometrySource;
 
 function containsGeometryPoint(
   snapshot: GeometrySnapshot,

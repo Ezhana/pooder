@@ -58,8 +58,8 @@ import {
   isEditorBuiltinObjectEffect,
   isEditorCompositeObject,
   isEditorVisualObject,
-  isGenericEditorEffect,
-  normalizeEditorDocument,
+  isEditorExtensionObjectEffect,
+  parseEditorDocument,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
   validateEditorDocumentExtensions,
@@ -70,7 +70,7 @@ import {
   type EditorDocumentEffectCapabilityResolver,
   type EditorDocumentValidationOptions,
   type DocumentInteractionSpec,
-  type EditorEffect,
+  type EditorExtensionObjectEffect,
   type EditorLayer,
   type EditorCompositeObject,
   type EditorImageObject,
@@ -369,15 +369,6 @@ export interface EditorDocumentService extends Service {
 export const EDITOR_DOCUMENT_SERVICE =
   createServiceToken<EditorDocumentService>("EditorDocumentService");
 
-/** @deprecated Use EditorDocumentService. */
-export type EditorDocumentController = Pick<
-  EditorDocumentService,
-  "apply" | "export" | "updateObject"
->;
-
-/** @deprecated Use EditorDocumentMutationResult. */
-export type DocumentUpdateResult = EditorDocumentMutationResult;
-
 interface EffectContext {
   surface: EditorSurface;
   layer?: EditorLayer;
@@ -385,7 +376,7 @@ interface EffectContext {
 }
 
 interface EffectEntry {
-  effect: EditorEffect;
+  effect: EditorExtensionObjectEffect;
   context: EffectContext;
   path: string;
 }
@@ -436,10 +427,9 @@ async function applyEditorDocumentInternal(
       renderIntentMode,
     );
   } catch (error) {
-    const document = normalizeEditorDocument(value);
     return createResult(
       false,
-      document,
+      createRejectedDocumentSnapshot(),
       [createPublicationDiagnostic("document-prepare-failed", error)],
       [],
     );
@@ -475,20 +465,25 @@ async function prepareEditorDocumentApplication(
   renderIntentMode: "replace" | "update",
 ): Promise<PreparedEditorDocumentApplication | ApplyEditorDocumentResult> {
   const validationOptions = toValidationOptions(options);
-  const document = normalizeEditorDocument(value);
+  const documentSchemaDiagnostics = validateEditorDocument(
+    value,
+    validationOptions,
+  );
+  if (hasErrors(documentSchemaDiagnostics)) {
+    return createResult(
+      false,
+      createRejectedDocumentSnapshot(),
+      documentSchemaDiagnostics,
+      [],
+    );
+  }
+  const document = parseEditorDocument(value);
   const extensionRegistry = createRuntimeDocumentExtensionRegistry(runtime);
   const effectSchemaRegistry = mergeEffectSchemaRegistries(
     extensionRegistry.createEffectSchemaRegistry(),
     options.effectSchemaRegistry,
   );
   const collectionOptions = toCollectionOptions(options, effectSchemaRegistry);
-  const documentSchemaDiagnostics = validateEditorDocument(
-    value,
-    validationOptions,
-  );
-  if (hasErrors(documentSchemaDiagnostics)) {
-    return createResult(false, document, documentSchemaDiagnostics, []);
-  }
   const extensionDiagnostics = validateEditorDocumentExtensions(
     value,
     extensionRegistry,
@@ -1314,14 +1309,6 @@ export function registerEditorDocumentService(
   return service;
 }
 
-/** @deprecated Use registerEditorDocumentService and EDITOR_DOCUMENT_SERVICE. */
-export function createEditorDocumentController(
-  runtime: EditorDocumentRuntime,
-  options: ApplyEditorDocumentOptions = {},
-): EditorDocumentService {
-  return registerEditorDocumentService(runtime, options);
-}
-
 function toValidationOptions(
   options: ApplyEditorDocumentOptions,
 ): EditorDocumentValidationOptions {
@@ -1342,7 +1329,7 @@ function toCollectionOptions(
 }
 
 function resolveEffectCapabilityId(
-  effect: EditorEffect,
+  effect: EditorExtensionObjectEffect,
   options: ApplyEditorDocumentOptions,
   effectSchemaRegistry: EffectSchemaRegistry,
 ): string | undefined {
@@ -1871,6 +1858,10 @@ function rotateObjectPlacement(
       f,
     ],
   };
+}
+
+function createRejectedDocumentSnapshot(): EditorDocument {
+  return { version: 7, assets: [], extensions: {}, surfaces: [] };
 }
 
 function createResult(
@@ -2615,7 +2606,7 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
         objects?.forEach((object, objectIndex) => {
           const objectPath = `${objectsPath}/${objectIndex}`;
           object.effects?.forEach((effect, effectIndex) => {
-            if (isGenericEditorEffect(effect)) {
+            if (isEditorExtensionObjectEffect(effect)) {
               entries.push({
                 effect,
                 context: { surface, layer, object },
@@ -2643,7 +2634,7 @@ function createObjectInteractionAspect(
 }
 
 function resolveRenderIntentTarget(
-  _effect: EditorEffect,
+  _effect: EditorExtensionObjectEffect,
   context: EffectContext,
   _document: EditorDocument,
 ): RenderIntentDraft["subject"] | null {
@@ -2684,7 +2675,7 @@ function findObjectContext(document: EditorDocument, objectId: string) {
 }
 
 function severityForEffect(
-  _effect: EditorEffect,
+  _effect: EditorExtensionObjectEffect,
 ): EditorDocumentDiagnostic["severity"] {
   return "error";
 }

@@ -1,4 +1,3 @@
-import { ClipCapabilityExtension } from "./extensions/clip";
 import { ConfigurableVisualCapabilityExtension } from "./extensions/configurable-visual";
 import { DesignExportCapabilityExtension } from "./extensions/design-export";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
@@ -6,10 +5,6 @@ import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
 import { ImageSlotCapabilityExtension } from "./extensions/image-slot";
 import { MirrorCapabilityExtension } from "./extensions/mirror";
 import { SceneExportCapabilityExtension } from "./extensions/scene-export";
-
-export const createClipCapability = (
-  options?: ConstructorParameters<typeof ClipCapabilityExtension>[0],
-) => new ClipCapabilityExtension(options);
 
 export const createConfigurableVisualCapability = (
   options?: ConstructorParameters<

@@ -74,23 +74,12 @@ export interface ProductionMaskDocumentState {
   masks: Record<string, ProductionMaskDocumentEntry>;
 }
 
-export interface ProductionMaskProjectionSource {
-  objectIds?: string[];
-  tags?: string[];
-}
-
-export interface ProductionMaskSessionProjection {
-  placement: "below" | "above";
-  source: ProductionMaskProjectionSource;
-  surfaceScope?: "same-surface" | "all";
-}
-
 export interface ProductionMaskPreviewStyle {
   tint?: Partial<ImageMaskTint>;
   opacity?: number;
 }
 
-export interface ProductionMaskEffectPayload {
+export interface ProductionMaskSettings {
   process: string;
   enabled: boolean;
   reference: ProductionMaskDocumentReference;
@@ -98,7 +87,6 @@ export interface ProductionMaskEffectPayload {
   source?: ProductionMaskSource;
   alpha: ProductionMaskAlphaParameters;
   preview?: ProductionMaskPreviewStyle;
-  sessionProjections?: ProductionMaskSessionProjection[];
 }
 
 export interface ProductionMaskCapabilityOptions {
@@ -118,10 +106,10 @@ export interface ProductionMaskDocumentController {
 }
 
 export interface ProductionMaskDescriptor {
-  effectId: string;
+  maskId: string;
   layerId: string | null;
   surfaceId: string;
-  payload: ProductionMaskEffectPayload;
+  settings: ProductionMaskSettings;
   presentation: ProductionMaskPresentationState;
 }
 
@@ -146,7 +134,7 @@ export interface ProductionMaskViewState {
 }
 
 export interface ProductionMaskSessionOpenEvent {
-  effectId: string;
+  maskId: string;
   process: string;
   sessionId: string;
   source: "api";
@@ -154,7 +142,7 @@ export interface ProductionMaskSessionOpenEvent {
 }
 
 export interface ProductionMaskSessionCloseEvent {
-  effectId: string;
+  maskId: string;
   reason: SessionTerminalReason;
   sessionId: string;
 }
@@ -166,7 +154,7 @@ export type ProductionMaskCapabilityChangeEvent =
 
 export type ProductionMaskOperationFailureReason =
   | "document-not-bound"
-  | "effect-not-found"
+  | "mask-not-found"
   | "reference-not-found"
   | "session-conflict"
   | "session-not-active"
@@ -193,7 +181,7 @@ export interface ProductionMaskCapabilityApi {
     dispose(): void;
   };
   openSession(input: {
-    effectId?: string;
+    maskId?: string;
     process?: string;
   }): Promise<ProductionMaskOperationResult>;
   getViewState(): ProductionMaskViewState;

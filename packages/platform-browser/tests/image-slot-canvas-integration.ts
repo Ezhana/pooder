@@ -4,6 +4,7 @@ import {
   SCENE_SERVICE,
   Pooder,
   coordinateMatrix,
+  createLocalToSceneMatrix,
   multiplyCoordinateMatrices,
   type RenderIntentService,
   type SceneService,
@@ -193,59 +194,65 @@ class ViewportCanvasService {
 function createNestedDocument(): EditorDocument {
   return {
     version: 7,
+    assets: [
+      {
+        id: "nested-artwork.asset",
+        type: "image",
+        source: { kind: "url", url: "/nested.png" },
+        intrinsicSize: { width: 240, height: 135 },
+      },
+    ],
     extensions: {},
     surfaces: [
       {
         id: "front",
-        size: { width: 300, height: 220, unit: "mm" },
-        frames: {
-          previewBounds: { xMm: 0, yMm: 0, widthMm: 300, heightMm: 220 },
-          productionFrame: { xMm: 0, yMm: 0, widthMm: 300, heightMm: 220 },
-          viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 300, heightMm: 220 },
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 300, height: 220 },
+          productionBounds: { x: 0, y: 0, width: 300, height: 220 },
         },
         layers: [
           {
             id: "artwork",
+            role: "content",
+            visible: true,
+            locked: false,
             objects: [
               {
                 id: "composite-parent",
-                coordinateSpace: "parent-local",
-                frame: { x: 35, y: 24, width: 190, height: 145 },
-                transform: {
-                  left: 142,
-                  top: 105,
-                  originX: "center",
-                  originY: "center",
-                  angle: 19,
-                  scaleX: 1.18,
-                  scaleY: 0.82,
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 35, y: 24, width: 190, height: 145 },
+                  localToParent: [...createLocalToSceneMatrix({
+                    position: { x: 142, y: 105 },
+                    pivot: { x: 130, y: 96.5 },
+                    rotation: 19,
+                    scaleX: 1.18,
+                    scaleY: 0.82,
+                  }).values] as MatrixValues,
+                  pivot: { x: 130, y: 96.5 },
                 },
                 interaction: {
-                  hitRegion: { type: "frame", space: "scene" },
+                  selection: { enabled: true },
                 },
                 children: [
                   {
                     id: OBJECT_ID,
-                    coordinateSpace: "parent-local",
-                    frame: { x: 18, y: 26, width: 110, height: 72 },
-                    transform: {
-                      left: 76,
-                      top: 64,
-                      originX: "center",
-                      originY: "center",
-                      angle: -11,
-                      scaleX: 0.94,
-                      scaleY: 1.08,
-                    },
-                    source: {
-                      kind: "image",
-                      resource: {
-                        kind: "url",
-                        url: "/nested.png",
-                        intrinsicSize: { width: 240, height: 135 },
-                      },
-                    },
+                    visible: true,
+                    locked: false,
                     placement: {
+                      localBounds: { x: 18, y: 26, width: 110, height: 72 },
+                      localToParent: [...createLocalToSceneMatrix({
+                        position: { x: 76, y: 64 },
+                        pivot: { x: 73, y: 62 },
+                        rotation: -11,
+                        scaleX: 0.94,
+                        scaleY: 1.08,
+                      }).values] as MatrixValues,
+                      pivot: { x: 73, y: 62 },
+                    },
+                    source: { kind: "image", assetId: "nested-artwork.asset" },
+                    appearance: {
                       fit: "cover",
                       anchorX: 0.35,
                       anchorY: 0.65,
@@ -254,7 +261,12 @@ function createNestedDocument(): EditorDocument {
                       opacity: 1,
                       clip: "frame",
                     },
-                    slot: { accepts: ["image/*"] },
+                    behaviors: [
+                      {
+                        type: "pooder.image-slot",
+                        config: { accepts: ["image/*"] },
+                      },
+                    ],
                   },
                 ],
               },

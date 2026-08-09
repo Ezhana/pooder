@@ -161,7 +161,7 @@ async function main() {
   );
   assert(
     contributions.renderIntentCompilers?.length === undefined,
-    "production-mask state should not be carried by a layer-effect compiler",
+    "production-mask state should not be carried by a render-intent compiler",
   );
 
   const facade = contributions.capabilities?.[0]?.facade as ProductionMaskCapabilityApi;
