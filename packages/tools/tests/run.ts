@@ -76,7 +76,7 @@ function createImageSlotDocument(): EditorDocument {
         },
         layers: [
           {
-            id: "artwork",
+            id: "front.artwork.layer",
             role: "content",
             visible: true,
             locked: false,

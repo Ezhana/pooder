@@ -4,6 +4,7 @@ import type {
   EditorDocumentDiagnostic,
   EditorObjectBehavior,
   EditorObjectTrait,
+  JsonValue,
 } from "./index";
 import type { DocumentValueSchemaIssue } from "./extension-schema";
 
@@ -24,10 +25,34 @@ export interface ObjectTraitDefinition {
 export interface ObjectBehaviorDefinition {
   behaviorType: string;
   capabilityId: string;
+  compileInteraction?(
+    behavior: EditorObjectBehavior,
+    context: ObjectSchemaContext,
+  ): ObjectBehaviorInteractionSpec | undefined;
   validate?(
     behavior: EditorObjectBehavior,
     context: ObjectSchemaContext,
   ): readonly DocumentValueSchemaIssue[];
+}
+
+export interface ObjectBehaviorInteractionSpec {
+  hitRegion?: { type: "frame"; space: "scene" };
+  activation?: {
+    enabled?: boolean;
+    trigger?: "primary-pointer" | "double-click";
+    action: {
+      commandId: string;
+      payload?: Record<string, JsonValue>;
+    };
+    session?: {
+      channel: string;
+      groupId: string;
+      sessionId?: string;
+      mode: "exclusive" | "cooperative" | "passive";
+      scope: "subject" | "surface" | "editor";
+      leavePolicy?: "block" | "commit" | "rollback";
+    };
+  };
 }
 
 export interface ObjectConstraintDefinition {

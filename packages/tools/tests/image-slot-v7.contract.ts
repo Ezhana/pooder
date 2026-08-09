@@ -27,9 +27,7 @@ const emptySlot: EditorImageObject = {
   },
   source: { kind: "image" },
   appearance,
-  behaviors: [
-    { type: "pooder.image-slot", config: { accepts: ["image/*"] } },
-  ],
+  behaviors: [{ type: "pooder.image-slot", config: { accepts: ["image/*"] } }],
 };
 
 const document: EditorDocument = {
@@ -45,7 +43,7 @@ const document: EditorDocument = {
       },
       layers: [
         {
-          id: "artwork",
+          id: "front.artwork.layer",
           role: "content",
           visible: true,
           locked: false,

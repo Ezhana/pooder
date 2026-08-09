@@ -107,6 +107,12 @@ class ViewportCanvasService {
     }
   }
 
+  emitPointer(target: any) {
+    this.handlers
+      .get("typed:pointer")
+      ?.forEach((handler) => handler({ kind: "down", target }));
+  }
+
   async reconcileRenderGraphDrawList(items: any[]) {
     this.reconcileCalls.push({ items });
   }
@@ -191,6 +197,128 @@ class ViewportCanvasService {
   }
 }
 
+function createEmptySlotDocument(): EditorDocument {
+  return {
+    version: 7,
+    assets: [
+      {
+        id: "empty-presentation",
+        type: "image",
+        source: {
+          kind: "data-url",
+          dataUrl:
+            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80'/%3E",
+        },
+        intrinsicSize: { width: 120, height: 80 },
+      },
+    ],
+    extensions: {},
+    surfaces: [
+      {
+        id: "front",
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 160, height: 120 },
+          productionBounds: { x: 0, y: 0, width: 160, height: 120 },
+        },
+        layers: [
+          {
+            id: "front.image-slot",
+            role: "content",
+            visible: true,
+            locked: false,
+            objects: [
+              {
+                id: OBJECT_ID,
+                visible: true,
+                locked: false,
+                placement: {
+                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                  localToParent: [1, 0, 0, 1, 20, 20],
+                  pivot: { x: 60, y: 40 },
+                },
+                source: { kind: "image" },
+                appearance: {
+                  fit: "cover",
+                  anchorX: 0.5,
+                  anchorY: 0.5,
+                  zoom: 1,
+                  rotation: 0,
+                  opacity: 1,
+                  clip: "frame",
+                },
+                behaviors: [
+                  {
+                    type: "pooder.image-slot",
+                    config: {
+                      accepts: ["image/*"],
+                      emptyPresentation: {
+                        assetId: "empty-presentation",
+                        fit: "stretch",
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+async function testEmptyImageSlotPointerActivation(): Promise<void> {
+  const runtime = new Pooder();
+  const canvas = new ViewportCanvasService();
+  const adapter = new FabricRenderGraphAdapter();
+  runtime.services.register(canvas as never, CANVAS_SERVICE);
+  runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
+  runtime.extensions.register(new ImageSlotCapabilityExtension());
+  await runtime.extensions.flushActivation();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const applied = await controller.apply(createEmptySlotDocument());
+    assert(
+      applied.ok,
+      `empty image-slot document should apply (${JSON.stringify(applied.diagnostics)})`,
+    );
+    const facade = runtime.capabilities.get<ImageSlotCapabilityApi>(
+      IMAGE_SLOT_CAPABILITY_ID,
+    );
+    assert(facade, "empty image-slot facade should exist");
+    facade.syncDocument(applied.document, controller);
+    await adapter.flush();
+    const hitTarget = canvas.reconcileCalls
+      .at(-1)
+      ?.items.find(
+        (candidate) => candidate.key === `${OBJECT_ID}:frame-hit-target`,
+      );
+    assert(hitTarget, "empty image-slot should expose a frame hit target");
+    assertEqual(
+      hitTarget.spec.data?.interactionSpec?.activation?.action?.commandId,
+      "pooder.image-slot.open",
+      "image-slot behavior should compile its activation command",
+    );
+    canvas.emitPointer({
+      data: { ...hitTarget.spec.data, renderTarget: "render-graph" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEqual(
+      facade.getViewState().phase,
+      "active",
+      "clicking an empty image-slot should activate its session",
+    );
+    assertEqual(
+      facade.getViewState().draft?.objectId,
+      OBJECT_ID,
+      "clicking an empty image-slot should open its session",
+    );
+    await facade.rollbackSession();
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 function createNestedDocument(): EditorDocument {
   return {
     version: 7,
@@ -223,13 +351,15 @@ function createNestedDocument(): EditorDocument {
                 locked: false,
                 placement: {
                   localBounds: { x: 35, y: 24, width: 190, height: 145 },
-                  localToParent: [...createLocalToSceneMatrix({
-                    position: { x: 142, y: 105 },
-                    pivot: { x: 130, y: 96.5 },
-                    rotation: 19,
-                    scaleX: 1.18,
-                    scaleY: 0.82,
-                  }).values] as MatrixValues,
+                  localToParent: [
+                    ...createLocalToSceneMatrix({
+                      position: { x: 142, y: 105 },
+                      pivot: { x: 130, y: 96.5 },
+                      rotation: 19,
+                      scaleX: 1.18,
+                      scaleY: 0.82,
+                    }).values,
+                  ] as MatrixValues,
                   pivot: { x: 130, y: 96.5 },
                 },
                 interaction: {
@@ -242,13 +372,15 @@ function createNestedDocument(): EditorDocument {
                     locked: false,
                     placement: {
                       localBounds: { x: 18, y: 26, width: 110, height: 72 },
-                      localToParent: [...createLocalToSceneMatrix({
-                        position: { x: 76, y: 64 },
-                        pivot: { x: 73, y: 62 },
-                        rotation: -11,
-                        scaleX: 0.94,
-                        scaleY: 1.08,
-                      }).values] as MatrixValues,
+                      localToParent: [
+                        ...createLocalToSceneMatrix({
+                          position: { x: 76, y: 64 },
+                          pivot: { x: 73, y: 62 },
+                          rotation: -11,
+                          scaleX: 0.94,
+                          scaleY: 1.08,
+                        }).values,
+                      ] as MatrixValues,
                       pivot: { x: 73, y: 62 },
                     },
                     source: { kind: "image", assetId: "nested-artwork.asset" },
@@ -323,6 +455,7 @@ function transformBounds(
 }
 
 export async function testImageSlotFabricViewportAndParentTransform(): Promise<void> {
+  await testEmptyImageSlotPointerActivation();
   const runtime = new Pooder();
   const canvas = new ViewportCanvasService();
   const adapter = new FabricRenderGraphAdapter();

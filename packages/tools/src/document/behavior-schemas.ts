@@ -6,25 +6,40 @@ import type {
 } from "@pooder/document";
 
 import { CONFIGURABLE_VISUAL_CAPABILITY_ID } from "../extensions/configurable-visual";
-import { IMAGE_SLOT_CAPABILITY_ID } from "../extensions/image-slot";
+import {
+  IMAGE_SLOT_CAPABILITY_ID,
+  IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
+} from "../extensions/image-slot";
 
 export const IMAGE_SLOT_BEHAVIOR_TYPE = "pooder.image-slot";
-export const CONFIGURABLE_VISUAL_BEHAVIOR_TYPE =
-  "pooder.configurable-visual";
+export const CONFIGURABLE_VISUAL_BEHAVIOR_TYPE = "pooder.configurable-visual";
 
-export interface ImageSlotObjectBehavior
-  extends EditorObjectBehavior<EditorImageSlotBehaviorConfig> {
+export interface ImageSlotObjectBehavior extends EditorObjectBehavior<EditorImageSlotBehaviorConfig> {
   type: typeof IMAGE_SLOT_BEHAVIOR_TYPE;
 }
 
-export interface ConfigurableVisualObjectBehavior
-  extends EditorObjectBehavior<{ key: string }> {
+export interface ConfigurableVisualObjectBehavior extends EditorObjectBehavior<{
+  key: string;
+}> {
   type: typeof CONFIGURABLE_VISUAL_BEHAVIOR_TYPE;
 }
 
 export const IMAGE_SLOT_BEHAVIOR_DEFINITION: ObjectBehaviorDefinition = {
   behaviorType: IMAGE_SLOT_BEHAVIOR_TYPE,
   capabilityId: IMAGE_SLOT_CAPABILITY_ID,
+  compileInteraction: () => ({
+    hitRegion: { type: "frame", space: "scene" },
+    activation: {
+      action: { commandId: IMAGE_SLOT_OPEN_SESSION_COMMAND_ID },
+      session: {
+        channel: "image-slot",
+        groupId: IMAGE_SLOT_CAPABILITY_ID,
+        mode: "exclusive",
+        scope: "subject",
+        leavePolicy: "block",
+      },
+    },
+  }),
   validate: (behavior) => validateImageSlotConfig(behavior.config),
 };
 

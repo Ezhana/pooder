@@ -30,6 +30,7 @@ import {
   type ImageResourceDescriptor,
   type ImageResourceService,
   type InteractionManipulationCommitEvent,
+  type InteractionSpec,
   type InteractionService,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDiagnostic,
@@ -81,6 +82,8 @@ import {
   type EditorObjectTrait,
   type EditorSurface,
   type DocumentExtensionContribution,
+  type ObjectSchemaContext,
+  type ObjectSchemaRegistry,
   type ObjectSource,
 } from "@pooder/document";
 
@@ -491,9 +494,10 @@ async function prepareEditorDocumentApplication(
   if (hasErrors(extensionDiagnostics)) {
     return createResult(false, document, extensionDiagnostics, []);
   }
+  const objectSchemaRegistry = extensionRegistry.createObjectSchemaRegistry();
   const objectSchemaDiagnostics = validateEditorDocumentObjectSchemas(
     document,
-    extensionRegistry.createObjectSchemaRegistry(),
+    objectSchemaRegistry,
   );
   if (hasErrors(objectSchemaDiagnostics)) {
     return createResult(false, document, objectSchemaDiagnostics, []);
@@ -543,7 +547,11 @@ async function prepareEditorDocumentApplication(
       "RenderIntentCompilerRegistryService is required to apply an EditorDocument.",
     );
   const resolvedImages = await resolveDocumentImageResources(runtime, document);
-  const intentDrafts = createBaseRenderIntentDrafts(document, resolvedImages);
+  const intentDrafts = createBaseRenderIntentDrafts(
+    document,
+    resolvedImages,
+    objectSchemaRegistry,
+  );
   const effectEntries = collectEffectEntries(document);
   const patchEntries: RenderIntentPatchEntry[] = [];
   let patchSequence = 0;
@@ -1342,8 +1350,7 @@ function resolveEffectCapabilityId(
 function createRuntimeDocumentExtensionRegistry(
   runtime: EditorDocumentRuntime,
 ): DocumentExtensionRegistry {
-  const contributions =
-    runtime.extensions?.listDocumentContributions() ?? [];
+  const contributions = runtime.extensions?.listDocumentContributions() ?? [];
   return new DocumentExtensionRegistry(
     contributions.filter(isDocumentExtensionContribution),
   );
@@ -1936,10 +1943,11 @@ function collectAvailableCapabilityIds(
 function createBaseRenderIntentDrafts(
   document: EditorDocument,
   resolvedImages: ReadonlyMap<string, ImageResourceResolution>,
+  objectSchemaRegistry: ObjectSchemaRegistry,
 ): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
   const assetsById = new Map(document.assets.map((asset) => [asset.id, asset]));
-  document.surfaces.forEach((surface) => {
+  document.surfaces.forEach((surface, surfaceIndex) => {
     surface.layers.forEach((layer, layerIndex) => {
       const visit = (
         objects: EditorObject[] | undefined,
@@ -1949,14 +1957,21 @@ function createBaseRenderIntentDrafts(
           [1, 0, 0, 1, 0, 0],
         ),
         compositeId?: string,
+        objectsPath = `/surfaces/${surfaceIndex}/layers/${layerIndex}/objects`,
       ) => {
         objects?.forEach((object, index) => {
+          const objectPath = `${objectsPath}/${index}`;
           const framePlacement = createFrameAffinePlacement(
             object,
             parentLocalToScene,
           );
+          const interaction = createObjectInteractionAspect(
+            object,
+            objectSchemaRegistry,
+            { document, objectId: object.id, path: objectPath },
+          );
           if (isEditorCompositeObject(object)) {
-            if (object.interaction) {
+            if (interaction) {
               drafts.push(
                 createCompositeInteractionProxyDraft(
                   surface,
@@ -1965,6 +1980,7 @@ function createBaseRenderIntentDrafts(
                   layerIndex,
                   index,
                   framePlacement,
+                  interaction,
                 ),
               );
             }
@@ -1976,6 +1992,7 @@ function createBaseRenderIntentDrafts(
                 framePlacement.localToScene.values,
               ),
               object.id,
+              `${objectPath}/children`,
             );
             return;
           }
@@ -1999,6 +2016,7 @@ function createBaseRenderIntentDrafts(
               : undefined,
             framePlacement,
             compositeId,
+            interaction,
           );
           if (draft) drafts.push(draft);
         });
@@ -2025,29 +2043,29 @@ function createBaseRenderIntentDrafts(
           coordinateMode: "absolute",
           ...(participation !== "export"
             ? {
-            previewGeometryRef: {
-              sourceId: "document-object",
+                previewGeometryRef: {
+                  sourceId: "document-object",
                   geometryId: effect.sourceObjectId,
-              purpose: "preview",
-            },
+                  purpose: "preview",
+                },
               }
             : {}),
           ...(participation !== "preview"
             ? {
-            exportGeometryRef: {
-              sourceId: "document-object",
+                exportGeometryRef: {
+                  sourceId: "document-object",
                   geometryId: effect.sourceObjectId,
-              purpose: "export",
-            },
+                  purpose: "export",
+                },
               }
             : {}),
-            source: {
+          source: {
             id: `document-object:${effect.sourceObjectId}:clip-placeholder`,
-              type: "path",
-              space: "scene",
-              props: {},
-            },
+            type: "path",
+            space: "scene",
+            props: {},
           },
+        },
       ];
     });
   });
@@ -2075,6 +2093,7 @@ function createCompositeInteractionProxyDraft(
   layerIndex: number,
   index: number,
   placement: AffinePlacement,
+  interaction: InteractionSpec,
 ): RenderIntentDraft {
   const memberNodeIds: string[] = [];
   const collectMembers = (children: EditorObject[]) =>
@@ -2099,7 +2118,7 @@ function createCompositeInteractionProxyDraft(
       variant: "base",
     },
     placement,
-    interaction: object.interaction,
+    interaction,
     export: { visible: true, tags: [] },
     ordering: {
       layerId: layer.id,
@@ -2135,12 +2154,12 @@ function createObjectRenderIntentDraft(
   presentationAsset?: EditorImageAsset,
   framePlacement: AffinePlacement = createFrameAffinePlacement(object),
   compositeId?: string,
+  interaction?: InteractionSpec,
 ): RenderIntentDraft | null {
   if (!isEditorVisualObject(object)) return null;
   const objectOrder = index;
   const layerOrder = layerIndex;
   const locked = object.locked === true || layer.locked === true;
-  const interaction = createObjectInteractionAspect(object);
   const objectEffects = cloneObjectEffects(object.effects);
   const guideTraits =
     object.traits?.filter(
@@ -2153,8 +2172,10 @@ function createObjectRenderIntentDraft(
         ?.filter(
           (
             trait,
-          ): trait is Extract<EditorObjectTrait, { type: "core.output-mask" }> =>
-            trait.type === "core.output-mask",
+          ): trait is Extract<
+            EditorObjectTrait,
+            { type: "core.output-mask" }
+          > => trait.type === "core.output-mask",
         )
         .flatMap((trait) => trait.keys) ?? [],
     ),
@@ -2629,8 +2650,25 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
 
 function createObjectInteractionAspect(
   object: EditorObject,
-): DocumentInteractionSpec | undefined {
-  return object.interaction;
+  registry: ObjectSchemaRegistry,
+  context: ObjectSchemaContext,
+): InteractionSpec | undefined {
+  const behaviorInteraction = object.behaviors?.reduce<InteractionSpec>(
+    (compiled, behavior) => {
+      const interaction = registry
+        .getBehavior(behavior.type)
+        ?.compileInteraction?.(behavior, context);
+      return interaction ? { ...compiled, ...interaction } : compiled;
+    },
+    {},
+  );
+  if (!object.interaction && !Object.keys(behaviorInteraction ?? {}).length) {
+    return undefined;
+  }
+  return {
+    ...(behaviorInteraction ?? {}),
+    ...(object.interaction as DocumentInteractionSpec | undefined),
+  };
 }
 
 function resolveRenderIntentTarget(
