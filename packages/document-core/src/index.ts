@@ -338,7 +338,7 @@ export interface EditorDocumentSelectorMutationOptions {
 }
 
 export interface EditorDocumentImageResourceUpdate {
-  source?: EditorAssetDataSource;
+  source?: EditorAssetDataSource | null;
   mimeType?: string;
   intrinsicSize?: EditorImageAsset["intrinsicSize"];
   visible?: boolean;
@@ -1092,27 +1092,30 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       }
       objects.forEach((object) => {
         if (object.type !== "image") return;
-        const assetId = update.source
-          ? createEditorDocumentAssetId(document, `asset:${object.id}`)
-          : (object.source?.assetId ?? `asset:${object.id}`);
-        setEditorImageObjectSource(
-          document,
-          object.id,
-          update.source ? { kind: "asset", assetId } : null,
-        );
         if (update.visible !== undefined) object.visible = update.visible;
-        if (update.source) {
-          const asset: EditorImageAsset = {
-            id: assetId,
-            type: "image",
-            source: { ...update.source },
-            ...(update.mimeType ? { mimeType: update.mimeType } : {}),
-            ...(update.intrinsicSize
-              ? { intrinsicSize: { ...update.intrinsicSize } }
-              : {}),
-          };
-          upsertEditorDocumentAsset(document, asset);
+        if (update.source === undefined) return;
+        if (update.source === null) {
+          setEditorImageObjectSource(document, object.id, null);
+          return;
         }
+        const assetId = createEditorDocumentAssetId(
+          document,
+          `asset:${object.id}`,
+        );
+        setEditorImageObjectSource(document, object.id, {
+          kind: "asset",
+          assetId,
+        });
+        const asset: EditorImageAsset = {
+          id: assetId,
+          type: "image",
+          source: { ...update.source },
+          ...(update.mimeType ? { mimeType: update.mimeType } : {}),
+          ...(update.intrinsicSize
+            ? { intrinsicSize: { ...update.intrinsicSize } }
+            : {}),
+        };
+        upsertEditorDocumentAsset(document, asset);
       });
     });
   }

@@ -8,7 +8,6 @@ import {
   SceneExportService,
   type SceneExportSourceSelector,
 } from "@pooder/core";
-import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import {
   createDesignExportCapabilityDefinition,
   DESIGN_EXPORT_CAPABILITY_ID,
@@ -25,9 +24,7 @@ export type {
   ExportImageResult,
 } from "./capability";
 
-const DEFAULT_EXPORT_LAYER_IDS = [
-  KIT_LEGACY_LAYER_PRESET.imageObject,
-] as const;
+const DEFAULT_DESIGN_EXPORT_TAGS = ["export:design"] as const;
 
 export interface DesignExportExtensionOptions
   extends DesignExportCapabilityOptions {
@@ -83,7 +80,7 @@ export class DesignExportExtension implements ExtensionDefinition {
   private resolveDefaultSource(): SceneExportSourceSelector {
     if (this.configuredSource) return this.configuredSource;
     return {
-      layerIds: DEFAULT_EXPORT_LAYER_IDS,
+      tags: DEFAULT_DESIGN_EXPORT_TAGS,
     };
   }
 

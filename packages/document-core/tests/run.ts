@@ -374,6 +374,58 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
       "/artwork.png",
       "sibling should retain the shared original asset",
     );
+
+    const replacementAssetId = target.source?.assetId;
+    const hidden = await controller.updateImageResources(
+      { ids: ["artwork"] },
+      { visible: false },
+      { expectedCount: 1 },
+    );
+    assert(hidden.ok, "visibility-only image update should commit");
+    const hiddenTarget = controller
+      .export()!
+      .surfaces[0]!.layers[0]!.objects.find(
+        (object) => object.id === "artwork",
+      );
+    assert(
+      hiddenTarget?.type === "image",
+      "visibility-only update should retain the image object",
+    );
+    assertEqual(
+      hiddenTarget.source?.assetId,
+      replacementAssetId,
+      "omitting source should preserve the current resource",
+    );
+    assertEqual(
+      controller
+        .export()!
+        .assets.some((asset) => asset.id === replacementAssetId),
+      true,
+      "visibility-only update should not reclaim the current resource",
+    );
+
+    const cleared = await controller.updateImageResources(
+      { ids: ["artwork"] },
+      { source: null },
+      { expectedCount: 1 },
+    );
+    assert(cleared.ok, "explicit null source should clear the resource");
+    const clearedTarget = controller
+      .export()!
+      .surfaces[0]!.layers[0]!.objects.find(
+        (object) => object.id === "artwork",
+      );
+    assert(
+      clearedTarget?.type === "image" && clearedTarget.source === null,
+      "explicit null should persist an empty image source",
+    );
+    assertEqual(
+      controller
+        .export()!
+        .assets.some((asset) => asset.id === replacementAssetId),
+      false,
+      "clearing the source should reclaim the orphaned resource",
+    );
   } finally {
     await runtime.dispose();
   }

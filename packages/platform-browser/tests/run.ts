@@ -40,7 +40,6 @@ import type {
   FabricRenderTargetItem,
 } from "../src/canvas-service";
 import { ViewportSystem } from "../src/viewport-system";
-import { testImageSlotFabricViewportAndParentTransform } from "./image-slot-canvas-integration";
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -4528,10 +4527,6 @@ async function main() {
     [
       "moves every projection of a logical subject",
       testFabricRenderGraphAdapterMovesLogicalSubjectProjections,
-    ],
-    [
-      "projects nested image slots through the Fabric viewport",
-      testImageSlotFabricViewportAndParentTransform,
     ],
     [
       "reconciles stale objects and clip cleanup",

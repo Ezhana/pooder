@@ -220,7 +220,7 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
     );
     const cleared = await controller.updateImageResources(
       { ids: [IMAGE_SLOT_ID] },
-      { visible: true },
+      { source: null, visible: true },
       { expectedCount: 1 },
     );
     assertEqual(cleared.ok, true, "slot resource should clear atomically");

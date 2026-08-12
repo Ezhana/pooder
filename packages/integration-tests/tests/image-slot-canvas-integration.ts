@@ -10,14 +10,19 @@ import {
   type SceneService,
 } from "@pooder/core";
 import type { EditorDocument, EditorImageObject } from "@pooder/document";
-import { registerEditorDocumentService } from "../../document-core/src";
-import { FABRIC_RENDER_GRAPH_ADAPTER, FabricRenderGraphAdapter } from "../src";
+import { registerEditorDocumentService } from "@pooder/document-core";
+import {
+  FABRIC_RENDER_GRAPH_ADAPTER,
+  FabricRenderGraphAdapter,
+} from "@pooder/platform-browser";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
   ImageSlotCapabilityExtension,
   type ImageSlotCapabilityApi,
-} from "../../tools/src/extensions/image-slot";
+} from "@pooder/tools";
+
+declare const process: { exit(code: number): never };
 
 const OBJECT_ID = "nested-artwork";
 const SECOND_OBJECT_ID = "nested-artwork-2";
@@ -874,3 +879,10 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
     await runtime.dispose();
   }
 }
+
+testImageSlotFabricViewportAndParentTransform()
+  .then(() => console.log("Image-slot browser integration passed."))
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

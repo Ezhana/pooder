@@ -13,6 +13,10 @@ export interface EditorDocumentAssetReferenceOptions {
   extensionRegistry?: DocumentExtensionRegistry;
 }
 
+export interface EditorDocumentAssetReclamationOptions {
+  extensionRegistry: DocumentExtensionRegistry;
+}
+
 /**
  * Collects only declared asset references. Extension JSON is never searched.
  * Behaviors, effects, and document extensions participate through their schema.
@@ -180,7 +184,7 @@ export function createEditorDocumentAssetId(
 
 export function reclaimOrphanedEditorDocumentAssets(
   document: EditorDocument,
-  options: EditorDocumentAssetReferenceOptions = {},
+  options: EditorDocumentAssetReclamationOptions,
 ): string[] {
   const referenced = new Set(
     collectEditorDocumentAssetReferences(document, options).map(

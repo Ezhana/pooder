@@ -23,7 +23,6 @@
     "fabric": "^7.0.0"
   },
   "devDependencies": {
-    "@pooder/document": "workspace:*",
     "@types/node": "^24.8.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0"

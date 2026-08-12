@@ -281,9 +281,7 @@ async function testDesignExportCapability(): Promise<void> {
     url: "data:image/png;base64,design",
     width: 90,
   };
-  runtime.extensions.register(
-    new DesignExportCapabilityExtension({ source: { tags: ["design"] } }),
-  );
+  runtime.extensions.register(new DesignExportCapabilityExtension());
   runtime.services.register(service as never, SCENE_EXPORT_SERVICE);
   await runtime.extensions.flushActivation();
   try {
@@ -343,8 +341,8 @@ async function testDesignExportCapability(): Promise<void> {
     );
     assertDeepEqual(
       service.calls.at(-1)?.source,
-      { tags: ["design"] },
-      "design export should use the configured source",
+      { tags: ["export:design"] },
+      "design export should use the canonical design export tag by default",
     );
   } finally {
     await runtime.dispose();

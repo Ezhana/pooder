@@ -12,8 +12,6 @@
     "rootDir": "..",
     "paths": {
       "@pooder/core": ["../core/src/index.ts"],
-      "@pooder/document": ["../document/src/index.ts"],
-      "@pooder/document-core": ["../document-core/src/index.ts"],
       "@pooder/geometry-paper": ["../geometry-paper/src/index.ts"]
     }
   },

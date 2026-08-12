@@ -7,6 +7,7 @@
     "lint": "pnpm exec prettier . --write",
     "build": "pnpm --filter \"./packages/**\" -r build",
     "test:import-safety": "node tests/import-no-window.mjs && node tests/import-dom-without-canvas-context.mjs",
+    "test:integration": "pnpm build && pnpm --filter @pooder/integration-tests test",
     "test:package-boundaries": "node tests/tool-package-boundaries.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",

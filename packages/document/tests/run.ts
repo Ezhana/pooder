@@ -1,11 +1,14 @@
 import {
   EffectSchemaRegistry,
+  DocumentExtensionRegistry,
   ObjectSchemaRegistry,
   cloneEditorDocument,
   collectEditorDocumentAssetReferences,
+  createAssetReferenceBinding,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
   getEditorDocumentObjects,
+  isAssetSource,
   parseEditorDocument,
   reclaimOrphanedEditorDocumentAssets,
   replaceEditorDocumentAssetReferences,
@@ -392,7 +395,9 @@ function testCentralAssetReferenceLifecycle(): void {
     "image-slot-placeholder",
     "replacement should mutate the typed source binding",
   );
-  const removed = reclaimOrphanedEditorDocumentAssets(document);
+  const removed = reclaimOrphanedEditorDocumentAssets(document, {
+    extensionRegistry: new DocumentExtensionRegistry(),
+  });
   assert(
     removed.includes("front-artwork") && removed.includes("front-white-ink"),
     "orphan reclamation should remove every unreferenced asset",
@@ -401,6 +406,61 @@ function testCentralAssetReferenceLifecycle(): void {
     document.assets.map((asset) => asset.id),
     ["image-slot-placeholder"],
     "orphan reclamation should retain referenced assets",
+  );
+}
+
+function testOrphanReclamationUsesRegisteredExtensionReferences(): void {
+  const document = representativeDocument();
+  const extensionRegistry = new DocumentExtensionRegistry().register({
+    id: "pooder.production-mask",
+    behaviors: [
+      {
+        behaviorType: "pooder.image-slot",
+        capabilityId: "pooder.kit.image-slot",
+        collectAssetReferences: (behavior, context) => {
+          const config = behavior.config as Record<string, unknown>;
+          const source = config.placeholderSource;
+          return isAssetSource(source)
+            ? [
+                createAssetReferenceBinding(
+                  source,
+                  "image",
+                  `${context.path}.behaviors[pooder.image-slot].config.placeholderSource`,
+                  (replacement) => {
+                    config.placeholderSource = replacement;
+                  },
+                ),
+              ]
+            : [];
+        },
+      },
+    ],
+    collectAssetReferences: (state) => {
+      const masks = (state as { masks?: Record<string, unknown> }).masks ?? {};
+      return Object.entries(masks).flatMap(([maskId, value]) => {
+        const production = (value as { production?: Record<string, unknown> })
+          .production;
+        const source = production?.source;
+        return production && isAssetSource(source)
+          ? [
+              createAssetReferenceBinding(
+                source,
+                "image",
+                `extensions.pooder.production-mask.masks.${maskId}.production.source`,
+                (replacement) => {
+                  production.source = replacement;
+                },
+              ),
+            ]
+          : [];
+      });
+    },
+  });
+
+  assertDeepEqual(
+    reclaimOrphanedEditorDocumentAssets(document, { extensionRegistry }),
+    [],
+    "orphan reclamation should retain object, behavior, and extension assets",
   );
 }
 
@@ -413,6 +473,7 @@ function main(): void {
   testCloneAndVisitors();
   testObjectSelectors();
   testCentralAssetReferenceLifecycle();
+  testOrphanReclamationUsesRegisteredExtensionReferences();
   console.log("ok");
 }
 
