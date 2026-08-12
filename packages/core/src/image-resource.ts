@@ -1,6 +1,6 @@
 import type { Service } from "./service";
 
-export type ImageResourceDescriptor =
+export type ImageResourceDescriptor = (
   | {
       kind: "url";
       url: string;
@@ -17,11 +17,16 @@ export type ImageResourceDescriptor =
       kind: "blob-url";
       url: string;
       transient: true;
+      mimeType?: string;
       intrinsicSize?: { width: number; height: number };
-    };
+    }
+) & {
+  /** Stable business/document identity. The locator above may change independently. */
+  assetId?: string;
+};
 
 export type ImageResourceResolution =
-  | { ok: true; src: string; width: number; height: number }
+  | { ok: true; src: string; width: number; height: number; unavailable?: boolean }
   | { ok: false; reason: "unsupported" | "load-failed" };
 
 export interface ImageResourceService extends Service {

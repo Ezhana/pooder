@@ -239,6 +239,10 @@ export class InteractionService implements Service {
   private geometrySource?: GeometrySourceService;
   private sessionService?: SessionService;
   private readonly events = new TypedEventEmitter<InteractionServiceEventMap>();
+  private readonly manipulationActionTasks = new WeakMap<
+    InteractionManipulationResult,
+    Promise<unknown>
+  >();
   private selectedSubject: InteractionSubject | null = null;
 
   constructor(
@@ -476,12 +480,19 @@ export class InteractionService implements Service {
       ...(resultSceneMatrix ? { sceneMatrix: resultSceneMatrix } : {}),
       ...(phase === "commit" && documentPatch ? { documentPatch } : {}),
     };
-    this.dispatchManipulationAction(kind, input, result);
+    const actionTask = this.dispatchManipulationAction(kind, input, result);
+    if (actionTask) this.manipulationActionTasks.set(result, actionTask);
     if (phase === "commit" && result.enabled) {
       const event = { kind, subject: result.subject, input, result };
       this.events.emit("manipulationCommit", event);
     }
     return result;
+  }
+
+  async waitForManipulationAction(
+    result: InteractionManipulationResult,
+  ): Promise<void> {
+    await this.manipulationActionTasks.get(result);
   }
 
   onDidCommitManipulation(
@@ -554,11 +565,11 @@ export class InteractionService implements Service {
     kind: InteractionManipulationKind,
     input: InteractionManipulationInput,
     result: InteractionManipulationResult,
-  ): void {
+  ): Promise<unknown> | undefined {
     const action = input.spec.manipulation?.[kind]?.action;
     const commandId = normalizeId(action?.commandId);
-    if (!result.enabled || !action || !commandId) return;
-    void this.requireCommandService()
+    if (!result.enabled || !action || !commandId) return undefined;
+    return this.requireCommandService()
       .executeCommand(commandId, {
         ...cloneRecord(action.payload),
         coordinateSpace: result.coordinateSpace,

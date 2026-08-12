@@ -2235,10 +2235,13 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     const committedKinds: string[] = [];
     const committedPatches: unknown[] = [];
     let manipulationActionPayload: any;
+    let manipulationActionCompleted = false;
     runtime.services
       .getOrThrow(COMMAND_SERVICE)
-      .registerCommand("interaction.transform", (payload) => {
+      .registerCommand("interaction.transform", async (payload) => {
         manipulationActionPayload = payload;
+        await Promise.resolve();
+        manipulationActionCompleted = true;
       });
     interaction.onDidCommitManipulation((event) => {
       committedKinds.push(event.kind);
@@ -2294,6 +2297,17 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       manipulationActionPayload.sceneMatrix,
       moveCommit.sceneMatrix,
       "manipulation actions should receive the absolute scene matrix",
+    );
+    assertEqual(
+      manipulationActionCompleted,
+      false,
+      "manipulation action should still be pending before the explicit wait",
+    );
+    await interaction.waitForManipulationAction(moveCommit);
+    assertEqual(
+      manipulationActionCompleted,
+      true,
+      "manipulation action wait should resolve after the command completes",
     );
     const staleBoundsMove = interaction.previewManipulation("move", {
       spec: {

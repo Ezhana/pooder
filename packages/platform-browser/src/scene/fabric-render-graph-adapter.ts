@@ -144,6 +144,7 @@ export class FabricRenderGraphAdapter implements Service {
   private layoutDisposables: Array<{ dispose(): void }> = [];
   private syncRequested = false;
   private syncPromise: Promise<void> | null = null;
+  private readonly manipulationTasks = new Set<Promise<void>>();
   private syncGeneration = 0;
   private syncError: unknown;
   private pendingSyncCauses = new Map<string, FabricRenderGraphSyncCause>();
@@ -209,11 +210,15 @@ export class FabricRenderGraphAdapter implements Service {
       this.canvasService.on("transform", (event) => {
         if (event.kind === "commit") {
           this.markInteractionOwnership(event.target, "committing");
-          void this.handleRenderGraphObjectModified(event.target);
+          this.trackManipulationTask(
+            this.handleRenderGraphObjectModified(event.target),
+          );
           return;
         }
         this.markInteractionOwnership(event.target, "active");
-        this.handleRenderGraphObjectManipulating(event.kind, event.target);
+        this.trackManipulationTask(
+          this.handleRenderGraphObjectManipulating(event.kind, event.target),
+        );
       }),
       this.canvasService.on("pointer", (event) => {
         this.handleInteractionActivation(
@@ -312,9 +317,24 @@ export class FabricRenderGraphAdapter implements Service {
   }
 
   async flush(): Promise<void> {
-    while (this.syncPromise) {
-      await this.syncPromise;
+    while (this.syncPromise || this.manipulationTasks.size > 0) {
+      await Promise.all([
+        ...(this.syncPromise ? [this.syncPromise] : []),
+        ...this.manipulationTasks,
+      ]);
     }
+  }
+
+  private trackManipulationTask(task: Promise<void>): void {
+    const guardedTask = task.catch((error) => {
+      console.error("[FabricRenderGraphAdapter] manipulation failed.", error);
+    });
+    this.manipulationTasks.add(guardedTask);
+    this.emitSyncState();
+    void guardedTask.finally(() => {
+      this.manipulationTasks.delete(guardedTask);
+      this.emitSyncState();
+    });
   }
 
   async refresh(): Promise<void> {
@@ -325,7 +345,10 @@ export class FabricRenderGraphAdapter implements Service {
   getSyncState(): FabricRenderGraphSyncState {
     const causes = this.listSyncCauses();
     const syncing =
-      this.syncRequested || Boolean(this.syncPromise) || causes.length > 0;
+      this.syncRequested ||
+      Boolean(this.syncPromise) ||
+      this.manipulationTasks.size > 0 ||
+      causes.length > 0;
     return {
       causes,
       ...(this.syncError === undefined ? {} : { error: this.syncError }),
@@ -1053,7 +1076,7 @@ export class FabricRenderGraphAdapter implements Service {
     });
   }
 
-  private handleRenderGraphObjectManipulating(
+  private async handleRenderGraphObjectManipulating(
     kind: InteractionManipulationKind,
     target: any,
     commit = false,
@@ -1126,10 +1149,47 @@ export class FabricRenderGraphAdapter implements Service {
           operationInput,
         );
     if (!result.enabled) return;
+    if (commit) {
+      await this.requireInteractionService().waitForManipulationAction(result);
+    }
+    this.updateTargetCanonicalPlacement(
+      target,
+      this.resolveCurrentProjectionSceneMatrix(operationInput.projectionId) ??
+        result.sceneMatrix,
+    );
     this.applyOperationPatches(
       result.projectionPatches,
       commit ? "committing" : "active",
     );
+  }
+
+  private updateTargetCanonicalPlacement(
+    target: any,
+    sceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
+  ): void {
+    const placement = target?.data?.affinePlacement as
+      | AffinePlacement
+      | undefined;
+    if (!placement || !sceneMatrix) return;
+    target.set?.({
+      data: {
+        ...(target.data || {}),
+        affinePlacement: {
+          ...placement,
+          localToScene: sceneMatrix,
+        },
+      },
+    });
+  }
+
+  private resolveCurrentProjectionSceneMatrix(
+    projectionId: string,
+  ): Matrix2D<"object-local", "scene"> | undefined {
+    if (!projectionId) return undefined;
+    return this.renderIntentService
+      ?.getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find((node) => node.id === projectionId)?.placement.localToScene;
   }
 
   private resolveParentSceneMatrix(
@@ -1205,7 +1265,7 @@ export class FabricRenderGraphAdapter implements Service {
     );
   }
 
-  private handleRenderGraphObjectModified(target: any) {
+  private async handleRenderGraphObjectModified(target: any) {
     if (
       target?.data?.renderTarget !== FABRIC_RENDER_GRAPH_TARGET ||
       !target.data?.interactionSpec
@@ -1216,7 +1276,7 @@ export class FabricRenderGraphAdapter implements Service {
       (target && typeof target === "object"
         ? this.activeManipulations.get(target)?.kind
         : undefined) ?? "move";
-    this.handleRenderGraphObjectManipulating(kind, target, true);
+    await this.handleRenderGraphObjectManipulating(kind, target, true);
     if (target && typeof target === "object") {
       this.activeManipulations.delete(target);
     }

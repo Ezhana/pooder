@@ -2437,7 +2437,7 @@ function createImageRenderIntentDraft(
 ): RenderIntentDraft {
   const resolved = resolution?.ok
     ? resolution
-    : resource?.intrinsicSize
+    : resolution === undefined && resource?.intrinsicSize
       ? {
           ok: true as const,
           src:
@@ -2657,6 +2657,7 @@ async function resolveDocumentImageResources(
       if (!asset) return;
       const resource: ImageResourceDescriptor = {
         ...asset.source,
+        assetId: asset.id,
         ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
         ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
       };

@@ -270,6 +270,12 @@ function createEmptySlotDocument(): EditorDocument {
         source: { kind: "url", url: "/placeholder.svg" },
         intrinsicSize: { width: 120, height: 80 },
       },
+      {
+        id: "image-slot.upload.asset",
+        type: "image",
+        source: { kind: "data-url", dataUrl: "data:image/png;base64,AA==" },
+        intrinsicSize: { width: 120, height: 80 },
+      },
     ],
     extensions: {},
     surfaces: [
@@ -381,11 +387,7 @@ async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> 
       true,
       "layered image-slot session should open",
     );
-    await facade.setResource({
-      kind: "data-url",
-      dataUrl: "data:image/png;base64,AA==",
-      intrinsicSize: { width: 120, height: 80 },
-    });
+    await facade.setAsset("image-slot.upload.asset");
     await adapter.flush();
     const visibleItems = (canvas.reconcileCalls.at(-1)?.items ?? []).filter(
       (item) => item.spec?.props?.visible !== false,
@@ -483,11 +485,7 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
       20,
       "multi-slot crop frame should use the active object y position",
     );
-    await facade.setResource({
-      kind: "data-url",
-      dataUrl: "data:image/png;base64,AA==",
-      intrinsicSize: { width: 120, height: 80 },
-    });
+    await facade.setAsset("image-slot.upload.asset");
     await runtime.commands.execute(IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID, {
       objectId: SECOND_OBJECT_ID,
       phase: "preview",
@@ -860,6 +858,8 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
       targetSceneMatrix[5],
     ];
     canvas.emitCanvasEvent("object:scaling", { target });
+    canvas.emitCanvasEvent("object:modified", { target });
+    await Promise.resolve();
     await adapter.flush();
     assert(
       canvas.reconcileCalls
@@ -868,6 +868,36 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
           (invalidation) => invalidation.type !== "full",
         ),
       "image-slot resize preview must preserve active interaction ownership",
+    );
+    const resizedWorkingMatrix = getWorkingMatrix(runtime);
+    assertMatrixClose(
+      target.data?.affinePlacement?.localToScene?.values,
+      resizedWorkingMatrix,
+      "resize commit should refresh the Fabric target canonical placement",
+    );
+
+    targetSceneMatrix = [
+      resizedWorkingMatrix[0],
+      resizedWorkingMatrix[1],
+      resizedWorkingMatrix[2],
+      resizedWorkingMatrix[3],
+      resizedWorkingMatrix[4] + canvas.toSceneLength(11.25),
+      resizedWorkingMatrix[5] + canvas.toSceneLength(-6.75),
+    ];
+    canvas.emitCanvasEvent("object:moving", { target });
+    canvas.emitCanvasEvent("object:modified", { target });
+    await Promise.resolve();
+    await adapter.flush();
+    const movedAfterResizeMatrix = getWorkingMatrix(runtime);
+    assertMatrixClose(
+      movedAfterResizeMatrix.slice(0, 4),
+      resizedWorkingMatrix.slice(0, 4),
+      "move after resize must preserve the committed image scale and rotation",
+    );
+    assert(
+      movedAfterResizeMatrix[4] !== resizedWorkingMatrix[4] ||
+        movedAfterResizeMatrix[5] !== resizedWorkingMatrix[5],
+      "move after resize should still update the image position",
     );
 
     targetSceneMatrix = [...expectedSceneMatrix];

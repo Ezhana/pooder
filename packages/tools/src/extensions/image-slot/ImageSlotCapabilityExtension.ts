@@ -1,6 +1,7 @@
 import {
   CANVAS_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
+  IMAGE_RESOURCE_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
   SESSION_SERVICE,
@@ -21,6 +22,8 @@ import {
   type ExtensionDefinition,
   type GeometrySourceService,
   type ImageResourceDescriptor,
+  type ImageResourceResolution,
+  type ImageResourceService,
   type InteractionOperationPhase,
   type SceneLayoutService,
   type RenderGraphNode,
@@ -32,13 +35,12 @@ import {
   type SessionService,
 } from "@pooder/core";
 import {
-  createEditorDocumentAssetId,
   findEditorDocumentObject,
-  resolveEditorDocumentAsset,
   setEditorImageObjectSource,
   upsertEditorDocumentAsset,
   visitEditorDocumentObjects,
   type EditorDocument,
+  type EditorImageAsset,
   type EditorImageObject,
   type EditorImagePlacement,
   type EditorObject,
@@ -59,8 +61,6 @@ import {
   type ImageSlotViewState,
   type SessionRenderDecorationContribution,
 } from "./capability";
-
-type EditorImageResource = ImageResourceDescriptor;
 
 const DEFAULT_PLACEMENT: EditorImagePlacement = {
   fit: "cover",
@@ -114,7 +114,6 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   };
   private document: EditorDocument | null = null;
   private controller: ImageSlotDocumentController | null = null;
-  private original: ImageSlotSessionDraft | null = null;
   private state: ImageSlotViewState = { phase: "idle", draft: null };
   private readonly listeners = new Set<(state: ImageSlotViewState) => void>();
   private readonly decorations = new Map<
@@ -131,6 +130,12 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private sessionTerminalSubscription: { dispose(): void } | null = null;
   private snapFeedback: ImageSlotRectSnapFeedback | undefined;
   private sessionHandle: SessionHandle<ImageSlotSessionDraft> | null = null;
+  private resolvedAsset: {
+    assetId: string;
+    resolution: Extract<ImageResourceResolution, { ok: true }>;
+  } | null = null;
+  private stagedAsset: EditorImageAsset | null = null;
+  private getImageResourceService?: () => ImageResourceService | undefined;
   private openingSession: {
     objectId: string;
     promise: Promise<ImageSlotOpenSessionResult>;
@@ -152,6 +157,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     );
     this.sessionService =
       context.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    this.getImageResourceService = () =>
+      context.services.get<ImageResourceService>(IMAGE_RESOURCE_SERVICE);
     this.sessionTerminalSubscription?.dispose();
     this.sessionTerminalSubscription = this.sessionService.onDidTerminate(
       (event) => {
@@ -178,6 +185,9 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     this.geometrySource = undefined;
     this.renderIntentService = undefined;
     this.sessionService = undefined;
+    this.getImageResourceService = undefined;
+    this.resolvedAsset = null;
+    this.stagedAsset = null;
   }
 
   contribute(): ExtensionContributions {
@@ -221,7 +231,6 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       !findImageSlot(document, this.state.draft.objectId)
     ) {
       const sessionHandle = this.sessionHandle;
-      this.original = null;
       this.state = { phase: "idle", draft: null };
       this.listeners.forEach((listener) => listener(clone(this.state)));
       if (sessionHandle && sessionHandle.phase !== "closed") {
@@ -246,7 +255,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         this.listeners.add(listener);
         return { dispose: () => this.listeners.delete(listener) };
       },
-      setResource: (resource, options) => this.setResource(resource, options),
+      setAsset: (assetId, options) => this.setAsset(assetId, options),
+      stageAsset: (asset, options) => this.stageAsset(asset, options),
       clearResource: () => this.clearResource(),
       updatePlacement: (partial) => this.updatePlacement(partial),
       applyPlacementPreset: (preset) => this.applyPlacementPreset(preset),
@@ -318,6 +328,15 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       return { ok: false as const, reason: "geometry-unavailable" };
     }
     const draft = toDraft(object, this.document!);
+    this.stagedAsset = null;
+    if (draft.assetId) {
+      const resolved = await this.resolveAsset(draft.assetId);
+      if (!resolved.ok) {
+        this.resolvedAsset = null;
+      }
+    } else {
+      this.resolvedAsset = null;
+    }
     const sessionId = `image-slot:${objectId}`;
     try {
       this.sessionHandle =
@@ -341,23 +360,48 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     } catch {
       return { ok: false as const, reason: "session-owner-conflict" };
     }
-    this.original = clone(draft);
     this.setState({ phase: "active", draft });
     this.startSessionRender(context.surfaceId);
     return { ok: true };
   }
 
-  private async setResource(
-    resource: EditorImageResource,
+  private async setAsset(
+    assetId: string,
     options: { placement?: "reset" | "preserve" } = {},
   ) {
     const draft = this.state.draft;
     if (!draft) return { ok: false, reason: "session-not-active" };
-    releaseUncommittedResource(
-      draft.resource,
-      this.original?.resource,
-      resource,
-    );
+    const normalizedAssetId = String(assetId || "").trim();
+    if (!normalizedAssetId) return { ok: false, reason: "asset-id-required" };
+    const resolved = await this.resolveAsset(normalizedAssetId);
+    if (!resolved.ok) return { ok: false, reason: "resource-load-failed" };
+    this.stagedAsset = null;
+    this.updateDraftAsset(normalizedAssetId, options);
+    return { ok: true };
+  }
+
+  private async stageAsset(
+    asset: EditorImageAsset,
+    options: { placement?: "reset" | "preserve" } = {},
+  ) {
+    const draft = this.state.draft;
+    if (!draft) return { ok: false, reason: "session-not-active" };
+    const stagedAsset = clone(asset);
+    const assetId = String(stagedAsset.id || "").trim();
+    if (!assetId) return { ok: false, reason: "asset-id-required" };
+    const resolved = await this.resolveImageAsset(stagedAsset);
+    if (!resolved.ok) return { ok: false, reason: "resource-load-failed" };
+    this.stagedAsset = stagedAsset;
+    this.updateDraftAsset(assetId, options);
+    return { ok: true };
+  }
+
+  private updateDraftAsset(
+    assetId: string,
+    options: { placement?: "reset" | "preserve" },
+  ): void {
+    const draft = this.state.draft;
+    if (!draft) return;
     const placement =
       options.placement === "preserve"
         ? draft.placement
@@ -368,15 +412,15 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           };
     this.setState({
       phase: "active",
-      draft: { ...draft, resource: clone(resource), placement },
+      draft: { ...draft, assetId, placement },
     });
-    return { ok: true };
   }
 
   private async clearResource() {
     const draft = this.state.draft;
     if (!draft) return { ok: false, reason: "session-not-active" };
-    releaseUncommittedResource(draft.resource, this.original?.resource);
+    this.resolvedAsset = null;
+    this.stagedAsset = null;
     this.setState({
       phase: "active",
       draft: { objectId: draft.objectId, placement: draft.placement },
@@ -398,10 +442,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       draft && this.document
         ? findImageSlotContext(this.document, draft.objectId)
         : null;
-    const source = draft?.resource?.intrinsicSize;
     if (!draft || !context) {
       return { ok: false, reason: "session-not-active" };
     }
+    const source = this.resolveDraftImage(draft)?.resolution;
     if (!source) return { ok: false, reason: "resource-load-failed" };
     const frame = context.object.placement.localBounds;
     const widthScale = frame.width / Math.max(source.width, 1);
@@ -436,12 +480,12 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       draft && this.document
         ? findImageSlotContext(this.document, draft.objectId)
         : null;
-    const source = draft?.resource?.intrinsicSize;
     const transform = input.transform;
     const phase = input.phase ?? "preview";
     if (!draft || !context || (objectId && objectId !== draft.objectId)) {
       return { ok: false, reason: "session-not-active" };
     }
+    const source = this.resolveDraftImage(draft)?.resolution;
     if (!source || (!transform && !input.sceneMatrix)) {
       return { ok: false, reason: "resource-load-failed" };
     }
@@ -514,7 +558,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       { ...this.state, phase: "validating" },
       { publishRender: false },
     );
-    if (draft.resource && !draft.resource.intrinsicSize) {
+    if (draft.assetId && !this.resolveDraftImage(draft)) {
       this.setState(
         {
           ...this.state,
@@ -529,7 +573,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (
       policy === "strict" &&
       this.document &&
-      doesDraftLeaveFrameUncovered(this.document, draft)
+      doesDraftLeaveFrameUncovered(
+        this.document,
+        draft,
+        this.resolveDraftImage(draft)?.resolution,
+      )
     ) {
       this.setState(
         {
@@ -551,7 +599,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private async commitSession() {
     const validation = await this.validateSession();
     const draft = this.state.draft;
-    if (!validation.ok || !draft || !this.controller)
+    if (!validation.ok || !draft || !this.controller || !this.document)
       return {
         type: "error" as const,
         reason: validation.ok ? "commit-failed" : validation.reason,
@@ -560,44 +608,31 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       { ...this.state, phase: "committing" },
       { publishRender: false },
     );
-    if (draft.resource?.kind === "blob-url") {
+    const stagedAsset =
+      draft.assetId && this.stagedAsset?.id === draft.assetId
+        ? this.stagedAsset
+        : null;
+    if (
+      draft.assetId &&
+      !stagedAsset &&
+      !this.document.assets.some((asset) => asset.id === draft.assetId)
+    ) {
       this.setState(
         { ...this.state, phase: "error", error: "commit-failed" },
         { publishRender: false },
       );
-      return { type: "error" as const, reason: "transient-resource" };
+      return { type: "error" as const, reason: "asset-not-found" };
     }
-    const stableResource = draft.resource as
-      | Exclude<ImageResourceDescriptor, { kind: "blob-url" }>
-      | undefined;
     const result = await this.controller.mutate((document) => {
+      if (stagedAsset) upsertEditorDocumentAsset(document, stagedAsset);
       const current = findEditorDocumentObject(document, draft.objectId);
       if (!current || current.type !== "image") return;
-      const assetId = createEditorDocumentAssetId(
-        document,
-        `${current.id}.image`,
-      );
       setEditorImageObjectSource(
         document,
         current.id,
-        stableResource ? { kind: "asset", assetId } : null,
+        draft.assetId ? { kind: "asset", assetId: draft.assetId } : null,
       );
       current.appearance = clone(draft.placement);
-      if (stableResource) {
-        const { kind, intrinsicSize, mimeType } = stableResource;
-        const source =
-          kind === "data-url"
-            ? { kind, dataUrl: stableResource.dataUrl }
-            : { kind, url: stableResource.url };
-        const asset = {
-          id: assetId,
-          type: "image" as const,
-          source,
-          ...(mimeType ? { mimeType } : {}),
-          ...(intrinsicSize ? { intrinsicSize: clone(intrinsicSize) } : {}),
-        };
-        upsertEditorDocumentAsset(document, asset);
-      }
       return document;
     });
     if (!result.ok) {
@@ -613,11 +648,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     } else {
       this.finalizeTerminatedSession();
     }
-    return draft.resource
+    return draft.assetId
       ? {
           type: "placed" as const,
           objectId: draft.objectId,
-          resource: draft.resource,
+          assetId: draft.assetId,
           placement: draft.placement,
         }
       : { type: "cleared" as const, objectId: draft.objectId };
@@ -625,10 +660,6 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
 
   private async rollbackSession() {
     if (!this.state.draft) return { ok: false, reason: "session-not-active" };
-    releaseUncommittedResource(
-      this.state.draft.resource,
-      this.original?.resource,
-    );
     if (this.sessionHandle?.phase === "active") {
       await this.sessionHandle.rollback();
     } else {
@@ -747,11 +778,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         subOrder: target.sortKey.subOrder,
       },
     };
-    const resource = draft.resource;
-    if (!resource?.intrinsicSize) return base;
+    const resolvedAsset = this.resolveDraftImage(draft);
+    if (!resolvedAsset) return base;
     const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
     if (!objectPlacement) return base;
-    const src = resourceLocation(resource);
+    const { src, width, height } = resolvedAsset.resolution;
     const objectSceneBounds = transformCoordinateRect(
       objectPlacement.localToScene,
       objectPlacement.localBounds,
@@ -762,7 +793,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       objectPlacement,
     );
     const geometry = resolveImageGeometry({
-      source: { src, size: resource.intrinsicSize },
+      source: { src, size: { width, height } },
       frame: coordinateRect("object-local", {
         left: 0,
         top: 0,
@@ -838,6 +869,46 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         },
       },
     };
+  }
+
+  private async resolveAsset(
+    assetId: string,
+  ): Promise<ImageResourceResolution> {
+    const asset = this.document?.assets.find(
+      (candidate) => candidate.id === assetId && candidate.type === "image",
+    );
+    if (!asset) return { ok: false, reason: "unsupported" };
+    return this.resolveImageAsset(asset);
+  }
+
+  private async resolveImageAsset(
+    asset: EditorImageAsset,
+  ): Promise<ImageResourceResolution> {
+    const assetId = asset.id;
+    const descriptor: ImageResourceDescriptor = {
+      ...asset.source,
+      assetId,
+      ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
+      ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
+    };
+    const service = this.getImageResourceService?.();
+    const resolution = service
+      ? await service.resolve(descriptor)
+      : asset.intrinsicSize
+        ? {
+            ok: true as const,
+            src: resourceLocation(descriptor),
+            ...asset.intrinsicSize,
+          }
+        : { ok: false as const, reason: "unsupported" as const };
+    if (resolution.ok) this.resolvedAsset = { assetId, resolution };
+    return resolution;
+  }
+
+  private resolveDraftImage(draft: ImageSlotSessionDraft) {
+    return draft.assetId && this.resolvedAsset?.assetId === draft.assetId
+      ? this.resolvedAsset
+      : null;
   }
 
   private resolveDocumentObjectPlacement(
@@ -1054,7 +1125,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private finalizeTerminatedSession(): void {
     this.disposeSessionRender();
     this.sessionHandle = null;
-    this.original = null;
+    this.resolvedAsset = null;
+    this.stagedAsset = null;
     this.state = { phase: "idle", draft: null };
     this.listeners.forEach((listener) => listener(clone(this.state)));
   }
@@ -1228,21 +1300,12 @@ function hasImageSlotBehavior(object: EditorObject): boolean {
 
 function toDraft(
   object: EditorImageObject,
-  document: EditorDocument,
+  _document: EditorDocument,
 ): ImageSlotSessionDraft {
-  const asset = resolveEditorDocumentAsset(document, object.source, "image");
   return {
     objectId: object.id,
-    ...(asset
-      ? {
-          resource: {
-            ...asset.source,
-            ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
-            ...(asset.intrinsicSize
-              ? { intrinsicSize: asset.intrinsicSize }
-              : {}),
-          },
-        }
+    ...(object.source?.kind === "asset"
+      ? { assetId: object.source.assetId }
       : {}),
     placement: clone(object.appearance),
   };
@@ -1273,23 +1336,9 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function releaseUncommittedResource(
-  resource: EditorImageResource | undefined,
-  committed: EditorImageResource | undefined,
-  replacement?: EditorImageResource,
-): void {
-  if (
-    resource?.kind !== "blob-url" ||
-    resource.url === resourceLocation(replacement)
-  )
-    return;
-  if (committed?.kind === "blob-url" && committed.url === resource.url) return;
-  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
-    URL.revokeObjectURL(resource.url);
-  }
-}
-
-function resourceLocation(resource: EditorImageResource | undefined): string {
+function resourceLocation(
+  resource: ImageResourceDescriptor | undefined,
+): string {
   return resource
     ? resource.kind === "data-url"
       ? resource.dataUrl
@@ -1300,13 +1349,16 @@ function resourceLocation(resource: EditorImageResource | undefined): string {
 function doesDraftLeaveFrameUncovered(
   document: EditorDocument,
   draft: ImageSlotSessionDraft,
+  resolution?: Extract<ImageResourceResolution, { ok: true }>,
 ): boolean {
   const context = findImageSlotContext(document, draft.objectId);
-  const size = draft.resource?.intrinsicSize;
+  const size = resolution
+    ? { width: resolution.width, height: resolution.height }
+    : undefined;
   if (!context || !size) return false;
   const object = context.object;
   const geometry = resolveImageGeometry({
-    source: { src: resourceLocation(draft.resource), size },
+    source: { src: resolution!.src, size },
     frame: coordinateRect("object-local", {
       left: 0,
       top: 0,

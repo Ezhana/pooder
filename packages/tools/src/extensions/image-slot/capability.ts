@@ -3,9 +3,11 @@ import type {
   ImageResourceDescriptor,
   SessionRenderAuxiliaryVisual,
 } from "@pooder/core";
-import type { EditorDocument, EditorImagePlacement } from "@pooder/document";
-
-type EditorImageResource = ImageResourceDescriptor;
+import type {
+  EditorDocument,
+  EditorImageAsset,
+  EditorImagePlacement,
+} from "@pooder/document";
 
 export interface ImageSlotDocumentController {
   mutate(
@@ -46,7 +48,7 @@ export type ImageSlotPlacementPreset =
 
 export interface ImageSlotSessionDraft {
   objectId: string;
-  resource?: EditorImageResource;
+  assetId?: string;
   placement: EditorImagePlacement;
 }
 
@@ -65,7 +67,7 @@ export type ImageSlotSessionResult =
   | {
       type: "placed";
       objectId: string;
-      resource: EditorImageResource;
+      assetId: string;
       placement: EditorImagePlacement;
     }
   | { type: "cleared"; objectId: string };
@@ -95,8 +97,12 @@ export interface ImageSlotCapabilityApi {
   onDidChange(listener: (state: ImageSlotViewState) => void): {
     dispose(): void;
   };
-  setResource(
-    resource: EditorImageResource,
+  setAsset(
+    assetId: string,
+    options?: { placement?: "reset" | "preserve" },
+  ): Promise<{ ok: boolean; reason?: string }>;
+  stageAsset(
+    asset: EditorImageAsset,
     options?: { placement?: "reset" | "preserve" },
   ): Promise<{ ok: boolean; reason?: string }>;
   clearResource(): Promise<{ ok: boolean; reason?: string }>;

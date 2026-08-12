@@ -9,6 +9,7 @@ import {
   type EditorDocumentService,
 } from "../../document-core/src";
 import {
+  findEditorDocumentObject,
   isEditorVisualObject,
   type EditorDocument,
   type EditorImageObject,
@@ -73,6 +74,12 @@ function createImageSlotDocument(): EditorDocument {
         type: "image",
         source: { kind: "url", url: "/placeholder.png" },
         intrinsicSize: { width: 120, height: 80 },
+      },
+      {
+        id: "artwork.upload.asset",
+        type: "image",
+        source: { kind: "data-url", dataUrl: "data:image/png;base64,AA==" },
+        intrinsicSize: { width: 300, height: 200 },
       },
     ],
     extensions: {},
@@ -190,11 +197,7 @@ async function testPlaceholderWorkingAndDocumentProjectionHandoff(): Promise<voi
       false,
       "opening the override should suppress the placeholder projection",
     );
-    await facade.setResource({
-      kind: "data-url",
-      dataUrl: "data:image/png;base64,AA==",
-      intrinsicSize: { width: 300, height: 200 },
-    });
+    await facade.setAsset("artwork.upload.asset");
     const working = renderIntents
       .getGraph()
       .layers.flatMap((layer) => layer.nodes)
@@ -730,6 +733,95 @@ async function testImageSlotRejectsMissingContainerGeometry(): Promise<void> {
   }
 }
 
+async function testImageSlotDraftExcludesImagePayload(): Promise<void> {
+  const document = createImageSlotDocument();
+  const upload = document.assets.find(
+    (asset) => asset.id === "artwork.upload.asset",
+  );
+  assert(upload, "large upload fixture should exist");
+  upload.source = {
+    kind: "data-url",
+    dataUrl: `data:image/png;base64,${"A".repeat(256_000)}`,
+  };
+  const { runtime, facade } = await createHarness({}, document);
+  try {
+    assertEqual(
+      (await facade.openSession({ objectId: IMAGE_SLOT_ID })).ok,
+      true,
+      "large-image session should open",
+    );
+    await facade.setAsset(upload.id);
+    for (let index = 0; index < 1_000; index += 1) {
+      facade.updatePlacement({ anchorX: (index % 100) / 100 });
+    }
+    const serializedDraft = JSON.stringify(facade.getViewState().draft);
+    assert(
+      serializedDraft.length < 512,
+      "image-slot draft size must remain independent of image payload size",
+    );
+    assert(
+      !serializedDraft.includes("data:image"),
+      "image-slot draft must not contain a data URL",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testStagedAssetCommitsAtomicallyWithObjectReference(): Promise<void> {
+  const document = createImageSlotDocument();
+  const stagedAssetId = "artwork.immediate-upload.asset";
+  const { runtime, controller, facade } = await createHarness({}, document);
+  try {
+    assertEqual(
+      (await facade.openSession({ objectId: IMAGE_SLOT_ID })).ok,
+      true,
+      "staged-asset session should open",
+    );
+    const staged = await facade.stageAsset({
+      id: stagedAssetId,
+      type: "image",
+      source: { kind: "url", url: "https://cdn.example.test/upload.png" },
+      intrinsicSize: { width: 640, height: 480 },
+    });
+    assertEqual(
+      staged.ok,
+      true,
+      "new asset should stage without entering the document",
+    );
+    assertEqual(
+      controller
+        .export("working")
+        ?.assets.some((asset) => asset.id === stagedAssetId),
+      false,
+      "uncommitted staged asset must stay outside the document",
+    );
+    assertEqual(
+      (await facade.commitSession()).type,
+      "placed",
+      "staged asset should commit",
+    );
+    const committed = controller.export();
+    assertEqual(
+      committed?.assets.some((asset) => asset.id === stagedAssetId),
+      true,
+      "commit should insert the staged asset",
+    );
+    const object = committed
+      ? findEditorDocumentObject(committed, IMAGE_SLOT_ID)
+      : undefined;
+    assertEqual(
+      object?.type === "image" && object.source?.kind === "asset"
+        ? object.source.assetId
+        : "",
+      stagedAssetId,
+      "commit should reference the staged asset in the same mutation",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 async function main(): Promise<void> {
   await runExistingCapabilityRegressions();
   await testImageSlotRejectsMissingContainerGeometry();
@@ -740,6 +832,8 @@ async function main(): Promise<void> {
   await testRemovedImageSlotContractsAreRejected();
   await testImageSlotCommitAndReopenMatrices();
   await testImageSlotRollbackDoesNotDrift();
+  await testImageSlotDraftExcludesImagePayload();
+  await testStagedAssetCommitsAtomicallyWithObjectReference();
   console.log("ok");
 }
 

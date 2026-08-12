@@ -19,11 +19,11 @@ export class BrowserImageResourceService implements ImageResourceService {
   ): Promise<ImageResourceResolution> {
     const src = resourceUrl(resource);
     if (!src) return { ok: false, reason: "unsupported" };
-    if (resource.intrinsicSize) {
-      return { ok: true, src, ...resource.intrinsicSize };
+    if (typeof Image === "undefined") {
+      return resource.intrinsicSize
+        ? { ok: true, src, ...resource.intrinsicSize }
+        : { ok: false, reason: "unsupported" };
     }
-    if (typeof Image === "undefined")
-      return { ok: false, reason: "unsupported" };
     return new Promise((resolve) => {
       const image = new Image();
       image.onload = () => {

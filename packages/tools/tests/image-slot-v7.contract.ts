@@ -51,6 +51,12 @@ const document: EditorDocument = {
       type: "image",
       source: { kind: "url", url: "/placeholder.svg" },
     },
+    {
+      id: "artwork.upload.asset",
+      type: "image",
+      source: { kind: "url", url: "/artwork.png" },
+      intrinsicSize: { width: 1200, height: 1200 },
+    },
   ],
   extensions: {},
   surfaces: [
@@ -77,14 +83,7 @@ if (diagnostics.length) throw new Error("v7 image slot contract is invalid");
 
 declare const facade: ImageSlotCapabilityApi;
 void facade.openSession({ objectId: emptySlot.id });
-void facade.setResource(
-  {
-    kind: "url",
-    url: "/artwork.png",
-    intrinsicSize: { width: 1200, height: 1200 },
-  },
-  { placement: "reset" },
-);
+void facade.setAsset("artwork.upload.asset", { placement: "reset" });
 facade.updatePlacement({ zoom: 1.25, rotation: 15 });
 
 const result: ImageSlotSessionResult = {
