@@ -1,6 +1,7 @@
 import { EditorDocumentParseError, parseEditorDocument } from "./parser";
 
 export * from "./effect-schema";
+export * from "./asset-references";
 export * from "./extension-schema";
 export * from "./object-schema";
 export * from "./parser";
@@ -120,19 +121,38 @@ export interface EditorObjectBase {
   interaction?: DocumentInteractionSpec;
 }
 
-export type EditorAssetSource =
+export type EditorAssetDataSource =
   | { kind: "url"; url: string }
   | { kind: "data-url"; dataUrl: string };
+
+/** A document-level reference to an entry in EditorDocument.assets. */
+export type AssetSource = {
+  kind: "asset";
+  assetId: string;
+};
+
+/** Inline object content. The object type determines the content schema. */
+export interface InlineSource<TContent = unknown> {
+  kind: "inline";
+  content: TContent;
+}
 
 export interface EditorImageAsset {
   id: string;
   type: "image";
-  source: EditorAssetSource;
+  source: EditorAssetDataSource;
   mimeType?: string;
   intrinsicSize?: EditorSize;
 }
 
 export type EditorAsset = EditorImageAsset;
+
+export interface EditorAssetReferenceBinding {
+  source: AssetSource;
+  expectedType: EditorAsset["type"];
+  path: string;
+  replace(source: AssetSource): void;
+}
 
 export interface EditorImagePlacement {
   fit: "cover" | "contain" | "stretch";
@@ -154,7 +174,7 @@ export interface EditorPrimitiveAppearance {
 
 export interface EditorImageSlotBehaviorConfig {
   accepts?: string[];
-  placeholderSelector: ObjectSelector;
+  placeholderSource: AssetSource;
 }
 
 export interface ObjectSelector {
@@ -163,36 +183,60 @@ export interface ObjectSelector {
   tagMatch?: "all" | "any";
 }
 
-export type ObjectSource =
-  | { kind: "image"; assetId?: string }
-  | {
-      kind: "path";
-      pathData: string;
-      sourceBounds?: EditorRect;
-      sourceSize?: EditorSize;
-    }
-  | {
-      kind: "shape";
-      shape: "rect" | "circle" | "ellipse" | "heart";
-      params: Record<string, JsonValue>;
-    }
-  | { kind: "text"; text: string };
+export interface EditorPathContent {
+  pathData: string;
+  sourceBounds?: EditorRect;
+  sourceSize?: EditorSize;
+}
+
+export interface EditorShapeContent {
+  shape: "rect" | "circle" | "ellipse" | "heart";
+  params: Record<string, JsonValue>;
+}
+
+export interface EditorTextContent {
+  text: string;
+}
+
+export type ObjectSource = AssetSource | InlineSource | null;
 
 export interface EditorImageObject extends EditorObjectBase {
-  source: Extract<ObjectSource, { kind: "image" }>;
+  type: "image";
+  source: AssetSource | null;
   appearance: EditorImagePlacement;
   children?: never;
 }
 
-export interface EditorPrimitiveObject extends EditorObjectBase {
-  source: Exclude<ObjectSource, { kind: "image" }>;
+export interface EditorPathObject extends EditorObjectBase {
+  type: "path";
+  source: InlineSource<EditorPathContent>;
   appearance?: EditorPrimitiveAppearance;
   children?: never;
 }
 
+export interface EditorShapeObject extends EditorObjectBase {
+  type: "shape";
+  source: InlineSource<EditorShapeContent>;
+  appearance?: EditorPrimitiveAppearance;
+  children?: never;
+}
+
+export interface EditorTextObject extends EditorObjectBase {
+  type: "text";
+  source: InlineSource<EditorTextContent>;
+  appearance?: EditorPrimitiveAppearance;
+  children?: never;
+}
+
+export type EditorPrimitiveObject =
+  | EditorPathObject
+  | EditorShapeObject
+  | EditorTextObject;
+
 export type EditorVisualObject = EditorImageObject | EditorPrimitiveObject;
 
 export interface EditorCompositeObject extends EditorObjectBase {
+  type: "group";
   children: EditorObject[];
   source?: never;
   appearance?: never;
@@ -224,7 +268,6 @@ export type EditorObjectEffect =
 
 export type CoreObjectTrait =
   | { type: "core.guide" }
-  | { type: "core.placeholder" }
   | { type: "core.output-mask"; keys: string[] };
 
 export interface EditorExtensionObjectTrait<TPayload = JsonValue> {
@@ -311,13 +354,13 @@ export type EditorDocumentObjectVisitor = (
 export function isEditorCompositeObject(
   object: EditorObject,
 ): object is EditorCompositeObject {
-  return Array.isArray(object.children);
+  return object.type === "group";
 }
 
 export function isEditorVisualObject(
   object: EditorObject,
 ): object is EditorVisualObject {
-  return "source" in object;
+  return object.type !== "group";
 }
 
 export function isEditorBuiltinObjectEffect(

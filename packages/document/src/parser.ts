@@ -6,7 +6,7 @@ import type {
   DocumentInteractionOperationSpec,
   DocumentInteractionSpec,
   EditorAsset,
-  EditorAssetSource,
+  EditorAssetDataSource,
   EditorCompositeObject,
   EditorDocument,
   EditorDocumentDiagnostic,
@@ -20,10 +20,12 @@ import type {
   EditorObjectTrait,
   EditorPrimitiveAppearance,
   EditorPrimitiveObject,
+  EditorPathContent,
+  EditorShapeContent,
+  EditorTextContent,
   EditorRect,
   EditorSurface,
   JsonValue,
-  ObjectSource,
   PointMm,
   RectMm,
 } from "./index";
@@ -161,7 +163,7 @@ function parseAsset(value: unknown, index: number): EditorAsset {
   };
 }
 
-function parseAssetSource(value: unknown, path: string): EditorAssetSource {
+function parseAssetSource(value: unknown, path: string): EditorAssetDataSource {
   const input = record(value, path);
   if (input.kind === "url") {
     exact(input, ["kind", "url"], path);
@@ -254,6 +256,7 @@ function parseLayer(value: unknown, path: string): EditorLayer {
 function parseObject(value: unknown, path: string): EditorObject {
   const input = record(value, path);
   const commonFields = [
+    "type",
     "id",
     "tags",
     "visible",
@@ -264,15 +267,6 @@ function parseObject(value: unknown, path: string): EditorObject {
     "behaviors",
     "interaction",
   ];
-  const hasSource = input.source !== undefined;
-  const hasChildren = input.children !== undefined;
-  if (hasSource === hasChildren) {
-    fail(
-      "object-union-invalid",
-      "Object must contain exactly one of source or children.",
-      path,
-    );
-  }
   const base = {
     id: identifier(input.id, `${path}.id`),
     tags: parseTags(input.tags, `${path}.tags`),
@@ -310,28 +304,37 @@ function parseObject(value: unknown, path: string): EditorObject {
           ),
         }),
   };
-  if (hasChildren) {
+  if (input.type === "group") {
     exact(input, [...commonFields, "children"], path);
     return {
       ...base,
+      type: "group",
       children: array(input.children, `${path}.children`).map((child, index) =>
         parseObject(child, `${path}.children[${index}]`),
       ),
     } satisfies EditorCompositeObject;
   }
-  const source = parseObjectSource(input.source, `${path}.source`);
-  if (source.kind === "image") {
+  if (input.type === "image") {
     exact(input, [...commonFields, "source", "appearance"], path);
     return {
       ...base,
-      source,
+      type: "image",
+      source: parseImageObjectSource(input.source, `${path}.source`),
       appearance: parseImageAppearance(input.appearance, `${path}.appearance`),
     } satisfies EditorImageObject;
+  }
+  if (
+    input.type !== "path" &&
+    input.type !== "shape" &&
+    input.type !== "text"
+  ) {
+    fail("object-type-invalid", "Object type is invalid.", `${path}.type`);
   }
   exact(input, [...commonFields, "source", "appearance"], path);
   return {
     ...base,
-    source,
+    type: input.type,
+    source: parseInlineObjectSource(input.type, input.source, `${path}.source`),
     ...(input.appearance === undefined
       ? {}
       : {
@@ -340,7 +343,7 @@ function parseObject(value: unknown, path: string): EditorObject {
             `${path}.appearance`,
           ),
         }),
-  } satisfies EditorPrimitiveObject;
+  } as EditorPrimitiveObject;
 }
 
 function parsePlacement(
@@ -366,54 +369,90 @@ function parsePlacement(
   };
 }
 
-function parseObjectSource(value: unknown, path: string): ObjectSource {
+function parseImageObjectSource(
+  value: unknown,
+  path: string,
+): EditorImageObject["source"] {
+  if (value === null) return null;
   const input = record(value, path);
-  if (input.kind === "image") {
+  if (input.kind === "asset") {
     exact(input, ["kind", "assetId"], path);
     return {
-      kind: "image",
-      ...(input.assetId === undefined
-        ? {}
-        : { assetId: identifier(input.assetId, `${path}.assetId`) }),
+      kind: "asset",
+      assetId: identifier(input.assetId, `${path}.assetId`),
     };
-  }
-  if (input.kind === "path") {
-    exact(input, ["kind", "pathData", "sourceBounds", "sourceSize"], path);
-    return {
-      kind: "path",
-      pathData: identifier(input.pathData, `${path}.pathData`),
-      ...(input.sourceBounds === undefined
-        ? {}
-        : {
-            sourceBounds: parseRect(input.sourceBounds, `${path}.sourceBounds`),
-          }),
-      ...(input.sourceSize === undefined
-        ? {}
-        : { sourceSize: parseSize(input.sourceSize, `${path}.sourceSize`) }),
-    };
-  }
-  if (input.kind === "shape") {
-    exact(input, ["kind", "shape", "params"], path);
-    if (
-      !["rect", "circle", "ellipse", "heart"].includes(input.shape as string)
-    ) {
-      fail("shape-kind-invalid", "Shape kind is invalid.", `${path}.shape`);
-    }
-    return {
-      kind: "shape",
-      shape: input.shape as Extract<ObjectSource, { kind: "shape" }>["shape"],
-      params: jsonRecord(input.params, `${path}.params`),
-    };
-  }
-  if (input.kind === "text") {
-    exact(input, ["kind", "text"], path);
-    return { kind: "text", text: string(input.text, `${path}.text`) };
   }
   fail(
     "object-source-kind-invalid",
-    "Object source kind is invalid.",
-    `${path}.kind`,
+    "Image source must be an asset reference or null.",
+    path,
   );
+}
+
+function parseInlineObjectSource(
+  type: "path" | "shape" | "text",
+  value: unknown,
+  path: string,
+): EditorPrimitiveObject["source"] {
+  const input = record(value, path);
+  exact(input, ["kind", "content"], path);
+  if (input.kind !== "inline") {
+    fail(
+      "object-source-kind-invalid",
+      'Primitive source kind must be "inline".',
+      `${path}.kind`,
+    );
+  }
+  const content = record(input.content, `${path}.content`);
+  if (type === "path") {
+    exact(
+      content,
+      ["pathData", "sourceBounds", "sourceSize"],
+      `${path}.content`,
+    );
+    const parsed: EditorPathContent = {
+      pathData: identifier(content.pathData, `${path}.content.pathData`),
+      ...(content.sourceBounds === undefined
+        ? {}
+        : {
+            sourceBounds: parseRect(
+              content.sourceBounds,
+              `${path}.content.sourceBounds`,
+            ),
+          }),
+      ...(content.sourceSize === undefined
+        ? {}
+        : {
+            sourceSize: parseSize(
+              content.sourceSize,
+              `${path}.content.sourceSize`,
+            ),
+          }),
+    };
+    return { kind: "inline", content: parsed };
+  }
+  if (type === "shape") {
+    exact(content, ["shape", "params"], `${path}.content`);
+    if (
+      !["rect", "circle", "ellipse", "heart"].includes(content.shape as string)
+    ) {
+      fail(
+        "shape-kind-invalid",
+        "Shape kind is invalid.",
+        `${path}.content.shape`,
+      );
+    }
+    const parsed: EditorShapeContent = {
+      shape: content.shape as EditorShapeContent["shape"],
+      params: jsonRecord(content.params, `${path}.content.params`),
+    };
+    return { kind: "inline", content: parsed };
+  }
+  exact(content, ["text"], `${path}.content`);
+  const parsed: EditorTextContent = {
+    text: string(content.text, `${path}.content.text`),
+  };
+  return { kind: "inline", content: parsed };
 }
 
 function parseImageAppearance(
@@ -478,10 +517,6 @@ function parseTrait(value: unknown, path: string): EditorObjectTrait {
   const input = record(value, path);
   const type = identifier(input.type, `${path}.type`);
   if (type === "core.guide") {
-    exact(input, ["type"], path);
-    return { type };
-  }
-  if (type === "core.placeholder") {
     exact(input, ["type"], path);
     return { type };
   }
@@ -750,11 +785,8 @@ function validateDocumentReferences(
           ),
         );
       }
-      const imageSource =
-        "source" in object && object.source?.kind === "image"
-          ? object.source
-          : undefined;
-      if (imageSource?.assetId && !assetIds.has(imageSource.assetId)) {
+      const imageSource = object.type === "image" ? object.source : null;
+      if (imageSource && !assetIds.has(imageSource.assetId)) {
         diagnostics.push(
           diagnostic(
             "image-asset-missing",

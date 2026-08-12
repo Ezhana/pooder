@@ -2,8 +2,10 @@
 
 `EditorObject` is a recursive exclusive union:
 
-- Visual Object: `source`, no `children`.
-- Composite Object: `children`, no `source`.
+- Visual Object: `type: "image" | "path" | "shape" | "text"`, `source`, no
+  `children`. `type` determines the visual renderer; `source` only describes
+  whether content is an asset, inline, or absent.
+- Composite Object: `type: "group"`, `children`, no `source`.
 
 IDs are globally unique across the document tree. Object effects and
 `GeometryRef` address those IDs. Missing targets, invalid source/children

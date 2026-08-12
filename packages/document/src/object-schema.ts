@@ -1,5 +1,6 @@
 import type {
   DocumentConstraintSpec,
+  EditorAssetReferenceBinding,
   EditorDocument,
   EditorDocumentDiagnostic,
   EditorObjectBehavior,
@@ -33,6 +34,10 @@ export interface ObjectBehaviorDefinition {
     behavior: EditorObjectBehavior,
     context: ObjectSchemaContext,
   ): readonly DocumentValueSchemaIssue[];
+  collectAssetReferences?(
+    behavior: EditorObjectBehavior,
+    context: ObjectSchemaContext,
+  ): readonly EditorAssetReferenceBinding[];
 }
 
 export interface ObjectBehaviorInteractionSpec {

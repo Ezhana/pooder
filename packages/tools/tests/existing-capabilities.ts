@@ -181,7 +181,13 @@ async function testSharedCurrentCapabilityUtilities(): Promise<void> {
 
 function createEffectDocument(
   effect: EditorObjectEffect,
-  source: Record<string, unknown>,
+  source:
+    | { type: "image" }
+    | {
+        type: "shape";
+        shape: "rect" | "circle" | "ellipse" | "heart";
+        params: Record<string, never>;
+      },
 ): EditorDocument {
   const placement: EditorObject["placement"] = {
     localBounds: { x: 0, y: 0, width: 80, height: 40 },
@@ -189,14 +195,15 @@ function createEffectDocument(
     pivot: { x: 40, y: 20 },
   };
   const visual: EditorObject =
-    source.kind === "image"
+    source.type === "image"
       ? {
+          type: "image",
           id: "visual",
           tags: ["visual:test"],
           visible: true,
           locked: false,
           placement,
-          source: { kind: "image", assetId: "visual.asset" },
+          source: { kind: "asset", assetId: "visual.asset" },
           appearance: {
             fit: "contain",
             anchorX: 0.5,
@@ -209,18 +216,25 @@ function createEffectDocument(
           effects: [effect],
         }
       : {
+          type: "shape",
           id: "visual",
           tags: ["visual:test"],
           visible: true,
           locked: false,
           placement,
-          source: source as never,
+          source: {
+            kind: "inline",
+            content: {
+              shape: source.shape,
+              params: source.params,
+            },
+          },
           effects: [effect],
         };
   return {
     version: 7,
     assets:
-      source.kind === "image"
+      source.type === "image"
         ? [
             {
               id: "visual.asset",
@@ -441,7 +455,7 @@ async function testMirrorCapability(): Promise<void> {
     const applied = await controller.apply(
       createEffectDocument(
         { type: "mirror", payload: { horizontal: true } },
-        { kind: "shape", shape: "rect", params: {} },
+        { type: "shape", shape: "rect", params: {} },
       ),
     );
     assertEqual(applied.ok, true, "mirror document should apply");

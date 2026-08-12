@@ -16,6 +16,11 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
       type: "image",
       source: { kind: "url", url: "https://example.test/front-white-ink.png" },
     },
+    {
+      id: "image-slot-placeholder",
+      type: "image",
+      source: { kind: "url", url: "https://example.test/placeholder.svg" },
+    },
   ],
   extensions: {
     "pooder.production-mask": {
@@ -61,6 +66,7 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
           locked: false,
           objects: [
             {
+              type: "image",
               id: "front.image-slot",
               tags: ["slot:front"],
               visible: true,
@@ -71,7 +77,7 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                 pivot: { x: 0, y: 0 },
               },
               source: {
-                kind: "image",
+                kind: "asset",
                 assetId: "front-artwork",
               },
               appearance: {
@@ -88,24 +94,13 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                   type: "pooder.image-slot",
                   config: {
                     accepts: ["image/png", "image/jpeg"],
-                    placeholderSelector: { ids: ["front.image-placeholder"] },
+                    placeholderSource: {
+                      kind: "asset",
+                      assetId: "image-slot-placeholder",
+                    },
                   },
                 },
               ],
-            },
-            {
-              id: "front.image-placeholder",
-              tags: ["placeholder:image-slot", "slot:front"],
-              visible: false,
-              locked: true,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 80, height: 90 },
-                localToParent: [1, 0, 0, 1, 10, 15],
-                pivot: { x: 0, y: 0 },
-              },
-              source: { kind: "shape", shape: "rect", params: {} },
-              appearance: { fill: "#dbeafe", stroke: "#2563eb" },
-              traits: [{ type: "core.placeholder" }],
             },
           ],
         },
@@ -115,6 +110,7 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
           locked: true,
           objects: [
             {
+              type: "path",
               id: "front.dieline",
               tags: ["guide:cut"],
               visible: true,
@@ -125,9 +121,11 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                 pivot: { x: 0, y: 0 },
               },
               source: {
-                kind: "path",
-                pathData: "M 3 3 H 97 V 117 H 3 Z",
-                sourceBounds: { x: 3, y: 3, width: 94, height: 114 },
+                kind: "inline",
+                content: {
+                  pathData: "M 3 3 H 97 V 117 H 3 Z",
+                  sourceBounds: { x: 3, y: 3, width: 94, height: 114 },
+                },
               },
               appearance: {
                 fill: "none",
@@ -146,6 +144,7 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
               ],
             },
             {
+              type: "shape",
               id: "front.feature.hole",
               tags: ["feature:hole"],
               visible: false,
@@ -155,7 +154,10 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                 localToParent: [1, 0, 0, 1, 46, 8],
                 pivot: { x: 0, y: 0 },
               },
-              source: { kind: "shape", shape: "circle", params: {} },
+              source: {
+                kind: "inline",
+                content: { shape: "circle", params: {} },
+              },
               appearance: { fill: "#000000", opacity: 1 },
               traits: [
                 {
@@ -184,6 +186,7 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
           locked: false,
           objects: [
             {
+              type: "shape",
               id: "back.artwork",
               tags: ["artwork:back"],
               visible: true,
@@ -193,7 +196,10 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                 localToParent: [1, 0, 0, 1, 10, 15],
                 pivot: { x: 0, y: 0 },
               },
-              source: { kind: "shape", shape: "rect", params: {} },
+              source: {
+                kind: "inline",
+                content: { shape: "rect", params: {} },
+              },
             },
           ],
         },

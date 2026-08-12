@@ -1,4 +1,5 @@
 import type {
+  EditorAssetReferenceBinding,
   EditorDocumentDiagnostic,
   EditorDocumentDiagnosticSeverity,
 } from "./index";
@@ -25,6 +26,10 @@ export interface EditorEffectSchema {
     payload: unknown,
     context: EditorEffectSchemaValidationContext,
   ): readonly EditorEffectSchemaIssue[];
+  collectAssetReferences?(
+    payload: unknown,
+    context: EditorEffectSchemaValidationContext,
+  ): readonly EditorAssetReferenceBinding[];
 }
 
 export interface EditorEffectSchemaValidationOptions {

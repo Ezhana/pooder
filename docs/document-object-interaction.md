@@ -6,6 +6,7 @@ extension-owned `EditorObject.behaviors`.
 
 ```ts
 const imageSlot: EditorObject = {
+  type: "image",
   id: "front.image",
   tags: ["slot:image"],
   placement: {
@@ -14,14 +15,25 @@ const imageSlot: EditorObject = {
   },
   locked: false,
   visible: true,
-  source: { kind: "image", assetId: "front.image.asset" },
-  appearance: { fit: "cover", opacity: 1 },
+  source: { kind: "asset", assetId: "front.image.asset" },
+  appearance: {
+    fit: "cover",
+    anchorX: 0.5,
+    anchorY: 0.5,
+    zoom: 1,
+    rotation: 0,
+    opacity: 1,
+    clip: "frame",
+  },
   behaviors: [
     {
       type: "pooder.image-slot",
       config: {
         accepts: ["image/*"],
-        placeholderSelector: { ids: ["front.image.placeholder"] },
+        placeholderSource: {
+          kind: "asset",
+          assetId: "asset:image-slot-placeholder",
+        },
       },
     },
   ],

@@ -10,7 +10,12 @@ import {
   registerEditorDocumentService,
   type EditorDocumentService,
 } from "../../document-core/src";
-import type { EditorDocument, EditorImagePlacement } from "@pooder/document";
+import {
+  isEditorVisualObject,
+  type EditorDocument,
+  type EditorImageObject,
+  type EditorImagePlacement,
+} from "@pooder/document";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_UPDATE_PLACEMENT_COMMAND_ID,
@@ -87,6 +92,7 @@ function createImageSlotDocument(): EditorDocument {
             locked: false,
             objects: [
               {
+                type: "image",
                 id: IMAGE_SLOT_ID,
                 tags: ["slot:artwork"],
                 visible: true,
@@ -97,7 +103,7 @@ function createImageSlotDocument(): EditorDocument {
                   pivot: { x: 60, y: 40 },
                 },
                 source: {
-                  kind: "image",
+                  kind: "asset",
                   assetId: "artwork.asset",
                 },
                 appearance: {
@@ -114,50 +120,13 @@ function createImageSlotDocument(): EditorDocument {
                     type: "pooder.image-slot",
                     config: {
                       accepts: ["image/*"],
-                      placeholderSelector: {
-                        ids: [
-                          "artwork.placeholder",
-                          "artwork.image-placeholder",
-                        ],
+                      placeholderSource: {
+                        kind: "asset",
+                        assetId: "artwork.placeholder.asset",
                       },
                     },
                   },
                 ],
-              },
-              {
-                id: "artwork.placeholder",
-                tags: ["placeholder:artwork"],
-                visible: true,
-                locked: true,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
-                  localToParent: [1, 0, 0, 1, 0, 0],
-                  pivot: { x: 0, y: 0 },
-                },
-                source: { kind: "shape", shape: "rect", params: {} },
-                traits: [{ type: "core.placeholder" }],
-              },
-              {
-                id: "artwork.image-placeholder",
-                tags: ["placeholder:artwork"],
-                visible: true,
-                locked: true,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
-                  localToParent: [1, 0, 0, 1, 0, 0],
-                  pivot: { x: 0, y: 0 },
-                },
-                source: { kind: "image", assetId: "artwork.placeholder.asset" },
-                appearance: {
-                  fit: "stretch",
-                  anchorX: 0.5,
-                  anchorY: 0.5,
-                  zoom: 1,
-                  rotation: 0,
-                  opacity: 1,
-                  clip: "frame",
-                },
-                traits: [{ type: "core.placeholder" }],
               },
             ],
           },
@@ -211,28 +180,43 @@ async function testStrictPolicyAcceptsAFrameCoveringCrop(): Promise<void> {
 
 async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
   const { runtime, controller } = await createHarness();
-  const getPlaceholder = () =>
+  const getSlotNode = () =>
     runtime.services
       .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
       .getGraph()
       .layers.flatMap((layer) => layer.nodes)
-      .find((node) => node.subjectId === "artwork.placeholder");
-  const getImagePlaceholder = () =>
+      .find((node) => node.subjectId === IMAGE_SLOT_ID);
+  const getSlotProjectionCount = () =>
     runtime.services
       .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
       .getGraph()
       .layers.flatMap((layer) => layer.nodes)
-      .find((node) => node.subjectId === "artwork.image-placeholder");
+      .filter((node) => node.subjectId === IMAGE_SLOT_ID).length;
   try {
     assertEqual(
-      getPlaceholder()?.visible,
-      false,
-      "filled slot should hide its placeholder",
+      getSlotProjectionCount(),
+      1,
+      "filled slot should compile one projection",
     );
     assertEqual(
-      getImagePlaceholder()?.visible,
-      false,
-      "filled slot should hide image placeholders",
+      getSlotNode()?.id,
+      IMAGE_SLOT_ID,
+      "slot projection id should stay canonical",
+    );
+    assertEqual(
+      getSlotNode()?.visual?.src,
+      "/artwork.png",
+      "filled slot should use its business asset",
+    );
+    assertEqual(
+      (getSlotNode()?.data.imageGeometry as { fit?: string } | undefined)?.fit,
+      "cover",
+      "business artwork should use the object appearance",
+    );
+    assertEqual(
+      getSlotNode()?.props.fit,
+      "cover",
+      "business render props should use cover",
     );
     const cleared = await controller.updateImageResources(
       { ids: [IMAGE_SLOT_ID] },
@@ -241,29 +225,58 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
     );
     assertEqual(cleared.ok, true, "slot resource should clear atomically");
     assertEqual(
-      getPlaceholder()?.visible,
-      true,
-      "empty slot should show its placeholder",
+      getSlotNode()?.visual?.src,
+      "/placeholder.png",
+      "empty slot should use its placeholder asset",
     );
     assertEqual(
-      getImagePlaceholder()?.visible,
-      true,
-      "empty slot should show image placeholders",
+      getSlotProjectionCount(),
+      1,
+      "empty slot should keep the same single projection",
     );
     assertEqual(
-      getPlaceholder()?.props.excludeFromExport,
-      true,
-      "shape placeholder should not export",
+      (getSlotNode()?.data.imageGeometry as { fit?: string } | undefined)?.fit,
+      "stretch",
+      "placeholder fallback should override fit without mutating the object",
     );
     assertEqual(
-      getImagePlaceholder()?.props.excludeFromExport,
+      getSlotNode()?.props.fit,
+      "stretch",
+      "placeholder render props should expose the visual override",
+    );
+    const persistedSlot = controller
+      .export()
+      ?.surfaces[0]?.layers[0]?.objects.find(
+        (object) => object.id === IMAGE_SLOT_ID,
+      );
+    assertEqual(
+      persistedSlot && persistedSlot.type === "image"
+        ? (persistedSlot as EditorImageObject).appearance.fit
+        : undefined,
+      "cover",
+      "placeholder fallback should not mutate persistent appearance",
+    );
+    assertEqual(
+      getSlotNode()?.props.excludeFromExport,
       true,
-      "image placeholder should not export",
+      "placeholder fallback should not export",
+    );
+    assertEqual(
+      getSlotNode()?.visible,
+      true,
+      "placeholder fallback should remain visible in the editor",
     );
     assertEqual(
       controller.export()?.assets.some((asset) => asset.id === "artwork.asset"),
       false,
       "clearing the slot should reclaim its orphaned asset",
+    );
+    assertEqual(
+      controller
+        .export()
+        ?.assets.some((asset) => asset.id === "artwork.placeholder.asset"),
+      true,
+      "clearing the slot should retain its placeholder asset",
     );
     const filled = await controller.updateImageResources(
       { tags: ["slot:artwork"] },
@@ -276,14 +289,91 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
     );
     assertEqual(filled.ok, true, "slot resource should replace atomically");
     assertEqual(
-      getPlaceholder()?.visible,
-      false,
-      "refilled slot should hide its placeholder",
+      getSlotNode()?.visual?.src,
+      "/replacement.png",
+      "refilled slot should replace the fallback in the same projection",
     );
     assertEqual(
-      getImagePlaceholder()?.visible,
+      (getSlotNode()?.data.imageGeometry as { fit?: string } | undefined)?.fit,
+      "cover",
+      "replacement artwork should restore the object appearance",
+    );
+    const refilledSlot = controller
+      .export()
+      ?.surfaces[0]?.layers[0]?.objects.find(
+        (object) => object.id === IMAGE_SLOT_ID,
+      );
+    assert(
+      refilledSlot?.type === "image" && refilledSlot.source?.kind === "asset",
+      "upload should replace the empty image source with an asset source",
+    );
+    assertEqual(
+      JSON.stringify(refilledSlot.behaviors),
+      JSON.stringify(
+        createImageSlotDocument().surfaces[0]!.layers[0]!.objects[0]!.behaviors,
+      ),
+      "upload should preserve the image-slot behavior and placeholder source",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testSharedPlaceholderAssetLifecycle(): Promise<void> {
+  const runtime = new Pooder();
+  runtime.extensions.register(createImageSlotCapability());
+  await runtime.extensions.flushActivation();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const document = createImageSlotDocument();
+    const layer = document.surfaces[0]!.layers[0]!;
+    const firstSlot = layer.objects[0]!;
+    if (firstSlot.type === "image") firstSlot.source = null;
+    document.assets = document.assets.filter(
+      (asset) => asset.id !== "artwork.asset",
+    );
+    const secondSlot = JSON.parse(
+      JSON.stringify(firstSlot),
+    ) as typeof firstSlot;
+    secondSlot.id = "artwork.secondary";
+    layer.objects.push(secondSlot);
+
+    assertEqual(
+      (await controller.apply(document)).ok,
+      true,
+      "multiple slots should share one placeholder asset",
+    );
+    assertEqual(
+      controller
+        .export()
+        ?.assets.filter((asset) => asset.id === "artwork.placeholder.asset")
+        .length,
+      1,
+      "shared placeholder should exist exactly once",
+    );
+    assertEqual(
+      (await controller.removeObject(IMAGE_SLOT_ID)).ok,
+      true,
+      "first shared slot should be removable",
+    );
+    assertEqual(
+      controller
+        .export()
+        ?.assets.some((asset) => asset.id === "artwork.placeholder.asset"),
+      true,
+      "placeholder should survive while another slot references it",
+    );
+    assertEqual(
+      (await controller.removeObject("artwork.secondary")).ok,
+      true,
+      "last shared slot should be removable",
+    );
+    assertEqual(
+      controller
+        .export()
+        ?.assets.some((asset) => asset.id === "artwork.placeholder.asset"),
       false,
-      "refilled slot should hide image placeholders",
+      "placeholder should be reclaimed after its final slot is removed",
     );
   } finally {
     await runtime.dispose();
@@ -328,15 +418,36 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
   );
 
   const missingPlaceholder = createImageSlotDocument();
-  missingPlaceholder.surfaces[0]!.layers[0]!.objects =
-    missingPlaceholder.surfaces[0]!.layers[0]!.objects.filter(
-      (object) =>
-        !object.traits?.some((trait) => trait.type === "core.placeholder"),
-    );
+  missingPlaceholder.assets = missingPlaceholder.assets.filter(
+    (asset) => asset.id !== "artwork.placeholder.asset",
+  );
   assertEqual(
     (await apply(missingPlaceholder)).ok,
     false,
-    "image slot without a business placeholder should be rejected",
+    "image slot with a missing placeholder asset should be rejected",
+  );
+
+  const missingPlaceholderSource = createImageSlotDocument();
+  const missingIdBehavior =
+    missingPlaceholderSource.surfaces[0]!.layers[0]!.objects[0]!.behaviors![0]!;
+  missingIdBehavior.config = { accepts: ["image/*"] };
+  assertEqual(
+    (await apply(missingPlaceholderSource)).ok,
+    false,
+    "image slot without placeholderSource should be rejected",
+  );
+
+  const nonImageSlot = createImageSlotDocument();
+  const nonImageObject = nonImageSlot.surfaces[0]!.layers[0]!.objects[0]!;
+  Object.assign(nonImageObject, {
+    type: "shape",
+    source: { kind: "inline", content: { shape: "rect", params: {} } },
+    appearance: { fill: "#ffffff" },
+  });
+  assertEqual(
+    (await apply(nonImageSlot)).ok,
+    false,
+    "image-slot behavior on a non-image object should be rejected",
   );
 }
 
@@ -546,6 +657,7 @@ async function main(): Promise<void> {
   await testImageSlotRejectsMissingContainerGeometry();
   await testStrictPolicyAcceptsAFrameCoveringCrop();
   await testPlaceholderVisibilityAndResourceLifecycle();
+  await testSharedPlaceholderAssetLifecycle();
   await testRemovedImageSlotContractsAreRejected();
   await testImageSlotCommitAndReopenMatrices();
   await testImageSlotRollbackDoesNotDrift();

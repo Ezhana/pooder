@@ -1,4 +1,5 @@
 import type {
+  EditorAssetReferenceBinding,
   EditorDocument,
   EditorDocumentDiagnostic,
   EditorDocumentDiagnosticSeverity,
@@ -40,9 +41,7 @@ export interface DocumentPublicationContext {
   extensionId: string;
 }
 
-export interface DocumentExtensionContribution<
-  TState = JsonValue,
-> {
+export interface DocumentExtensionContribution<TState = JsonValue> {
   id: string;
   stateSchema?: DocumentValueSchema<TState>;
   effects?: readonly EditorEffectSchema[];
@@ -53,6 +52,10 @@ export interface DocumentExtensionContribution<
     state: TState,
     document: EditorDocument,
   ): readonly EditorDocumentDiagnostic[];
+  collectAssetReferences?(
+    state: TState,
+    context: DocumentPublicationContext,
+  ): readonly EditorAssetReferenceBinding[];
   preparePublication?(
     state: TState,
     context: DocumentPublicationContext,
@@ -62,35 +65,60 @@ export interface DocumentExtensionContribution<
 export class DocumentExtensionRegistry {
   private readonly contributions = new Map<
     string,
-    DocumentExtensionContribution
+    DocumentExtensionContribution<unknown>
   >();
 
   constructor(
-    contributions: Iterable<DocumentExtensionContribution> = [],
+    contributions: Iterable<DocumentExtensionContribution<never>> = [],
   ) {
     this.registerMany(contributions);
   }
 
-  register(contribution: DocumentExtensionContribution): this {
+  register<TState>(contribution: DocumentExtensionContribution<TState>): this {
     const id = normalizeIdentifier(contribution.id);
     if (!id) throw new TypeError("Document extension id is required.");
     if (this.contributions.has(id)) {
       throw new Error(`Document extension "${id}" is already registered.`);
     }
-    this.contributions.set(id, { ...contribution, id });
+    this.contributions.set(id, {
+      ...contribution,
+      id,
+      ...(contribution.validateReferences
+        ? {
+            validateReferences: (state, document) =>
+              contribution.validateReferences?.(state as TState, document) ??
+              [],
+          }
+        : {}),
+      ...(contribution.collectAssetReferences
+        ? {
+            collectAssetReferences: (state, context) =>
+              contribution.collectAssetReferences?.(state as TState, context) ??
+              [],
+          }
+        : {}),
+      ...(contribution.preparePublication
+        ? {
+            preparePublication: (state, context) =>
+              contribution.preparePublication?.(state as TState, context),
+          }
+        : {}),
+    });
     return this;
   }
 
-  registerMany(contributions: Iterable<DocumentExtensionContribution>): this {
+  registerMany<TState>(
+    contributions: Iterable<DocumentExtensionContribution<TState>>,
+  ): this {
     for (const contribution of contributions) this.register(contribution);
     return this;
   }
 
-  get(id: string): DocumentExtensionContribution | undefined {
+  get(id: string): DocumentExtensionContribution<unknown> | undefined {
     return this.contributions.get(normalizeIdentifier(id));
   }
 
-  list(): DocumentExtensionContribution[] {
+  list(): DocumentExtensionContribution<unknown>[] {
     return Array.from(this.contributions.values());
   }
 
@@ -141,10 +169,11 @@ export function validateEditorDocumentExtensions(
       continue;
     }
 
-    const schemaIssues = contribution.stateSchema?.validate(state, {
-      extensionId,
-      path,
-    }) ?? [];
+    const schemaIssues =
+      contribution.stateSchema?.validate(state, {
+        extensionId,
+        path,
+      }) ?? [];
     for (const issue of schemaIssues) {
       diagnostics.push({
         severity: issue.severity ?? "error",
@@ -158,13 +187,13 @@ export function validateEditorDocumentExtensions(
       continue;
     }
     diagnostics.push(
-      ...(contribution.validateReferences?.(state as JsonValue, document) ?? []).map(
-        (diagnostic) => ({
-          ...diagnostic,
-          stage: diagnostic.stage ?? "extension-schema",
-          path: appendPath(path, diagnostic.path),
-        }),
-      ),
+      ...(
+        contribution.validateReferences?.(state as JsonValue, document) ?? []
+      ).map((diagnostic) => ({
+        ...diagnostic,
+        stage: diagnostic.stage ?? "extension-schema",
+        path: appendPath(path, diagnostic.path),
+      })),
     );
   }
 

@@ -2,10 +2,14 @@ import {
   EffectSchemaRegistry,
   ObjectSchemaRegistry,
   cloneEditorDocument,
+  collectEditorDocumentAssetReferences,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
   getEditorDocumentObjects,
   parseEditorDocument,
+  reclaimOrphanedEditorDocumentAssets,
+  replaceEditorDocumentAssetReferences,
+  resolveEditorDocumentAsset,
   selectEditorDocumentObjects,
   selectOneEditorDocumentObject,
   validateEditorDocument,
@@ -145,7 +149,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
       (exportScope.surfaces as Array<Record<string, unknown>>)[0]!
         .layers as Array<Record<string, unknown>>
     )[0]!.objects as Array<Record<string, unknown>>
-  )[1]!;
+  )[0]!;
   exportObject.traits = [{ type: "core.export", scopes: ["design"] }];
   assertEqual(
     validateEditorDocument(exportScope)[0]?.code,
@@ -167,6 +171,23 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
     validateEditorDocument(unnamespacedTag)[0]?.code,
     "object-tag-namespace-required",
     "object tags should require namespaces",
+  );
+
+  const legacyObjectSource = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const legacyObject = (
+    (
+      (legacyObjectSource.surfaces as Array<Record<string, unknown>>)[0]!
+        .layers as Array<Record<string, unknown>>
+    )[0]!.objects as Array<Record<string, unknown>>
+  )[0]!;
+  delete legacyObject.type;
+  legacyObject.source = { kind: "image", assetId: "front-artwork" };
+  assertEqual(
+    validateEditorDocument(legacyObjectSource)[0]?.code,
+    "object-type-invalid",
+    "legacy image-kind sources should be rejected without compatibility",
   );
 }
 
@@ -197,8 +218,8 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   object.children = [];
   assertEqual(
     validateEditorDocument(invalidUnion)[0]?.code,
-    "object-union-invalid",
-    "source/children union should be exclusive",
+    "unknown-field",
+    "visual objects should reject children",
   );
 }
 
@@ -322,21 +343,65 @@ function testObjectSelectors(): void {
     selectEditorDocumentObjects(document, { tags: ["slot:front"] }).map(
       (object) => object.id,
     ),
-    ["front.image-slot", "front.image-placeholder"],
-    "tag selector should match all objects in a category",
+    ["front.image-slot"],
+    "tag selector should match the image slot",
   );
   assertEqual(
     selectOneEditorDocumentObject(document, { ids: ["front.dieline"] })?.id,
     "front.dieline",
     "id selector should resolve one exact object",
   );
-  let ambiguous = false;
-  try {
-    selectOneEditorDocumentObject(document, { tags: ["slot:front"] });
-  } catch {
-    ambiguous = true;
-  }
-  assert(ambiguous, "single-object selector should reject multiple matches");
+  assertEqual(
+    selectOneEditorDocumentObject(document, { tags: ["slot:front"] })?.id,
+    "front.image-slot",
+    "single-object selector should resolve the image slot",
+  );
+}
+
+function testCentralAssetReferenceLifecycle(): void {
+  const document = representativeDocument();
+  document.extensions = {};
+  const slot = findEditorDocumentObject(document, "front.image-slot");
+  assert(
+    slot?.type === "image",
+    "fixture image slot should be an image object",
+  );
+  slot.behaviors = undefined;
+
+  const references = collectEditorDocumentAssetReferences(document);
+  assertDeepEqual(
+    references.map((reference) => reference.source.assetId),
+    ["front-artwork"],
+    "collector should include declared object asset sources only",
+  );
+  assertEqual(
+    resolveEditorDocumentAsset(document, slot.source, "image")?.id,
+    "front-artwork",
+    "resolver should enforce the expected asset type",
+  );
+  assertEqual(
+    replaceEditorDocumentAssetReferences(document, "front-artwork", {
+      kind: "asset",
+      assetId: "image-slot-placeholder",
+    }),
+    1,
+    "replacement should update every collected reference",
+  );
+  assertEqual(
+    slot.source?.assetId,
+    "image-slot-placeholder",
+    "replacement should mutate the typed source binding",
+  );
+  const removed = reclaimOrphanedEditorDocumentAssets(document);
+  assert(
+    removed.includes("front-artwork") && removed.includes("front-white-ink"),
+    "orphan reclamation should remove every unreferenced asset",
+  );
+  assertDeepEqual(
+    document.assets.map((asset) => asset.id),
+    ["image-slot-placeholder"],
+    "orphan reclamation should retain referenced assets",
+  );
 }
 
 function main(): void {
@@ -347,6 +412,7 @@ function main(): void {
   testExtensionSchemasAreStrict();
   testCloneAndVisitors();
   testObjectSelectors();
+  testCentralAssetReferenceLifecycle();
   console.log("ok");
 }
 

@@ -1,5 +1,7 @@
 import {
+  createAssetReferenceBinding,
   findEditorDocumentObject,
+  isAssetSource,
   type DocumentExtensionContribution,
   type DocumentValueSchemaIssue,
   type EditorDocumentDiagnostic,
@@ -32,6 +34,21 @@ export const POODER_PRODUCTION_MASK_DOCUMENT_CONTRIBUTION: DocumentExtensionCont
       validate: validateProductionMaskDocumentState,
     },
     validateReferences: validateProductionMaskReferences,
+    collectAssetReferences: (state, context) =>
+      Object.entries(state.masks).flatMap(([maskId, mask]) => {
+        const source = mask.production.source;
+        if (!isAssetSource(source)) return [];
+        return [
+          createAssetReferenceBinding(
+            source,
+            "image",
+            `extensions.${context.extensionId}.masks.${maskId}.production.source`,
+            (replacement) => {
+              mask.production.source = replacement;
+            },
+          ),
+        ];
+      }),
   };
 
 function validateProductionMaskDocumentState(
@@ -52,10 +69,7 @@ function validateProductionMaskDocumentState(
     }
     if (!isProcess(rawMask.process)) {
       issues.push(
-        invalidType(
-          `${path}.process`,
-          '"white-ink", "reverse", or "spot-uv"',
-        ),
+        invalidType(`${path}.process`, '"white-ink", "reverse", or "spot-uv"'),
       );
     }
     validateProduction(rawMask.production, `${path}.production`, issues);
@@ -77,13 +91,17 @@ function validateProduction(
     issues.push(invalidType(`${path}.enabled`, "a boolean"));
   }
   if (!isNonEmptyString(value.referenceObjectId)) {
-    issues.push(invalidType(`${path}.referenceObjectId`, "a non-empty object id"));
+    issues.push(
+      invalidType(`${path}.referenceObjectId`, "a non-empty object id"),
+    );
   }
   if (!isRecord(value.source)) {
     issues.push(invalidType(`${path}.source`, "an object"));
   } else if (value.source.kind === "asset") {
     if (!isNonEmptyString(value.source.assetId)) {
-      issues.push(invalidType(`${path}.source.assetId`, "a non-empty asset id"));
+      issues.push(
+        invalidType(`${path}.source.assetId`, "a non-empty asset id"),
+      );
     }
   } else if (value.source.kind !== "reference-object") {
     issues.push(
@@ -152,12 +170,19 @@ function validateProductionMaskReferences(
   const diagnostics: EditorDocumentDiagnostic[] = [];
   for (const [maskId, mask] of Object.entries(state.masks)) {
     const path = `masks.${maskId}`;
-    const surface = document.surfaces.find((entry) => entry.id === mask.surfaceId);
+    const surface = document.surfaces.find(
+      (entry) => entry.id === mask.surfaceId,
+    );
     if (!surface) {
-      diagnostics.push(referenceError(`${path}.surfaceId`, "surface", mask.surfaceId));
+      diagnostics.push(
+        referenceError(`${path}.surfaceId`, "surface", mask.surfaceId),
+      );
       continue;
     }
-    const reference = findEditorDocumentObject(document, mask.production.referenceObjectId);
+    const reference = findEditorDocumentObject(
+      document,
+      mask.production.referenceObjectId,
+    );
     if (!reference) {
       diagnostics.push(
         referenceError(
@@ -178,25 +203,15 @@ function validateProductionMaskReferences(
         path: `${path}.production.referenceObjectId`,
       });
     }
-    const source = mask.production.source;
-    if (
-      source.kind === "asset" &&
-      !document.assets.some((asset) => asset.id === source.assetId)
-    ) {
-      diagnostics.push(
-        referenceError(
-          `${path}.production.source.assetId`,
-          "asset",
-          source.assetId,
-        ),
-      );
-    }
   }
   return diagnostics;
 }
 
 function containsObject(
-  object: { id: string; children?: readonly { id: string; children?: readonly unknown[] }[] },
+  object: {
+    id: string;
+    children?: readonly { id: string; children?: readonly unknown[] }[];
+  },
   objectId: string,
 ): boolean {
   if (object.id === objectId) return true;

@@ -31,8 +31,11 @@ import {
   type SessionService,
 } from "@pooder/core";
 import {
+  createEditorDocumentAssetId,
   findEditorDocumentObject,
-  isEditorVisualObject,
+  resolveEditorDocumentAsset,
+  setEditorImageObjectSource,
+  upsertEditorDocumentAsset,
   visitEditorDocumentObjects,
   type EditorDocument,
   type EditorImageObject,
@@ -549,18 +552,16 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       | undefined;
     const result = await this.controller.mutate((document) => {
       const current = findEditorDocumentObject(document, draft.objectId);
-      if (
-        !current ||
-        !isEditorVisualObject(current) ||
-        current.source.kind !== "image" ||
-        !("appearance" in current)
-      )
-        return;
-      const previousAssetId = current.source.assetId;
-      const assetId = previousAssetId || `${current.id}.image`;
-      current.source = stableResource
-        ? { kind: "image", assetId }
-        : { kind: "image" };
+      if (!current || current.type !== "image") return;
+      const assetId = createEditorDocumentAssetId(
+        document,
+        `${current.id}.image`,
+      );
+      setEditorImageObjectSource(
+        document,
+        current.id,
+        stableResource ? { kind: "asset", assetId } : null,
+      );
       current.appearance = clone(draft.placement);
       if (stableResource) {
         const { kind, intrinsicSize, mimeType } = stableResource;
@@ -575,24 +576,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           ...(mimeType ? { mimeType } : {}),
           ...(intrinsicSize ? { intrinsicSize: clone(intrinsicSize) } : {}),
         };
-        const assetIndex = document.assets.findIndex(
-          (entry) => entry.id === assetId,
-        );
-        if (assetIndex >= 0) document.assets[assetIndex] = asset;
-        else document.assets.push(asset);
-      } else if (previousAssetId) {
-        const stillReferenced = document.surfaces.some((surface) =>
-          surface.layers.some((layer) =>
-            layer.objects?.some((object) =>
-              objectReferencesAsset(object, previousAssetId),
-            ),
-          ),
-        );
-        if (!stillReferenced) {
-          document.assets = document.assets.filter(
-            (asset) => asset.id !== previousAssetId,
-          );
-        }
+        upsertEditorDocumentAsset(document, asset);
       }
       return document;
     });
@@ -671,7 +655,12 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     const isVisibleSessionDocumentNode = ({
       node,
     }: {
-      node: { id: string; subjectId: string; surfaceId: string; tags: string[] };
+      node: {
+        id: string;
+        subjectId: string;
+        surfaceId: string;
+        tags: string[];
+      };
     }) =>
       node.surfaceId === surfaceId &&
       node.subjectId !== object.id &&
@@ -1115,9 +1104,7 @@ function findImageSlot(
     if (
       !match &&
       object.id === objectId &&
-      isEditorVisualObject(object) &&
-      object.source.kind === "image" &&
-      "appearance" in object &&
+      object.type === "image" &&
       hasImageSlotBehavior(object)
     )
       match = object as EditorImageObject;
@@ -1134,9 +1121,7 @@ function findImageSlotContext(
     if (
       !match &&
       object.id === objectId &&
-      isEditorVisualObject(object) &&
-      object.source.kind === "image" &&
-      "appearance" in object &&
+      object.type === "image" &&
       hasImageSlotBehavior(object)
     )
       match = { object: object as EditorImageObject, surfaceId: surface.id };
@@ -1156,9 +1141,7 @@ function toDraft(
   object: EditorImageObject,
   document: EditorDocument,
 ): ImageSlotSessionDraft {
-  const asset = object.source.assetId
-    ? document.assets.find((entry) => entry.id === object.source.assetId)
-    : undefined;
+  const asset = resolveEditorDocumentAsset(document, object.source, "image");
   return {
     objectId: object.id,
     ...(asset
@@ -1174,16 +1157,6 @@ function toDraft(
       : {}),
     placement: clone(object.appearance),
   };
-}
-
-function objectReferencesAsset(
-  object: import("@pooder/document").EditorObject,
-  assetId: string,
-): boolean {
-  if (isEditorVisualObject(object)) {
-    return object.source.kind === "image" && object.source.assetId === assetId;
-  }
-  return object.children.some((child) => objectReferencesAsset(child, assetId));
 }
 
 function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {

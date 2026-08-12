@@ -5,6 +5,7 @@ import type {
   SessionTerminalReason,
 } from "@pooder/core";
 import type {
+  AssetSource,
   EditorDocument,
   EditorDocumentDiagnostic,
 } from "@pooder/document";
@@ -44,9 +45,7 @@ export interface ProductionMaskAlphaParameters {
   outputOpacity?: number;
 }
 
-export type ProductionMaskSource =
-  | { type: "reference-object" }
-  | { type: "asset"; assetId: string };
+export type ProductionMaskSource = { kind: "reference-object" } | AssetSource;
 
 export type ProductionMaskProcess = "white-ink" | "reverse" | "spot-uv";
 
@@ -62,9 +61,7 @@ export interface ProductionMaskDocumentEntry {
   production: {
     enabled: boolean;
     referenceObjectId: string;
-    source:
-      | { kind: "reference-object" }
-      | { kind: "asset"; assetId: string };
+    source: { kind: "reference-object" } | AssetSource;
     alpha: ProductionMaskAlphaParameters;
   };
   presentation: ProductionMaskPresentationState;

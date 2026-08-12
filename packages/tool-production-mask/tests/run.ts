@@ -1,4 +1,8 @@
-import type { EditorDocument } from "@pooder/document";
+import {
+  DocumentExtensionRegistry,
+  validateEditorDocumentAssetReferences,
+  type EditorDocument,
+} from "@pooder/document";
 
 import {
   POODER_PRODUCTION_MASK_CAPABILITY_ID,
@@ -73,6 +77,7 @@ const createDocument = (): EditorDocument => ({
           locked: false,
           objects: [
             {
+              type: "image",
               id: "front.image",
               tags: ["export:design"],
               visible: true,
@@ -82,7 +87,7 @@ const createDocument = (): EditorDocument => ({
                 localToParent: [1, 0, 0, 1, 0, 0],
                 pivot: { x: 0, y: 0 },
               },
-              source: { kind: "image", assetId: "artwork" },
+              source: { kind: "asset", assetId: "artwork" },
               appearance: {
                 fit: "cover",
                 anchorX: 0.5,
@@ -143,16 +148,22 @@ async function main() {
     kind: "asset",
     assetId: "missing-asset",
   };
-  const referenceDiagnostics = contribution.validateReferences?.(
-    missingReferences,
-    document,
-  );
+  const missingDocument = createDocument();
+  missingDocument.extensions[POODER_PRODUCTION_MASK_CAPABILITY_ID] =
+    missingReferences as unknown as never;
+  const referenceDiagnostics = [
+    ...(contribution.validateReferences?.(missingReferences, missingDocument) ??
+      []),
+    ...validateEditorDocumentAssetReferences(missingDocument, {
+      extensionRegistry: new DocumentExtensionRegistry([contribution]),
+    }),
+  ];
   assert(
-    referenceDiagnostics?.some(
+    referenceDiagnostics.some(
       (item) => item.code === "production-mask-object-missing",
     ) &&
       referenceDiagnostics.some(
-        (item) => item.code === "production-mask-asset-missing",
+        (item) => item.code === "asset-reference-missing",
       ),
     "missing mask object and asset references should be rejected",
   );

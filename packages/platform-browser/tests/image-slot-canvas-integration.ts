@@ -216,6 +216,7 @@ class ViewportCanvasService {
 
 function createEmptySlotObject(id: string, left: number): EditorImageObject {
   return {
+    type: "image",
     id,
     tags: ["slot:image"],
     visible: true,
@@ -225,7 +226,7 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
       localToParent: [1, 0, 0, 1, left, 20],
       pivot: { x: 60, y: 40 },
     },
-    source: { kind: "image" },
+    source: null,
     appearance: {
       fit: "cover",
       anchorX: 0.5,
@@ -240,7 +241,10 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
         type: "pooder.image-slot",
         config: {
           accepts: ["image/*"],
-          placeholderSelector: { ids: [`${id}.placeholder`] },
+          placeholderSource: {
+            kind: "asset",
+            assetId: "image-slot.placeholder.asset",
+          },
         },
       },
     ],
@@ -250,7 +254,14 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
 function createEmptySlotDocument(): EditorDocument {
   return {
     version: 7,
-    assets: [],
+    assets: [
+      {
+        id: "image-slot.placeholder.asset",
+        type: "image",
+        source: { kind: "url", url: "/placeholder.svg" },
+        intrinsicSize: { width: 120, height: 80 },
+      },
+    ],
     extensions: {},
     surfaces: [
       {
@@ -266,33 +277,7 @@ function createEmptySlotDocument(): EditorDocument {
             locked: false,
             objects: [
               createEmptySlotObject(OBJECT_ID, 20),
-              {
-                id: `${OBJECT_ID}.placeholder`,
-                tags: ["placeholder:image-slot"],
-                visible: true,
-                locked: true,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
-                  localToParent: [1, 0, 0, 1, 20, 20],
-                  pivot: { x: 60, y: 40 },
-                },
-                source: { kind: "shape", shape: "rect", params: {} },
-                traits: [{ type: "core.placeholder" }],
-              },
               createEmptySlotObject(SECOND_OBJECT_ID, 180),
-              {
-                id: `${SECOND_OBJECT_ID}.placeholder`,
-                tags: ["placeholder:image-slot"],
-                visible: true,
-                locked: true,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
-                  localToParent: [1, 0, 0, 1, 180, 20],
-                  pivot: { x: 60, y: 40 },
-                },
-                source: { kind: "shape", shape: "rect", params: {} },
-                traits: [{ type: "core.placeholder" }],
-              },
             ],
           },
         ],
@@ -306,6 +291,7 @@ function createLayeredSlotDocument(): EditorDocument {
     id: string,
     assetId: string,
   ): EditorImageObject => ({
+    type: "image",
     id,
     tags: ["export:mockup"],
     visible: true,
@@ -315,7 +301,7 @@ function createLayeredSlotDocument(): EditorDocument {
       localToParent: [1, 0, 0, 1, 0, 0] as MatrixValues,
       pivot: { x: 170, y: 60 },
     },
-    source: { kind: "image" as const, assetId },
+    source: { kind: "asset" as const, assetId },
     appearance: {
       fit: "cover" as const,
       anchorX: 0.5,
@@ -560,6 +546,12 @@ function createNestedDocument(): EditorDocument {
         source: { kind: "url", url: "/nested.png" },
         intrinsicSize: { width: 240, height: 135 },
       },
+      {
+        id: "image-slot.placeholder.asset",
+        type: "image",
+        source: { kind: "url", url: "/placeholder.svg" },
+        intrinsicSize: { width: 120, height: 80 },
+      },
     ],
     extensions: {},
     surfaces: [
@@ -576,6 +568,7 @@ function createNestedDocument(): EditorDocument {
             locked: false,
             objects: [
               {
+                type: "group",
                 id: "composite-parent",
                 tags: ["composite:test"],
                 visible: true,
@@ -598,6 +591,7 @@ function createNestedDocument(): EditorDocument {
                 },
                 children: [
                   {
+                    type: "image",
                     id: OBJECT_ID,
                     tags: ["slot:image"],
                     visible: true,
@@ -615,7 +609,7 @@ function createNestedDocument(): EditorDocument {
                       ] as MatrixValues,
                       pivot: { x: 73, y: 62 },
                     },
-                    source: { kind: "image", assetId: "nested-artwork.asset" },
+                    source: { kind: "asset", assetId: "nested-artwork.asset" },
                     appearance: {
                       fit: "cover",
                       anchorX: 0.35,
@@ -630,25 +624,13 @@ function createNestedDocument(): EditorDocument {
                         type: "pooder.image-slot",
                         config: {
                           accepts: ["image/*"],
-                          placeholderSelector: {
-                            ids: [`${OBJECT_ID}.placeholder`],
+                          placeholderSource: {
+                            kind: "asset",
+                            assetId: "image-slot.placeholder.asset",
                           },
                         },
                       },
                     ],
-                  },
-                  {
-                    id: `${OBJECT_ID}.placeholder`,
-                    tags: ["placeholder:image-slot"],
-                    visible: true,
-                    locked: true,
-                    placement: {
-                      localBounds: { x: 18, y: 26, width: 110, height: 72 },
-                      localToParent: [1, 0, 0, 1, 0, 0],
-                      pivot: { x: 73, y: 62 },
-                    },
-                    source: { kind: "shape", shape: "rect", params: {} },
-                    traits: [{ type: "core.placeholder" }],
                   },
                 ],
               },

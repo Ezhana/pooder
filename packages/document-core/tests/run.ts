@@ -5,7 +5,10 @@ import {
   type GeometrySourceService,
   type RenderIntentService,
 } from "@pooder/core";
-import type { EditorDocument } from "@pooder/document";
+import {
+  resolveEditorDocumentAsset,
+  type EditorDocument,
+} from "@pooder/document";
 import {
   registerEditorDocumentService,
   resolveObjectSource,
@@ -64,6 +67,7 @@ function createDocument(): EditorDocument {
             locked: false,
             objects: [
               {
+                type: "shape",
                 id: "clip-source",
                 tags: ["clip:source"],
                 visible: false,
@@ -73,9 +77,13 @@ function createDocument(): EditorDocument {
                   localToParent: [1, 0, 0, 1, 10, 20],
                   pivot: { x: 40, y: 30 },
                 },
-                source: { kind: "shape", shape: "rect", params: {} },
+                source: {
+                  kind: "inline",
+                  content: { shape: "rect", params: {} },
+                },
               },
               {
+                type: "image",
                 id: "artwork",
                 tags: ["artwork:test"],
                 visible: true,
@@ -85,7 +93,7 @@ function createDocument(): EditorDocument {
                   localToParent: [1, 0.25, -0.1, 1, 10, 20],
                   pivot: { x: 40, y: 30 },
                 },
-                source: { kind: "image", assetId: "artwork.asset" },
+                source: { kind: "asset", assetId: "artwork.asset" },
                 appearance: {
                   fit: "cover",
                   anchorX: 0.5,
@@ -123,13 +131,38 @@ function createDocument(): EditorDocument {
 }
 
 function testSourceResolution(): void {
+  const base = {
+    id: "test",
+    tags: [],
+    visible: true,
+    locked: false,
+    placement: {
+      localBounds: { x: 0, y: 0, width: 1, height: 1 },
+      localToParent: [1, 0, 0, 1, 0, 0] as [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ],
+      pivot: { x: 0, y: 0 },
+    },
+  };
   assert(
-    resolveObjectSource({ kind: "shape", shape: "circle", params: {} })
-      ?.pathData,
+    resolveObjectSource({
+      ...base,
+      type: "shape",
+      source: { kind: "inline", content: { shape: "circle", params: {} } },
+    })?.pathData,
     "shape source should resolve geometry",
   );
   assertEqual(
-    resolveObjectSource({ kind: "text", text: "Label" })?.text,
+    resolveObjectSource({
+      ...base,
+      type: "text",
+      source: { kind: "inline", content: { text: "Label" } },
+    })?.text,
     "Label",
     "text source should resolve content",
   );
@@ -190,6 +223,7 @@ async function testDocumentLayerArrayDefinesRenderGraphOrder(): Promise<void> {
       locked: false,
       objects: [
         {
+          type: "shape" as const,
           id: `${id}.object`,
           tags: [],
           visible: true,
@@ -199,7 +233,10 @@ async function testDocumentLayerArrayDefinesRenderGraphOrder(): Promise<void> {
             localToParent: [1, 0, 0, 1, layerIndex, layerIndex],
             pivot: { x: 0, y: 0 },
           },
-          source: { kind: "shape", shape: "rect", params: {} },
+          source: {
+            kind: "inline" as const,
+            content: { shape: "rect" as const, params: {} },
+          },
         },
       ],
     }),
@@ -279,6 +316,69 @@ async function testSceneTranslationCommit(): Promise<void> {
   }
 }
 
+async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const document = createDocument();
+    const layer = document.surfaces[0]!.layers[0]!;
+    const artwork = layer.objects.find((object) => object.id === "artwork")!;
+    layer.objects.push({
+      ...JSON.parse(JSON.stringify(artwork)),
+      id: "artwork-copy",
+      effects: undefined,
+    });
+    assert(
+      (await controller.apply(document)).ok,
+      "shared image fixture should apply",
+    );
+
+    const updated = await controller.updateImageResources(
+      { ids: ["artwork"] },
+      { source: { kind: "url", url: "/replacement.png" } },
+      { expectedCount: 1 },
+    );
+    assert(updated.ok, "target image upload should commit");
+    const exported = controller.export()!;
+    const target = exported.surfaces[0]!.layers[0]!.objects.find(
+      (object) => object.id === "artwork",
+    );
+    const sibling = exported.surfaces[0]!.layers[0]!.objects.find(
+      (object) => object.id === "artwork-copy",
+    );
+    assert(
+      target?.type === "image" && sibling?.type === "image",
+      "images should retain type",
+    );
+    assert(
+      target.source?.assetId !== sibling.source?.assetId,
+      "upload should replace only the target source reference",
+    );
+    const targetAsset = resolveEditorDocumentAsset(
+      exported,
+      target.source,
+      "image",
+    );
+    const siblingAsset = resolveEditorDocumentAsset(
+      exported,
+      sibling.source,
+      "image",
+    );
+    assertEqual(
+      targetAsset?.source.kind === "url" ? targetAsset.source.url : undefined,
+      "/replacement.png",
+      "target should resolve the replacement asset",
+    );
+    assertEqual(
+      siblingAsset?.source.kind === "url" ? siblingAsset.source.url : undefined,
+      "/artwork.png",
+      "sibling should retain the shared original asset",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 function testSceneFrameConversion(): void {
   assertDeepEqual(
     sceneFrameToLocalFrame(
@@ -297,6 +397,7 @@ async function main(): Promise<void> {
   await testDocumentLayerArrayDefinesRenderGraphOrder();
   await testRejectedDocumentsRemainAtomic();
   await testSceneTranslationCommit();
+  await testImageUploadReplacesOnlyTheTargetSource();
   console.log("ok");
 }
 

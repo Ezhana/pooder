@@ -34,8 +34,10 @@ import {
   type CanvasService,
   type RenderObjectSpec,
 } from "@pooder/core";
-import type {
-  EditorDocument,
+import {
+  resolveEditorDocumentAsset,
+  upsertEditorDocumentAsset,
+  type EditorDocument,
 } from "@pooder/document";
 
 type EditorImageResource = ImageResourceDescriptor;
@@ -64,9 +66,7 @@ import {
   type ProductionMaskViewState,
 } from "./capability";
 import { POODER_PRODUCTION_MASK_DOCUMENT_CONTRIBUTION } from "./document-contribution";
-import {
-  POODER_PRODUCTION_MASK_LAYER_PRESET,
-} from "./layers";
+import { POODER_PRODUCTION_MASK_LAYER_PRESET } from "./layers";
 import { SubscriptionBag } from "./runtime/subscriptions";
 import { type FrameRect, resolveSurfaceFrameRect } from "./scene/frame";
 
@@ -94,9 +94,7 @@ const COVER_MASK_TINT: MaskTint = { r: 52, g: 136, b: 255, key: "cover" };
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-const cloneReferenceClipEffects = (
-  node: RenderGraphNode,
-): RenderEffectSpec[] =>
+const cloneReferenceClipEffects = (node: RenderGraphNode): RenderEffectSpec[] =>
   node.effects
     .filter((effect) => effect.type === "clipPath")
     .map((effect) => clone(effect));
@@ -189,8 +187,8 @@ const listDescriptors = (
       alignment: "reference-frame",
       source:
         mask.production.source.kind === "asset"
-          ? { type: "asset", assetId: mask.production.source.assetId }
-          : { type: "reference-object" },
+          ? { kind: "asset", assetId: mask.production.source.assetId }
+          : { kind: "reference-object" },
       alpha: mask.production.alpha,
     }),
     presentation: clone(mask.presentation),
@@ -212,7 +210,7 @@ const replaceMaskProduction = (
     enabled: settings.enabled,
     referenceObjectId: settings.reference.objectId,
     source:
-      settings.source?.type === "asset"
+      settings.source?.kind === "asset"
         ? { kind: "asset", assetId: settings.source.assetId }
         : { kind: "reference-object" },
     alpha: clone(settings.alpha),
@@ -463,8 +461,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
           previewOriginalVisible: descriptor.presentation.originalVisible,
           previewOriginalMaskVisible:
             descriptor.presentation.originalMaskVisible,
-          previewCurrentMaskVisible:
-            descriptor.presentation.currentMaskVisible,
+          previewCurrentMaskVisible: descriptor.presentation.currentMaskVisible,
         } satisfies ProductionMaskSessionDraft,
       });
     } catch (error) {
@@ -523,7 +520,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
           ...draft.descriptor.settings,
           enabled: true,
           source: {
-            type: "asset",
+            kind: "asset",
             assetId: this.stageMaskAsset(draft.descriptor.maskId, resource),
           },
         },
@@ -539,7 +536,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         settings: {
           ...draft.descriptor.settings,
           enabled: true,
-          source: { type: "reference-object" },
+          source: { kind: "reference-object" },
         },
       },
     }));
@@ -652,7 +649,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     const draft = clone(handle.getDraft());
     const result = await controller.mutate((document) => {
       const source = draft.descriptor.settings.source;
-      if (source?.type === "asset") {
+      if (source?.kind === "asset") {
         const resource = this.pendingAssets.get(source.assetId);
         if (resource && resource.kind !== "blob-url") {
           const asset = {
@@ -667,11 +664,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
               ? { intrinsicSize: clone(resource.intrinsicSize) }
               : {}),
           };
-          const assetIndex = document.assets.findIndex(
-            (entry) => entry.id === source.assetId,
-          );
-          if (assetIndex >= 0) document.assets[assetIndex] = asset;
-          else document.assets.push(asset);
+          upsertEditorDocumentAsset(document, asset);
         }
       }
       if (
@@ -686,7 +679,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     });
     if (!result.ok) return { ok: false, reason: "document-update-failed" };
     this.document = clone(result.document);
-    if (draft.descriptor.settings.source?.type === "asset") {
+    if (draft.descriptor.settings.source?.kind === "asset") {
       this.pendingAssets.delete(draft.descriptor.settings.source.assetId);
     }
     await handle.commit();
@@ -699,7 +692,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       return { ok: false, reason: "session-not-active" };
     }
     const source = handle.getDraft().descriptor.settings.source;
-    if (source?.type === "asset") this.pendingAssets.delete(source.assetId);
+    if (source?.kind === "asset") this.pendingAssets.delete(source.assetId);
     await handle.rollback();
     return { ok: true };
   }
@@ -849,17 +842,26 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     source: ProductionMaskSource | undefined,
     reference: ImageSnapshot,
   ): string {
-    if (!source || source.type === "reference-object") return reference.src;
+    if (!source || source.kind === "reference-object") return reference.src;
     const pending = this.pendingAssets.get(source.assetId);
     if (pending) return resourceLocation(pending);
-    const asset = this.document?.assets.find((entry) => entry.id === source.assetId);
+    const asset = this.document
+      ? resolveEditorDocumentAsset(
+          this.document,
+          { kind: "asset", assetId: source.assetId },
+          "image",
+        )
+      : undefined;
     if (!asset) return "";
     return asset.source.kind === "data-url"
       ? asset.source.dataUrl
       : asset.source.url;
   }
 
-  private stageMaskAsset(maskId: string, resource: EditorImageResource): string {
+  private stageMaskAsset(
+    maskId: string,
+    resource: EditorImageResource,
+  ): string {
     const assetId = `${maskId}.source`;
     this.pendingAssets.set(assetId, clone(resource));
     return assetId;
@@ -994,7 +996,11 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         ),
       ];
     }
-    if (reference && descriptor.settings.enabled && descriptor.settings.source) {
+    if (
+      reference &&
+      descriptor.settings.enabled &&
+      descriptor.settings.source
+    ) {
       const sourceUrl = this.sourceUrl(descriptor.settings.source, reference);
       const tint = normalizeTint(descriptor.settings.preview?.tint);
       if (draft.previewCurrentMaskVisible) {

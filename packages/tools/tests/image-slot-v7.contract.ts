@@ -17,6 +17,7 @@ const appearance = {
 } as const;
 
 const emptySlot: EditorImageObject = {
+  type: "image",
   id: "artwork",
   tags: ["slot:artwork"],
   visible: true,
@@ -26,14 +27,17 @@ const emptySlot: EditorImageObject = {
     localToParent: [1, 0, 0, 1, 0, 0],
     pivot: { x: 0, y: 0 },
   },
-  source: { kind: "image" },
+  source: null,
   appearance,
   behaviors: [
     {
       type: "pooder.image-slot",
       config: {
         accepts: ["image/*"],
-        placeholderSelector: { ids: ["artwork.placeholder"] },
+        placeholderSource: {
+          kind: "asset",
+          assetId: "artwork.placeholder.asset",
+        },
       },
     },
   ],
@@ -41,7 +45,13 @@ const emptySlot: EditorImageObject = {
 
 const document: EditorDocument = {
   version: 7,
-  assets: [],
+  assets: [
+    {
+      id: "artwork.placeholder.asset",
+      type: "image",
+      source: { kind: "url", url: "/placeholder.svg" },
+    },
+  ],
   extensions: {},
   surfaces: [
     {
@@ -55,18 +65,7 @@ const document: EditorDocument = {
           id: "front.artwork.layer",
           visible: true,
           locked: false,
-          objects: [
-            emptySlot,
-            {
-              id: "artwork.placeholder",
-              tags: ["placeholder:artwork"],
-              visible: true,
-              locked: true,
-              placement: emptySlot.placement,
-              source: { kind: "shape", shape: "rect", params: {} },
-              traits: [{ type: "core.placeholder" }],
-            },
-          ],
+          objects: [emptySlot],
         },
       ],
     },

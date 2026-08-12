@@ -54,6 +54,11 @@ import {
   EffectSchemaRegistry,
   DocumentExtensionRegistry,
   cloneEditorDocument,
+  createEditorDocumentAssetId,
+  reclaimOrphanedEditorDocumentAssets,
+  resolveEditorDocumentAsset,
+  setEditorImageObjectSource,
+  upsertEditorDocumentAsset,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
   isEditorBuiltinObjectEffect,
@@ -66,6 +71,7 @@ import {
   validateEditorDocumentEffectSchemas,
   validateEditorDocumentExtensions,
   validateEditorDocumentObjectSchemas,
+  validateEditorDocumentAssetReferences,
   type EditorDocument,
   type EditorDocumentCapabilityCollectionOptions,
   type EditorDocumentDiagnostic,
@@ -78,7 +84,7 @@ import {
   type EditorImageObject,
   type EditorImageSlotBehaviorConfig,
   type EditorImageAsset,
-  type EditorAssetSource,
+  type EditorAssetDataSource,
   type EditorObject,
   type EditorObjectEffect,
   type EditorObjectTrait,
@@ -87,6 +93,8 @@ import {
   type ObjectSchemaContext,
   type ObjectSchemaRegistry,
   type ObjectSource,
+  type EditorPrimitiveObject,
+  type EditorShapeContent,
   type ObjectSelector,
 } from "@pooder/document";
 
@@ -114,37 +122,39 @@ export interface ResolvedVisual {
 }
 
 export interface GeometryResolver {
-  resolve(source: ObjectSource): ResolvedVisual | null;
-  hitTest(source: ObjectSource, point: GeometryPoint): boolean;
+  resolve(object: EditorPrimitiveObject): ResolvedVisual | null;
+  hitTest(object: EditorPrimitiveObject, point: GeometryPoint): boolean;
 }
 
 export class DefaultGeometryResolver implements GeometryResolver {
-  resolve(source: ObjectSource): ResolvedVisual | null {
-    if (source.kind === "path") {
-      const pathData = source.pathData.trim();
+  resolve(object: EditorPrimitiveObject): ResolvedVisual | null {
+    if (object.type === "path") {
+      const source = object.source;
+      const pathData = source.content.pathData.trim();
       if (!pathData) return null;
       const contentBounds =
-        rectToBounds(source.sourceBounds) ??
+        rectToBounds(source.content.sourceBounds) ??
         inferPathBounds(pathData) ??
         undefined;
       return {
         source,
         pathData,
-        bounds: source.sourceSize
-          ? sizeToBounds(source.sourceSize)
+        bounds: source.content.sourceSize
+          ? sizeToBounds(source.content.sourceSize)
           : contentBounds,
         contentBounds,
-        intrinsicSize: source.sourceSize,
+        intrinsicSize: source.content.sourceSize,
       };
     }
 
-    if (source.kind !== "shape") return null;
-    const resolved = resolveShapeSource(source);
+    if (object.type !== "shape") return null;
+    const source = object.source;
+    const resolved = resolveShapeSource(source.content);
     return resolved ? { source, ...resolved } : null;
   }
 
-  hitTest(source: ObjectSource, point: GeometryPoint): boolean {
-    const visual = this.resolve(source);
+  hitTest(object: EditorPrimitiveObject, point: GeometryPoint): boolean {
+    const visual = this.resolve(object);
     if (!visual?.bounds) return false;
     return containsPoint(visual.bounds, point);
   }
@@ -155,18 +165,19 @@ export class SourceResolver {
     private readonly geometryResolver: GeometryResolver = new DefaultGeometryResolver(),
   ) {}
 
-  resolve(source: ObjectSource): ResolvedVisual | null {
-    switch (source.kind) {
-      case "image": {
+  resolve(
+    object: Exclude<EditorObject, EditorCompositeObject>,
+  ): ResolvedVisual | null {
+    switch (object.type) {
+      case "image":
         return null;
-      }
       case "path":
       case "shape":
-        return this.geometryResolver.resolve(source);
+        return this.geometryResolver.resolve(object);
       case "text":
         return {
-          source,
-          text: source.text,
+          source: object.source,
+          text: object.source.content.text,
         };
       default:
         return null;
@@ -175,9 +186,9 @@ export class SourceResolver {
 }
 
 export function resolveObjectSource(
-  source: ObjectSource,
+  object: Exclude<EditorObject, EditorCompositeObject>,
 ): ResolvedVisual | null {
-  return new SourceResolver().resolve(source);
+  return new SourceResolver().resolve(object);
 }
 
 export interface EditorDocumentRuntime {
@@ -327,7 +338,7 @@ export interface EditorDocumentSelectorMutationOptions {
 }
 
 export interface EditorDocumentImageResourceUpdate {
-  source?: EditorAssetSource;
+  source?: EditorAssetDataSource;
   mimeType?: string;
   intrinsicSize?: EditorImageAsset["intrinsicSize"];
   visible?: boolean;
@@ -540,13 +551,18 @@ async function prepareEditorDocumentApplication(
     value,
     effectSchemaRegistry,
   );
+  const assetReferenceDiagnostics = validateEditorDocumentAssetReferences(
+    document,
+    { extensionRegistry },
+  );
   const diagnostics = [
     ...documentSchemaDiagnostics,
     ...extensionDiagnostics,
     ...objectSchemaDiagnostics,
     ...effectSchemaDiagnostics,
+    ...assetReferenceDiagnostics,
   ];
-  if (hasErrors(effectSchemaDiagnostics)) {
+  if (hasErrors([...effectSchemaDiagnostics, ...assetReferenceDiagnostics])) {
     return createResult(false, document, diagnostics, []);
   }
 
@@ -1071,23 +1087,19 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       const objects = selectEditorDocumentObjects(document, selector);
       assertSelectorCount(objects.length, options.expectedCount);
       if (!objects.length) throw new DocumentMutationError("object-not-found");
-      if (
-        objects.some(
-          (object) =>
-            !isEditorVisualObject(object) || object.source.kind !== "image",
-        )
-      ) {
+      if (objects.some((object) => object.type !== "image")) {
         throw new DocumentMutationError("object-type-mismatch");
       }
-      const replacedAssetIds = new Set<string>();
       objects.forEach((object) => {
-        if (!isEditorVisualObject(object) || object.source.kind !== "image")
-          return;
-        if (object.source.assetId) replacedAssetIds.add(object.source.assetId);
-        const assetId = object.source.assetId ?? `asset:${object.id}`;
-        object.source = update.source
-          ? { kind: "image", assetId }
-          : { kind: "image" };
+        if (object.type !== "image") return;
+        const assetId = update.source
+          ? createEditorDocumentAssetId(document, `asset:${object.id}`)
+          : (object.source?.assetId ?? `asset:${object.id}`);
+        setEditorImageObjectSource(
+          document,
+          object.id,
+          update.source ? { kind: "asset", assetId } : null,
+        );
         if (update.visible !== undefined) object.visible = update.visible;
         if (update.source) {
           const asset: EditorImageAsset = {
@@ -1099,18 +1111,9 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
               ? { intrinsicSize: { ...update.intrinsicSize } }
               : {}),
           };
-          const assetIndex = document.assets.findIndex(
-            (item) => item.id === assetId,
-          );
-          if (assetIndex >= 0) document.assets[assetIndex] = asset;
-          else document.assets.push(asset);
+          upsertEditorDocumentAsset(document, asset);
         }
       });
-      document.assets = document.assets.filter(
-        (asset) =>
-          !replacedAssetIds.has(asset.id) ||
-          isAssetReferenced(document, asset.id),
-      );
     });
   }
 
@@ -1236,6 +1239,9 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         : mutationFailure("mutation-failed");
     }
     const next = returned ? cloneEditorDocument(returned) : candidate;
+    reclaimOrphanedEditorDocumentAssets(next, {
+      extensionRegistry: createRuntimeDocumentExtensionRegistry(this.runtime),
+    });
     const result = await this.applyDocumentToRuntime(next, "update", {
       publishDocumentState: (document) => {
         this.workingDocument = cloneEditorDocument(document);
@@ -1583,29 +1589,6 @@ function assertSelectorCount(
   }
 }
 
-function isAssetReferenced(document: EditorDocument, assetId: string): boolean {
-  const referencedByObject = selectEditorDocumentObjects(document).some(
-    (object) =>
-      isEditorVisualObject(object) &&
-      object.source.kind === "image" &&
-      object.source.assetId === assetId,
-  );
-  return referencedByObject || jsonContainsString(document.extensions, assetId);
-}
-
-function jsonContainsString(value: unknown, expected: string): boolean {
-  if (value === expected) return true;
-  if (Array.isArray(value)) {
-    return value.some((entry) => jsonContainsString(entry, expected));
-  }
-  if (value && typeof value === "object") {
-    return Object.values(value).some((entry) =>
-      jsonContainsString(entry, expected),
-    );
-  }
-  return false;
-}
-
 class EditorDocumentSessionMutationError extends Error {
   constructor(readonly result: EditorDocumentMutationResult) {
     super(result.ok ? "document-session-mutation-failed" : result.reason);
@@ -1860,11 +1843,10 @@ export function createDocumentObjectGeometrySource(
         metadata: { objectId: object.id, composite: true },
       };
     }
-    const usesFrameGeometry =
-      object.source.kind === "image" || object.source.kind === "text";
+    const usesFrameGeometry = object.type === "image" || object.type === "text";
     const visual = usesFrameGeometry
       ? ({ source: object.source } satisfies ResolvedVisual)
-      : resolveObjectSource(object.source);
+      : resolveObjectSource(object);
     if (!visual) return null;
     const visualPlacement = visual.pathData
       ? createPathAffinePlacement(
@@ -1883,7 +1865,7 @@ export function createDocumentObjectGeometrySource(
         space: "object-local",
         bounds,
         localToScene: visualPlacement.localToScene,
-        metadata: { objectId: object.id, sourceKind: object.source.kind },
+        metadata: { objectId: object.id, objectType: object.type },
       };
     }
     return {
@@ -1893,7 +1875,7 @@ export function createDocumentObjectGeometrySource(
       bounds,
       rect: bounds,
       localToScene: visualPlacement.localToScene,
-      metadata: { objectId: object.id, sourceKind: object.source.kind },
+      metadata: { objectId: object.id, objectType: object.type },
     };
   };
 
@@ -1987,7 +1969,7 @@ function getDocumentObjectDescriptors(document: EditorDocument) {
             },
             kind: isEditorCompositeObject(object)
               ? "compound"
-              : object.source.kind === "image" || object.source.kind === "text"
+              : object.type === "image" || object.type === "text"
                 ? "rect"
                 : "path",
             space: isEditorCompositeObject(object) ? "scene" : "object-local",
@@ -2107,22 +2089,6 @@ function createBaseRenderIntentDrafts(
   objectSchemaRegistry: ObjectSchemaRegistry,
 ): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
-  const assetsById = new Map(document.assets.map((asset) => [asset.id, asset]));
-  const placeholderVisibility = new Map<string, boolean>();
-  visitDocumentVisualObjects(document, (object) => {
-    if (object.source.kind !== "image") return;
-    const config = getImageSlotBehaviorConfig(object as EditorImageObject);
-    if (!config?.placeholderSelector) return;
-    const empty = !object.source.assetId;
-    selectEditorDocumentObjects(document, config.placeholderSelector).forEach(
-      (placeholder) => {
-        placeholderVisibility.set(
-          placeholder.id,
-          (placeholderVisibility.get(placeholder.id) ?? false) || empty,
-        );
-      },
-    );
-  });
   document.surfaces.forEach((surface, surfaceIndex) => {
     surface.layers.forEach((layer, layerIndex) => {
       const visit = (
@@ -2179,13 +2145,14 @@ function createBaseRenderIntentDrafts(
             layerIndex,
             index,
             resolvedImages.get(object.id),
-            object.source.kind === "image" && object.source.assetId
-              ? assetsById.get(object.source.assetId)
+            object.type === "image"
+              ? resolveImageVisualAsset(document, object as EditorImageObject)
               : undefined,
             framePlacement,
             compositeId,
             interaction,
-            placeholderVisibility.get(object.id),
+            object.type === "image" &&
+              isImageSlotPlaceholderFallback(object as EditorImageObject),
           );
           if (draft) drafts.push(draft);
         });
@@ -2322,7 +2289,7 @@ function createObjectRenderIntentDraft(
   framePlacement: AffinePlacement = createFrameAffinePlacement(object),
   compositeId?: string,
   interaction?: InteractionSpec,
-  behaviorVisible?: boolean,
+  placeholderFallback = false,
 ): RenderIntentDraft | null {
   if (!isEditorVisualObject(object)) return null;
   const objectOrder = index;
@@ -2331,8 +2298,6 @@ function createObjectRenderIntentDraft(
   const objectEffects = cloneObjectEffects(object.effects);
   const isGuide =
     object.traits?.some((trait) => trait.type === "core.guide") ?? false;
-  const isPlaceholder =
-    object.traits?.some((trait) => trait.type === "core.placeholder") ?? false;
   const outputMaskKeys = Array.from(
     new Set(
       object.traits
@@ -2355,7 +2320,7 @@ function createObjectRenderIntentDraft(
       surfaceId: surface.id,
       layerId: layer.id,
       objectId: object.id,
-      objectType: object.source.kind,
+      objectType: object.type,
     },
     placement: framePlacement,
     containerGeometryRef: {
@@ -2381,22 +2346,19 @@ function createObjectRenderIntentDraft(
       subOrder: 0,
     },
     export: {
-      visible:
-        (layer.visible ?? true) &&
-        (object.visible ?? true) &&
-        (behaviorVisible ?? true),
+      visible: (layer.visible ?? true) && (object.visible ?? true),
       tags,
     },
     ...(interaction ? { interaction } : {}),
     props: {
       ...(object.appearance ?? {}),
-      ...(isGuide || isPlaceholder ? { excludeFromExport: true } : {}),
+      ...(isGuide || placeholderFallback ? { excludeFromExport: true } : {}),
     },
     data: {
       id: object.id,
       layerId: layer.id,
       documentSurfaceId: surface.id,
-      documentObjectSourceKind: object.source.kind,
+      documentObjectType: object.type,
       ...(compositeId ? { compositeId } : {}),
       ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
@@ -2404,12 +2366,13 @@ function createObjectRenderIntentDraft(
     },
   } satisfies Omit<RenderIntentDraft, "visual">;
 
-  if (object.source.kind === "image") {
+  if (object.type === "image") {
     return createImageRenderIntentDraft(
       base,
       object as EditorImageObject,
       imageResolution,
       imageAsset,
+      placeholderFallback,
       resolveEditorImageClipFrame(
         surface,
         object as EditorImageObject,
@@ -2417,7 +2380,7 @@ function createObjectRenderIntentDraft(
       ),
     );
   }
-  const visual = resolveObjectSource(object.source);
+  const visual = resolveObjectSource(object);
   if (!visual) return null;
   if (visual.imageUrl) {
     return {
@@ -2464,6 +2427,7 @@ function createImageRenderIntentDraft(
   object: EditorImageObject,
   resolution?: ImageResourceResolution,
   resource?: EditorImageAsset,
+  placeholderFallback = false,
   clipFrame?: import("@pooder/core").CoordinateRect<"object-local">,
 ): RenderIntentDraft {
   const resolved = resolution?.ok
@@ -2480,7 +2444,18 @@ function createImageRenderIntentDraft(
         }
       : undefined;
   const image = resolved;
-  const fit = object.appearance.fit;
+  const appearance = placeholderFallback
+    ? {
+        ...object.appearance,
+        fit: "stretch" as const,
+        anchorX: 0.5,
+        anchorY: 0.5,
+        zoom: 1,
+        rotation: 0,
+        opacity: 1,
+      }
+    : object.appearance;
+  const fit = appearance.fit;
   const geometryDescriptor = image
     ? {
         source: {
@@ -2494,8 +2469,8 @@ function createImageRenderIntentDraft(
           height: object.placement.localBounds.height,
         }),
         fit,
-        transform: object.appearance,
-        ...(object.appearance.clip === "frame" && clipFrame
+        transform: appearance,
+        ...(appearance.clip === "frame" && clipFrame
           ? { clip: clipFrame }
           : {}),
       }
@@ -2546,13 +2521,15 @@ function createImageRenderIntentDraft(
       : base.placement,
     props: {
       ...base.props,
+      ...appearance,
       source: object.source,
-      opacity: geometry?.opacity ?? object.appearance.opacity,
+      opacity: geometry?.opacity ?? appearance.opacity,
       ...(geometry?.clip ? { clip: geometry.clip } : {}),
     },
     data: {
       ...base.data,
-      emptyImageSlot: !resource,
+      emptyImageSlot: placeholderFallback,
+      ...(placeholderFallback ? { imageSlotVisualFallback: true } : {}),
       ...(resolved && geometryDescriptor
         ? { [IMAGE_GEOMETRY_DATA_KEY]: geometryDescriptor }
         : {}),
@@ -2608,6 +2585,23 @@ function getImageSlotBehaviorConfig(
     : undefined;
 }
 
+function resolveImageVisualAsset(
+  document: EditorDocument,
+  object: EditorImageObject,
+): EditorImageAsset | undefined {
+  const source =
+    object.source ?? getImageSlotBehaviorConfig(object)?.placeholderSource;
+  return resolveEditorDocumentAsset<EditorImageAsset>(
+    document,
+    source,
+    "image",
+  );
+}
+
+function isImageSlotPlaceholderFallback(object: EditorImageObject): boolean {
+  return object.source === null && Boolean(getImageSlotBehaviorConfig(object));
+}
+
 function createEditorImageClipEffect(
   objectId: string,
   frame: import("@pooder/core").CoordinateRect<"object-local">,
@@ -2647,16 +2641,14 @@ async function resolveDocumentImageResources(
   );
   const entries: Array<Promise<readonly [string, ImageResourceResolution]>> =
     [];
-  const assetsById = new Map(document.assets.map((asset) => [asset.id, asset]));
   const collect = (objects: EditorObject[] | undefined) =>
     objects?.forEach((object) => {
       if (isEditorCompositeObject(object)) {
         collect(object.children);
         return;
       }
-      if (object.source.kind !== "image" || !object.source.assetId || !service)
-        return;
-      const asset = assetsById.get(object.source.assetId);
+      if (object.type !== "image" || !service) return;
+      const asset = resolveImageVisualAsset(document, object);
       if (!asset) return;
       const resource: ImageResourceDescriptor = {
         ...asset.source,
@@ -2816,9 +2808,7 @@ function resolveRenderIntentTarget(
     surfaceId: context.surface.id,
     layerId: context.layer.id,
     objectId: context.object.id,
-    objectType: isEditorCompositeObject(context.object)
-      ? "composite"
-      : context.object.source.kind,
+    objectType: context.object.type,
   };
 }
 
@@ -2912,7 +2902,7 @@ function normalizeOutputMaskKeys(value: unknown): string[] {
 }
 
 function resolveShapeSource(
-  source: Extract<ObjectSource, { kind: "shape" }>,
+  source: EditorShapeContent,
 ): Omit<ResolvedVisual, "source"> | null {
   switch (source.shape) {
     case "rect": {
