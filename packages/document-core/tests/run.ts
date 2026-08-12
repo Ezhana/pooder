@@ -20,11 +20,17 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
-    throw new Error(`${message} (expected ${String(expected)}, got ${String(actual)})`);
+    throw new Error(
+      `${message} (expected ${String(expected)}, got ${String(actual)})`,
+    );
   }
 }
 
-function assertDeepEqual(actual: unknown, expected: unknown, message: string): void {
+function assertDeepEqual(
+  actual: unknown,
+  expected: unknown,
+  message: string,
+): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
   if (actualJson !== expectedJson) {
@@ -54,7 +60,6 @@ function createDocument(): EditorDocument {
         layers: [
           {
             id: "front.content",
-            role: "content",
             visible: true,
             locked: false,
             objects: [
@@ -135,7 +140,10 @@ async function testStrictApplyAndGeometry(): Promise<void> {
   const controller = registerEditorDocumentService(runtime);
   try {
     const result = await controller.apply(createDocument());
-    assert(result.ok, `strict document should apply (${JSON.stringify(result.diagnostics)})`);
+    assert(
+      result.ok,
+      `strict document should apply (${JSON.stringify(result.diagnostics)})`,
+    );
     const renderIntents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
@@ -167,6 +175,58 @@ async function testStrictApplyAndGeometry(): Promise<void> {
     assert(
       renderIntents.getGraph().revision > beforeRevision,
       "committed mutation should republish render intent",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testDocumentLayerArrayDefinesRenderGraphOrder(): Promise<void> {
+  const document = createDocument();
+  document.surfaces[0]!.layers = ["bottom", "middle", "top"].map(
+    (id, layerIndex) => ({
+      id,
+      visible: true,
+      locked: false,
+      objects: [
+        {
+          id: `${id}.object`,
+          tags: [],
+          visible: true,
+          locked: false,
+          placement: {
+            localBounds: { x: 0, y: 0, width: 10, height: 10 },
+            localToParent: [1, 0, 0, 1, layerIndex, layerIndex],
+            pivot: { x: 0, y: 0 },
+          },
+          source: { kind: "shape", shape: "rect", params: {} },
+        },
+      ],
+    }),
+  );
+
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const applied = await controller.apply(document);
+    assert(applied.ok, "layer ordering document should apply");
+    const graph = runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph();
+    assertDeepEqual(
+      graph.layers.map((layer) => layer.id),
+      ["bottom", "middle", "top"],
+      "RenderGraph should use document layer indexes from bottom to top",
+    );
+    assertEqual(
+      graph.layers[0]?.order,
+      0,
+      "the first layer should be bottommost",
+    );
+    assertEqual(
+      graph.layers.at(-1)?.order,
+      2,
+      "the last layer should be topmost",
     );
   } finally {
     await runtime.dispose();
@@ -209,7 +269,8 @@ async function testSceneTranslationCommit(): Promise<void> {
     });
     assert(result.ok, "scene translation should commit");
     assertDeepEqual(
-      controller.export()?.surfaces[0]!.layers[0]!.objects[1]!.placement.localToParent,
+      controller.export()?.surfaces[0]!.layers[0]!.objects[1]!.placement
+        .localToParent,
       [1, 0.25, -0.1, 1, 20, 25],
       "scene delta should convert to parent-local translation",
     );
@@ -233,6 +294,7 @@ async function main(): Promise<void> {
   testSourceResolution();
   testSceneFrameConversion();
   await testStrictApplyAndGeometry();
+  await testDocumentLayerArrayDefinesRenderGraphOrder();
   await testRejectedDocumentsRemainAtomic();
   await testSceneTranslationCommit();
   console.log("ok");

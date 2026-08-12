@@ -48,3 +48,6 @@ This policy defines the capability-first architecture and public naming rules.
   contains selection, manipulation, and constraints only.
 - Product metadata does not enter the generic document model; express durable
   semantics through typed traits and extension state.
+- Layer hierarchy is represented only by `EditorSurface.layers` array order:
+  index zero is bottommost and the last layer is topmost. `EditorLayer` has no
+  semantic role or independent stack value.

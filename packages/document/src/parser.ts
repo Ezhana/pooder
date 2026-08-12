@@ -89,7 +89,9 @@ export function validateEditorDocument(
       : [
           diagnostic(
             "document-parse-failed",
-            error instanceof Error ? error.message : "EditorDocument parsing failed.",
+            error instanceof Error
+              ? error.message
+              : "EditorDocument parsing failed.",
             "document",
           ),
         ];
@@ -150,7 +152,12 @@ function parseAsset(value: unknown, index: number): EditorAsset {
       : { mimeType: identifier(input.mimeType, `${path}.mimeType`) }),
     ...(input.intrinsicSize === undefined
       ? {}
-      : { intrinsicSize: parseSize(input.intrinsicSize, `${path}.intrinsicSize`) }),
+      : {
+          intrinsicSize: parseSize(
+            input.intrinsicSize,
+            `${path}.intrinsicSize`,
+          ),
+        }),
   };
 }
 
@@ -167,7 +174,11 @@ function parseAssetSource(value: unknown, path: string): EditorAssetSource {
       dataUrl: identifier(input.dataUrl, `${path}.dataUrl`),
     };
   }
-  fail("asset-source-kind-invalid", "Asset source kind is invalid.", `${path}.kind`);
+  fail(
+    "asset-source-kind-invalid",
+    "Asset source kind is invalid.",
+    `${path}.kind`,
+  );
 }
 
 function parseExtensions(value: unknown): Record<string, JsonValue> {
@@ -196,7 +207,10 @@ function parseSurface(value: unknown, index: number): EditorSurface {
       ? {}
       : { title: string(input.title, `${path}.title`) }),
     geometry: {
-      canvasBounds: parseRect(geometry.canvasBounds, `${path}.geometry.canvasBounds`),
+      canvasBounds: parseRect(
+        geometry.canvasBounds,
+        `${path}.geometry.canvasBounds`,
+      ),
       productionBounds: parseRect(
         geometry.productionBounds,
         `${path}.geometry.productionBounds`,
@@ -226,14 +240,9 @@ function parseSurface(value: unknown, index: number): EditorSurface {
 
 function parseLayer(value: unknown, path: string): EditorLayer {
   const input = record(value, path);
-  exact(input, ["id", "role", "visible", "locked", "objects"], path);
-  const roles = ["background", "content", "guide", "overlay", "production"];
-  if (!roles.includes(input.role as string)) {
-    fail("layer-role-invalid", "Layer role is invalid.", `${path}.role`);
-  }
+  exact(input, ["id", "visible", "locked", "objects"], path);
   return {
     id: identifier(input.id, `${path}.id`),
-    role: input.role as EditorLayer["role"],
     visible: boolean(input.visible, `${path}.visible`),
     locked: boolean(input.locked, `${path}.locked`),
     objects: array(input.objects, `${path}.objects`).map((object, index) =>
@@ -280,8 +289,8 @@ function parseObject(value: unknown, path: string): EditorObject {
     ...(input.effects === undefined
       ? {}
       : {
-          effects: array(input.effects, `${path}.effects`).map((effect, index) =>
-            parseEffect(effect, `${path}.effects[${index}]`),
+          effects: array(input.effects, `${path}.effects`).map(
+            (effect, index) => parseEffect(effect, `${path}.effects[${index}]`),
           ),
         }),
     ...(input.behaviors === undefined
@@ -342,7 +351,11 @@ function parsePlacement(
   exact(input, ["localBounds", "localToParent", "pivot"], path);
   const matrix = array(input.localToParent, `${path}.localToParent`);
   if (matrix.length !== 6) {
-    fail("affine-matrix-invalid", "Affine matrix must contain 6 numbers.", `${path}.localToParent`);
+    fail(
+      "affine-matrix-invalid",
+      "Affine matrix must contain 6 numbers.",
+      `${path}.localToParent`,
+    );
   }
   return {
     localBounds: parseRect(input.localBounds, `${path}.localBounds`),
@@ -371,7 +384,9 @@ function parseObjectSource(value: unknown, path: string): ObjectSource {
       pathData: identifier(input.pathData, `${path}.pathData`),
       ...(input.sourceBounds === undefined
         ? {}
-        : { sourceBounds: parseRect(input.sourceBounds, `${path}.sourceBounds`) }),
+        : {
+            sourceBounds: parseRect(input.sourceBounds, `${path}.sourceBounds`),
+          }),
       ...(input.sourceSize === undefined
         ? {}
         : { sourceSize: parseSize(input.sourceSize, `${path}.sourceSize`) }),
@@ -379,7 +394,9 @@ function parseObjectSource(value: unknown, path: string): ObjectSource {
   }
   if (input.kind === "shape") {
     exact(input, ["kind", "shape", "params"], path);
-    if (!["rect", "circle", "ellipse", "heart"].includes(input.shape as string)) {
+    if (
+      !["rect", "circle", "ellipse", "heart"].includes(input.shape as string)
+    ) {
       fail("shape-kind-invalid", "Shape kind is invalid.", `${path}.shape`);
     }
     return {
@@ -392,12 +409,23 @@ function parseObjectSource(value: unknown, path: string): ObjectSource {
     exact(input, ["kind", "text"], path);
     return { kind: "text", text: string(input.text, `${path}.text`) };
   }
-  fail("object-source-kind-invalid", "Object source kind is invalid.", `${path}.kind`);
+  fail(
+    "object-source-kind-invalid",
+    "Object source kind is invalid.",
+    `${path}.kind`,
+  );
 }
 
-function parseImageAppearance(value: unknown, path: string): EditorImagePlacement {
+function parseImageAppearance(
+  value: unknown,
+  path: string,
+): EditorImagePlacement {
   const input = record(value, path);
-  exact(input, ["fit", "anchorX", "anchorY", "zoom", "rotation", "opacity", "clip"], path);
+  exact(
+    input,
+    ["fit", "anchorX", "anchorY", "zoom", "rotation", "opacity", "clip"],
+    path,
+  );
   if (!["cover", "contain", "stretch"].includes(input.fit as string)) {
     fail("image-fit-invalid", "Image fit is invalid.", `${path}.fit`);
   }
@@ -424,7 +452,9 @@ function parsePrimitiveAppearance(
   const color = (entry: unknown, entryPath: string) =>
     entry === null ? null : string(entry, entryPath);
   return {
-    ...(input.fill === undefined ? {} : { fill: color(input.fill, `${path}.fill`) }),
+    ...(input.fill === undefined
+      ? {}
+      : { fill: color(input.fill, `${path}.fill`) }),
     ...(input.stroke === undefined
       ? {}
       : { stroke: color(input.stroke, `${path}.stroke`) }),
@@ -475,19 +505,41 @@ function parseEffect(value: unknown, path: string): EditorObjectEffect {
     exact(input, ["type", "sourceObjectId", "participation"], path);
     return {
       type,
-      sourceObjectId: identifier(input.sourceObjectId, `${path}.sourceObjectId`),
+      sourceObjectId: identifier(
+        input.sourceObjectId,
+        `${path}.sourceObjectId`,
+      ),
       ...parseParticipation(input.participation, `${path}.participation`),
     };
   }
   if (type === "core.geometry.boolean") {
-    exact(input, ["type", "operandObjectId", "operation", "participation"], path);
-    if (!["add", "subtract", "intersect", "exclude"].includes(input.operation as string)) {
-      fail("boolean-operation-invalid", "Boolean operation is invalid.", `${path}.operation`);
+    exact(
+      input,
+      ["type", "operandObjectId", "operation", "participation"],
+      path,
+    );
+    if (
+      !["add", "subtract", "intersect", "exclude"].includes(
+        input.operation as string,
+      )
+    ) {
+      fail(
+        "boolean-operation-invalid",
+        "Boolean operation is invalid.",
+        `${path}.operation`,
+      );
     }
     return {
       type,
-      operandObjectId: identifier(input.operandObjectId, `${path}.operandObjectId`),
-      operation: input.operation as "add" | "subtract" | "intersect" | "exclude",
+      operandObjectId: identifier(
+        input.operandObjectId,
+        `${path}.operandObjectId`,
+      ),
+      operation: input.operation as
+        | "add"
+        | "subtract"
+        | "intersect"
+        | "exclude",
       ...parseParticipation(input.participation, `${path}.participation`),
     };
   }
@@ -503,7 +555,11 @@ function parseEffect(value: unknown, path: string): EditorObjectEffect {
 function parseParticipation(value: unknown, path: string) {
   if (value === undefined) return {};
   if (value !== "preview" && value !== "export" && value !== "both") {
-    fail("effect-participation-invalid", "Effect participation is invalid.", path);
+    fail(
+      "effect-participation-invalid",
+      "Effect participation is invalid.",
+      path,
+    );
   }
   return { participation: value } as const;
 }
@@ -519,7 +575,10 @@ function parseBehavior(value: unknown, path: string): EditorObjectBehavior {
   };
 }
 
-function parseInteraction(value: unknown, path: string): DocumentInteractionSpec {
+function parseInteraction(
+  value: unknown,
+  path: string,
+): DocumentInteractionSpec {
   const input = record(value, path);
   exact(input, ["selection", "manipulation"], path);
   const interaction: DocumentInteractionSpec = {};
@@ -591,7 +650,9 @@ function parseConstraint(value: unknown, path: string): DocumentConstraintSpec {
     ...(input.source === undefined
       ? {}
       : { source: parseGeometryRef(input.source, `${path}.source`) }),
-    ...(input.mode === undefined ? {} : { mode: string(input.mode, `${path}.mode`) }),
+    ...(input.mode === undefined
+      ? {}
+      : { mode: string(input.mode, `${path}.mode`) }),
     ...(input.params === undefined
       ? {}
       : { params: jsonRecord(input.params, `${path}.params`) }),
@@ -623,7 +684,11 @@ function parseConstraintApplication(value: unknown, path: string) {
   exact(input, ["preview", "commit"], path);
   const mode = (entry: unknown, entryPath: string) => {
     if (entry !== "evaluate" && entry !== "apply") {
-      fail("constraint-application-invalid", "Constraint application mode is invalid.", entryPath);
+      fail(
+        "constraint-application-invalid",
+        "Constraint application mode is invalid.",
+        entryPath,
+      );
     }
     return entry as DocumentConstraintApplicationMode;
   };
@@ -654,77 +719,85 @@ function validateDocumentReferences(
       );
     } else allIds.set(id, path);
   };
-  document.assets.forEach((asset, index) => addId(asset.id, `assets[${index}].id`));
+  document.assets.forEach((asset, index) =>
+    addId(asset.id, `assets[${index}].id`),
+  );
   document.surfaces.forEach((surface, surfaceIndex) => {
     addId(surface.id, `surfaces[${surfaceIndex}].id`);
     surface.layers.forEach((layer, layerIndex) =>
       addId(layer.id, `surfaces[${surfaceIndex}].layers[${layerIndex}].id`),
     );
   });
-  const objects = new Map<string, { object: EditorObject; surfaceId: string; path: string }>();
+  const objects = new Map<
+    string,
+    { object: EditorObject; surfaceId: string; path: string }
+  >();
   visitEditorDocumentObjects(document, ({ object, surface, path }) => {
     addId(object.id, `${path}.id`);
     objects.set(object.id, { object, surfaceId: surface.id, path });
   });
   const assetIds = new Set(document.assets.map((asset) => asset.id));
   const dependencies = new Map<string, Set<string>>();
-  visitEditorDocumentObjects(document, ({ object, surface, path, parentObject }) => {
-    if (parentObject && object.interaction) {
-      diagnostics.push(
-        diagnostic(
-          "composite-child-interaction-invalid",
-          "Composite child interaction belongs to its composite owner.",
-          `${path}.interaction`,
-        ),
-      );
-    }
-    const imageSource =
-      "source" in object && object.source?.kind === "image"
-        ? object.source
-        : undefined;
-    if (imageSource?.assetId && !assetIds.has(imageSource.assetId)) {
-      diagnostics.push(
-        diagnostic(
-          "image-asset-missing",
-          `Image asset "${imageSource.assetId}" does not exist.`,
-          `${path}.source.assetId`,
-        ),
-      );
-    }
-    object.effects?.forEach((effect, index) => {
-      if (!isEditorBuiltinObjectEffect(effect)) return;
-      const isClip = effect.type === "core.geometry.clip";
-      const field = isClip ? "sourceObjectId" : "operandObjectId";
-      const targetId = isClip
-        ? effect.sourceObjectId
-        : effect.operandObjectId;
-      const target = objects.get(targetId);
-      const effectPath = `${path}.effects[${index}].${field}`;
-      if (!target) {
+  visitEditorDocumentObjects(
+    document,
+    ({ object, surface, path, parentObject }) => {
+      if (parentObject && object.interaction) {
         diagnostics.push(
           diagnostic(
-            "object-effect-target-missing",
-            `Object "${object.id}" references missing object "${targetId}".`,
-            effectPath,
+            "composite-child-interaction-invalid",
+            "Composite child interaction belongs to its composite owner.",
+            `${path}.interaction`,
           ),
         );
-        return;
       }
-      if (target.surfaceId !== surface.id) {
+      const imageSource =
+        "source" in object && object.source?.kind === "image"
+          ? object.source
+          : undefined;
+      if (imageSource?.assetId && !assetIds.has(imageSource.assetId)) {
         diagnostics.push(
           diagnostic(
-            "object-effect-cross-surface",
-            `Object "${object.id}" references another surface.`,
-            effectPath,
+            "image-asset-missing",
+            `Image asset "${imageSource.assetId}" does not exist.`,
+            `${path}.source.assetId`,
           ),
         );
-        return;
       }
-      const targets = dependencies.get(object.id) ?? new Set<string>();
-      targets.add(targetId);
-      dependencies.set(object.id, targets);
-    });
-  });
+      object.effects?.forEach((effect, index) => {
+        if (!isEditorBuiltinObjectEffect(effect)) return;
+        const isClip = effect.type === "core.geometry.clip";
+        const field = isClip ? "sourceObjectId" : "operandObjectId";
+        const targetId = isClip
+          ? effect.sourceObjectId
+          : effect.operandObjectId;
+        const target = objects.get(targetId);
+        const effectPath = `${path}.effects[${index}].${field}`;
+        if (!target) {
+          diagnostics.push(
+            diagnostic(
+              "object-effect-target-missing",
+              `Object "${object.id}" references missing object "${targetId}".`,
+              effectPath,
+            ),
+          );
+          return;
+        }
+        if (target.surfaceId !== surface.id) {
+          diagnostics.push(
+            diagnostic(
+              "object-effect-cross-surface",
+              `Object "${object.id}" references another surface.`,
+              effectPath,
+            ),
+          );
+          return;
+        }
+        const targets = dependencies.get(object.id) ?? new Set<string>();
+        targets.add(targetId);
+        dependencies.set(object.id, targets);
+      });
+    },
+  );
   const visited = new Set<string>();
   const active = new Set<string>();
   const visit = (id: string) => {
@@ -808,18 +881,24 @@ function array(value: unknown, path: string): unknown[] {
 function identifier(value: unknown, path: string): string {
   const result = string(value, path);
   if (!result || result !== result.trim()) {
-    fail("identifier-invalid", "Expected a non-empty, already-trimmed string.", path);
+    fail(
+      "identifier-invalid",
+      "Expected a non-empty, already-trimmed string.",
+      path,
+    );
   }
   return result;
 }
 
 function string(value: unknown, path: string): string {
-  if (typeof value !== "string") fail("string-required", "Expected a string.", path);
+  if (typeof value !== "string")
+    fail("string-required", "Expected a string.", path);
   return value;
 }
 
 function boolean(value: unknown, path: string): boolean {
-  if (typeof value !== "boolean") fail("boolean-required", "Expected a boolean.", path);
+  if (typeof value !== "boolean")
+    fail("boolean-required", "Expected a boolean.", path);
   return value;
 }
 
@@ -839,14 +918,22 @@ function jsonRecord(value: unknown, path: string): Record<string, JsonValue> {
 }
 
 function json(value: unknown, path: string): JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
     return value;
   }
   if (typeof value === "number") return finite(value, path);
-  if (Array.isArray(value)) return value.map((entry, index) => json(entry, `${path}[${index}]`));
+  if (Array.isArray(value))
+    return value.map((entry, index) => json(entry, `${path}[${index}]`));
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, json(entry, `${path}.${key}`)]),
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        json(entry, `${path}.${key}`),
+      ]),
     );
   }
   fail("json-value-invalid", "Expected a JSON value.", path);

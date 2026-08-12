@@ -1032,7 +1032,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     source: EditorDocumentSource = "working",
   ): EditorObject | undefined {
     const objects = this.selectObjects(selector, source);
-    if (objects.length > 1) throw new Error("document-object-selector-ambiguous");
+    if (objects.length > 1)
+      throw new Error("document-object-selector-ambiguous");
     return objects[0];
   }
 
@@ -1072,14 +1073,16 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       if (!objects.length) throw new DocumentMutationError("object-not-found");
       if (
         objects.some(
-          (object) => !isEditorVisualObject(object) || object.source.kind !== "image",
+          (object) =>
+            !isEditorVisualObject(object) || object.source.kind !== "image",
         )
       ) {
         throw new DocumentMutationError("object-type-mismatch");
       }
       const replacedAssetIds = new Set<string>();
       objects.forEach((object) => {
-        if (!isEditorVisualObject(object) || object.source.kind !== "image") return;
+        if (!isEditorVisualObject(object) || object.source.kind !== "image")
+          return;
         if (object.source.assetId) replacedAssetIds.add(object.source.assetId);
         const assetId = object.source.assetId ?? `asset:${object.id}`;
         object.source = update.source
@@ -1096,14 +1099,17 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
               ? { intrinsicSize: { ...update.intrinsicSize } }
               : {}),
           };
-          const assetIndex = document.assets.findIndex((item) => item.id === assetId);
+          const assetIndex = document.assets.findIndex(
+            (item) => item.id === assetId,
+          );
           if (assetIndex >= 0) document.assets[assetIndex] = asset;
           else document.assets.push(asset);
         }
       });
       document.assets = document.assets.filter(
         (asset) =>
-          !replacedAssetIds.has(asset.id) || isAssetReferenced(document, asset.id),
+          !replacedAssetIds.has(asset.id) ||
+          isAssetReferenced(document, asset.id),
       );
     });
   }
@@ -1568,7 +1574,10 @@ class DocumentMutationError extends Error {
   }
 }
 
-function assertSelectorCount(actual: number, expected: number | undefined): void {
+function assertSelectorCount(
+  actual: number,
+  expected: number | undefined,
+): void {
   if (expected !== undefined && actual !== expected) {
     throw new DocumentMutationError("selector-count-mismatch");
   }
@@ -1590,7 +1599,9 @@ function jsonContainsString(value: unknown, expected: string): boolean {
     return value.some((entry) => jsonContainsString(entry, expected));
   }
   if (value && typeof value === "object") {
-    return Object.values(value).some((entry) => jsonContainsString(entry, expected));
+    return Object.values(value).some((entry) =>
+      jsonContainsString(entry, expected),
+    );
   }
   return false;
 }
@@ -2284,7 +2295,6 @@ function createCompositeInteractionProxyDraft(
       objectOrder: index,
       channel: "overlay",
       subOrder: 1,
-      stack: resolveLayerStack(layer),
     },
     props: {
       fill: "rgba(0,0,0,0)",
@@ -2319,7 +2329,8 @@ function createObjectRenderIntentDraft(
   const layerOrder = layerIndex;
   const locked = object.locked === true || layer.locked === true;
   const objectEffects = cloneObjectEffects(object.effects);
-  const isGuide = object.traits?.some((trait) => trait.type === "core.guide") ?? false;
+  const isGuide =
+    object.traits?.some((trait) => trait.type === "core.guide") ?? false;
   const isPlaceholder =
     object.traits?.some((trait) => trait.type === "core.placeholder") ?? false;
   const outputMaskKeys = Array.from(
@@ -2368,7 +2379,6 @@ function createObjectRenderIntentDraft(
       objectOrder,
       channel: "normal" as const,
       subOrder: 0,
-      stack: resolveLayerStack(layer),
     },
     export: {
       visible:
@@ -2387,7 +2397,6 @@ function createObjectRenderIntentDraft(
       layerId: layer.id,
       documentSurfaceId: surface.id,
       documentObjectSourceKind: object.source.kind,
-      documentLayerRole: layer.role,
       ...(compositeId ? { compositeId } : {}),
       ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
@@ -2664,11 +2673,6 @@ async function resolveDocumentImageResources(
     surface.layers.forEach((layer) => collect(layer.objects)),
   );
   return new Map(await Promise.all(entries));
-}
-
-function resolveLayerStack(layer: EditorLayer): number {
-  if (layer.role === "guide") return 900;
-  return layer.role === "overlay" ? 780 : 0;
 }
 
 async function compileRenderIntentPatches(

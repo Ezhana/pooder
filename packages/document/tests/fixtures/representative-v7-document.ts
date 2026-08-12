@@ -56,8 +56,61 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
       },
       layers: [
         {
+          id: "front.content",
+          visible: true,
+          locked: false,
+          objects: [
+            {
+              id: "front.image-slot",
+              tags: ["slot:front"],
+              visible: true,
+              locked: false,
+              placement: {
+                localBounds: { x: 0, y: 0, width: 80, height: 90 },
+                localToParent: [1, 0, 0, 1, 10, 15],
+                pivot: { x: 0, y: 0 },
+              },
+              source: {
+                kind: "image",
+                assetId: "front-artwork",
+              },
+              appearance: {
+                fit: "cover",
+                anchorX: 0.5,
+                anchorY: 0.5,
+                zoom: 1,
+                rotation: 0,
+                opacity: 1,
+                clip: "frame",
+              },
+              behaviors: [
+                {
+                  type: "pooder.image-slot",
+                  config: {
+                    accepts: ["image/png", "image/jpeg"],
+                    placeholderSelector: { ids: ["front.image-placeholder"] },
+                  },
+                },
+              ],
+            },
+            {
+              id: "front.image-placeholder",
+              tags: ["placeholder:image-slot", "slot:front"],
+              visible: false,
+              locked: true,
+              placement: {
+                localBounds: { x: 0, y: 0, width: 80, height: 90 },
+                localToParent: [1, 0, 0, 1, 10, 15],
+                pivot: { x: 0, y: 0 },
+              },
+              source: { kind: "shape", shape: "rect", params: {} },
+              appearance: { fill: "#dbeafe", stroke: "#2563eb" },
+              traits: [{ type: "core.placeholder" }],
+            },
+          ],
+        },
+        {
           id: "front.production",
-          role: "production",
           visible: true,
           locked: true,
           objects: [
@@ -113,61 +166,6 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
             },
           ],
         },
-        {
-          id: "front.content",
-          role: "content",
-          visible: true,
-          locked: false,
-          objects: [
-            {
-              id: "front.image-slot",
-              tags: ["slot:front"],
-              visible: true,
-              locked: false,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 80, height: 90 },
-                localToParent: [1, 0, 0, 1, 10, 15],
-                pivot: { x: 0, y: 0 },
-              },
-              source: {
-                kind: "image",
-                assetId: "front-artwork",
-              },
-              appearance: {
-                fit: "cover",
-                anchorX: 0.5,
-                anchorY: 0.5,
-                zoom: 1,
-                rotation: 0,
-                opacity: 1,
-                clip: "frame",
-              },
-              behaviors: [
-                {
-                  type: "pooder.image-slot",
-                  config: {
-                    accepts: ["image/png", "image/jpeg"],
-                    placeholderSelector: { ids: ["front.image-placeholder"] },
-                  },
-                },
-              ],
-            },
-            {
-              id: "front.image-placeholder",
-              tags: ["placeholder:image-slot", "slot:front"],
-              visible: false,
-              locked: true,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 80, height: 90 },
-                localToParent: [1, 0, 0, 1, 10, 15],
-                pivot: { x: 0, y: 0 },
-              },
-              source: { kind: "shape", shape: "rect", params: {} },
-              appearance: { fill: "#dbeafe", stroke: "#2563eb" },
-              traits: [{ type: "core.placeholder" }],
-            },
-          ],
-        },
       ],
     },
     {
@@ -182,7 +180,6 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
       layers: [
         {
           id: "back.content",
-          role: "content",
           visible: true,
           locked: false,
           objects: [

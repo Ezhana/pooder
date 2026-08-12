@@ -241,7 +241,6 @@ function createEffectDocument(
         layers: [
           {
             id: "artwork",
-            role: "content",
             visible: true,
             locked: false,
             objects: [visual],

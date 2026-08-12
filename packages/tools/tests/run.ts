@@ -83,7 +83,6 @@ function createImageSlotDocument(): EditorDocument {
         layers: [
           {
             id: "front.artwork.layer",
-            role: "content",
             visible: true,
             locked: false,
             objects: [
@@ -116,7 +115,10 @@ function createImageSlotDocument(): EditorDocument {
                     config: {
                       accepts: ["image/*"],
                       placeholderSelector: {
-                        ids: ["artwork.placeholder", "artwork.image-placeholder"],
+                        ids: [
+                          "artwork.placeholder",
+                          "artwork.image-placeholder",
+                        ],
                       },
                     },
                   },
@@ -222,18 +224,42 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
       .layers.flatMap((layer) => layer.nodes)
       .find((node) => node.subjectId === "artwork.image-placeholder");
   try {
-    assertEqual(getPlaceholder()?.visible, false, "filled slot should hide its placeholder");
-    assertEqual(getImagePlaceholder()?.visible, false, "filled slot should hide image placeholders");
+    assertEqual(
+      getPlaceholder()?.visible,
+      false,
+      "filled slot should hide its placeholder",
+    );
+    assertEqual(
+      getImagePlaceholder()?.visible,
+      false,
+      "filled slot should hide image placeholders",
+    );
     const cleared = await controller.updateImageResources(
       { ids: [IMAGE_SLOT_ID] },
       { visible: true },
       { expectedCount: 1 },
     );
     assertEqual(cleared.ok, true, "slot resource should clear atomically");
-    assertEqual(getPlaceholder()?.visible, true, "empty slot should show its placeholder");
-    assertEqual(getImagePlaceholder()?.visible, true, "empty slot should show image placeholders");
-    assertEqual(getPlaceholder()?.props.excludeFromExport, true, "shape placeholder should not export");
-    assertEqual(getImagePlaceholder()?.props.excludeFromExport, true, "image placeholder should not export");
+    assertEqual(
+      getPlaceholder()?.visible,
+      true,
+      "empty slot should show its placeholder",
+    );
+    assertEqual(
+      getImagePlaceholder()?.visible,
+      true,
+      "empty slot should show image placeholders",
+    );
+    assertEqual(
+      getPlaceholder()?.props.excludeFromExport,
+      true,
+      "shape placeholder should not export",
+    );
+    assertEqual(
+      getImagePlaceholder()?.props.excludeFromExport,
+      true,
+      "image placeholder should not export",
+    );
     assertEqual(
       controller.export()?.assets.some((asset) => asset.id === "artwork.asset"),
       false,
@@ -249,8 +275,16 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
       { expectedCount: 1 },
     );
     assertEqual(filled.ok, true, "slot resource should replace atomically");
-    assertEqual(getPlaceholder()?.visible, false, "refilled slot should hide its placeholder");
-    assertEqual(getImagePlaceholder()?.visible, false, "refilled slot should hide image placeholders");
+    assertEqual(
+      getPlaceholder()?.visible,
+      false,
+      "refilled slot should hide its placeholder",
+    );
+    assertEqual(
+      getImagePlaceholder()?.visible,
+      false,
+      "refilled slot should hide image placeholders",
+    );
   } finally {
     await runtime.dispose();
   }
@@ -296,7 +330,8 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
   const missingPlaceholder = createImageSlotDocument();
   missingPlaceholder.surfaces[0]!.layers[0]!.objects =
     missingPlaceholder.surfaces[0]!.layers[0]!.objects.filter(
-      (object) => !object.traits?.some((trait) => trait.type === "core.placeholder"),
+      (object) =>
+        !object.traits?.some((trait) => trait.type === "core.placeholder"),
     );
   assertEqual(
     (await apply(missingPlaceholder)).ok,

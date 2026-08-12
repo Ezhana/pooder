@@ -24,11 +24,17 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
-    throw new Error(`${message} (expected ${String(expected)}, got ${String(actual)})`);
+    throw new Error(
+      `${message} (expected ${String(expected)}, got ${String(actual)})`,
+    );
   }
 }
 
-function assertDeepEqual(actual: unknown, expected: unknown, message: string): void {
+function assertDeepEqual(
+  actual: unknown,
+  expected: unknown,
+  message: string,
+): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
   if (actualJson !== expectedJson) {
@@ -49,6 +55,11 @@ function testStrictRoundTrip(): void {
     ["front", "back"],
     "surface order should be preserved",
   );
+  assertDeepEqual(
+    document.surfaces[0]?.layers.map((layer) => layer.id),
+    ["front.content", "front.production"],
+    "layer array order should be preserved from bottom to top",
+  );
   assertEqual(
     findEditorDocumentObject(document, "front.feature.hole")?.id,
     "front.feature.hole",
@@ -67,8 +78,16 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
     ) as Record<string, unknown>;
     input[field] = value;
     const diagnostic = validateEditorDocument(input)[0];
-    assertEqual(diagnostic?.code, "unknown-field", `${field} should be rejected`);
-    assertEqual(diagnostic?.path, `document.${field}`, `${field} path should be stable`);
+    assertEqual(
+      diagnostic?.code,
+      "unknown-field",
+      `${field} should be rejected`,
+    );
+    assertEqual(
+      diagnostic?.path,
+      `document.${field}`,
+      `${field} path should be stable`,
+    );
   }
 
   const input = JSON.parse(
@@ -84,13 +103,33 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
     "legacy object frame should be rejected at its exact path",
   );
 
+  const layerRole = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const legacyLayer = (
+    (layerRole.surfaces as Array<Record<string, unknown>>)[0]!.layers as Array<
+      Record<string, unknown>
+    >
+  )[0]!;
+  legacyLayer.role = "content";
+  assertEqual(
+    validateEditorDocument(layerRole)[0]?.path,
+    "surfaces[0].layers[0].role",
+    "legacy layer role should be rejected at its exact path",
+  );
+
   const guideRole = JSON.parse(
     JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const guide = ((((guideRole.surfaces as Array<Record<string, unknown>>)[0]!
-    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
-    Record<string, unknown>
-  >)[0]!.traits as Array<Record<string, unknown>>)[0]!;
+  const guideLayers = (guideRole.surfaces as Array<Record<string, unknown>>)[0]!
+    .layers as Array<Record<string, unknown>>;
+  const guide = (
+    (
+      guideLayers[guideLayers.length - 1]!.objects as Array<
+        Record<string, unknown>
+      >
+    )[0]!.traits as Array<Record<string, unknown>>
+  )[0]!;
   guide.role = "cut";
   assertEqual(
     validateEditorDocument(guideRole)[0]?.code,
@@ -101,10 +140,12 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   const exportScope = JSON.parse(
     JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const exportObject = (((exportScope.surfaces as Array<Record<string, unknown>>)[0]!
-    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
-    Record<string, unknown>
-  >)[1]!;
+  const exportObject = (
+    (
+      (exportScope.surfaces as Array<Record<string, unknown>>)[0]!
+        .layers as Array<Record<string, unknown>>
+    )[0]!.objects as Array<Record<string, unknown>>
+  )[1]!;
   exportObject.traits = [{ type: "core.export", scopes: ["design"] }];
   assertEqual(
     validateEditorDocument(exportScope)[0]?.code,
@@ -115,10 +156,12 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   const unnamespacedTag = JSON.parse(
     JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const taggedObject = (((unnamespacedTag.surfaces as Array<Record<string, unknown>>)[0]!
-    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
-    Record<string, unknown>
-  >)[0]!;
+  const taggedObject = (
+    (
+      (unnamespacedTag.surfaces as Array<Record<string, unknown>>)[0]!
+        .layers as Array<Record<string, unknown>>
+    )[0]!.objects as Array<Record<string, unknown>>
+  )[0]!;
   taggedObject.tags = ["cut"];
   assertEqual(
     validateEditorDocument(unnamespacedTag)[0]?.code,
@@ -132,10 +175,8 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
     JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const geometry = (
-    (nonFinite.surfaces as Array<Record<string, unknown>>)[0]!.geometry as Record<
-      string,
-      unknown
-    >
+    (nonFinite.surfaces as Array<Record<string, unknown>>)[0]!
+      .geometry as Record<string, unknown>
   ).canvasBounds as Record<string, unknown>;
   geometry.width = Number.POSITIVE_INFINITY;
   assertEqual(
@@ -147,10 +188,12 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   const invalidUnion = JSON.parse(
     JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const object = (((invalidUnion.surfaces as Array<Record<string, unknown>>)[0]!
-    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
-    Record<string, unknown>
-  >)[0]!;
+  const object = (
+    (
+      (invalidUnion.surfaces as Array<Record<string, unknown>>)[0]!
+        .layers as Array<Record<string, unknown>>
+    )[0]!.objects as Array<Record<string, unknown>>
+  )[0]!;
   object.children = [];
   assertEqual(
     validateEditorDocument(invalidUnion)[0]?.code,
@@ -175,10 +218,15 @@ function testGlobalIdsAndReferencesAreStrict(): void {
   const missing = JSON.parse(
     JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const cutline = ((((missing.surfaces as Array<Record<string, unknown>>)[0]!
-    .layers as Array<Record<string, unknown>>)[0]!.objects as Array<
-    Record<string, unknown>
-  >)[0]!.effects as Array<Record<string, unknown>>)[0]!;
+  const missingLayers = (missing.surfaces as Array<Record<string, unknown>>)[0]!
+    .layers as Array<Record<string, unknown>>;
+  const cutline = (
+    (
+      missingLayers[missingLayers.length - 1]!.objects as Array<
+        Record<string, unknown>
+      >
+    )[0]!.effects as Array<Record<string, unknown>>
+  )[0]!;
   cutline.operandObjectId = "missing";
   assert(
     validateEditorDocument(missing).some(
@@ -230,19 +278,34 @@ function testExtensionSchemasAreStrict(): void {
     [],
     "registered effect schemas should validate",
   );
-  const requirements = collectEditorDocumentCapabilityRequirements(effectDocument, {
-    availableCapabilityIds: ["test.capability"],
-    resolveEffectCapabilityId: (effect) =>
-      effect.type === "test.effect" ? "test.capability" : undefined,
-  });
-  assertEqual(requirements.requirements.length, 1, "effect capability should be collected");
-  assertDeepEqual(requirements.diagnostics, [], "available capability should satisfy effect");
+  const requirements = collectEditorDocumentCapabilityRequirements(
+    effectDocument,
+    {
+      availableCapabilityIds: ["test.capability"],
+      resolveEffectCapabilityId: (effect) =>
+        effect.type === "test.effect" ? "test.capability" : undefined,
+    },
+  );
+  assertEqual(
+    requirements.requirements.length,
+    1,
+    "effect capability should be collected",
+  );
+  assertDeepEqual(
+    requirements.diagnostics,
+    [],
+    "available capability should satisfy effect",
+  );
 }
 
 function testCloneAndVisitors(): void {
   const document = representativeDocument();
   const clone = cloneEditorDocument(document);
-  assertDeepEqual(clone, document, "clone should preserve strict document data");
+  assertDeepEqual(
+    clone,
+    document,
+    "clone should preserve strict document data",
+  );
   assert(clone !== document, "clone should detach the root");
   const visited: string[] = [];
   visitEditorDocumentObjects(document, ({ path }) => visited.push(path));

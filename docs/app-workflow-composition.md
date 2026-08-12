@@ -18,6 +18,11 @@ group.
   cutline. Preview and export use the referenced object's final geometry.
 - Layer remains the coarse render partition. Composite provides local
   coordinates, logical selection, and linked interaction only.
+- `surface.layers` is the only source of layer hierarchy: `layers[0]` is the
+  bottom layer and the final layer is the top layer. Layer roles and runtime
+  stack metadata do not participate in ordering.
+- Guide objects use the `core.guide` trait for guide behavior. Applications
+  that need guides on top place their guide layer last in the array.
 
 The document compiler recursively composes transforms and emits every Visual
 child as an independent RenderIntent. An interactive Composite emits one

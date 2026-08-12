@@ -69,7 +69,6 @@ const createDocument = (): EditorDocument => ({
       layers: [
         {
           id: "artwork",
-          role: "content",
           visible: true,
           locked: false,
           objects: [
@@ -138,7 +137,8 @@ async function main() {
     "valid mask asset and object references should pass",
   );
   const missingReferences = createState();
-  missingReferences.masks["front.reverse"].production.referenceObjectId = "missing-object";
+  missingReferences.masks["front.reverse"].production.referenceObjectId =
+    "missing-object";
   missingReferences.masks["front.reverse"].production.source = {
     kind: "asset",
     assetId: "missing-asset",
@@ -148,16 +148,20 @@ async function main() {
     document,
   );
   assert(
-    referenceDiagnostics?.some((item) => item.code === "production-mask-object-missing") &&
-      referenceDiagnostics.some((item) => item.code === "production-mask-asset-missing"),
+    referenceDiagnostics?.some(
+      (item) => item.code === "production-mask-object-missing",
+    ) &&
+      referenceDiagnostics.some(
+        (item) => item.code === "production-mask-asset-missing",
+      ),
     "missing mask object and asset references should be rejected",
   );
 
   const extension = createProductionMaskCapability();
   const contributions = extension.contribute();
   assert(
-    (contributions.documentExtensions?.[0] as { id?: string } | undefined)?.id ===
-      POODER_PRODUCTION_MASK_CAPABILITY_ID,
+    (contributions.documentExtensions?.[0] as { id?: string } | undefined)
+      ?.id === POODER_PRODUCTION_MASK_CAPABILITY_ID,
     "production masks should register their document contribution",
   );
   assert(
@@ -165,7 +169,8 @@ async function main() {
     "production-mask state should not be carried by a render-intent compiler",
   );
 
-  const facade = contributions.capabilities?.[0]?.facade as ProductionMaskCapabilityApi;
+  const facade = contributions.capabilities?.[0]
+    ?.facade as ProductionMaskCapabilityApi;
   assert(facade, "production-mask capability facade should be contributed");
   let persisted = document;
   facade.syncDocument(document, {
@@ -175,18 +180,25 @@ async function main() {
       return { ok: true, document: persisted };
     },
   });
-  const productionBefore = JSON.stringify(createState().masks["front.reverse"].production);
+  const productionBefore = JSON.stringify(
+    createState().masks["front.reverse"].production,
+  );
   const updated = await facade.updatePreview({ currentMaskVisible: false });
   const persistedState = persisted.extensions[
     POODER_PRODUCTION_MASK_CAPABILITY_ID
   ] as unknown as ProductionMaskDocumentState;
-  assert(updated.ok, "preview preference should persist through the document controller");
   assert(
-    persistedState.masks["front.reverse"].presentation.currentMaskVisible === false,
+    updated.ok,
+    "preview preference should persist through the document controller",
+  );
+  assert(
+    persistedState.masks["front.reverse"].presentation.currentMaskVisible ===
+      false,
     "preview preference should be written immediately",
   );
   assert(
-    JSON.stringify(persistedState.masks["front.reverse"].production) === productionBefore,
+    JSON.stringify(persistedState.masks["front.reverse"].production) ===
+      productionBefore,
     "preview persistence must not publish or rewrite session production state",
   );
   console.log("ok");

@@ -10,7 +10,6 @@ export interface RenderIntentObjectPatchOptions {
   surfaceId?: string;
   layerId: string;
   layerOrder?: number;
-  stack?: number;
   channel?: RenderIntentPatch["ordering"] extends infer T
     ? T extends { channel?: infer C }
       ? C
@@ -44,7 +43,6 @@ export function patchRenderObjectSpecs(
       ordering: {
         layerId: options.layerId,
         layerOrder: options.layerOrder,
-        stack: options.stack,
         objectOrder: (options.baseOrder ?? 0) + index,
         channel: options.channel,
       },

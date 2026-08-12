@@ -67,7 +67,6 @@ export interface RenderIntentOrderingAspect {
   objectOrder?: number;
   channel?: RenderIntentChannel;
   subOrder?: number;
-  stack?: number;
 }
 
 export interface RenderIntentDraft {
@@ -168,7 +167,6 @@ export interface RenderGraphLayer {
   id: string;
   surfaceId: string;
   order: number;
-  stack: number;
   visible: boolean;
   nodes: RenderGraphNode[];
   effects: RenderEffectSpec[];
@@ -204,7 +202,8 @@ export function selectRenderGraphNodes(
     layer.nodes.filter((node) => {
       if (ids && !ids.has(node.subjectId)) return false;
       if (projectionIds && !projectionIds.has(node.id)) return false;
-      if (selector.visible !== undefined && node.visible !== selector.visible) return false;
+      if (selector.visible !== undefined && node.visible !== selector.visible)
+        return false;
       if (!tags) return true;
       const nodeTags = new Set(node.tags);
       return selector.tagMatch === "any"
@@ -223,9 +222,13 @@ export function selectOneRenderGraphNode(
   return nodes[0];
 }
 
-function selectorValues(values: readonly string[] | undefined): Set<string> | undefined {
+function selectorValues(
+  values: readonly string[] | undefined,
+): Set<string> | undefined {
   if (!values?.length) return undefined;
-  const normalized = new Set(values.map((value) => value.trim()).filter(Boolean));
+  const normalized = new Set(
+    values.map((value) => value.trim()).filter(Boolean),
+  );
   return normalized.size ? normalized : undefined;
 }
 
@@ -783,7 +786,6 @@ function collectRenderIntentSnapshots(graph: RenderGraph) {
           effects: layer.effects,
           id: layer.id,
           order: layer.order,
-          stack: layer.stack,
           surfaceId: layer.surfaceId,
           visible: layer.visible,
         },
@@ -1119,7 +1121,6 @@ function createDraftFromPatch(
       objectOrder: ordering.objectOrder,
       channel: ordering.channel,
       subOrder: ordering.subOrder,
-      stack: ordering.stack,
     },
     visual: patch.visual,
     containerGeometryRef: patch.containerGeometryRef,
@@ -1143,7 +1144,6 @@ function getOrCreateGraphLayer(
   const existing = layerMap.get(draft.ordering.layerId);
   if (existing) {
     existing.order = Math.min(existing.order, draft.ordering.layerOrder ?? 0);
-    existing.stack = Math.min(existing.stack, draft.ordering.stack ?? 0);
     existing.visible = existing.visible || draft.export?.visible !== false;
     return existing;
   }
@@ -1152,7 +1152,6 @@ function getOrCreateGraphLayer(
     id: draft.ordering.layerId,
     surfaceId: draft.subject.surfaceId,
     order: draft.ordering.layerOrder ?? 0,
-    stack: draft.ordering.stack ?? 0,
     visible: draft.export?.visible !== false,
     nodes: [],
     effects: [],
@@ -1270,7 +1269,7 @@ function compareGraphNodes(a: RenderGraphNode, b: RenderGraphNode): number {
 }
 
 function compareGraphLayers(a: RenderGraphLayer, b: RenderGraphLayer): number {
-  return a.stack - b.stack || a.order - b.order || a.id.localeCompare(b.id);
+  return a.order - b.order;
 }
 
 function mergeDraft(

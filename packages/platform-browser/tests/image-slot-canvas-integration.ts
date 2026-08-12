@@ -262,7 +262,6 @@ function createEmptySlotDocument(): EditorDocument {
         layers: [
           {
             id: "front.image-slot",
-            role: "content",
             visible: true,
             locked: false,
             objects: [
@@ -303,7 +302,10 @@ function createEmptySlotDocument(): EditorDocument {
 }
 
 function createLayeredSlotDocument(): EditorDocument {
-  const createVisualObject = (id: string, assetId: string): EditorImageObject => ({
+  const createVisualObject = (
+    id: string,
+    assetId: string,
+  ): EditorImageObject => ({
     id,
     tags: ["export:mockup"],
     visible: true,
@@ -344,7 +346,6 @@ function createLayeredSlotDocument(): EditorDocument {
   surface.layers = [
     {
       id: "front.background",
-      role: "content",
       visible: true,
       locked: true,
       objects: [createVisualObject("background", "background.asset")],
@@ -352,7 +353,6 @@ function createLayeredSlotDocument(): EditorDocument {
     slotLayer,
     {
       id: "front.foreground",
-      role: "overlay",
       visible: true,
       locked: true,
       objects: [createVisualObject("foreground", "foreground.asset")],
@@ -407,7 +407,10 @@ async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> 
     assert(
       backgroundIndex >= 0 && workingIndex >= 0 && foregroundIndex >= 0,
       `layered session items should render (${JSON.stringify(
-        visibleItems.map((item) => ({ id: item.spec?.id, data: item.spec?.data })),
+        visibleItems.map((item) => ({
+          id: item.spec?.id,
+          data: item.spec?.data,
+        })),
       )})`,
     );
     assert(
@@ -569,7 +572,6 @@ function createNestedDocument(): EditorDocument {
         layers: [
           {
             id: "artwork",
-            role: "content",
             visible: true,
             locked: false,
             objects: [
@@ -628,7 +630,9 @@ function createNestedDocument(): EditorDocument {
                         type: "pooder.image-slot",
                         config: {
                           accepts: ["image/*"],
-                          placeholderSelector: { ids: [`${OBJECT_ID}.placeholder`] },
+                          placeholderSelector: {
+                            ids: [`${OBJECT_ID}.placeholder`],
+                          },
                         },
                       },
                     ],

@@ -735,7 +735,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 10, 10),
-      ordering: { layerId: "bg", stack: 0, layerOrder: 0 },
+      ordering: { layerId: "bg", layerOrder: 0 },
       props: { width: 10, height: 10 },
     },
     {
@@ -748,7 +748,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 5, 5),
-      ordering: { layerId: "art", stack: 10, layerOrder: 0 },
+      ordering: { layerId: "art", layerOrder: 1 },
       props: { width: 5, height: 5 },
       effects: [
         {
@@ -774,7 +774,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 7, 8),
-      ordering: { layerId: "art", stack: 10, layerOrder: 1 },
+      ordering: { layerId: "art", layerOrder: 1 },
       export: { visible: false, tags: ["mockup"] },
       props: { width: 7, height: 8 },
     },
@@ -835,7 +835,7 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 20, 20),
-      ordering: { layerId: "document", stack: 0 },
+      ordering: { layerId: "document" },
       props: { width: 20, height: 20 },
       interaction: { selection: { enabled: true } },
     },
@@ -1178,7 +1178,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
         },
       },
       placement: createTestPlacement(100, 120, 200, 160),
-      ordering: { layerId: "art", stack: 10, layerOrder: 0 },
+      ordering: { layerId: "art", layerOrder: 0 },
     },
     {
       id: "resolved-slot",
@@ -1200,7 +1200,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
           rotation: 15,
         }),
       }),
-      ordering: { layerId: "art", stack: 10, layerOrder: 0, objectOrder: 1 },
+      ordering: { layerId: "art", layerOrder: 0, objectOrder: 1 },
     },
   ]);
 
@@ -1308,7 +1308,7 @@ async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
         objectId: "art",
       },
       visual: { type: "rect" },
-      ordering: { layerId: "art", stack: 10, layerOrder: 0 },
+      ordering: { layerId: "art", layerOrder: 0 },
       props: { width: 5, height: 5 },
     },
   ]);
@@ -1572,7 +1572,7 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
         objectId: "bg",
       },
       visual: { type: "rect" },
-      ordering: { layerId: "bg", stack: 0, layerOrder: 0 },
+      ordering: { layerId: "bg", layerOrder: 0 },
       props: { width: 10, height: 10 },
     },
   ]);
@@ -1714,7 +1714,7 @@ async function testFabricRenderGraphAdapterConsumesSceneSpace() {
       visual: { type: "path" },
       coordinateSpace: "scene",
       placement: createTestPlacement(0, 0, 10, 10),
-      ordering: { layerId: "overlay", stack: 100, layerOrder: 0 },
+      ordering: { layerId: "overlay", layerOrder: 0 },
       props: { pathData: "M 0 0 L 10 0 L 10 10 Z" },
     },
   ]);
@@ -1838,7 +1838,7 @@ async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft(
   await runtime.dispose();
 }
 
-async function testFabricRenderGraphAdapterRespectsExplicitLayerStacks() {
+async function testFabricRenderGraphAdapterRespectsLayerArrayOrder() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -1864,16 +1864,12 @@ async function testFabricRenderGraphAdapterRespectsExplicitLayerStacks() {
         layerId: "front.dieline-overlay",
         layerOrder: 30,
         objectOrder: 0,
-        stack: 0,
       },
       props: {
         fill: "transparent",
         pathData: "M0 0H531V531H0Z",
         stroke: "#ef4444",
         strokeWidth: 2,
-      },
-      data: {
-        documentLayerRole: "guide",
       },
     },
   ]);
@@ -1890,9 +1886,8 @@ async function testFabricRenderGraphAdapterRespectsExplicitLayerStacks() {
     placement: createTestPlacement(30, 30, 531, 531),
     ordering: {
       layerId: "image.overlay",
-      layerOrder: 0,
+      layerOrder: 31,
       objectOrder: 0,
-      stack: 800,
     },
     props: {
       fill: "rgba(22, 119, 255, 0.08)",
@@ -1919,7 +1914,7 @@ async function testFabricRenderGraphAdapterRespectsExplicitLayerStacks() {
     typeof guideOrder === "number" &&
       typeof uploadOrder === "number" &&
       uploadOrder > guideOrder,
-    "higher explicit layer stacks should render above lower stacks",
+    "later document layer indexes should render above earlier layers",
   );
 
   await runtime.dispose();
@@ -2759,7 +2754,7 @@ async function testCanvasReconcileSortsByRenderOrder() {
     {
       key: "guide",
       layerId: "guide",
-      order: 900,
+      order: 1,
       spec: {
         id: "guide",
         type: "path",
@@ -2770,7 +2765,7 @@ async function testCanvasReconcileSortsByRenderOrder() {
     {
       key: "content",
       layerId: "content",
-      order: 10,
+      order: 0,
       spec: {
         id: "content",
         type: "rect",
@@ -4523,8 +4518,8 @@ async function main() {
       testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft,
     ],
     [
-      "keeps document guide nodes above upload overlays",
-      testFabricRenderGraphAdapterRespectsExplicitLayerStacks,
+      "uses document layer array order for graph stacking",
+      testFabricRenderGraphAdapterRespectsLayerArrayOrder,
     ],
     [
       "maps declarative interaction state",

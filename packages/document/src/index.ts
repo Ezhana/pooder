@@ -57,13 +57,6 @@ export type EditorDocumentDiagnosticStage =
   | "effect-schema"
   | "extension-schema"
   | "runtime-capability";
-export type EditorLayerRole =
-  | "background"
-  | "content"
-  | "guide"
-  | "overlay"
-  | "production";
-
 export interface EditorRect {
   x: number;
   y: number;
@@ -106,7 +99,6 @@ export interface EditorSurface {
 
 export interface EditorLayer {
   id: string;
-  role: EditorLayerRole;
   visible: boolean;
   locked: boolean;
   objects: EditorObject[];
@@ -226,7 +218,9 @@ export type CoreGeometryEffect =
       participation?: "preview" | "export" | "both";
     };
 
-export type EditorObjectEffect = CoreGeometryEffect | EditorExtensionObjectEffect;
+export type EditorObjectEffect =
+  | CoreGeometryEffect
+  | EditorExtensionObjectEffect;
 
 export type CoreObjectTrait =
   | { type: "core.guide" }
@@ -382,7 +376,9 @@ export function visitEditorDocumentObjects(
   });
 }
 
-export function getEditorDocumentObjects(document: EditorDocument): EditorObject[] {
+export function getEditorDocumentObjects(
+  document: EditorDocument,
+): EditorObject[] {
   const objects: EditorObject[] = [];
   visitEditorDocumentObjects(document, ({ object }) => objects.push(object));
   return objects;
@@ -476,7 +472,11 @@ export function collectEditorDocumentCapabilityRequirements(
         });
         return;
       }
-      requirements.push({ capabilityId, effectType: effect.type, path: effectPath });
+      requirements.push({
+        capabilityId,
+        effectType: effect.type,
+        path: effectPath,
+      });
       if (available && !available.has(capabilityId)) {
         diagnostics.push({
           severity: "error",
