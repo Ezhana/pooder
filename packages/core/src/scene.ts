@@ -1,6 +1,5 @@
 import type { RenderEffectSpec } from "./render";
 import type { InteractionSpec } from "./interaction-service";
-import type { RenderGraphLayer, RenderGraphNode } from "./render-intent";
 import type Disposable from "./disposable";
 import type { AffinePlacement, CoordinatePoint } from "./coordinate";
 
@@ -108,15 +107,6 @@ export interface SceneElementBase {
   placement?: AffinePlacement;
   transform?: SceneTransform;
   interaction?: InteractionSpec;
-  /**
-   * Associates a local scene element with the logical RenderGraph projection
-   * it temporarily replaces. Render adapters use this only to preserve target
-   * identity while composition changes.
-   */
-  renderGraphProjection?: {
-    readonly subjectId: string;
-    readonly type?: SceneElementType;
-  };
 }
 
 export interface SceneImageElement extends SceneElementBase {
@@ -171,7 +161,6 @@ export interface SceneElementPatch {
   style?: SceneElementStyle;
   placement?: AffinePlacement;
   transform?: SceneTransform;
-  renderGraphProjection?: SceneElementBase["renderGraphProjection"];
   src?: string;
   width?: number;
   height?: number;
@@ -256,29 +245,12 @@ export interface SessionSceneOwner {
 
 export type SceneOwner = SessionSceneOwner;
 
-export interface RenderGraphProjectionFilterContext {
-  readonly layer: RenderGraphLayer;
-  readonly node: RenderGraphNode;
-}
-
-export type RenderGraphProjectionFilter = (
-  context: RenderGraphProjectionFilterContext,
-) => boolean;
-
-export interface RenderGraphSceneCompositionEntry {
-  readonly source: "render-graph";
-  readonly interaction: "disabled";
-  readonly filter?: RenderGraphProjectionFilter;
-}
-
 export interface LocalSceneCompositionEntry {
   readonly source: "local";
   readonly layerIds: readonly LayerId[];
 }
 
-export type SceneCompositionEntry =
-  | RenderGraphSceneCompositionEntry
-  | LocalSceneCompositionEntry;
+export type SceneCompositionEntry = LocalSceneCompositionEntry;
 
 export interface SceneComposition {
   readonly entries: readonly SceneCompositionEntry[];

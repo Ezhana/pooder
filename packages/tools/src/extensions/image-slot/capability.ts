@@ -1,12 +1,9 @@
 import type {
   CapabilityDefinition,
   ImageResourceDescriptor,
-  SceneElementInput,
+  SessionRenderAuxiliaryVisual,
 } from "@pooder/core";
-import type {
-  EditorDocument,
-  EditorImagePlacement,
-} from "@pooder/document";
+import type { EditorDocument, EditorImagePlacement } from "@pooder/document";
 
 type EditorImageResource = ImageResourceDescriptor;
 
@@ -73,15 +70,16 @@ export type ImageSlotSessionResult =
     }
   | { type: "cleared"; objectId: string };
 
-export interface SessionSceneDecorationContext {
+export interface SessionRenderDecorationContext {
   objectId: string;
   surfaceId: string;
 }
 
-export interface SessionSceneDecorationContribution {
+export interface SessionRenderDecorationContribution {
   id: string;
-  placement: "underlay" | "overlay" | "controls";
-  provide(context: SessionSceneDecorationContext): SceneElementInput[];
+  provide(
+    context: SessionRenderDecorationContext,
+  ): Array<Omit<SessionRenderAuxiliaryVisual, "sessionId" | "role">>;
 }
 
 export interface ImageSlotCapabilityApi {
@@ -115,8 +113,8 @@ export interface ImageSlotCapabilityApi {
     ImageSlotSessionResult | { type: "error"; reason: string }
   >;
   rollbackSession(): Promise<{ ok: boolean; reason?: string }>;
-  registerSessionSceneDecoration(
-    contribution: SessionSceneDecorationContribution,
+  registerSessionRenderDecoration(
+    contribution: SessionRenderDecorationContribution,
   ): { dispose(): void };
 }
 

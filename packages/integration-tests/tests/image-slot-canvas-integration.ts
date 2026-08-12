@@ -1,13 +1,11 @@
 import {
   CANVAS_SERVICE,
   RENDER_INTENT_SERVICE,
-  SCENE_SERVICE,
   Pooder,
   coordinateMatrix,
   createLocalToSceneMatrix,
   multiplyCoordinateMatrices,
   type RenderIntentService,
-  type SceneService,
 } from "@pooder/core";
 import type { EditorDocument, EditorImageObject } from "@pooder/document";
 import { registerEditorDocumentService } from "@pooder/document-core";
@@ -62,7 +60,10 @@ class ViewportCanvasService {
   readonly scale = 2.25;
   readonly offsetX = 137;
   readonly offsetY = -48;
-  readonly reconcileCalls: Array<{ items: any[] }> = [];
+  readonly reconcileCalls: Array<{
+    items: any[];
+    options?: { invalidations?: readonly { type: string }[] };
+  }> = [];
   private readonly handlers = new Map<
     string,
     Array<(...args: any[]) => void>
@@ -120,8 +121,11 @@ class ViewportCanvasService {
       ?.forEach((handler) => handler({ kind: "down", target }));
   }
 
-  async reconcileRenderGraphDrawList(items: any[]) {
-    this.reconcileCalls.push({ items });
+  async reconcileRenderGraphDrawList(
+    items: any[],
+    options?: { invalidations?: readonly { type: string }[] },
+  ) {
+    this.reconcileCalls.push({ items, options });
   }
 
   selectObjects() {
@@ -460,29 +464,23 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
       SECOND_OBJECT_ID,
       "clicking an empty image-slot should open its session",
     );
-    const scene = runtime.services
-      .getOrThrow<SceneService>(SCENE_SERVICE)
-      .getSceneHandle(`image-slot:${SECOND_OBJECT_ID}:scene`);
-    const cropFrame = scene
-      ?.selectElements()
-      .find(
-        (element) => element.id === `image-slot:${SECOND_OBJECT_ID}:crop-frame`,
-      );
-    assert(cropFrame?.transform, "active image-slot crop frame should render");
-    const expectedScreenFrame = canvas.toScreenRect({
-      left: 180,
-      top: 20,
-      width: 120,
-      height: 80,
-    });
+    const sessionNodes = () =>
+      runtime.services
+        .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+        .getGraph()
+        .layers.flatMap((layer) => layer.nodes);
+    const cropFrame = sessionNodes().find(
+      (node) => node.id === `image-slot:${SECOND_OBJECT_ID}:crop-frame`,
+    );
+    assert(cropFrame?.placement, "active image-slot crop frame should render");
     assertEqual(
-      cropFrame.transform.left,
-      expectedScreenFrame.left,
+      cropFrame.placement.localToScene.values[4],
+      180,
       "multi-slot crop frame should use the active object x position",
     );
     assertEqual(
-      cropFrame.transform.top,
-      expectedScreenFrame.top,
+      cropFrame.placement.localToScene.values[5],
+      20,
       "multi-slot crop frame should use the active object y position",
     );
     await facade.setResource({
@@ -509,29 +507,23 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
         },
       },
     });
-    const verticalGuide = scene
-      ?.selectElements()
-      .find(
-        (element) =>
-          element.id === `image-slot:${SECOND_OBJECT_ID}:snap-guide:x`,
-      );
-    const horizontalGuide = scene
-      ?.selectElements()
-      .find(
-        (element) =>
-          element.id === `image-slot:${SECOND_OBJECT_ID}:snap-guide:y`,
-      );
+    const verticalGuide = sessionNodes().find(
+      (node) => node.id === `image-slot:${SECOND_OBJECT_ID}:snap-guide:x`,
+    );
+    const horizontalGuide = sessionNodes().find(
+      (node) => node.id === `image-slot:${SECOND_OBJECT_ID}:snap-guide:y`,
+    );
     assert(
-      verticalGuide?.transform && horizontalGuide?.transform,
+      verticalGuide?.placement && horizontalGuide?.placement,
       "active image-slot snap guides should render",
     );
     assertEqual(
-      verticalGuide.transform.top,
+      verticalGuide.placement.localToScene.values[5],
       20,
       "vertical guide should use scene y",
     );
     assertEqual(
-      horizontalGuide.transform.left,
+      horizontalGuide.placement.localToScene.values[4],
       180,
       "horizontal guide should use scene x",
     );
@@ -648,20 +640,19 @@ function createNestedDocument(): EditorDocument {
 }
 
 function getWorkingMatrix(runtime: Pooder): MatrixValues {
-  const scene = runtime.services
-    .getOrThrow<SceneService>(SCENE_SERVICE)
-    .getSceneHandle(`image-slot:${OBJECT_ID}:scene`);
-  const element = scene
-    ?.selectElements()
+  const node = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
     .find((candidate) => candidate.id === `image-slot:${OBJECT_ID}:working`);
-  assert(element?.placement, "working image placement should exist");
-  return [...element.placement.localToScene.values] as MatrixValues;
+  assert(node?.placement, "working image placement should exist");
+  return [...node.placement.localToScene.values] as MatrixValues;
 }
 
 function getCommittedMatrix(runtime: Pooder): MatrixValues {
   const node = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
-    .getGraph()
+    .getDocumentGraph()
     .layers.flatMap((layer) => layer.nodes)
     .find((candidate) => candidate.subjectId === OBJECT_ID);
   assert(node, "committed nested image node should exist");
@@ -723,9 +714,9 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
       .at(-1)
       ?.items.find(
         (candidate) =>
+          candidate.key === `image-slot:${OBJECT_ID}:working` &&
           candidate.spec?.data?.imageSlotObjectId === OBJECT_ID &&
-          candidate.spec?.data?.sceneElementId ===
-            `image-slot:${OBJECT_ID}:working`,
+          candidate.spec?.data?.subjectId === OBJECT_ID,
       );
     assert(
       item?.spec?.placement,
@@ -825,10 +816,40 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
       targetSceneMatrix[1],
       targetSceneMatrix[2],
       targetSceneMatrix[3],
-      expectedSceneMatrix[4],
-      expectedSceneMatrix[5],
+      targetSceneMatrix[4] + canvas.toSceneLength(18),
+      targetSceneMatrix[5] + canvas.toSceneLength(-13.5),
     ];
     canvas.emitCanvasEvent("object:moving", { target });
+    await adapter.flush();
+    assert(
+      canvas.reconcileCalls
+        .at(-1)
+        ?.options?.invalidations?.every(
+          (invalidation) => invalidation.type !== "full",
+        ),
+      "image-slot move preview must not cross a full render invalidation barrier",
+    );
+    const movedWorkingMatrix = getWorkingMatrix(runtime);
+    assertMatrixClose(
+      movedWorkingMatrix,
+      targetSceneMatrix,
+      "image-slot move preview should follow the Fabric scene position",
+    );
+    targetSceneMatrix = [
+      targetSceneMatrix[0],
+      targetSceneMatrix[1],
+      targetSceneMatrix[2],
+      targetSceneMatrix[3],
+      targetSceneMatrix[4] + canvas.toSceneLength(2.25),
+      targetSceneMatrix[5] + canvas.toSceneLength(4.5),
+    ];
+    canvas.emitCanvasEvent("object:moving", { target });
+    await adapter.flush();
+    assertMatrixClose(
+      getWorkingMatrix(runtime),
+      targetSceneMatrix,
+      "successive image-slot move previews must not accumulate earlier pointer deltas",
+    );
 
     targetSceneMatrix = [
       expectedSceneMatrix[0],
@@ -839,10 +860,29 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
       targetSceneMatrix[5],
     ];
     canvas.emitCanvasEvent("object:scaling", { target });
+    await adapter.flush();
+    assert(
+      canvas.reconcileCalls
+        .at(-1)
+        ?.options?.invalidations?.every(
+          (invalidation) => invalidation.type !== "full",
+        ),
+      "image-slot resize preview must preserve active interaction ownership",
+    );
 
     targetSceneMatrix = [...expectedSceneMatrix];
     canvas.emitCanvasEvent("object:rotating", { target });
+    await adapter.flush();
+    assert(
+      canvas.reconcileCalls
+        .at(-1)
+        ?.options?.invalidations?.every(
+          (invalidation) => invalidation.type !== "full",
+        ),
+      "image-slot rotation preview must preserve active interaction ownership",
+    );
     canvas.emitCanvasEvent("object:modified", { target });
+    await adapter.flush();
 
     const working = getWorkingMatrix(runtime);
     assertMatrixClose(

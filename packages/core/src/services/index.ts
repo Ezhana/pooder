@@ -83,6 +83,7 @@ export type {
   RenderGraph,
   RenderGraphLayer,
   RenderGraphNode,
+  RenderGraphNodeProvenance,
   RenderGraphProjectionMembership,
   RenderIntentChangeEvent,
   RenderIntentChangeReason,
@@ -94,6 +95,11 @@ export type {
   RenderIntentPatch,
   RenderIntentPatchEntry,
   RenderIntentSubject,
+  SessionRenderAuxiliaryVisual,
+  SessionRenderContribution,
+  SessionRenderOverride,
+  SessionRenderReplacementTarget,
+  SessionRenderScope,
 } from "../render-intent";
 export type { SceneChangeEvent } from "./SceneService";
 export type {

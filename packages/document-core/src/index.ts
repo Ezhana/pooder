@@ -1298,6 +1298,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private async writeManipulationToDocument(
     event: InteractionManipulationCommitEvent,
   ): Promise<void> {
+    const operation = event.input.spec.manipulation?.[event.kind];
+    if (operation?.documentMutation === "action-owned") return;
     const subjectId = normalizeObjectId(event.subject.subjectId);
     const sceneTransformPatch = event.result.documentPatch;
     if (!subjectId || !sceneTransformPatch) return;

@@ -787,9 +787,6 @@ export default class SceneService implements Service {
       style: this.cloneRecord(element.style),
       placement: this.clonePlacement(element.placement),
       transform: this.cloneRecord(element.transform),
-      renderGraphProjection: element.renderGraphProjection
-        ? { ...element.renderGraphProjection }
-        : undefined,
     };
   }
 
@@ -922,7 +919,8 @@ export default class SceneService implements Service {
     if (selector.visible !== undefined && layer.visible !== selector.visible) {
       return false;
     }
-    if (!this.matchesTags(layer.tags, selector.tags, selector.tagMatch)) return false;
+    if (!this.matchesTags(layer.tags, selector.tags, selector.tagMatch))
+      return false;
     if (!this.matchesMetadata(layer.metadata, selector.metadata)) return false;
     return true;
   }
@@ -932,8 +930,7 @@ export default class SceneService implements Service {
     selector: SceneElementSelector,
   ): boolean {
     const ids = this.normalizeSelectorValues(selector.ids);
-    const subjectId = element.renderGraphProjection?.subjectId ?? element.id;
-    if (ids && !ids.has(subjectId)) return false;
+    if (ids && !ids.has(element.id)) return false;
     const projectionIds = this.normalizeSelectorValues(selector.projectionIds);
     if (projectionIds && !projectionIds.has(element.id)) return false;
     const layerIds = this.normalizeSelectorValues(selector.layerIds);
@@ -946,7 +943,8 @@ export default class SceneService implements Service {
     ) {
       return false;
     }
-    if (!this.matchesTags(element.tags, selector.tags, selector.tagMatch)) return false;
+    if (!this.matchesTags(element.tags, selector.tags, selector.tagMatch))
+      return false;
     if (!this.matchesMetadata(element.metadata, selector.metadata))
       return false;
     return true;
@@ -1016,16 +1014,6 @@ function normalizeComposition(
   }
   return {
     entries: composition.entries.map((entry) => {
-      if (entry.source === "render-graph") {
-        if (entry.interaction !== "disabled") {
-          throw new Error("RenderGraph projections must disable interaction.");
-        }
-        return {
-          source: "render-graph" as const,
-          interaction: "disabled" as const,
-          ...(entry.filter ? { filter: entry.filter } : {}),
-        };
-      }
       if (entry.source === "local") {
         return {
           source: "local" as const,
@@ -1046,11 +1034,10 @@ function cloneComposition(
   composition: SceneSnapshot["composition"],
 ): SceneSnapshot["composition"] {
   return {
-    entries: composition.entries.map((entry) =>
-      entry.source === "render-graph"
-        ? { ...entry }
-        : { ...entry, layerIds: [...entry.layerIds] },
-    ),
+    entries: composition.entries.map((entry) => ({
+      ...entry,
+      layerIds: [...entry.layerIds],
+    })),
   };
 }
 

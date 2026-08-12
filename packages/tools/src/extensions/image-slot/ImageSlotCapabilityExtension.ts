@@ -3,7 +3,6 @@ import {
   GEOMETRY_SOURCE_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  SCENE_SERVICE,
   SESSION_SERVICE,
   coordinateMatrix,
   coordinateRect,
@@ -23,10 +22,12 @@ import {
   type GeometrySourceService,
   type ImageResourceDescriptor,
   type InteractionOperationPhase,
-  type SceneHandle,
   type SceneLayoutService,
-  type SceneService,
+  type RenderGraphNode,
+  type RenderIntentDraft,
   type RenderIntentService,
+  type SessionRenderContribution,
+  type SessionRenderScope,
   type SessionHandle,
   type SessionService,
 } from "@pooder/core";
@@ -56,7 +57,7 @@ import {
   type ImageSlotSessionDraft,
   type ImageSlotPlacementPreset,
   type ImageSlotViewState,
-  type SessionSceneDecorationContribution,
+  type SessionRenderDecorationContribution,
 } from "./capability";
 
 type EditorImageResource = ImageResourceDescriptor;
@@ -105,7 +106,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   readonly id = IMAGE_SLOT_CAPABILITY_ID;
   readonly metadata = { name: "ImageSlotCapabilityExtension" };
   readonly activation = {
-    requiresServices: [GEOMETRY_SOURCE_SERVICE, SCENE_SERVICE, SESSION_SERVICE],
+    requiresServices: [
+      GEOMETRY_SOURCE_SERVICE,
+      RENDER_INTENT_SERVICE,
+      SESSION_SERVICE,
+    ],
   };
   private document: EditorDocument | null = null;
   private controller: ImageSlotDocumentController | null = null;
@@ -114,16 +119,17 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private readonly listeners = new Set<(state: ImageSlotViewState) => void>();
   private readonly decorations = new Map<
     string,
-    SessionSceneDecorationContribution
+    SessionRenderDecorationContribution
   >();
-  private sceneService?: SceneService;
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
   private geometrySource?: GeometrySourceService;
   private renderIntentService?: RenderIntentService;
   private sessionService?: SessionService;
-  private sceneHandle: SceneHandle | null = null;
   private sceneLayoutSubscription: { dispose(): void } | null = null;
+  private sessionRenderScope: SessionRenderScope | null = null;
+  private sessionTerminalSubscription: { dispose(): void } | null = null;
+  private snapFeedback: ImageSlotRectSnapFeedback | undefined;
   private sessionHandle: SessionHandle<ImageSlotSessionDraft> | null = null;
   private openingSession: {
     objectId: string;
@@ -138,28 +144,38 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     this.canvasService = context.services.get<CanvasService>(CANVAS_SERVICE);
     this.sceneLayoutService =
       context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
-    this.sceneService =
-      context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.geometrySource = context.services.getOrThrow<GeometrySourceService>(
       GEOMETRY_SOURCE_SERVICE,
     );
-    this.renderIntentService = context.services.get<RenderIntentService>(
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
     this.sessionService =
       context.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    this.sessionTerminalSubscription?.dispose();
+    this.sessionTerminalSubscription = this.sessionService.onDidTerminate(
+      (event) => {
+        if (
+          event.descriptor.sessionId ===
+          this.sessionHandle?.descriptor.sessionId
+        ) {
+          this.finalizeTerminatedSession();
+        }
+      },
+    );
   }
 
   async deactivate(): Promise<void> {
-    this.disposeScene();
     if (this.sessionHandle && this.sessionHandle.phase !== "closed") {
       await this.sessionHandle.cancel();
     }
+    this.disposeSessionRender();
+    this.sessionTerminalSubscription?.dispose();
+    this.sessionTerminalSubscription = null;
     this.sessionHandle = null;
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
     this.geometrySource = undefined;
-    this.sceneService = undefined;
     this.renderIntentService = undefined;
     this.sessionService = undefined;
   }
@@ -204,14 +220,19 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       this.state.draft &&
       !findImageSlot(document, this.state.draft.objectId)
     ) {
-      this.disposeScene();
       const sessionHandle = this.sessionHandle;
-      this.sessionHandle = null;
-      if (sessionHandle && sessionHandle.phase !== "closed") {
-        void sessionHandle.cancel();
-      }
       this.original = null;
-      this.setState({ phase: "idle", draft: null });
+      this.state = { phase: "idle", draft: null };
+      this.listeners.forEach((listener) => listener(clone(this.state)));
+      if (sessionHandle && sessionHandle.phase !== "closed") {
+        void sessionHandle.cancel().catch(() => {
+          if (this.sessionHandle === sessionHandle) {
+            this.finalizeTerminatedSession();
+          }
+        });
+      } else {
+        this.finalizeTerminatedSession();
+      }
     }
   }
 
@@ -232,10 +253,15 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       validateSession: () => this.validateSession(),
       commitSession: () => this.commitSession(),
       rollbackSession: () => this.rollbackSession(),
-      registerSessionSceneDecoration: (contribution) => {
+      registerSessionRenderDecoration: (contribution) => {
         this.decorations.set(contribution.id, contribution);
-        this.renderSessionScene();
-        return { dispose: () => this.decorations.delete(contribution.id) };
+        this.publishSessionRenderContributions();
+        return {
+          dispose: () => {
+            this.decorations.delete(contribution.id);
+            this.publishSessionRenderContributions();
+          },
+        };
       },
     };
   }
@@ -317,7 +343,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     }
     this.original = clone(draft);
     this.setState({ phase: "active", draft });
-    this.createSessionScene(context.surfaceId, object);
+    this.startSessionRender(context.surfaceId);
     return { ok: true };
   }
 
@@ -424,10 +450,6 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!objectPlacement) {
       return { ok: false, reason: "geometry-unavailable" };
     }
-    const objectSceneBounds = transformCoordinateRect(
-      objectPlacement.localToScene,
-      objectPlacement.localBounds,
-    );
     const imageLocalToObjectLocal = input.sceneMatrix
       ? multiplyCoordinateMatrices(
           invertCoordinateMatrix(objectPlacement.localToScene),
@@ -477,13 +499,11 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     });
     this.setState(
       { phase: "active", draft: { ...draft, placement } },
-      { renderScene: phase === "commit" },
+      { publishRender: false },
     );
-    this.renderSnapGuides(
-      phase === "commit" ? undefined : input.metadata?.rectSnap,
-      draft.objectId,
-      objectSceneBounds,
-    );
+    this.snapFeedback =
+      phase === "commit" ? undefined : input.metadata?.rectSnap;
+    this.publishSessionRenderContributions();
     return { ok: true };
   }
 
@@ -492,7 +512,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!draft) return { ok: false as const, reason: "session-not-active" };
     this.setState(
       { ...this.state, phase: "validating" },
-      { renderScene: false },
+      { publishRender: false },
     );
     if (draft.resource && !draft.resource.intrinsicSize) {
       this.setState(
@@ -501,7 +521,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           phase: "error",
           error: "resource-load-failed",
         },
-        { renderScene: false },
+        { publishRender: false },
       );
       return { ok: false as const, reason: "resource-load-failed" };
     }
@@ -517,13 +537,13 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           phase: "error",
           error: "validation-failed",
         },
-        { renderScene: false },
+        { publishRender: false },
       );
       return { ok: false as const, reason: "outside-frame" };
     }
     this.setState(
       { ...this.state, phase: "active", error: undefined },
-      { renderScene: false },
+      { publishRender: false },
     );
     return { ok: true as const };
   }
@@ -538,12 +558,12 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       };
     this.setState(
       { ...this.state, phase: "committing" },
-      { renderScene: false },
+      { publishRender: false },
     );
     if (draft.resource?.kind === "blob-url") {
       this.setState(
         { ...this.state, phase: "error", error: "commit-failed" },
-        { renderScene: false },
+        { publishRender: false },
       );
       return { type: "error" as const, reason: "transient-resource" };
     }
@@ -583,18 +603,16 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!result.ok) {
       this.setState(
         { ...this.state, phase: "error", error: "commit-failed" },
-        { renderScene: false },
+        { publishRender: false },
       );
       return { type: "error" as const, reason: result.reason };
     }
     this.document = result.document;
-    this.disposeScene();
     if (this.sessionHandle?.phase === "active") {
       await this.sessionHandle.commit();
+    } else {
+      this.finalizeTerminatedSession();
     }
-    this.sessionHandle = null;
-    this.original = null;
-    this.setState({ phase: "idle", draft: null });
     return draft.resource
       ? {
           type: "placed" as const,
@@ -611,389 +629,460 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       this.state.draft.resource,
       this.original?.resource,
     );
-    this.disposeScene();
     if (this.sessionHandle?.phase === "active") {
       await this.sessionHandle.rollback();
+    } else {
+      this.finalizeTerminatedSession();
     }
-    this.sessionHandle = null;
-    this.original = null;
-    this.setState({ phase: "idle", draft: null });
     return { ok: true };
   }
 
   private setState(
     state: ImageSlotViewState,
-    options: { renderScene?: boolean } = {},
+    options: { publishRender?: boolean } = {},
   ): void {
     this.state = clone(state);
     if (this.state.draft && this.sessionHandle?.phase === "active") {
       this.sessionHandle.updateDraft(this.state.draft);
-      if (options.renderScene !== false) this.renderSessionScene();
+      if (options.publishRender !== false) {
+        this.publishSessionRenderContributions();
+      }
     }
     this.listeners.forEach((listener) => listener(clone(this.state)));
   }
 
-  private createSessionScene(
-    surfaceId: string,
-    object: EditorImageObject,
-  ): void {
-    this.disposeScene();
-    if (!this.sceneService || !this.sessionHandle) return;
-    const sceneId = `image-slot:${object.id}:scene`;
-    const graphNodesBeforeWorkingImage = new Set<string>();
-    let reachedWorkingImage = false;
-    for (const layer of this.renderIntentService?.getGraph().layers ?? []) {
-      for (const node of layer.nodes) {
-        if (node.surfaceId !== surfaceId) continue;
-        if (node.subjectId === object.id) {
-          reachedWorkingImage = true;
-          continue;
-        }
-        if (!reachedWorkingImage) graphNodesBeforeWorkingImage.add(node.id);
-      }
-    }
-    const isVisibleSessionDocumentNode = ({
-      node,
-    }: {
-      node: {
-        id: string;
-        subjectId: string;
-        surfaceId: string;
-        tags: string[];
-      };
-    }) =>
-      node.surfaceId === surfaceId &&
-      node.subjectId !== object.id &&
-      node.tags.some(
-        (tag) => tag === "export:mockup" || tag === "export:design",
-      );
-    this.sceneService.getSceneHandle(sceneId)?.dispose();
-    this.sceneHandle = this.sceneService.createScene({
-      id: sceneId,
-      owner: {
-        type: "session",
-        sessionId: this.sessionHandle.descriptor.sessionId,
-      },
-      composition: {
-        entries: [
-          {
-            source: "render-graph",
-            interaction: "disabled",
-            filter: (context) =>
-              isVisibleSessionDocumentNode(context) &&
-              graphNodesBeforeWorkingImage.has(context.node.id),
-          },
-          { source: "local", layerIds: ["image-slot.underlay"] },
-          { source: "local", layerIds: ["image-slot.working"] },
-          {
-            source: "render-graph",
-            interaction: "disabled",
-            filter: (context) =>
-              isVisibleSessionDocumentNode(context) &&
-              !graphNodesBeforeWorkingImage.has(context.node.id),
-          },
-          { source: "local", layerIds: ["image-slot.overlay"] },
-          { source: "local", layerIds: ["image-slot.controls"] },
-        ],
-      },
-    });
-    ["underlay", "working", "overlay", "controls"].forEach((name, order) =>
-      this.sceneHandle?.addLayer({
-        id: `image-slot.${name}`,
-        order,
-        visible: true,
-      }),
+  private startSessionRender(surfaceId: string): void {
+    this.disposeSessionRender();
+    if (!this.sessionHandle || !this.renderIntentService) return;
+    const scope = this.renderIntentService.createSessionRenderScope(
+      this.sessionHandle.descriptor.sessionId,
     );
+    this.sessionRenderScope = this.sessionHandle.own(scope);
     this.sceneLayoutSubscription =
       this.sceneLayoutService?.onLayoutChange(surfaceId, () =>
-        this.renderSessionScene(),
+        this.publishSessionRenderContributions(),
       ) ?? null;
-    this.renderSessionScene();
+    this.publishSessionRenderContributions();
   }
 
-  private renderSessionScene(): void {
-    const scene = this.sceneHandle;
+  private publishSessionRenderContributions(): void {
+    const scope = this.sessionRenderScope;
+    const session = this.sessionHandle;
     const draft = this.state.draft;
-    if (!scene || !draft || !this.document) return;
-    scene
-      .selectElements()
-      .forEach((element) => scene.removeElement(element.id));
+    if (!scope || !session || !draft || !this.document) return;
     const context = findImageSlotContext(this.document, draft.objectId);
-    if (!context) return;
-    const resource = draft.resource;
-    if (resource?.intrinsicSize) {
-      const src = resourceLocation(resource);
-      const objectPlacement = this.resolveDocumentObjectPlacement(
-        draft.objectId,
-      );
-      if (!objectPlacement) return;
-      const objectSceneBounds = transformCoordinateRect(
-        objectPlacement.localToScene,
-        objectPlacement.localBounds,
-      );
-      const clipFrame = resolveImageSlotClipFrame(
-        this.document,
-        context,
-        objectPlacement,
-      );
-      const geometry = resolveImageGeometry({
-        source: { src, size: resource.intrinsicSize },
-        frame: coordinateRect("object-local", {
-          left: 0,
-          top: 0,
-          width: context.object.placement.localBounds.width,
-          height: context.object.placement.localBounds.height,
-        }),
-        fit: draft.placement.fit,
-        transform: draft.placement,
-        ...(draft.placement.clip === "frame"
-          ? {
-              clip: clipFrame,
-            }
-          : {}),
-      });
-      scene.addElement({
-        id: `image-slot:${draft.objectId}:working`,
-        layerId: "image-slot.working",
-        type: "image",
-        renderGraphProjection: {
-          subjectId: draft.objectId,
-          type: "image",
-        },
-        src,
-        width: geometry.imageLocalBounds.width,
-        height: geometry.imageLocalBounds.height,
-        placement: createAffinePlacement({
-          localBounds: geometry.imageLocalBounds,
-          localToScene: multiplyCoordinateMatrices(
-            objectPlacement.localToScene,
-            geometry.imageLocalToObjectLocal,
-          ),
-          pivot: {
-            x:
-              geometry.imageLocalBounds.left +
-              geometry.imageLocalBounds.width / 2,
-            y:
-              geometry.imageLocalBounds.top +
-              geometry.imageLocalBounds.height / 2,
-          },
-        }),
-        data: {
-          autoFocus: true,
-          imageSlotObjectId: draft.objectId,
-        },
-        style: {
-          opacity: geometry.opacity,
-        },
-        ...(geometry.clip
-          ? {
-              effects: [
-                createImageSlotClipEffect(
-                  draft.objectId,
-                  geometry.clip,
-                  objectPlacement,
-                ),
-              ],
-            }
-          : {}),
-        interaction: {
-          selection: { enabled: true },
-          manipulation: {
-            move: {
-              enabled: true,
-              constraints: [
-                {
-                  spec: {
-                    type: "rect.snap",
-                    application: {
-                      preview: "evaluate",
-                      commit: "apply",
-                    },
-                    params: {
-                      id: `image-slot:${draft.objectId}:frame`,
-                      rect: objectSceneBounds,
-                      thresholdPx: 6,
-                    },
-                  },
-                },
-              ],
-              action: createImageSlotPlacementAction(draft.objectId),
-            },
-            resize: {
-              enabled: true,
-              action: createImageSlotPlacementAction(draft.objectId),
-            },
-            rotate: {
-              enabled: true,
-              action: createImageSlotPlacementAction(draft.objectId),
-            },
-          },
-        },
-      });
+    const target = this.resolveDocumentObjectProjection(draft.objectId);
+    if (!context || !target) {
+      scope.replace([]);
+      return;
     }
-    this.renderSessionFrame(scene, draft.objectId);
-    for (const contribution of this.decorations.values()) {
-      contribution
+    const contributions: SessionRenderContribution[] = [];
+    const workingProjection = this.createWorkingProjection(
+      draft,
+      context,
+      target,
+    );
+    contributions.push({
+      role: "override",
+      sessionId: session.descriptor.sessionId,
+      subjectId: draft.objectId,
+      surfaceId: context.surfaceId,
+      provenance: `${IMAGE_SLOT_CAPABILITY_ID}:working-image`,
+      priority: 100,
+      replacementTarget: {
+        subjectId: draft.objectId,
+        projectionId: target.id,
+      },
+      projection: workingProjection,
+    });
+    contributions.push(
+      ...this.createSessionFrameContributions(
+        session.descriptor.sessionId,
+        draft.objectId,
+        context.surfaceId,
+        target,
+      ),
+      ...this.createSnapGuideContributions(
+        session.descriptor.sessionId,
+        draft.objectId,
+        context.surfaceId,
+        target,
+      ),
+    );
+    for (const decoration of this.decorations.values()) {
+      decoration
         .provide({ objectId: draft.objectId, surfaceId: context.surfaceId })
-        .forEach((element) =>
-          scene.addElement({
-            ...element,
-            layerId: `image-slot.${contribution.placement}`,
+        .forEach((contribution) =>
+          contributions.push({
+            ...contribution,
+            role: "auxiliary",
+            sessionId: session.descriptor.sessionId,
           }),
         );
     }
+    scope.replace(contributions);
+  }
+
+  private createWorkingProjection(
+    draft: ImageSlotSessionDraft,
+    context: ReturnType<typeof findImageSlotContext> & {},
+    target: RenderGraphNode,
+  ): RenderIntentDraft {
+    const base: RenderIntentDraft = {
+      id: `image-slot:${draft.objectId}:working`,
+      subject: {
+        kind: "object",
+        surfaceId: target.surfaceId,
+        layerId: target.layerId,
+        objectId: draft.objectId,
+        objectType: "image",
+      },
+      placement: clone(target.placement),
+      containerGeometryRef: clone(target.containerGeometryRef),
+      ordering: {
+        layerId: target.layerId,
+        layerOrder: target.sortKey.layerOrder,
+        objectOrder: target.sortKey.objectOrder,
+        channel: target.sortKey.channel,
+        subOrder: target.sortKey.subOrder,
+      },
+    };
+    const resource = draft.resource;
+    if (!resource?.intrinsicSize) return base;
+    const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
+    if (!objectPlacement) return base;
+    const src = resourceLocation(resource);
+    const objectSceneBounds = transformCoordinateRect(
+      objectPlacement.localToScene,
+      objectPlacement.localBounds,
+    );
+    const clipFrame = resolveImageSlotClipFrame(
+      this.document!,
+      context,
+      objectPlacement,
+    );
+    const geometry = resolveImageGeometry({
+      source: { src, size: resource.intrinsicSize },
+      frame: coordinateRect("object-local", {
+        left: 0,
+        top: 0,
+        width: context.object.placement.localBounds.width,
+        height: context.object.placement.localBounds.height,
+      }),
+      fit: draft.placement.fit,
+      transform: draft.placement,
+      ...(draft.placement.clip === "frame" ? { clip: clipFrame } : {}),
+    });
+    return {
+      ...base,
+      visual: { type: "image", src },
+      placement: createAffinePlacement({
+        localBounds: geometry.imageLocalBounds,
+        localToScene: multiplyCoordinateMatrices(
+          objectPlacement.localToScene,
+          geometry.imageLocalToObjectLocal,
+        ),
+        pivot: {
+          x:
+            geometry.imageLocalBounds.left +
+            geometry.imageLocalBounds.width / 2,
+          y:
+            geometry.imageLocalBounds.top +
+            geometry.imageLocalBounds.height / 2,
+        },
+      }),
+      data: { autoFocus: true, imageSlotObjectId: draft.objectId },
+      props: { opacity: geometry.opacity },
+      ...(geometry.clip
+        ? {
+            effects: [
+              createImageSlotClipEffect(
+                draft.objectId,
+                geometry.clip,
+                objectPlacement,
+              ),
+            ],
+          }
+        : {}),
+      interaction: {
+        selection: { enabled: true },
+        manipulation: {
+          move: {
+            enabled: true,
+            documentMutation: "action-owned",
+            constraints: [
+              {
+                spec: {
+                  type: "rect.snap",
+                  application: { preview: "evaluate", commit: "apply" },
+                  params: {
+                    id: `image-slot:${draft.objectId}:frame`,
+                    rect: objectSceneBounds,
+                    thresholdPx: 6,
+                  },
+                },
+              },
+            ],
+            action: createImageSlotPlacementAction(draft.objectId),
+          },
+          resize: {
+            enabled: true,
+            documentMutation: "action-owned",
+            action: createImageSlotPlacementAction(draft.objectId),
+          },
+          rotate: {
+            enabled: true,
+            documentMutation: "action-owned",
+            action: createImageSlotPlacementAction(draft.objectId),
+          },
+        },
+      },
+    };
   }
 
   private resolveDocumentObjectPlacement(
     objectId: string,
   ): AffinePlacement | undefined {
-    for (const layer of this.renderIntentService?.getGraph().layers ?? []) {
-      const node = layer.nodes.find(
-        (candidate) => candidate.subjectId === objectId,
-      );
-      if (!node) continue;
-      const snapshot = this.geometrySource?.getSnapshot(
-        node.containerGeometryRef,
-      ).value;
-      if (!snapshot || snapshot.space !== "object-local") return undefined;
-      return createAffinePlacement({
-        localBounds: coordinateRect("object-local", snapshot.bounds),
-        localToScene: coordinateMatrix(
-          "object-local",
-          "scene",
-          snapshot.localToScene.values,
-        ),
-        pivot: {
-          x: snapshot.bounds.left + snapshot.bounds.width / 2,
-          y: snapshot.bounds.top + snapshot.bounds.height / 2,
-        },
-      });
-    }
-    return undefined;
+    const node = this.resolveDocumentObjectProjection(objectId);
+    if (!node) return undefined;
+    const snapshot = this.geometrySource?.getSnapshot(
+      node.containerGeometryRef,
+    ).value;
+    if (!snapshot || snapshot.space !== "object-local") return undefined;
+    return createAffinePlacement({
+      localBounds: coordinateRect("object-local", snapshot.bounds),
+      localToScene: coordinateMatrix(
+        "object-local",
+        "scene",
+        snapshot.localToScene.values,
+      ),
+      pivot: {
+        x: snapshot.bounds.left + snapshot.bounds.width / 2,
+        y: snapshot.bounds.top + snapshot.bounds.height / 2,
+      },
+    });
   }
 
-  private renderSessionFrame(scene: SceneHandle, objectId: string): void {
+  private resolveDocumentObjectProjection(
+    objectId: string,
+  ): RenderGraphNode | undefined {
+    return this.renderIntentService
+      ?.getDocumentGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find(
+        (candidate) =>
+          candidate.subjectId === objectId && candidate.type === "image",
+      );
+  }
+
+  private createSessionFrameContributions(
+    sessionId: string,
+    objectId: string,
+    surfaceId: string,
+    target: RenderGraphNode,
+  ): SessionRenderContribution[] {
     const canvas = this.canvasService;
     const viewport = canvas?.getScreenViewportRect();
     const objectPlacement = this.resolveDocumentObjectPlacement(objectId);
-    if (!canvas || !viewport || !objectPlacement) return;
-    const cutRect = canvas.toScreenRect(
-      transformCoordinateRect(
-        objectPlacement.localToScene,
-        objectPlacement.localBounds,
-      ),
+    if (!canvas || !viewport || !objectPlacement) return [];
+    const viewportRect = canvas.toSceneRect(viewport);
+    const cutRect = transformCoordinateRect(
+      objectPlacement.localToScene,
+      objectPlacement.localBounds,
     );
-
-    scene.addElement({
-      id: `image-slot:${objectId}:crop-mask`,
-      layerId: "image-slot.controls",
-      type: "path",
-      path: buildViewportMaskPath(viewport, cutRect),
-      data: {
-        imageSlotObjectId: objectId,
-        renderSpace: "screen",
-        type: "image-slot-crop-mask",
-      },
-      transform: {
-        left: viewport.left,
-        top: viewport.top,
-        originX: "left",
-        originY: "top",
-      },
-      style: {
-        excludeFromExport: true,
-        fill: "rgba(245, 245, 245, 0.72)",
-        fillRule: "evenodd",
-        objectCaching: false,
-        stroke: null,
-      },
+    const controlsLayerId = `session:${sessionId}:controls`;
+    const controlsLayerOrder = target.sortKey.layerOrder + 1_000_000;
+    const contribution = (
+      projection: RenderIntentDraft,
+      provenance: string,
+    ): SessionRenderContribution => ({
+      role: "auxiliary",
+      sessionId,
+      subjectId: objectId,
+      surfaceId,
+      provenance,
+      priority: 100,
+      projection,
     });
-    scene.addElement({
-      id: `image-slot:${objectId}:crop-frame`,
-      layerId: "image-slot.controls",
-      type: "rect",
-      width: cutRect.width,
-      height: cutRect.height,
-      data: {
-        imageSlotObjectId: objectId,
-        renderSpace: "screen",
-        type: "image-slot-crop-frame",
-      },
-      transform: {
-        left: cutRect.left,
-        top: cutRect.top,
-        originX: "left",
-        originY: "top",
-      },
-      style: {
-        excludeFromExport: true,
-        fill: "rgba(0, 0, 0, 0)",
-        stroke: "rgba(80, 80, 80, 0.9)",
-        strokeDashArray: [8, 8],
-        strokeUniform: true,
-        strokeWidth: 1,
-      },
-    });
+    return [
+      contribution(
+        {
+          id: `image-slot:${objectId}:crop-mask`,
+          subject: {
+            kind: "object",
+            surfaceId,
+            layerId: controlsLayerId,
+            objectId,
+          },
+          visual: { type: "path" },
+          placement: createSceneRectPlacement(viewportRect),
+          props: {
+            pathData: buildViewportMaskPath(viewportRect, cutRect),
+            fill: "rgba(245, 245, 245, 0.72)",
+            fillRule: "evenodd",
+            objectCaching: false,
+            stroke: null,
+          },
+          data: { imageSlotObjectId: objectId, type: "image-slot-crop-mask" },
+          ordering: {
+            layerId: controlsLayerId,
+            layerOrder: controlsLayerOrder,
+            objectOrder: 0,
+          },
+        },
+        `${IMAGE_SLOT_CAPABILITY_ID}:crop-mask`,
+      ),
+      contribution(
+        {
+          id: `image-slot:${objectId}:crop-frame`,
+          subject: {
+            kind: "object",
+            surfaceId,
+            layerId: controlsLayerId,
+            objectId,
+          },
+          visual: { type: "rect" },
+          placement: createSceneRectPlacement(cutRect),
+          props: {
+            width: cutRect.width,
+            height: cutRect.height,
+            fill: "rgba(0, 0, 0, 0)",
+            stroke: "rgba(80, 80, 80, 0.9)",
+            strokeDashArray: [8, 8],
+            strokeUniform: true,
+            strokeWidth: 1,
+          },
+          data: { imageSlotObjectId: objectId, type: "image-slot-crop-frame" },
+          ordering: {
+            layerId: controlsLayerId,
+            layerOrder: controlsLayerOrder,
+            objectOrder: 1,
+          },
+        },
+        `${IMAGE_SLOT_CAPABILITY_ID}:crop-frame`,
+      ),
+    ];
   }
 
-  private renderSnapGuides(
-    snap: ImageSlotRectSnapFeedback | undefined,
+  private createSnapGuideContributions(
+    sessionId: string,
     objectId: string,
-    frame: { left: number; top: number; width: number; height: number },
-  ): void {
-    const scene = this.sceneHandle;
-    if (!scene) return;
-    scene
-      .selectElements({ layerIds: ["image-slot.controls"] })
-      .filter((element) => element.data?.type === "image-slot-snap-guide")
-      .forEach((element) => scene.removeElement(element.id));
-
-    const guides = Array.isArray(snap?.guides) ? snap.guides : [];
+    surfaceId: string,
+    target: RenderGraphNode,
+  ): SessionRenderContribution[] {
+    const placement = this.resolveDocumentObjectPlacement(objectId);
+    if (!placement) return [];
+    const frame = transformCoordinateRect(
+      placement.localToScene,
+      placement.localBounds,
+    );
+    const guides = Array.isArray(this.snapFeedback?.guides)
+      ? this.snapFeedback.guides
+      : [];
     const vertical = guides.find(
       (guide) => guide.axis === "x" && Number.isFinite(guide.position),
     );
     const horizontal = guides.find(
       (guide) => guide.axis === "y" && Number.isFinite(guide.position),
     );
-    const addGuide = (axis: "x" | "y", position: number) => {
-      const vertical = axis === "x";
-      scene.addElement({
-        id: `image-slot:${objectId}:snap-guide:${axis}`,
-        layerId: "image-slot.controls",
-        type: "path",
-        path: vertical
-          ? `M 0 0 L 0 ${frame.height}`
-          : `M 0 0 L ${frame.width} 0`,
-        data: {
-          type: "image-slot-snap-guide",
-          imageSlotObjectId: objectId,
+    const controlsLayerId = `session:${sessionId}:controls`;
+    const createGuide = (
+      axis: "x" | "y",
+      position: number,
+    ): SessionRenderContribution => {
+      const isVertical = axis === "x";
+      const guideRect = {
+        left: isVertical ? position : frame.left,
+        top: isVertical ? frame.top : position,
+        width: isVertical ? 0 : frame.width,
+        height: isVertical ? frame.height : 0,
+      };
+      return {
+        role: "auxiliary",
+        sessionId,
+        subjectId: objectId,
+        surfaceId,
+        provenance: `${IMAGE_SLOT_CAPABILITY_ID}:snap-guide`,
+        priority: 110,
+        projection: {
+          id: `image-slot:${objectId}:snap-guide:${axis}`,
+          subject: {
+            kind: "object",
+            surfaceId,
+            layerId: controlsLayerId,
+            objectId,
+          },
+          visual: { type: "path" },
+          placement: createSceneRectPlacement(guideRect),
+          props: {
+            pathData: isVertical
+              ? `M 0 0 L 0 ${frame.height}`
+              : `M 0 0 L ${frame.width} 0`,
+            fill: null,
+            objectCaching: false,
+            stroke: "#1677ff",
+            strokeUniform: true,
+            strokeWidth: 1,
+          },
+          data: {
+            type: "image-slot-snap-guide",
+            imageSlotObjectId: objectId,
+          },
+          ordering: {
+            layerId: controlsLayerId,
+            layerOrder: target.sortKey.layerOrder + 1_000_000,
+            objectOrder: 10,
+            subOrder: axis === "x" ? 0 : 1,
+          },
         },
-        transform: {
-          left: vertical ? position : frame.left,
-          top: vertical ? frame.top : position,
-          originX: "left",
-          originY: "top",
-        },
-        style: {
-          excludeFromExport: true,
-          fill: null,
-          objectCaching: false,
-          stroke: "#1677ff",
-          strokeUniform: true,
-          strokeWidth: 1,
-        },
-      });
+      };
     };
-    if (vertical) addGuide("x", Number(vertical.position));
-    if (horizontal) addGuide("y", Number(horizontal.position));
+    return [
+      ...(vertical ? [createGuide("x", Number(vertical.position))] : []),
+      ...(horizontal ? [createGuide("y", Number(horizontal.position))] : []),
+    ];
   }
 
-  private disposeScene(): void {
+  private disposeSessionRender(): void {
     this.sceneLayoutSubscription?.dispose();
     this.sceneLayoutSubscription = null;
-    this.sceneHandle?.dispose();
-    this.sceneHandle = null;
+    this.snapFeedback = undefined;
+    this.sessionRenderScope?.dispose();
+    this.sessionRenderScope = null;
   }
+
+  private finalizeTerminatedSession(): void {
+    this.disposeSessionRender();
+    this.sessionHandle = null;
+    this.original = null;
+    this.state = { phase: "idle", draft: null };
+    this.listeners.forEach((listener) => listener(clone(this.state)));
+  }
+}
+
+function createSceneRectPlacement(rect: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}): AffinePlacement {
+  return createAffinePlacement({
+    localBounds: coordinateRect("object-local", {
+      left: 0,
+      top: 0,
+      width: rect.width,
+      height: rect.height,
+    }),
+    localToScene: coordinateMatrix("object-local", "scene", [
+      1,
+      0,
+      0,
+      1,
+      rect.left,
+      rect.top,
+    ]),
+    pivot: { x: rect.width / 2, y: rect.height / 2 },
+  });
 }
 
 function buildViewportMaskPath(

@@ -94,6 +94,8 @@ export interface InteractionConstraintSpec {
 export interface InteractionOperationSpec {
   enabled: boolean;
   constraints?: InteractionConstraintSpec[];
+  /** Selects whether the document service or the declared action owns commit. */
+  documentMutation?: "automatic" | "action-owned";
   action?: {
     commandId: string;
     payload?: Record<string, unknown>;
@@ -435,6 +437,7 @@ export class InteractionService implements Service {
           input.sceneMatrix,
         )
       : undefined;
+    const primaryProjectionId = normalizeId(input.projectionId);
     const projectionPatches =
       operation.enabled && documentPatch
         ? createProjectionPatches(
@@ -443,10 +446,10 @@ export class InteractionService implements Service {
             documentPatch,
             input.sourceSceneMatrix,
             input.sceneMatrix,
+            primaryProjectionId,
             this.requireGeometrySource(),
           )
         : [];
-    const primaryProjectionId = normalizeId(input.projectionId);
     const primaryMatrixPatch = projectionPatches.find(
       (patch) =>
         patch.transform.type === "replace-matrix" &&
@@ -745,22 +748,31 @@ function createProjectionPatches(
   documentPatch: SceneTransformPatch,
   sourceSceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
   sceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
+  primaryProjectionId: string | undefined,
   geometrySource: GeometrySourceService,
 ): InteractionProjectionPatch[] {
   const projectionTargets =
     normalizeInteractionSubject(subject)?.projectionTargets ?? [];
   if (kind === "move") {
+    const primarySceneMatrix =
+      primaryProjectionId && sourceSceneMatrix
+        ? applySceneTransformPatch(documentPatch, sourceSceneMatrix)
+        : undefined;
     return projectionTargets.map((projectionTarget) => ({
       target: {
         kind: "projection",
         projectionId: projectionTarget.projectionId,
       },
       coordinateSpace: "scene",
-      transform: createProjectionTransformFromDocumentPatch(
-        projectionTarget,
-        documentPatch,
-        geometrySource,
-      ),
+      transform:
+        primarySceneMatrix &&
+        projectionTarget.projectionId === primaryProjectionId
+          ? {
+              type: "replace-matrix" as const,
+              coordinateSpace: "scene" as const,
+              matrix: primarySceneMatrix,
+            }
+          : documentPatch,
     }));
   }
 
@@ -801,16 +813,21 @@ function createProjectionPatches(
       ...projectionTarget.geometryRef,
       purpose: "preview",
     }).value;
-    const matrix = snapshot
-      ? multiplyCoordinateMatrices(
-          sceneDelta,
-          coordinateMatrix(
-            "object-local",
-            "scene",
-            snapshot.localToScene.values,
-          ),
-        )
-      : sceneMatrix;
+    const matrix =
+      sceneMatrix && projectionTarget.projectionId === primaryProjectionId
+        ? // The hit projection already reports an absolute matrix. Reapplying the
+          // delta to its live preview would accumulate earlier preview updates.
+          sceneMatrix
+        : snapshot
+          ? multiplyCoordinateMatrices(
+              sceneDelta,
+              coordinateMatrix(
+                "object-local",
+                "scene",
+                snapshot.localToScene.values,
+              ),
+            )
+          : sceneMatrix;
     return {
       target: {
         kind: "projection",
@@ -824,6 +841,24 @@ function createProjectionPatches(
       },
     };
   });
+}
+
+function applySceneTransformPatch(
+  patch: SceneTransformPatch,
+  sourceSceneMatrix: Matrix2D<"object-local", "scene">,
+): Matrix2D<"object-local", "scene"> {
+  if (patch.type === "replace-matrix") return patch.matrix;
+  return multiplyCoordinateMatrices(
+    coordinateMatrix("scene", "scene", [
+      1,
+      0,
+      0,
+      1,
+      patch.delta.x,
+      patch.delta.y,
+    ]),
+    sourceSceneMatrix,
+  );
 }
 
 function createProjectionTransformFromDocumentPatch(
@@ -933,9 +968,7 @@ function createSessionScope(
 function cloneConstraintSpec(spec: ConstraintSpec): ConstraintSpec {
   return {
     ...spec,
-    ...(spec.application
-      ? { application: { ...spec.application } }
-      : {}),
+    ...(spec.application ? { application: { ...spec.application } } : {}),
     ...(spec.params ? { params: cloneRecord(spec.params) } : {}),
   };
 }

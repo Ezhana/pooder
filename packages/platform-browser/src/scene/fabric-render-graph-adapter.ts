@@ -85,6 +85,13 @@ export type FabricRenderGraphSyncCause =
       operation: "set" | "delete" | "clear";
       keys: string[];
     }
+  | {
+      type: "session-render";
+      operation: "replace" | "clear";
+      sessionId: string;
+      projectionIds: string[];
+      subjectIds: string[];
+    }
   | { type: "scene-content" }
   | {
       type: "interaction-preview";
@@ -179,8 +186,10 @@ export class FabricRenderGraphAdapter implements Service {
 
     this.graphSubscription = this.renderIntentService.onDidChange((event) => {
       if (
-        event.reason.type === "base-updated" &&
-        event.reason.intentIds.length === 0
+        (event.reason.type === "base-updated" &&
+          event.reason.intentIds.length === 0) ||
+        (event.reason.type === "session-render" &&
+          event.reason.projectionIds.length === 0)
       ) {
         return;
       }
@@ -416,10 +425,20 @@ export class FabricRenderGraphAdapter implements Service {
       };
     }
     return {
-      type: "runtime-patch",
-      operation: reason.operation,
-      ...(reason.sourceId ? { sourceId: reason.sourceId } : {}),
-      intentIds: reason.intentIds.slice(),
+      ...(reason.type === "session-render"
+        ? {
+            type: "session-render" as const,
+            operation: reason.operation,
+            sessionId: reason.sessionId,
+            projectionIds: reason.projectionIds.slice(),
+            subjectIds: reason.subjectIds.slice(),
+          }
+        : {
+            type: "runtime-patch" as const,
+            operation: reason.operation,
+            ...(reason.sourceId ? { sourceId: reason.sourceId } : {}),
+            intentIds: reason.intentIds.slice(),
+          }),
     };
   }
 
@@ -429,6 +448,16 @@ export class FabricRenderGraphAdapter implements Service {
     if (reason.type === "base-updated") {
       return reason.intentIds.length
         ? [{ type: "render-intents", intentIds: reason.intentIds.slice() }]
+        : [];
+    }
+    if (reason.type === "session-render") {
+      return reason.projectionIds.length
+        ? [
+            {
+              type: "render-intents",
+              intentIds: reason.projectionIds.slice(),
+            },
+          ]
         : [];
     }
     if (reason.type !== "runtime-patch" || !reason.intentIds.length) {
@@ -587,12 +616,7 @@ export class FabricRenderGraphAdapter implements Service {
 
     const activeRoot = this.sceneService?.getActiveRoot() ?? null;
     if (activeRoot) {
-      this.appendRootCompositionItems(
-        items,
-        activeRoot,
-        graph,
-        conditionContext,
-      );
+      this.appendRootCompositionItems(items, activeRoot, conditionContext);
     } else {
       this.appendRenderGraphItems(items, graph, conditionContext);
     }
@@ -654,25 +678,12 @@ export class FabricRenderGraphAdapter implements Service {
   private appendRootCompositionItems(
     items: FabricRenderTargetItem[],
     root: SceneSnapshot,
-    graph: RenderGraph,
     conditionContext: ReturnType<
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
     >,
   ): void {
-    const rootItemStart = items.length;
     root.composition.entries.forEach((entry, entryIndex) => {
       const orderBase = entryIndex * 1_000_000_000;
-      if (entry.source === "render-graph") {
-        this.appendRenderGraphItems(
-          items,
-          graph,
-          conditionContext,
-          orderBase,
-          `root:${root.id}:${entryIndex}:render-graph`,
-          entry.filter,
-        );
-        return;
-      }
       entry.layerIds.forEach((layerId, groupLayerIndex) => {
         const layer = this.sceneService?.selectOneLayer({
           sceneId: root.id,
@@ -713,68 +724,6 @@ export class FabricRenderGraphAdapter implements Service {
         });
       });
     });
-    this.stabilizeRootCompositionItems(items, rootItemStart, graph);
-    this.appendRetainedRenderGraphItems(items, graph, conditionContext);
-  }
-
-  private stabilizeRootCompositionItems(
-    items: FabricRenderTargetItem[],
-    start: number,
-    graph: RenderGraph,
-  ): void {
-    const nodes = graph.layers.flatMap((layer) => layer.nodes);
-    const usedKeys = new Set<string>();
-    items.slice(start).forEach((item) => {
-      let canonicalKey =
-        item.origin?.type === "render-intent" ? item.spec.id : undefined;
-      const sceneElement =
-        item.origin?.type === "scene-element"
-          ? this.sceneService?.selectOneElement({
-              sceneId: item.origin.sceneId,
-              projectionIds: [item.origin.elementId],
-            })
-          : undefined;
-      const projection = sceneElement?.renderGraphProjection;
-      if (projection) {
-        canonicalKey = nodes.find(
-          (node) =>
-            node.subjectId === projection.subjectId &&
-            node.type === (projection.type ?? item.spec.type),
-        )?.id;
-      }
-      if (canonicalKey && !usedKeys.has(canonicalKey)) {
-        item.key = canonicalKey;
-      }
-      usedKeys.add(item.key);
-    });
-  }
-
-  private appendRetainedRenderGraphItems(
-    items: FabricRenderTargetItem[],
-    graph: RenderGraph,
-    conditionContext: ReturnType<
-      FabricRenderGraphAdapter["buildRuntimeConditionContext"]
-    >,
-  ): void {
-    const usedKeys = new Set(items.map((item) => item.key));
-    const retained: FabricRenderTargetItem[] = [];
-    this.appendRenderGraphItems(retained, graph, conditionContext);
-    retained.forEach((item) => {
-      if (usedKeys.has(item.key)) return;
-      items.push({
-        ...item,
-        spec: {
-          ...item.spec,
-          props: {
-            ...item.spec.props,
-            evented: false,
-            selectable: false,
-            visible: false,
-          },
-        },
-      });
-      usedKeys.add(item.key);
-    });
   }
 
   private appendRenderGraphItems(
@@ -783,13 +732,6 @@ export class FabricRenderGraphAdapter implements Service {
     conditionContext: ReturnType<
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
     >,
-    orderBase = 0,
-    keyPrefix = "",
-    filter?: SceneSnapshot["composition"]["entries"][number] extends infer T
-      ? T extends { source: "render-graph"; filter?: infer F }
-        ? F
-        : never
-      : never,
   ): void {
     graph.layers.forEach((layer, layerIndex) => {
       const layerEffects = this.normalizeActiveEffects(
@@ -797,12 +739,13 @@ export class FabricRenderGraphAdapter implements Service {
         conditionContext,
       );
       layer.nodes.forEach((node, nodeIndex) => {
-        if (filter && !filter({ layer, node })) return;
         if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext))
           return;
-        const frameHitTarget = keyPrefix
-          ? null
-          : this.toFrameHitTargetSpec(layer, node, conditionContext);
+        const frameHitTarget = this.toFrameHitTargetSpec(
+          layer,
+          node,
+          conditionContext,
+        );
         if (frameHitTarget) {
           items.push({
             key: `${node.id}:frame-hit-target`,
@@ -812,9 +755,7 @@ export class FabricRenderGraphAdapter implements Service {
               intentId: String(node.data.renderIntentId || node.id),
             },
             order:
-              orderBase +
-              this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex) -
-              0.001,
+              this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex) - 0.001,
             spec: frameHitTarget,
           });
         }
@@ -823,18 +764,17 @@ export class FabricRenderGraphAdapter implements Service {
           node,
           conditionContext,
           layerEffects,
-          Boolean(keyPrefix),
+          false,
         );
         if (!spec) return;
         items.push({
-          key: keyPrefix ? `${keyPrefix}:${node.id}` : node.id,
+          key: node.id,
           layerId: layer.id,
           origin: {
             type: "render-intent",
             intentId: String(node.data.renderIntentId || node.id),
           },
-          order:
-            orderBase + this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex),
+          order: this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex),
           spec,
         });
       });
@@ -905,7 +845,11 @@ export class FabricRenderGraphAdapter implements Service {
     const nodes = graph.layers.flatMap((layer) => layer.nodes);
     return membership.nodeIds.flatMap((projectionId) => {
       const node = nodes.find((candidate) => candidate.id === projectionId);
-      return node
+      return node &&
+        !(
+          node.provenance.type === "session" &&
+          node.provenance.role === "auxiliary"
+        )
         ? [{ projectionId, geometryRef: { ...node.previewGeometryRef } }]
         : [];
     });
@@ -917,12 +861,7 @@ export class FabricRenderGraphAdapter implements Service {
     if (!graph) return null;
     const renderNodeId = String(target.data?.renderNodeId || "").trim();
     const declaredSubjectId = String(target.data?.subjectId || "").trim();
-    const membership = graph.projectionMemberships.find(
-      (item) =>
-        item.subjectId === declaredSubjectId ||
-        (renderNodeId && item.nodeIds.includes(renderNodeId)),
-    );
-    const subjectId = membership?.subjectId || declaredSubjectId;
+    const subjectId = declaredSubjectId;
     if (!subjectId) return null;
     const projectionTargets = this.resolveProjectionTargets(subjectId);
     const compositeMemberNodeIds = Array.isArray(
@@ -1304,11 +1243,6 @@ export class FabricRenderGraphAdapter implements Service {
     });
   }
 
-  private resolveLiveObjectFrame(objectId: string): GeometryRect | null {
-    const target = this.resolveLiveProjection(objectId);
-    return target ? this.getTargetSceneBounds(target) : null;
-  }
-
   private resolveLiveProjection(projectionId: string): any | null {
     const canvas = this.canvasService;
     if (!canvas) return null;
@@ -1321,8 +1255,7 @@ export class FabricRenderGraphAdapter implements Service {
         })
         .find(
           (candidate: any) =>
-            String(candidate?.data?.renderNodeId || "") === normalized ||
-            String(candidate?.data?.subjectId || "") === normalized,
+            String(candidate?.data?.renderNodeId || "") === normalized,
         ) ?? null
     );
   }
@@ -1403,7 +1336,7 @@ export class FabricRenderGraphAdapter implements Service {
           layer.nodes.map((node) => ({
             ref: {
               sourceId: "render-graph",
-              geometryId: node.subjectId,
+              geometryId: node.id,
             },
             kind: "rect" as const,
             space: node.coordinateSpace,
@@ -1605,7 +1538,7 @@ export class FabricRenderGraphAdapter implements Service {
     node: RenderGraphNode,
   ): RenderObjectSpec | null {
     const conditionContext = this.buildRuntimeConditionContext(
-      this.requireRenderIntentService().getGraph(),
+      this.requireRenderIntentService().getDocumentGraph(),
     );
     return this.toRenderObjectSpec(
       layer,

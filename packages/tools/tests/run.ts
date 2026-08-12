@@ -1,10 +1,8 @@
 import {
   RENDER_INTENT_SERVICE,
-  SCENE_SERVICE,
   Pooder,
   coordinateMatrix,
   type RenderIntentService,
-  type SceneService,
 } from "@pooder/core";
 import {
   registerEditorDocumentService,
@@ -138,6 +136,7 @@ function createImageSlotDocument(): EditorDocument {
 
 async function createHarness(
   imageSlotOptions: Parameters<typeof createImageSlotCapability>[0] = {},
+  document: EditorDocument = createImageSlotDocument(),
 ): Promise<{
   runtime: Pooder;
   controller: EditorDocumentService;
@@ -147,7 +146,7 @@ async function createHarness(
   runtime.extensions.register(createImageSlotCapability(imageSlotOptions));
   await runtime.extensions.flushActivation();
   const controller = registerEditorDocumentService(runtime);
-  const applied = await controller.apply(createImageSlotDocument());
+  const applied = await controller.apply(document);
   assertEqual(applied.ok, true, "image-slot document should apply");
   const facade = runtime.capabilities.get<ImageSlotCapabilityApi>(
     IMAGE_SLOT_CAPABILITY_ID,
@@ -155,6 +154,86 @@ async function createHarness(
   assert(facade, "image-slot facade should be registered");
   facade.syncDocument(applied.document, controller);
   return { runtime, controller, facade };
+}
+
+async function testPlaceholderWorkingAndDocumentProjectionHandoff(): Promise<void> {
+  const document = createImageSlotDocument();
+  const slot = document.surfaces[0]!.layers[0]!.objects[0]!;
+  if (slot.type === "image") slot.source = null;
+  document.assets = document.assets.filter(
+    (asset) => asset.id !== "artwork.asset",
+  );
+  const { runtime, facade } = await createHarness({}, document);
+  const renderIntents = runtime.services.getOrThrow<RenderIntentService>(
+    RENDER_INTENT_SERVICE,
+  );
+  const projectionIds = () =>
+    renderIntents
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes.map((node) => node.id));
+  try {
+    assertEqual(
+      renderIntents
+        .getDocumentGraph()
+        .layers.flatMap((layer) => layer.nodes)
+        .find((node) => node.id === IMAGE_SLOT_ID)?.visual?.src,
+      "/placeholder.png",
+      "empty document projection should start from its placeholder",
+    );
+    assertEqual(
+      (await facade.openSession({ objectId: IMAGE_SLOT_ID })).ok,
+      true,
+      "placeholder slot session should open",
+    );
+    assertEqual(
+      projectionIds().includes(IMAGE_SLOT_ID),
+      false,
+      "opening the override should suppress the placeholder projection",
+    );
+    await facade.setResource({
+      kind: "data-url",
+      dataUrl: "data:image/png;base64,AA==",
+      intrinsicSize: { width: 300, height: 200 },
+    });
+    const working = renderIntents
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find((node) => node.id === `image-slot:${IMAGE_SLOT_ID}:working`);
+    assertEqual(
+      working?.subjectId,
+      IMAGE_SLOT_ID,
+      "working projection should keep the persistent business subject",
+    );
+    assertEqual(
+      working?.provenance.type,
+      "session",
+      "working projection should expose session provenance",
+    );
+    assertEqual(
+      (await facade.commitSession()).type,
+      "placed",
+      "working resource should commit",
+    );
+    assertEqual(
+      projectionIds().includes(`image-slot:${IMAGE_SLOT_ID}:working`),
+      false,
+      "commit should atomically remove the working projection",
+    );
+    assertEqual(
+      projectionIds().includes(IMAGE_SLOT_ID),
+      true,
+      "formal document projection should take over after commit",
+    );
+    assertEqual(
+      projectionIds().some(
+        (id) => id.includes("crop-") || id.includes("snap-guide"),
+      ),
+      false,
+      "commit should remove every auxiliary session visual",
+    );
+  } finally {
+    await runtime.dispose();
+  }
 }
 
 async function testStrictPolicyAcceptsAFrameCoveringCrop(): Promise<void> {
@@ -452,12 +531,11 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
 }
 
 function getWorkingMatrix(runtime: Pooder): number[] {
-  const scene = runtime.services
-    .getOrThrow<SceneService>(SCENE_SERVICE)
-    .getSceneHandle(`image-slot:${IMAGE_SLOT_ID}:scene`);
-  const working = scene
-    ?.selectElements()
-    .find((element) => element.id === `image-slot:${IMAGE_SLOT_ID}:working`);
+  const working = runtime.services
+    .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+    .getGraph()
+    .layers.flatMap((layer) => layer.nodes)
+    .find((node) => node.id === `image-slot:${IMAGE_SLOT_ID}:working`);
   assert(working?.placement, "image-slot working projection should exist");
   return [...working.placement.localToScene.values];
 }
@@ -465,7 +543,7 @@ function getWorkingMatrix(runtime: Pooder): number[] {
 function getCommittedMatrix(runtime: Pooder): number[] {
   const node = runtime.services
     .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
-    .getGraph()
+    .getDocumentGraph()
     .layers.flatMap((layer) => layer.nodes)
     .find((candidate) => candidate.id === IMAGE_SLOT_ID);
   assert(node, "committed image render node should exist");
@@ -656,6 +734,7 @@ async function main(): Promise<void> {
   await runExistingCapabilityRegressions();
   await testImageSlotRejectsMissingContainerGeometry();
   await testStrictPolicyAcceptsAFrameCoveringCrop();
+  await testPlaceholderWorkingAndDocumentProjectionHandoff();
   await testPlaceholderVisibilityAndResourceLifecycle();
   await testSharedPlaceholderAssetLifecycle();
   await testRemovedImageSlotContractsAreRejected();

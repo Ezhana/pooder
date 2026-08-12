@@ -1619,7 +1619,6 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       composition: {
         entries: [
           { source: "local", layerIds: ["underlay"] },
-          { source: "render-graph", interaction: "disabled" },
           { source: "local", layerIds: ["controls"] },
         ],
       },
@@ -1637,7 +1636,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
     });
     assertDeepEqual(
       scenes.getActiveRoot()?.composition.entries.map((entry) => entry.source),
-      ["local", "render-graph", "local"],
+      ["local", "local"],
     );
 
     const other = await sessions.open({
@@ -2268,6 +2267,7 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
         "scene",
         [1, 0, 0, 1, 1, 2],
       ),
+      projectionId: "image.fill",
       subject: {
         subjectId: "image",
         projectionTargets: ["image.fill", "image.outline"].map(
@@ -2358,6 +2358,24 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       moveCommit.projectionPatches.map((patch) => patch.target.projectionId),
       ["image.fill", "image.outline"],
       "one logical operation should emit one patch per projection target",
+    );
+    assertDeepEqual(
+      moveCommit.projectionPatches[0]?.transform,
+      {
+        type: "replace-matrix",
+        coordinateSpace: "scene",
+        matrix: coordinateMatrix("object-local", "scene", [1, 0, 0, 1, 10, 2]),
+      },
+      "the initiating move projection should use an absolute matrix based on the interaction start",
+    );
+    assertDeepEqual(
+      moveCommit.projectionPatches[1]?.transform,
+      {
+        type: "translate",
+        coordinateSpace: "scene",
+        delta: { space: "scene", x: 10, y: 2 },
+      },
+      "secondary projections should apply the total interaction delta to their stable source placement",
     );
     const resizePreview = interaction.previewManipulation("resize", {
       spec,
@@ -2636,6 +2654,193 @@ function createTestPlacement(
       left,
       top,
     ]),
+  });
+}
+
+async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createProjection = (id: string, objectOrder: number) => ({
+      id,
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "logical-image",
+      },
+      visual: { type: "image" as const, src: `/${id}.png` },
+      placement: createTestPlacement(objectOrder * 10, 0, 10, 10),
+      ordering: { layerId: "art", layerOrder: 2, objectOrder },
+    });
+    intents.setDocumentIntents([
+      createProjection("logical-image:fill", 0),
+      createProjection("logical-image:outline", 1),
+    ]);
+    const sessionRenderChanges: RenderIntentChangeEvent[] = [];
+    intents.onDidChange((event) => sessionRenderChanges.push(event));
+
+    const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
+      descriptor: {
+        sessionId: "session:image-slot",
+        ownerId: "test",
+        scope: { subjectId: "logical-image", surfaceId: "front" },
+        interactionMode: "exclusive",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    const scope = session.own(
+      intents.createSessionRenderScope(session.descriptor.sessionId),
+    );
+    scope.replace([
+      {
+        role: "override",
+        sessionId: session.descriptor.sessionId,
+        subjectId: "logical-image",
+        surfaceId: "front",
+        provenance: "test:image-slot-working",
+        priority: 100,
+        replacementTarget: {
+          subjectId: "logical-image",
+          projectionId: "logical-image:fill",
+        },
+        projection: {
+          ...createProjection("session:working-image", 0),
+          subject: {
+            kind: "object",
+            surfaceId: "wrong-input-is-normalized",
+            layerId: "art",
+            objectId: "wrong-input-is-normalized",
+          },
+          visual: { type: "image", src: "/working.png" },
+        },
+      },
+      {
+        role: "auxiliary",
+        sessionId: session.descriptor.sessionId,
+        subjectId: "logical-image",
+        surfaceId: "front",
+        provenance: "test:snap-guide",
+        priority: 110,
+        projection: {
+          id: "session:snap-guide",
+          subject: {
+            kind: "object",
+            surfaceId: "front",
+            layerId: "controls",
+            objectId: "logical-image",
+          },
+          visual: { type: "path" },
+          placement: createTestPlacement(0, 0, 10, 10),
+          props: { pathData: "M0 0L10 0" },
+          ordering: { layerId: "controls", layerOrder: 100 },
+        },
+      },
+    ]);
+    assertDeepEqual(
+      sessionRenderChanges.at(-1)?.reason,
+      {
+        type: "session-render",
+        operation: "replace",
+        sessionId: "session:image-slot",
+        projectionIds: [
+          "logical-image:fill",
+          "session:snap-guide",
+          "session:working-image",
+        ],
+        subjectIds: ["logical-image"],
+      },
+      "session render changes should name only projections changed by composition",
+    );
+
+    let graph = intents.getGraph();
+    assertDeepEqual(
+      graph.layers.flatMap((layer) => layer.nodes.map((node) => node.id)),
+      ["session:working-image", "logical-image:outline", "session:snap-guide"],
+      "session override should replace only its concrete target at document order",
+    );
+    const working = selectOneRenderGraphNode(graph, {
+      projectionIds: ["session:working-image"],
+    });
+    assertEqual(working?.subjectId, "logical-image");
+    assertDeepEqual(working?.provenance, {
+      type: "session",
+      sessionId: "session:image-slot",
+      contributionId: "session:working-image",
+      source: "test:image-slot-working",
+      role: "override",
+      priority: 100,
+      replacementTarget: {
+        subjectId: "logical-image",
+        projectionId: "logical-image:fill",
+      },
+    });
+    assertEqual(
+      working?.props.excludeFromExport,
+      true,
+      "temporary projections should be non-exportable by construction",
+    );
+    assertDeepEqual(
+      intents
+        .getDocumentGraph()
+        .layers.flatMap((layer) => layer.nodes.map((node) => node.id)),
+      ["logical-image:fill", "logical-image:outline"],
+      "document graph should remain stable while the session graph is active",
+    );
+
+    const competingScope = intents.createSessionRenderScope(
+      "session:priority-winner",
+    );
+    competingScope.replace([
+      {
+        role: "override",
+        sessionId: "session:priority-winner",
+        subjectId: "logical-image",
+        surfaceId: "front",
+        provenance: "test:priority-winner",
+        priority: 200,
+        replacementTarget: {
+          subjectId: "logical-image",
+          projectionId: "logical-image:fill",
+        },
+        projection: {
+          ...createProjection("session:priority-working-image", 0),
+          visual: { type: "image", src: "/priority-working.png" },
+        },
+      },
+    ]);
+    assertEqual(
+      selectOneRenderGraphNode(intents.getGraph(), {
+        projectionIds: ["session:priority-working-image"],
+      })?.provenance.type,
+      "session",
+      "the highest-priority override should own an overlapping target",
+    );
+    assertEqual(
+      selectOneRenderGraphNode(intents.getGraph(), {
+        projectionIds: ["session:working-image"],
+      }),
+      undefined,
+      "lower-priority replacement projections should not leak into the graph",
+    );
+    competingScope.dispose();
+    assertEqual(
+      selectOneRenderGraphNode(intents.getGraph(), {
+        projectionIds: ["session:working-image"],
+      })?.subjectId,
+      "logical-image",
+      "ending the focused override should reveal the previous session projection",
+    );
+
+    await session.cancel();
+    graph = intents.getGraph();
+    assertDeepEqual(
+      graph.layers.flatMap((layer) => layer.nodes.map((node) => node.id)),
+      ["logical-image:fill", "logical-image:outline"],
+      "session termination should atomically remove auxiliaries and restore targets",
+    );
   });
 }
 
@@ -3794,6 +3999,10 @@ async function main() {
     [
       "records logical subject projection memberships",
       testRenderGraphRecordsSubjectProjectionMemberships,
+    ],
+    [
+      "composes and atomically cleans session render overrides",
+      testSessionRenderOverridesComposeAndCleanUpAtomically,
     ],
     [
       "keeps render intent container, preview, and export geometry independent",

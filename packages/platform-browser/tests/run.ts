@@ -817,7 +817,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
   await runtime.dispose();
 }
 
-async function testSessionRootCompositionIsExplicitAndReadOnly() {
+async function testSessionRootCompositionIsLocalOnly() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -856,7 +856,6 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     composition: {
       entries: [
         { source: "local", layerIds: ["underlay"] },
-        { source: "render-graph", interaction: "disabled" },
         { source: "local", layerIds: ["controls"] },
       ],
     },
@@ -905,7 +904,7 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
   const items = canvas.reconcileCalls.at(-1)?.items ?? [];
   assertDeepEqual(
     items.map((item) => item.spec.id),
-    ["underlay-node", "session-image", "document-node", "control-node"],
+    ["underlay-node", "session-image", "control-node"],
     "composition entry order should be the render order",
   );
   const sessionImage = items.find(
@@ -931,29 +930,6 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     true,
     "dimensionless scene images should remain hit-testable",
   );
-  const projection = items.find(
-    (item) => item.spec.id === "document-node",
-  )?.spec;
-  assertEqual(
-    projection?.props.selectable,
-    false,
-    "document projections are read-only",
-  );
-  assertEqual(
-    projection?.props.evented,
-    false,
-    "document projections do not hit test",
-  );
-  assertEqual(
-    projection?.data?.interactionSpec,
-    undefined,
-    "document projections do not activate document interaction",
-  );
-  assertEqual(
-    items.find((item) => item.spec.id === "document-node")?.key,
-    "document-node",
-    "document projections should preserve their canonical render key",
-  );
   const control = items.find((item) => item.spec.id === "control-node")?.spec;
   assertEqual(
     control?.props.selectable,
@@ -976,38 +952,18 @@ async function testSessionRootCompositionIsExplicitAndReadOnly() {
     "scene renderProps cannot inject Fabric interaction flags",
   );
 
-  scene.dispose();
-  const localOnly = scenes.createScene({
-    id: "local-only",
-    owner: { type: "session", sessionId: session.descriptor.sessionId },
-    composition: { entries: [] },
-  });
-  session.own(localOnly);
-  await adapter.flush();
-  const retainedDocument = canvas.reconcileCalls
-    .at(-1)
-    ?.items.find((item) => item.key === "document-node");
-  assertEqual(
-    retainedDocument?.spec.props.visible,
-    false,
-    "a root without document projection should retain the document target invisibly",
-  );
-  assertEqual(
-    retainedDocument?.spec.props.evented,
-    false,
-    "retained document targets must not receive pointer events",
-  );
   await session.cancel();
   await runtime.dispose();
 }
 
-async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
+async function testSessionRenderOverrideUsesIndependentProjectionId() {
   const runtime = new Pooder();
   const canvas = new FakeCanvasService();
   const adapter = new FabricRenderGraphAdapter();
   runtime.services.register(canvas as any, CANVAS_SERVICE);
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
-  runtime.services.getOrThrow(RENDER_INTENT_SERVICE).setDocumentIntents([
+  const renderIntents = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  renderIntents.setDocumentIntents([
     {
       id: "user-image",
       subject: {
@@ -1031,33 +987,79 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
     },
     initialDraft: {},
   });
-  const scene = runtime.services.getOrThrow(SCENE_SERVICE).createScene({
-    id: "image-root",
-    owner: { type: "session", sessionId: session.descriptor.sessionId },
-    composition: {
-      entries: [{ source: "local", layerIds: ["working"] }],
-    },
-  });
-  session.own(scene);
-  scene.addLayer({ id: "working" });
-  scene.addElement({
-    id: "working-user-image",
-    layerId: "working",
-    type: "image",
-    src: "/user.png",
-    renderGraphProjection: { subjectId: "user-image", type: "image" },
-  });
+  const scope = session.own(
+    renderIntents.createSessionRenderScope(session.descriptor.sessionId),
+  );
+  const createWorkingOverride = (left: number) =>
+    ({
+      role: "override",
+      sessionId: session.descriptor.sessionId,
+      subjectId: "user-image",
+      surfaceId: "front",
+      provenance: "platform-test:working-image",
+      priority: 100,
+      replacementTarget: {
+        subjectId: "user-image",
+        projectionId: "user-image",
+      },
+      projection: {
+        id: "working-user-image",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "art",
+          objectId: "user-image",
+        },
+        visual: { type: "image", src: "/working-user.png" },
+        ordering: { layerId: "art" },
+        placement: createTestPlacement(left, 0, 100, 80),
+        interaction: { selection: { enabled: true } },
+      },
+    }) as const;
+  scope.replace([createWorkingOverride(0)]);
   await adapter.flush();
   const workingItems = canvas.reconcileCalls.at(-1)?.items ?? [];
-  assertEqual(
-    workingItems.find((item) => item.spec.id === "working-user-image")?.key,
-    "user-image",
-    "working image should take over the committed image canonical key",
+  const openingInvalidations =
+    canvas.reconcileCalls.at(-1)?.options?.invalidations ?? [];
+  assert(
+    openingInvalidations.every(
+      (invalidation) => invalidation.type !== "full",
+    ) &&
+      openingInvalidations.some(
+        (invalidation) =>
+          invalidation.type === "render-intents" &&
+          invalidation.intentIds.includes("working-user-image"),
+      ),
+    "opening a session override should use projection-scoped invalidations",
   );
   assertEqual(
-    workingItems.filter((item) => item.key === "user-image").length,
-    1,
-    "working and retained document images must not duplicate the canonical target",
+    workingItems.find((item) => item.spec.id === "working-user-image")?.key,
+    "working-user-image",
+    "session projection should keep its independent runtime key",
+  );
+  assertEqual(
+    workingItems.some((item) => item.key === "user-image"),
+    false,
+    "active override should suppress the targeted document projection",
+  );
+  assertEqual(
+    workingItems.find((item) => item.key === "working-user-image")?.spec.data
+      ?.subjectId,
+    "user-image",
+    "runtime hits should carry the business subject id directly",
+  );
+
+  scope.replace([createWorkingOverride(24)]);
+  await adapter.flush();
+  assertDeepEqual(
+    canvas.reconcileCalls.at(-1)?.options?.invalidations,
+    [
+      {
+        type: "render-intents",
+        intentIds: ["working-user-image"],
+      },
+    ],
+    "updating a working projection should not trigger a full canvas reconcile",
   );
 
   const reconcileCount = canvas.reconcileCalls.length;
@@ -1069,16 +1071,87 @@ async function testSessionWorkingImageHandsOffCanonicalRenderKey() {
     "session phase-only changes should not reconcile the canvas",
   );
 
-  scene.dispose();
+  scope.clear();
   await adapter.flush();
+  const clearingInvalidations =
+    canvas.reconcileCalls.at(-1)?.options?.invalidations ?? [];
+  assert(
+    clearingInvalidations.length > 0 &&
+      clearingInvalidations.every(
+        (invalidation) => invalidation.type !== "full",
+      ),
+    "clearing an override should use projection-scoped handoff invalidations",
+  );
   assertEqual(
     canvas.reconcileCalls
       .at(-1)
       ?.items.find((item) => item.key === "user-image")?.spec.id,
     "user-image",
-    "committed document image should inherit the same canonical target",
+    "clearing the override should restore the document projection",
   );
   await session.cancel();
+  await runtime.dispose();
+}
+
+async function testSceneExportReadsOnlyDocumentProjections() {
+  const runtime = new Pooder();
+  const renderIntents = runtime.services.getOrThrow(RENDER_INTENT_SERVICE);
+  renderIntents.setDocumentIntents([
+    {
+      id: "document-export-node",
+      subject: {
+        kind: "object",
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "export-subject",
+      },
+      visual: { type: "rect" },
+      placement: createTestPlacement(0, 0, 20, 20),
+      ordering: { layerId: "art" },
+    },
+  ]);
+  const scope = renderIntents.createSessionRenderScope("session:export-test");
+  scope.replace([
+    {
+      role: "override",
+      sessionId: scope.sessionId,
+      subjectId: "export-subject",
+      surfaceId: "front",
+      provenance: "test:working",
+      priority: 100,
+      replacementTarget: {
+        subjectId: "export-subject",
+        projectionId: "document-export-node",
+      },
+      projection: {
+        id: "session-export-node",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "art",
+          objectId: "export-subject",
+        },
+        visual: { type: "rect" },
+        placement: createTestPlacement(0, 0, 20, 20),
+        ordering: { layerId: "art" },
+      },
+    },
+  ]);
+
+  const exportService = new BrowserSceneExportService() as any;
+  exportService.renderIntentService = renderIntents;
+  exportService.renderGraphAdapter = {
+    createExportRenderObjectSpec: (_layer: unknown, node: { id: string }) => ({
+      id: node.id,
+    }),
+  };
+  const entries = exportService.selectEntries({});
+  assertDeepEqual(
+    entries.map((entry: { node: { id: string } }) => entry.node.id),
+    ["document-export-node"],
+    "export should ignore active session overrides and auxiliary projections",
+  );
+  scope.dispose();
   await runtime.dispose();
 }
 
@@ -2787,9 +2860,8 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
     key: "working-image",
     layerId: "image.session.image",
     origin: {
-      type: "scene-element",
-      sceneId: "image-session",
-      elementId: "working-image",
+      type: "render-intent",
+      intentId: "working-image",
     },
     order: 0,
     spec: {
@@ -2815,9 +2887,8 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
         key: "snap-guide",
         layerId: "image.session.controls",
         origin: {
-          type: "scene-element",
-          sceneId: "image-session",
-          elementId: "snap-guide",
+          type: "render-intent",
+          intentId: "snap-guide",
         },
         order: 1,
         spec: {
@@ -2830,9 +2901,8 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
     {
       invalidations: [
         {
-          type: "scene-elements",
-          sceneId: "image-session",
-          elementIds: ["snap-guide"],
+          type: "render-intents",
+          intentIds: ["snap-guide"],
         },
       ],
     },
@@ -2859,9 +2929,8 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
   await service.reconcileRenderGraphDrawList([movedWorkingImage], {
     invalidations: [
       {
-        type: "scene-elements",
-        sceneId: "image-session",
-        elementIds: ["working-image"],
+        type: "render-intents",
+        intentIds: ["working-image"],
       },
     ],
   });
@@ -2881,9 +2950,8 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
   await service.reconcileRenderGraphDrawList([workingImage], {
     invalidations: [
       {
-        type: "scene-elements",
-        sceneId: "image-session",
-        elementIds: ["working-image"],
+        type: "render-intents",
+        intentIds: ["working-image"],
       },
     ],
   });
@@ -2901,9 +2969,8 @@ async function testCanvasReconcileUsesInvalidationAndInteractionOwnership() {
   await service.reconcileRenderGraphDrawList([workingImage], {
     invalidations: [
       {
-        type: "scene-elements",
-        sceneId: "image-session",
-        elementIds: ["working-image"],
+        type: "render-intents",
+        intentIds: ["working-image"],
       },
     ],
   });
@@ -4465,12 +4532,16 @@ async function main() {
       testFabricRenderGraphAdapterBuildsDrawList,
     ],
     [
-      "composes explicit read-only session roots",
-      testSessionRootCompositionIsExplicitAndReadOnly,
+      "composes local-only session roots",
+      testSessionRootCompositionIsLocalOnly,
     ],
     [
-      "hands session working images back to canonical document targets",
-      testSessionWorkingImageHandsOffCanonicalRenderKey,
+      "uses independent session projection ids and direct subject ids",
+      testSessionRenderOverrideUsesIndependentProjectionId,
+    ],
+    [
+      "exports only persistent document projections during sessions",
+      testSceneExportReadsOnlyDocumentProjections,
     ],
     [
       "renders renderable SceneService scenes",
