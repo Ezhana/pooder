@@ -63,6 +63,8 @@ export interface RenderIntentExportAspect {
 
 export interface RenderIntentOrderingAspect {
   layerId: string;
+  /** Runtime render-layer order. Independent from the node's intra-layer path. */
+  layerOrder?: number;
   /** Lexicographic draw path. Earlier entries and shorter prefixes draw first. */
   path?: readonly number[];
   channel?: RenderIntentChannel;
@@ -123,6 +125,7 @@ export interface RenderIntentPatchEntry {
 }
 
 export interface RenderGraphSortKey {
+  layerOrder: number;
   path: readonly number[];
   channel: RenderIntentChannel;
   channelOrder: number;
@@ -1280,10 +1283,7 @@ export function createRenderGraph(
   });
 
   const layers = Array.from(layerMap.values())
-    .map((layer) => ({
-      ...layer,
-      nodes: layer.nodes.sort(compareGraphNodes),
-    }))
+    .map(normalizeGraphLayerNodeOrder)
     .sort(compareGraphLayers);
   const projectionMemberships = collectProjectionMemberships(layers);
 
@@ -1397,7 +1397,9 @@ function createComposedRenderGraph(
     layer.nodes.sort(compareGraphNodes);
   });
 
-  const layers = Array.from(layersById.values()).sort(compareGraphLayers);
+  const layers = Array.from(layersById.values())
+    .map(normalizeGraphLayerNodeOrder)
+    .sort(compareGraphLayers);
   return {
     revision,
     surfaceIds: Array.from(
@@ -1561,6 +1563,7 @@ function createDraftFromPatch(
     },
     ordering: {
       layerId: ordering.layerId,
+      layerOrder: ordering.layerOrder,
       path: ordering.path ? [...ordering.path] : undefined,
       channel: ordering.channel,
       subOrder: ordering.subOrder,
@@ -1586,7 +1589,7 @@ function getOrCreateGraphLayer(
 ): RenderGraphLayer {
   const existing = layerMap.get(draft.ordering.layerId);
   if (existing) {
-    existing.order = Math.min(existing.order, draft.ordering.path?.[0] ?? 0);
+    existing.order = Math.min(existing.order, draft.ordering.layerOrder ?? 0);
     existing.visible = existing.visible || draft.export?.visible !== false;
     return existing;
   }
@@ -1594,7 +1597,7 @@ function getOrCreateGraphLayer(
   const layer: RenderGraphLayer = {
     id: draft.ordering.layerId,
     surfaceId: draft.subject.surfaceId,
-    order: draft.ordering.path?.[0] ?? 0,
+    order: draft.ordering.layerOrder ?? 0,
     visible: draft.export?.visible !== false,
     nodes: [],
     effects: [],
@@ -1666,6 +1669,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     visibleWhen: cloneRecord(draft.export?.visibleWhen),
     visible: draft.export?.visible !== false,
     sortKey: {
+      layerOrder: draft.ordering.layerOrder ?? 0,
       path: [...(draft.ordering.path ?? [])],
       channel,
       channelOrder: CHANNEL_ORDER[channel],
@@ -1724,7 +1728,19 @@ function compareSortPaths(
 }
 
 function compareGraphLayers(a: RenderGraphLayer, b: RenderGraphLayer): number {
-  return a.order - b.order;
+  return a.order - b.order || a.id.localeCompare(b.id);
+}
+
+function normalizeGraphLayerNodeOrder(layer: RenderGraphLayer): RenderGraphLayer {
+  return {
+    ...layer,
+    nodes: layer.nodes
+      .map((node) => ({
+        ...node,
+        sortKey: { ...node.sortKey, layerOrder: layer.order },
+      }))
+      .sort(compareGraphNodes),
+  };
 }
 
 function mergeDraft(

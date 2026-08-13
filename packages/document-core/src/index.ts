@@ -2223,6 +2223,7 @@ function createBaseRenderIntentDrafts(
               createGroupInteractionProxyDraft(
                 surface,
                 object,
+                surfaceIndex,
                 orderingPath,
                 visible,
                 framePlacement,
@@ -2247,6 +2248,7 @@ function createBaseRenderIntentDrafts(
         const draft = createObjectRenderIntentDraft(
           surface,
           object,
+          surfaceIndex,
           orderingPath,
           visible,
           resolvedImages.get(object.id),
@@ -2326,6 +2328,7 @@ function visitDocumentVisualObjects(
 function createGroupInteractionProxyDraft(
   surface: EditorSurface,
   object: EditorGroupObject,
+  layerOrder: number,
   path: readonly number[],
   visible: boolean,
   placement: AffinePlacement,
@@ -2358,6 +2361,7 @@ function createGroupInteractionProxyDraft(
     export: { visible, tags: [...object.tags] },
     ordering: {
       layerId: surface.id,
+      layerOrder,
       path,
       channel: "overlay",
       subOrder: 1,
@@ -2380,6 +2384,7 @@ function createGroupInteractionProxyDraft(
 function createObjectRenderIntentDraft(
   surface: EditorSurface,
   object: EditorLeafObject,
+  layerOrder: number,
   path: readonly number[],
   visible: boolean,
   imageResolution?: ImageResourceResolution,
@@ -2435,6 +2440,7 @@ function createObjectRenderIntentDraft(
     },
     ordering: {
       layerId: surface.id,
+      layerOrder,
       path,
       channel: "normal" as const,
       subOrder: 0,

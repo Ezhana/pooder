@@ -735,7 +735,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 10, 10),
-      ordering: { layerId: "bg", path: [0] },
+      ordering: { layerId: "bg", layerOrder: 0, path: [0] },
       props: { width: 10, height: 10 },
     },
     {
@@ -748,7 +748,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 5, 5),
-      ordering: { layerId: "art", path: [1] },
+      ordering: { layerId: "art", layerOrder: 1, path: [0] },
       props: { width: 5, height: 5 },
       effects: [
         {
@@ -774,7 +774,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 7, 8),
-      ordering: { layerId: "art", path: [1] },
+      ordering: { layerId: "art", layerOrder: 1, path: [1] },
       export: { visible: false, tags: ["mockup"] },
       props: { width: 7, height: 8 },
     },

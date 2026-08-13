@@ -11,6 +11,12 @@ Document objects do not create render/scene layers: the compiler targets the
 surface id as its render-layer id, while runtime render and scene layers remain
 independent concepts.
 
+Render intents keep these two order dimensions separate. `ordering.layerOrder`
+orders runtime render layers; `ordering.path` is the lexicographic draw path
+within one layer. Document intents derive their path from object-tree indexes,
+while extension intents must choose an explicit layer order when they need to
+render before or after another runtime layer.
+
 `EditorObject` is an exclusive recursive union:
 
 - `group` is a structural transform node with `children`. It has no

@@ -772,6 +772,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       containerGeometryRef: clone(target.containerGeometryRef),
       ordering: {
         layerId: target.layerId,
+        layerOrder: target.sortKey.layerOrder,
         path: [...target.sortKey.path],
         channel: target.sortKey.channel,
         subOrder: target.sortKey.subOrder,
@@ -963,7 +964,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       objectPlacement.localBounds,
     );
     const controlsLayerId = `session:${sessionId}:controls`;
-    const controlsLayerOrder = (target.sortKey.path[0] ?? 0) + 1_000_000;
+    const controlsLayerOrder = target.sortKey.layerOrder + 1_000_000;
     const contribution = (
       projection: RenderIntentDraft,
       provenance: string,
@@ -998,7 +999,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           data: { imageSlotObjectId: objectId, type: "image-slot-crop-mask" },
           ordering: {
             layerId: controlsLayerId,
-            path: [controlsLayerOrder, 0],
+            layerOrder: controlsLayerOrder,
+            path: [0],
           },
         },
         `${IMAGE_SLOT_CAPABILITY_ID}:crop-mask`,
@@ -1026,7 +1028,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           data: { imageSlotObjectId: objectId, type: "image-slot-crop-frame" },
           ordering: {
             layerId: controlsLayerId,
-            path: [controlsLayerOrder, 1],
+            layerOrder: controlsLayerOrder,
+            path: [1],
           },
         },
         `${IMAGE_SLOT_CAPABILITY_ID}:crop-frame`,
@@ -1100,7 +1103,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           },
           ordering: {
             layerId: controlsLayerId,
-            path: [(target.sortKey.path[0] ?? 0) + 1_000_000, 10],
+            layerOrder: target.sortKey.layerOrder + 1_000_000,
+            path: [10],
             subOrder: axis === "x" ? 0 : 1,
           },
         },

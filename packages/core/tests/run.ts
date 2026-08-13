@@ -2671,6 +2671,43 @@ function createTestPlacement(
   });
 }
 
+async function testRenderGraphSeparatesLayerOrderFromNodePath() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createProjection = (
+      id: string,
+      layerId: string,
+      layerOrder: number,
+      path: readonly number[],
+    ) => ({
+      id,
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId,
+        objectId: id,
+      },
+      visual: { type: "rect" as const },
+      placement: createTestPlacement(0, 0, 10, 10),
+      ordering: { layerId, layerOrder, path },
+    });
+    const graph = intents.setDocumentIntents([
+      createProjection("later-node", "later-layer", 20, [0]),
+      createProjection("earlier-node", "earlier-layer", 10, [999]),
+    ]);
+
+    assertDeepEqual(
+      graph.layers.map((layer) => layer.id),
+      ["earlier-layer", "later-layer"],
+      "runtime layer order must not be inferred from the node path",
+    );
+    assertEqual(graph.layers[0]?.nodes[0]?.sortKey.layerOrder, 10);
+    assertDeepEqual(graph.layers[0]?.nodes[0]?.sortKey.path, [999]);
+  });
+}
+
 async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
   await withRuntime(async (runtime) => {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
@@ -4011,6 +4048,10 @@ async function main() {
     [
       "records logical subject projection memberships",
       testRenderGraphRecordsSubjectProjectionMemberships,
+    ],
+    [
+      "separates runtime layer order from node draw paths",
+      testRenderGraphSeparatesLayerOrderFromNodePath,
     ],
     [
       "composes and atomically cleans session render overrides",
