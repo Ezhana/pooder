@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "lint": "pnpm exec prettier . --write",
+    "format": "pnpm exec prettier . --write",
+    "format:check": "pnpm exec prettier . --check",
     "build": "pnpm --filter \"./packages/**\" -r build",
     "test:import-safety": "node tests/import-no-window.mjs && node tests/import-dom-without-canvas-context.mjs",
     "test:integration": "pnpm build && pnpm --filter @pooder/integration-tests test",
