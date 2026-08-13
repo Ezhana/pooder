@@ -14,17 +14,19 @@ independent concepts.
 `EditorObject` is an exclusive recursive union:
 
 - `group` is a structural transform node with `children`. It has no
-  `localBounds`, `pivot`, `opacity`, `clip`, `effects`, `source`, `contentFit`,
-  or `paint`.
+  `localFrame`, `localPivot`, `opacity`, `effects`, `source`, `contentFit`, or
+  `paint`.
 - `image`, `path`, and `shape` are pixel-producing leaves. Every leaf has
-  `localBounds`; `pivot`, `opacity`, `clip`, and `effects` are optional.
+  `localFrame`; `localPivot`, `opacity`, and `effects` are optional.
 - The document model has no text object. Canvas text belongs to scene elements
   or extensions; restoring document text requires another document version.
 
 Every node owns `localToParent`, the sole object-local to parent-local
 transform. A surface root object's parent origin is the origin of
-`surface.geometry.canvasBounds`. Leaf `localBounds.x/y` describe intrinsic
-geometry and are not an additional placement.
+`surface.geometry.canvasBounds`. Leaf `localFrame` is the declared rectangle
+content is placed into; its `x/y` describe geometry and are not an additional
+placement. The three `local*` fields carry their coordinate space in the name
+because the model is flat: there is no `placement` wrapper to supply it.
 
 ## Inheritance and interaction
 
@@ -46,15 +48,20 @@ native group.
 ## Geometry, paint, and effects
 
 Image content mapping is described only by `contentFit`; `anchorX` and
-`anchorY` are in `[0, 1]`, and `zoom` is greater than zero. Paths and shapes use
-optional `paint`; millimetre-valued fields are named `strokeWidthMm` and
-`dashMm`. Path/shape source bounds fix their content-to-frame mapping.
+`anchorY` are in `[0, 1]`, and `zoom` is greater than zero. Its `clip` decides
+whether content that overflows the frame is cropped, which completes the
+mapping contract: `fit: "cover"` overflows by definition, so the crop belongs
+beside it rather than on the node. Paths and shapes use optional `paint`;
+millimetre-valued fields are named `strokeWidthMm` and `dashMm`. Path/shape
+source bounds fix their content-to-frame mapping.
 
-Effects are leaf-only and apply in array order. Groups have no opacity,
-effects, or clipping because the core model has no offscreen compositing
-boundary. A producer that needs shared clipping expands it onto each leaf.
-Path clipping uses a leaf `core.geometry.clip` effect that references a path
-object.
+Effects are leaf-only and apply in array order. The dividing line is
+ownership: `contentFit` describes an object's own interior, while effects
+consume other objects. Clipping to another object's shape is therefore a
+`core.geometry.clip` effect, not a `contentFit` concern. Groups have no
+opacity, effects, or clipping because the core model has no offscreen
+compositing boundary. A producer that needs shared clipping expands it onto
+each leaf.
 
 Geometry references to groups resolve to compound snapshots derived from their
 children. IDs are globally unique across assets, surfaces, and all object

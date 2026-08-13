@@ -9,7 +9,7 @@ const imageSlot: EditorObject = {
   type: "image",
   id: "front.image",
   tags: ["slot:image"],
-  localBounds: { x: 0, y: 0, width: 100, height: 100 },
+  localFrame: { x: 0, y: 0, width: 100, height: 100 },
   localToParent: [1, 0, 0, 1, 0, 0],
   locked: false,
   visible: true,
@@ -20,9 +20,9 @@ const imageSlot: EditorObject = {
     anchorY: 0.5,
     zoom: 1,
     rotation: 0,
+    clip: "frame",
   },
   opacity: 1,
-  clip: "frame",
   behaviors: [
     {
       type: "pooder.image-slot",

@@ -19,7 +19,7 @@ inside one coordinate-space implementation.
 ## Boundary rules
 
 - A document node's `localToParent` transform is `parent-local`; only document
-  leaves persist `localBounds` and `pivot`.
+  leaves persist `localFrame` and `localPivot`.
 - A formal `RenderGraphNode` is always `scene`. A render intent in another
   space is rejected with `render-intent-non-scene-space`; its producer must
   project it before compilation.
@@ -60,6 +60,12 @@ persisted local frame.
 Rotation, non-uniform and negative scale,
 skew, and translation are therefore preserved without decomposition. `pivot`
 is an editing anchor in local coordinates, not an additional transform.
+
+The two sides use different words on purpose. A document leaf declares a
+`localFrame`: the rectangle its content is placed into. `AffinePlacement`
+reports `localBounds`: the measured extent of whatever the node actually
+produces, which for an image draft is the bitmap rather than the frame. Do not
+treat the two as synonyms when reading compiler code.
 
 The document compiler is the compatibility boundary that converts persisted
 parent-local frame/transform fields into `AffinePlacement`. Platform adapters do

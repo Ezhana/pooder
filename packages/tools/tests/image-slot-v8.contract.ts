@@ -12,6 +12,7 @@ const contentFit = {
   anchorY: 0.5,
   zoom: 1,
   rotation: 0,
+  clip: "frame",
 } as const;
 
 const emptySlot: EditorImageObject = {
@@ -20,13 +21,12 @@ const emptySlot: EditorImageObject = {
   tags: ["slot:artwork"],
   visible: true,
   locked: false,
-  localBounds: { x: 0, y: 0, width: 100, height: 100 },
+  localFrame: { x: 0, y: 0, width: 100, height: 100 },
   localToParent: [1, 0, 0, 1, 0, 0],
-  pivot: { x: 0, y: 0 },
+  localPivot: { x: 0, y: 0 },
   source: null,
   contentFit,
   opacity: 1,
-  clip: "frame",
   behaviors: [
     {
       type: "pooder.image-slot",

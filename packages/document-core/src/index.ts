@@ -1415,8 +1415,8 @@ function resizeDocumentObject(
     const [a, b, c, d] = object.localToParent;
     return {
       ...object,
-      localBounds: {
-        ...object.localBounds,
+      localFrame: {
+        ...object.localFrame,
         width: frame.width,
         height: frame.height,
       },
@@ -1801,12 +1801,14 @@ function createFrameAffinePlacement(
   const localBounds = isEditorGroupObject(object)
     ? deriveGroupLocalBounds(object)
     : coordinateRect("object-local", {
-        left: object.localBounds.x,
-        top: object.localBounds.y,
-        width: object.localBounds.width,
-        height: object.localBounds.height,
+        left: object.localFrame.x,
+        top: object.localFrame.y,
+        width: object.localFrame.width,
+        height: object.localFrame.height,
       });
-  const pivot = (isEditorLeafObject(object) ? object.pivot : undefined) ?? {
+  const pivot = (isEditorLeafObject(object)
+    ? object.localPivot
+    : undefined) ?? {
     x: localBounds.left + localBounds.width / 2,
     y: localBounds.top + localBounds.height / 2,
   };
@@ -1828,10 +1830,10 @@ function deriveGroupLocalBounds(
     const childBounds = isEditorGroupObject(child)
       ? deriveGroupLocalBounds(child)
       : coordinateRect("object-local", {
-          left: child.localBounds.x,
-          top: child.localBounds.y,
-          width: child.localBounds.width,
-          height: child.localBounds.height,
+          left: child.localFrame.x,
+          top: child.localFrame.y,
+          width: child.localFrame.width,
+          height: child.localFrame.height,
         });
     const transformed = transformCoordinateRect(
       coordinateMatrix("object-local", "object-local", child.localToParent),
@@ -2540,7 +2542,10 @@ function createImageRenderIntentDraft(
         rotation: 0,
       }
     : object.contentFit;
-  const fit = contentFit.fit;
+  // Render props carry the fit transform only; clip is a document enum, while
+  // the props of the same name hold a resolved rect.
+  const { clip: contentClip, ...contentFitTransform } = contentFit;
+  const fit = contentFitTransform.fit;
   const geometryDescriptor = image
     ? {
         source: {
@@ -2548,14 +2553,14 @@ function createImageRenderIntentDraft(
           size: { width: image.width, height: image.height },
         },
         frame: coordinateRect("object-local", {
-          left: object.localBounds.x,
-          top: object.localBounds.y,
-          width: object.localBounds.width,
-          height: object.localBounds.height,
+          left: object.localFrame.x,
+          top: object.localFrame.y,
+          width: object.localFrame.width,
+          height: object.localFrame.height,
         }),
         fit,
-        transform: contentFit,
-        ...(object.clip === "frame" && clipFrame ? { clip: clipFrame } : {}),
+        transform: contentFitTransform,
+        ...(contentClip === "frame" && clipFrame ? { clip: clipFrame } : {}),
       }
     : undefined;
   const geometry = geometryDescriptor
@@ -2604,7 +2609,7 @@ function createImageRenderIntentDraft(
       : base.placement,
     props: {
       ...base.props,
-      ...contentFit,
+      ...contentFitTransform,
       source: object.source,
       opacity: object.opacity ?? 1,
       ...(geometry?.clip ? { clip: geometry.clip } : {}),

@@ -78,9 +78,9 @@ function createDocument(): EditorDocument {
                 tags: ["clip:source"],
                 visible: false,
                 locked: true,
-                localBounds: { x: 0, y: 0, width: 80, height: 60 },
+                localFrame: { x: 0, y: 0, width: 80, height: 60 },
                 localToParent: [1, 0, 0, 1, 10, 20],
-                pivot: { x: 40, y: 30 },
+                localPivot: { x: 40, y: 30 },
                 source: {
                   kind: "inline",
                   content: { shape: "rect", params: {} },
@@ -92,9 +92,9 @@ function createDocument(): EditorDocument {
                 tags: ["artwork:test"],
                 visible: true,
                 locked: false,
-                localBounds: { x: 0, y: 0, width: 80, height: 60 },
+                localFrame: { x: 0, y: 0, width: 80, height: 60 },
                 localToParent: [1, 0.25, -0.1, 1, 10, 20],
-                pivot: { x: 40, y: 30 },
+                localPivot: { x: 40, y: 30 },
                 source: { kind: "asset", assetId: "artwork.asset" },
                 contentFit: {
                   fit: "cover",
@@ -102,9 +102,9 @@ function createDocument(): EditorDocument {
                   anchorY: 0.5,
                   zoom: 1,
                   rotation: 0,
+                  clip: "frame",
                 },
                 opacity: 1,
-                clip: "frame",
                 effects: [
                   {
                     type: "core.geometry.clip",
@@ -138,7 +138,7 @@ function testSourceResolution(): void {
     tags: [],
     visible: true,
     locked: false,
-    localBounds: { x: 0, y: 0, width: 1, height: 1 },
+    localFrame: { x: 0, y: 0, width: 1, height: 1 },
     localToParent: [1, 0, 0, 1, 0, 0] as [
       number,
       number,
@@ -147,7 +147,7 @@ function testSourceResolution(): void {
       number,
       number,
     ],
-    pivot: { x: 0, y: 0 },
+    localPivot: { x: 0, y: 0 },
   };
   assert(
     resolveObjectSource({
@@ -213,7 +213,7 @@ async function testDocumentDepthFirstOrderDefinesRenderGraphOrder(): Promise<voi
     tags: [],
     visible: true,
     locked: false,
-    localBounds: { x: 0, y: 0, width: 10, height: 10 },
+    localFrame: { x: 0, y: 0, width: 10, height: 10 },
     localToParent: [1, 0, 0, 1, 0, 0] as [
       number,
       number,

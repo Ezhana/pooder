@@ -116,14 +116,12 @@ export interface EditorNodeBase {
 
 /** Fields owned only by pixel-producing leaf nodes. */
 export interface EditorLeafBase extends EditorNodeBase {
-  /** Intrinsic geometry bounds; x/y describe geometry, not placement. */
-  localBounds: RectMm;
-  /** Editing anchor only; it does not participate in geometry transforms. */
-  pivot?: PointMm;
+  /** The declared rectangle content is placed into. x/y are geometry, not placement. */
+  localFrame: RectMm;
+  /** Editing anchor in object-local space; it is not a transform. */
+  localPivot?: PointMm;
   /** Per-object opacity in [0, 1]. Defaults to 1 and is not inherited. */
   opacity?: number;
-  /** Whether content is clipped to localBounds. Defaults to "none". */
-  clip?: "frame" | "none";
   effects?: EditorObjectEffect[];
 }
 
@@ -166,6 +164,8 @@ export interface EditorImageContentFit {
   anchorY: number;
   zoom: number;
   rotation: number;
+  /** Whether content that overflows the frame is cropped to it. */
+  clip: "frame" | "none";
 }
 
 export interface EditorPaint {

@@ -68,6 +68,7 @@ const DEFAULT_PLACEMENT: EditorImageContentFit = {
   anchorY: 0.5,
   zoom: 1,
   rotation: 0,
+  clip: "frame",
 };
 
 type ImageSlotOpenSessionResult = { ok: true } | { ok: false; reason: string };
@@ -405,7 +406,9 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         ? draft.placement
         : {
             ...DEFAULT_PLACEMENT,
+            // Cropping is a slot property, not part of the user's pan/zoom.
             fit: draft.placement.fit,
+            clip: draft.placement.clip,
           };
     this.setState({
       phase: "active",
@@ -444,7 +447,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     }
     const source = this.resolveDraftImage(draft)?.resolution;
     if (!source) return { ok: false, reason: "resource-load-failed" };
-    const frame = context.object.localBounds;
+    const frame = context.object.localFrame;
     const widthScale = frame.width / Math.max(source.width, 1);
     const heightScale = frame.height / Math.max(source.height, 1);
     const absoluteScale =
@@ -486,7 +489,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!source || (!transform && !input.sceneMatrix)) {
       return { ok: false, reason: "resource-load-failed" };
     }
-    const frame = context.object.localBounds;
+    const frame = context.object.localFrame;
     const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
     if (!objectPlacement) {
       return { ok: false, reason: "geometry-unavailable" };
@@ -791,14 +794,16 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     const geometry = resolveImageGeometry({
       source: { src, size: { width, height } },
       frame: coordinateRect("object-local", {
-        left: context.object.localBounds.x,
-        top: context.object.localBounds.y,
-        width: context.object.localBounds.width,
-        height: context.object.localBounds.height,
+        left: context.object.localFrame.x,
+        top: context.object.localFrame.y,
+        width: context.object.localFrame.width,
+        height: context.object.localFrame.height,
       }),
       fit: draft.placement.fit,
       transform: draft.placement,
-      ...(context.object.clip === "frame" ? { clip: clipFrame } : {}),
+      ...(context.object.contentFit.clip === "frame"
+        ? { clip: clipFrame }
+        : {}),
     });
     return {
       ...base,
@@ -1320,6 +1325,7 @@ function normalizePlacement(
     ),
     zoom: Number.isFinite(value.zoom) && value.zoom > 0 ? value.zoom : 1,
     rotation: Number.isFinite(value.rotation) ? value.rotation : 0,
+    clip: value.clip === "frame" ? "frame" : "none",
   };
 }
 
@@ -1353,8 +1359,8 @@ function doesDraftLeaveFrameUncovered(
     frame: coordinateRect("object-local", {
       left: 0,
       top: 0,
-      width: object.localBounds.width,
-      height: object.localBounds.height,
+      width: object.localFrame.width,
+      height: object.localFrame.height,
     }),
     fit: draft.placement.fit,
     transform: draft.placement,
@@ -1362,8 +1368,8 @@ function doesDraftLeaveFrameUncovered(
   const objectLocalToImageLocal = invertCoordinateMatrix(
     geometry.imageLocalToObjectLocal,
   );
-  const frameWidth = object.localBounds.width;
-  const frameHeight = object.localBounds.height;
+  const frameWidth = object.localFrame.width;
+  const frameHeight = object.localFrame.height;
   const frameCorners = [
     { space: "object-local" as const, x: 0, y: 0 },
     { space: "object-local" as const, x: frameWidth, y: 0 },

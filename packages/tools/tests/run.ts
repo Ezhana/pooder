@@ -105,9 +105,9 @@ function createImageSlotDocument(): EditorDocument {
                 tags: ["slot:artwork"],
                 visible: true,
                 locked: false,
-                localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                localFrame: { x: 0, y: 0, width: 120, height: 80 },
                 localToParent: [1.05858, 0.44934, -0.33212, 0.78243, 92, 76],
-                pivot: { x: 60, y: 40 },
+                localPivot: { x: 60, y: 40 },
                 source: {
                   kind: "asset",
                   assetId: "artwork.asset",
@@ -118,9 +118,9 @@ function createImageSlotDocument(): EditorDocument {
                   anchorY: 0.5,
                   zoom: 1,
                   rotation: 0,
+                  clip: "frame",
                 },
                 opacity: 1,
-                clip: "frame",
                 behaviors: [
                   {
                     type: "pooder.image-slot",
@@ -624,6 +624,7 @@ async function testImageSlotCommitAndReopenMatrices(): Promise<void> {
         anchorY: 0.7 - index * 0.1,
         zoom: 1.2 + index * 0.1,
         rotation: 17 + index * 9,
+        clip: "frame",
       });
       const committed = await facade.commitSession();
       assertEqual(committed.type, "placed", `${fit} session should commit`);

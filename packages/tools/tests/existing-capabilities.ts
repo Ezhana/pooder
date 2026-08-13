@@ -190,7 +190,7 @@ function createEffectDocument(
       },
 ): EditorDocument {
   const geometry = {
-    localBounds: { x: 0, y: 0, width: 80, height: 40 },
+    localFrame: { x: 0, y: 0, width: 80, height: 40 },
     localToParent: [1.15911, 0.31058, -0.20706, 0.77274, 50, 40] as [
       number,
       number,
@@ -199,7 +199,7 @@ function createEffectDocument(
       number,
       number,
     ],
-    pivot: { x: 40, y: 20 },
+    localPivot: { x: 40, y: 20 },
   };
   const visual: EditorObject =
     source.type === "image"
@@ -217,9 +217,9 @@ function createEffectDocument(
             anchorY: 0.5,
             zoom: 1,
             rotation: 0,
+            clip: "frame",
           },
           opacity: 1,
-          clip: "frame",
           effects: [effect],
         }
       : {

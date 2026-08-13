@@ -230,9 +230,9 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
     tags: ["slot:image"],
     visible: true,
     locked: false,
-    localBounds: { x: 0, y: 0, width: 120, height: 80 },
+    localFrame: { x: 0, y: 0, width: 120, height: 80 },
     localToParent: [1, 0, 0, 1, left, 20],
-    pivot: { x: 60, y: 40 },
+    localPivot: { x: 60, y: 40 },
     source: null,
     contentFit: {
       fit: "cover",
@@ -240,9 +240,9 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
       anchorY: 0.5,
       zoom: 1,
       rotation: 0,
+      clip: "frame",
     },
     opacity: 1,
-    clip: "frame",
     behaviors: [
       {
         type: "pooder.image-slot",
@@ -312,9 +312,9 @@ function createOrderedSlotDocument(): EditorDocument {
     tags: ["export:mockup"],
     visible: true,
     locked: true,
-    localBounds: { x: 0, y: 0, width: 340, height: 120 },
+    localFrame: { x: 0, y: 0, width: 340, height: 120 },
     localToParent: [1, 0, 0, 1, 0, 0] as MatrixValues,
-    pivot: { x: 170, y: 60 },
+    localPivot: { x: 170, y: 60 },
     source: { kind: "asset" as const, assetId },
     contentFit: {
       fit: "cover" as const,
@@ -322,9 +322,9 @@ function createOrderedSlotDocument(): EditorDocument {
       anchorY: 0.5,
       zoom: 1,
       rotation: 0,
+      clip: "frame" as const,
     },
     opacity: 1,
-    clip: "frame" as const,
   });
   const document = createEmptySlotDocument();
   document.assets.push(
@@ -587,7 +587,7 @@ function createNestedDocument(): EditorDocument {
                 tags: ["slot:image"],
                 visible: true,
                 locked: false,
-                localBounds: { x: 18, y: 26, width: 110, height: 72 },
+                localFrame: { x: 18, y: 26, width: 110, height: 72 },
                 localToParent: [
                   ...createLocalToSceneMatrix({
                     position: { x: 76, y: 64 },
@@ -597,7 +597,7 @@ function createNestedDocument(): EditorDocument {
                     scaleY: 1.08,
                   }).values,
                 ] as MatrixValues,
-                pivot: { x: 73, y: 62 },
+                localPivot: { x: 73, y: 62 },
                 source: { kind: "asset", assetId: "nested-artwork.asset" },
                 contentFit: {
                   fit: "cover",
@@ -605,9 +605,9 @@ function createNestedDocument(): EditorDocument {
                   anchorY: 0.65,
                   zoom: 1.15,
                   rotation: 7,
+                  clip: "frame",
                 },
                 opacity: 1,
-                clip: "frame",
                 behaviors: [
                   {
                     type: "pooder.image-slot",

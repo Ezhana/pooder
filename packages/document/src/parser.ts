@@ -293,24 +293,20 @@ function parseObject(value: unknown, path: string): EditorObject {
   }
   const leafFields = [
     ...nodeFields,
-    "localBounds",
-    "pivot",
+    "localFrame",
+    "localPivot",
     "opacity",
-    "clip",
     "effects",
   ];
   const leaf = {
     ...base,
-    localBounds: parseRect(input.localBounds, `${path}.localBounds`),
-    ...(input.pivot === undefined
+    localFrame: parseRect(input.localFrame, `${path}.localFrame`),
+    ...(input.localPivot === undefined
       ? {}
-      : { pivot: parsePoint(input.pivot, `${path}.pivot`) }),
+      : { localPivot: parsePoint(input.localPivot, `${path}.localPivot`) }),
     ...(input.opacity === undefined
       ? {}
       : { opacity: unitInterval(input.opacity, `${path}.opacity`) }),
-    ...(input.clip === undefined
-      ? {}
-      : { clip: parseClip(input.clip, `${path}.clip`) }),
     ...(input.effects === undefined
       ? {}
       : {
@@ -477,7 +473,7 @@ function parseImageContentFit(
   path: string,
 ): EditorImageContentFit {
   const input = record(value, path);
-  exact(input, ["fit", "anchorX", "anchorY", "zoom", "rotation"], path);
+  exact(input, ["fit", "anchorX", "anchorY", "zoom", "rotation", "clip"], path);
   if (!["cover", "contain", "stretch"].includes(input.fit as string)) {
     fail("image-fit-invalid", "Image fit is invalid.", `${path}.fit`);
   }
@@ -487,6 +483,7 @@ function parseImageContentFit(
     anchorY: unitInterval(input.anchorY, `${path}.anchorY`),
     zoom: positive(input.zoom, `${path}.zoom`),
     rotation: finite(input.rotation, `${path}.rotation`),
+    clip: parseClip(input.clip, `${path}.clip`),
   };
 }
 
@@ -947,7 +944,7 @@ function unitInterval(value: unknown, path: string): number {
 
 function parseClip(value: unknown, path: string): "frame" | "none" {
   if (value !== "frame" && value !== "none") {
-    fail("object-clip-invalid", "Object clip is invalid.", path);
+    fail("image-clip-invalid", "Image clip is invalid.", path);
   }
   return value;
 }

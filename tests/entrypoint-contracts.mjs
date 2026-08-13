@@ -81,7 +81,7 @@ const contracts = [
       const runtime = vueRoot.createPooderRuntime();
       const documentService = vueRoot.installPooderDocument(runtime);
       const result = await documentService.apply({
-        version: 7,
+        version: 8,
         assets: [],
         extensions: {},
         surfaces: [
@@ -91,23 +91,24 @@ const contracts = [
               canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
               productionBounds: { x: 0, y: 0, width: 100, height: 100 },
             },
-            layers: [
+            objects: [
               {
+                type: "group",
                 id: "artwork",
+                tags: [],
                 visible: true,
                 locked: false,
-                objects: [
+                localToParent: [1, 0, 0, 1, 0, 0],
+                children: [
                   {
                     type: "shape",
                     id: "shape",
                     tags: [],
                     visible: true,
                     locked: false,
-                    placement: {
-                      localBounds: { x: 0, y: 0, width: 30, height: 40 },
-                      localToParent: [1, 0, 0, 1, 10, 20],
-                      pivot: { x: 0, y: 0 },
-                    },
+                    localFrame: { x: 0, y: 0, width: 30, height: 40 },
+                    localToParent: [1, 0, 0, 1, 10, 20],
+                    localPivot: { x: 0, y: 0 },
                     source: {
                       kind: "inline",
                       content: {

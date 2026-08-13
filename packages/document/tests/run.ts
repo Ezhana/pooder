@@ -238,7 +238,7 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   for (const [field, value] of [
     ["opacity", 0.5],
     ["effects", []],
-    ["localBounds", { x: 0, y: 0, width: 1, height: 1 }],
+    ["localFrame", { x: 0, y: 0, width: 1, height: 1 }],
     ["source", null],
     ["paint", {}],
     [
@@ -267,12 +267,29 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
     );
   }
 
+  const leafClip = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const clippedLeaf = (
+    (
+      (leafClip.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
+  )[0]!;
+  clippedLeaf.clip = "frame";
+  assertEqual(
+    validateEditorDocument(leafClip)[0]?.code,
+    "unknown-field",
+    "leaf clip outside contentFit should be rejected",
+  );
+
   for (const [path, value, expectedCode] of [
     ["opacity", -0.01, "unit-interval-required"],
     ["opacity", 1.01, "unit-interval-required"],
     ["contentFit.anchorX", -0.01, "unit-interval-required"],
     ["contentFit.anchorY", 1.01, "unit-interval-required"],
     ["contentFit.zoom", 0, "positive-number-required"],
+    ["contentFit.clip", "outside", "image-clip-invalid"],
   ] as const) {
     const invalidNumber = JSON.parse(
       JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),

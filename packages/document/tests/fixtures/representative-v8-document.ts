@@ -74,9 +74,9 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
               tags: ["slot:front"],
               visible: true,
               locked: false,
-              localBounds: { x: 0, y: 0, width: 80, height: 90 },
+              localFrame: { x: 0, y: 0, width: 80, height: 90 },
               localToParent: [1, 0, 0, 1, 10, 15],
-              pivot: { x: 0, y: 0 },
+              localPivot: { x: 0, y: 0 },
               source: {
                 kind: "asset",
                 assetId: "front-artwork",
@@ -87,9 +87,9 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
                 anchorY: 0.5,
                 zoom: 1,
                 rotation: 0,
+                clip: "frame",
               },
               opacity: 1,
-              clip: "frame",
               behaviors: [
                 {
                   type: "pooder.image-slot",
@@ -119,9 +119,9 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
               tags: ["guide:cut"],
               visible: true,
               locked: true,
-              localBounds: { x: 0, y: 0, width: 94, height: 114 },
+              localFrame: { x: 0, y: 0, width: 94, height: 114 },
               localToParent: [1, 0, 0, 1, 3, 3],
-              pivot: { x: 0, y: 0 },
+              localPivot: { x: 0, y: 0 },
               source: {
                 kind: "inline",
                 content: {
@@ -151,9 +151,9 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
               tags: ["feature:hole"],
               visible: false,
               locked: true,
-              localBounds: { x: 0, y: 0, width: 8, height: 8 },
+              localFrame: { x: 0, y: 0, width: 8, height: 8 },
               localToParent: [1, 0, 0, 1, 46, 8],
-              pivot: { x: 0, y: 0 },
+              localPivot: { x: 0, y: 0 },
               source: {
                 kind: "inline",
                 content: { shape: "circle", params: {} },
@@ -195,9 +195,9 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
               tags: ["artwork:back"],
               visible: true,
               locked: false,
-              localBounds: { x: 0, y: 0, width: 80, height: 90 },
+              localFrame: { x: 0, y: 0, width: 80, height: 90 },
               localToParent: [1, 0, 0, 1, 10, 15],
-              pivot: { x: 0, y: 0 },
+              localPivot: { x: 0, y: 0 },
               source: {
                 kind: "inline",
                 content: { shape: "rect", params: {} },
