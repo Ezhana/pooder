@@ -893,7 +893,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     };
     const service = this.getImageResourceService?.();
     const resolution = service
-      ? await service.resolve(descriptor)
+      ? service.read(descriptor) ?? (await service.ensure(descriptor))
       : asset.intrinsicSize
         ? {
             ok: true as const,

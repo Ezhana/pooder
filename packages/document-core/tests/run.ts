@@ -3,13 +3,16 @@ import {
   RENDER_INTENT_SERVICE,
   Pooder,
   type GeometrySourceService,
+  type ImageResourceService,
   type RenderIntentService,
 } from "@pooder/core";
 import {
   resolveEditorDocumentAsset,
   type EditorDocument,
+  type EditorImageObject,
 } from "@pooder/document";
 import {
+  collectUnresolvableImageObjectIds,
   registerEditorDocumentService,
   resolveObjectSource,
   sceneFrameToLocalFrame,
@@ -431,6 +434,86 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
   }
 }
 
+async function testUnresolvableImageDetection(): Promise<void> {
+  const document = createDocument();
+  const surface = document.surfaces[0]!;
+  const layer = surface.layers[0]!;
+  const template = layer.objects.find(
+    (object): object is EditorImageObject => object.type === "image",
+  )!;
+  document.assets.push(
+    { id: "missing.asset", type: "image", source: { kind: "url", url: "/missing.png" } },
+    {
+      id: "placeholder.asset",
+      type: "image",
+      source: { kind: "url", url: "/placeholder.png" },
+    },
+  );
+  layer.objects.push(
+    {
+      ...template,
+      id: "missing",
+      source: { kind: "asset", assetId: "missing.asset" },
+    },
+    {
+      ...template,
+      id: "missing-hidden",
+      visible: false,
+      source: { kind: "asset", assetId: "missing.asset" },
+    },
+    {
+      ...template,
+      id: "empty-slot",
+      source: null,
+      behaviors: [
+        {
+          type: "pooder.image-slot",
+          config: {
+            placeholderSource: { kind: "asset", assetId: "placeholder.asset" },
+          },
+        },
+      ],
+    } as EditorImageObject,
+  );
+  surface.layers.push({
+    id: "front.hidden",
+    visible: false,
+    locked: false,
+    objects: [
+      {
+        ...template,
+        id: "missing-in-hidden-layer",
+        source: { kind: "asset", assetId: "missing.asset" },
+      },
+    ],
+  });
+
+  const ensured: string[] = [];
+  const service: Pick<ImageResourceService, "read" | "ensure"> = {
+    read: (resource) =>
+      resource.kind === "url" && resource.url === "/artwork.png"
+        ? { ok: true, src: resource.url, width: 200, height: 100 }
+        : undefined,
+    ensure: async (resource) => {
+      ensured.push(resource.kind === "url" ? resource.url : "");
+      return { ok: false, reason: "load-failed" };
+    },
+  };
+
+  assertDeepEqual(
+    await collectUnresolvableImageObjectIds(document, service),
+    ["missing"],
+    "only drawable images with unavailable bytes should be reported",
+  );
+  // Skipped objects must not even be asked for: a hidden image or an empty slot's
+  // placeholder never reaches the exported pixels, so blocking on them would be wrong.
+  assertDeepEqual(
+    ensured,
+    ["/missing.png"],
+    "established resources should not be re-fetched and skipped ones not fetched at all",
+  );
+}
+
 function testSceneFrameConversion(): void {
   assertDeepEqual(
     sceneFrameToLocalFrame(
@@ -450,6 +533,7 @@ async function main(): Promise<void> {
   await testRejectedDocumentsRemainAtomic();
   await testSceneTranslationCommit();
   await testImageUploadReplacesOnlyTheTargetSource();
+  await testUnresolvableImageDetection();
   console.log("ok");
 }
 

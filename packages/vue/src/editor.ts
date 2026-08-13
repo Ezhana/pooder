@@ -1,5 +1,12 @@
 import PooderCanvasHost from "./pooder-canvas-host.vue";
-import type { ExtensionDefinition, Pooder } from "@pooder/core";
+import {
+  IMAGE_RESOURCE_SERVICE,
+  type ExtensionDefinition,
+  type ImageResourceService,
+  type Pooder,
+} from "@pooder/core";
+import type { EditorDocument } from "@pooder/document";
+import { collectUnresolvableImageObjectIds } from "@pooder/document-core";
 
 import {
   getPooderRuntimeCore,
@@ -51,6 +58,22 @@ export function getPooderCapability<TFacade>(
   id: string,
 ): TFacade | null {
   return getEditorRuntimeCore(runtime).capabilities.get<TFacade>(id) ?? null;
+}
+
+/**
+ * Ids of the document's image objects that cannot be drawn because their bytes are
+ * unavailable. An unresolvable image renders nothing, so anything that turns the canvas
+ * into a deliverable — production artwork above all — must ask before exporting instead
+ * of trusting what happens to be on screen.
+ */
+export function collectPooderUnresolvableImages(
+  runtime: PooderRuntime,
+  document: EditorDocument,
+): Promise<string[]> {
+  const service = getEditorRuntimeCore(runtime).services.get<
+    ImageResourceService
+  >(IMAGE_RESOURCE_SERVICE);
+  return collectUnresolvableImageObjectIds(document, service);
 }
 
 export function requirePooderCapability<TFacade>(

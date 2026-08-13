@@ -2637,6 +2637,22 @@ function createEditorImageClipEffect(
   };
 }
 
+function imageResourceDescriptor(
+  asset: EditorImageAsset,
+): ImageResourceDescriptor {
+  return {
+    ...asset.source,
+    assetId: asset.id,
+    ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
+    ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
+  };
+}
+
+/**
+ * Read every image resolution the document needs. Resources whose bytes are already
+ * established resolve synchronously, so a mutation only awaits genuinely new bytes
+ * instead of re-deriving the whole document's resources on every apply.
+ */
 async function resolveDocumentImageResources(
   runtime: EditorDocumentRuntime,
   document: EditorDocument,
@@ -2644,8 +2660,8 @@ async function resolveDocumentImageResources(
   const service = runtime.services.get?.<ImageResourceService>(
     IMAGE_RESOURCE_SERVICE,
   );
-  const entries: Array<Promise<readonly [string, ImageResourceResolution]>> =
-    [];
+  const resolutions = new Map<string, ImageResourceResolution>();
+  const pending: Array<Promise<void>> = [];
   const collect = (objects: EditorObject[] | undefined) =>
     objects?.forEach((object) => {
       if (isEditorCompositeObject(object)) {
@@ -2655,22 +2671,75 @@ async function resolveDocumentImageResources(
       if (object.type !== "image" || !service) return;
       const asset = resolveImageVisualAsset(document, object);
       if (!asset) return;
-      const resource: ImageResourceDescriptor = {
-        ...asset.source,
-        assetId: asset.id,
-        ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
-        ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
-      };
-      entries.push(
-        service
-          .resolve(resource)
-          .then((result) => [object.id, result] as const),
+      const resource = imageResourceDescriptor(asset);
+      const established = service.read(resource);
+      if (established) {
+        resolutions.set(object.id, established);
+        return;
+      }
+      pending.push(
+        service.ensure(resource).then((resolution) => {
+          resolutions.set(object.id, resolution);
+        }),
       );
     });
   document.surfaces.forEach((surface) =>
     surface.layers.forEach((layer) => collect(layer.objects)),
   );
-  return new Map(await Promise.all(entries));
+  if (pending.length) await Promise.all(pending);
+  return resolutions;
+}
+
+/**
+ * Ids of the image objects whose bytes cannot be resolved. Such an object compiles to
+ * an image visual with no source and therefore draws nothing, so an export taken now
+ * would silently omit it — which is why callers that produce artwork must ask first
+ * rather than trusting the rendered canvas.
+ *
+ * Hidden objects and image-slot placeholders are excluded because they never reach the
+ * exported pixels. Resources are converged before being judged, so the answer does not
+ * depend on whether the document has been applied yet; established ones cost no I/O.
+ */
+export async function collectUnresolvableImageObjectIds(
+  document: EditorDocument,
+  service: Pick<ImageResourceService, "read" | "ensure"> | undefined,
+): Promise<string[]> {
+  if (!service) return [];
+  const unresolvable: string[] = [];
+  const pending: Array<Promise<void>> = [];
+  const judge = (objectId: string, resolution: ImageResourceResolution) => {
+    if (!resolution.ok) unresolvable.push(objectId);
+  };
+  const collect = (objects: EditorObject[] | undefined, visible: boolean) =>
+    objects?.forEach((object) => {
+      const objectVisible = visible && (object.visible ?? true);
+      if (isEditorCompositeObject(object)) {
+        collect(object.children, objectVisible);
+        return;
+      }
+      if (object.type !== "image" || !objectVisible) return;
+      if (isImageSlotPlaceholderFallback(object)) return;
+      const asset = resolveImageVisualAsset(document, object);
+      if (!asset) return;
+      const resource = imageResourceDescriptor(asset);
+      const established = service.read(resource);
+      if (established) {
+        judge(object.id, established);
+        return;
+      }
+      pending.push(
+        service.ensure(resource).then((resolution) => {
+          judge(object.id, resolution);
+        }),
+      );
+    });
+  document.surfaces.forEach((surface) =>
+    surface.layers.forEach((layer) =>
+      collect(layer.objects, layer.visible ?? true),
+    ),
+  );
+  if (pending.length) await Promise.all(pending);
+  return unresolvable;
 }
 
 async function compileRenderIntentPatches(
