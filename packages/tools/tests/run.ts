@@ -623,7 +623,7 @@ async function testImageSlotCommitAndReopenMatrices(): Promise<void> {
         anchorX: 0.25 + index * 0.15,
         anchorY: 0.7 - index * 0.1,
         zoom: 1.2 + index * 0.1,
-        rotation: 17 + index * 9,
+        rotation: index === 0 ? -17 : 17 + index * 9,
         clip: "frame",
       });
       const committed = await facade.commitSession();
