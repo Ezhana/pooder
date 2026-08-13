@@ -42,8 +42,7 @@ export function patchRenderObjectSpecs(
       },
       ordering: {
         layerId: options.layerId,
-        layerOrder: options.layerOrder,
-        objectOrder: (options.baseOrder ?? 0) + index,
+        path: [options.layerOrder ?? 0, (options.baseOrder ?? 0) + index],
         channel: options.channel,
       },
       effects: spec.effects,

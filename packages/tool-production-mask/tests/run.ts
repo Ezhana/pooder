@@ -47,7 +47,7 @@ const createState = (): ProductionMaskDocumentState => ({
 });
 
 const createDocument = (): EditorDocument => ({
-  version: 7,
+  version: 8,
   assets: [
     {
       id: "artwork",
@@ -70,33 +70,34 @@ const createDocument = (): EditorDocument => ({
         canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
         productionBounds: { x: 0, y: 0, width: 100, height: 100 },
       },
-      layers: [
+      objects: [
         {
+          type: "group",
           id: "artwork",
+          tags: [],
           visible: true,
           locked: false,
-          objects: [
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [
             {
               type: "image",
               id: "front.image",
               tags: ["export:design"],
               visible: true,
               locked: false,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 100, height: 100 },
-                localToParent: [1, 0, 0, 1, 0, 0],
-                pivot: { x: 0, y: 0 },
-              },
+              localBounds: { x: 0, y: 0, width: 100, height: 100 },
+              localToParent: [1, 0, 0, 1, 0, 0],
+              pivot: { x: 0, y: 0 },
               source: { kind: "asset", assetId: "artwork" },
-              appearance: {
+              contentFit: {
                 fit: "cover",
                 anchorX: 0.5,
                 anchorY: 0.5,
                 zoom: 1,
                 rotation: 0,
-                opacity: 1,
-                clip: "frame",
               },
+              opacity: 1,
+              clip: "frame",
             },
           ],
         },

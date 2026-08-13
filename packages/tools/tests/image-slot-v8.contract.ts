@@ -6,14 +6,12 @@ import {
   type ImageSlotSessionResult,
 } from "../src";
 
-const appearance = {
+const contentFit = {
   fit: "cover",
   anchorX: 0.5,
   anchorY: 0.5,
   zoom: 1,
   rotation: 0,
-  opacity: 1,
-  clip: "frame",
 } as const;
 
 const emptySlot: EditorImageObject = {
@@ -22,13 +20,13 @@ const emptySlot: EditorImageObject = {
   tags: ["slot:artwork"],
   visible: true,
   locked: false,
-  placement: {
-    localBounds: { x: 0, y: 0, width: 100, height: 100 },
-    localToParent: [1, 0, 0, 1, 0, 0],
-    pivot: { x: 0, y: 0 },
-  },
+  localBounds: { x: 0, y: 0, width: 100, height: 100 },
+  localToParent: [1, 0, 0, 1, 0, 0],
+  pivot: { x: 0, y: 0 },
   source: null,
-  appearance,
+  contentFit,
+  opacity: 1,
+  clip: "frame",
   behaviors: [
     {
       type: "pooder.image-slot",
@@ -44,7 +42,7 @@ const emptySlot: EditorImageObject = {
 };
 
 const document: EditorDocument = {
-  version: 7,
+  version: 8,
   assets: [
     {
       id: "artwork.placeholder.asset",
@@ -66,12 +64,15 @@ const document: EditorDocument = {
         canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
         productionBounds: { x: 0, y: 0, width: 100, height: 100 },
       },
-      layers: [
+      objects: [
         {
-          id: "front.artwork.layer",
+          type: "group",
+          id: "front.artwork.group",
+          tags: [],
           visible: true,
           locked: false,
-          objects: [emptySlot],
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [emptySlot],
         },
       ],
     },
@@ -79,7 +80,7 @@ const document: EditorDocument = {
 };
 
 const diagnostics = validateEditorDocument(document);
-if (diagnostics.length) throw new Error("v7 image slot contract is invalid");
+if (diagnostics.length) throw new Error("v8 image slot contract is invalid");
 
 declare const facade: ImageSlotCapabilityApi;
 void facade.openSession({ objectId: emptySlot.id });

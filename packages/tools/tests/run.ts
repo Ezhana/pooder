@@ -10,10 +10,10 @@ import {
 } from "../../document-core/src";
 import {
   findEditorDocumentObject,
-  isEditorVisualObject,
   type EditorDocument,
+  type EditorGroupObject,
+  type EditorImageContentFit,
   type EditorImageObject,
-  type EditorImagePlacement,
 } from "@pooder/document";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
@@ -61,7 +61,7 @@ function assertMatrixClose(
 
 function createImageSlotDocument(): EditorDocument {
   return {
-    version: 7,
+    version: 8,
     assets: [
       {
         id: "artwork.asset",
@@ -90,36 +90,37 @@ function createImageSlotDocument(): EditorDocument {
           canvasBounds: { x: 0, y: 0, width: 240, height: 180 },
           productionBounds: { x: 8, y: 12, width: 220, height: 150 },
         },
-        layers: [
+        objects: [
           {
-            id: "front.artwork.layer",
+            type: "group",
+            id: "front.group.artwork",
+            tags: [],
             visible: true,
             locked: false,
-            objects: [
+            localToParent: [1, 0, 0, 1, 0, 0],
+            children: [
               {
                 type: "image",
                 id: IMAGE_SLOT_ID,
                 tags: ["slot:artwork"],
                 visible: true,
                 locked: false,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 120, height: 80 },
-                  localToParent: [1.05858, 0.44934, -0.33212, 0.78243, 92, 76],
-                  pivot: { x: 60, y: 40 },
-                },
+                localBounds: { x: 0, y: 0, width: 120, height: 80 },
+                localToParent: [1.05858, 0.44934, -0.33212, 0.78243, 92, 76],
+                pivot: { x: 60, y: 40 },
                 source: {
                   kind: "asset",
                   assetId: "artwork.asset",
                 },
-                appearance: {
+                contentFit: {
                   fit: "cover",
                   anchorX: 0.5,
                   anchorY: 0.5,
                   zoom: 1,
                   rotation: 0,
-                  opacity: 1,
-                  clip: "frame",
                 },
+                opacity: 1,
+                clip: "frame",
                 behaviors: [
                   {
                     type: "pooder.image-slot",
@@ -139,6 +140,12 @@ function createImageSlotDocument(): EditorDocument {
       },
     ],
   };
+}
+
+function getSlotGroup(document: EditorDocument): EditorGroupObject {
+  const group = document.surfaces[0]?.objects[0];
+  assert(group?.type === "group", "image-slot fixture group should exist");
+  return group;
 }
 
 async function createHarness(
@@ -165,7 +172,7 @@ async function createHarness(
 
 async function testPlaceholderWorkingAndDocumentProjectionHandoff(): Promise<void> {
   const document = createImageSlotDocument();
-  const slot = document.surfaces[0]!.layers[0]!.objects[0]!;
+  const slot = getSlotGroup(document).children[0]!;
   if (slot.type === "image") slot.source = null;
   document.assets = document.assets.filter(
     (asset) => asset.id !== "artwork.asset",
@@ -328,15 +335,16 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
     );
     const persistedSlot = controller
       .export()
-      ?.surfaces[0]?.layers[0]?.objects.find(
-        (object) => object.id === IMAGE_SLOT_ID,
-      );
+      ?.surfaces[0]?.objects.flatMap((object) =>
+        object.type === "group" ? object.children : [object],
+      )
+      .find((object) => object.id === IMAGE_SLOT_ID);
     assertEqual(
       persistedSlot && persistedSlot.type === "image"
-        ? (persistedSlot as EditorImageObject).appearance.fit
+        ? (persistedSlot as EditorImageObject).contentFit.fit
         : undefined,
       "cover",
-      "placeholder fallback should not mutate persistent appearance",
+      "placeholder fallback should not mutate persistent content fit",
     );
     assertEqual(
       getSlotNode()?.props.excludeFromExport,
@@ -378,13 +386,14 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
     assertEqual(
       (getSlotNode()?.data.imageGeometry as { fit?: string } | undefined)?.fit,
       "cover",
-      "replacement artwork should restore the object appearance",
+      "replacement artwork should restore the object content fit",
     );
     const refilledSlot = controller
       .export()
-      ?.surfaces[0]?.layers[0]?.objects.find(
-        (object) => object.id === IMAGE_SLOT_ID,
-      );
+      ?.surfaces[0]?.objects.flatMap((object) =>
+        object.type === "group" ? object.children : [object],
+      )
+      .find((object) => object.id === IMAGE_SLOT_ID);
     assert(
       refilledSlot?.type === "image" && refilledSlot.source?.kind === "asset",
       "upload should replace the empty image source with an asset source",
@@ -392,7 +401,7 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
     assertEqual(
       JSON.stringify(refilledSlot.behaviors),
       JSON.stringify(
-        createImageSlotDocument().surfaces[0]!.layers[0]!.objects[0]!.behaviors,
+        getSlotGroup(createImageSlotDocument()).children[0]!.behaviors,
       ),
       "upload should preserve the image-slot behavior and placeholder source",
     );
@@ -408,8 +417,8 @@ async function testSharedPlaceholderAssetLifecycle(): Promise<void> {
   const controller = registerEditorDocumentService(runtime);
   try {
     const document = createImageSlotDocument();
-    const layer = document.surfaces[0]!.layers[0]!;
-    const firstSlot = layer.objects[0]!;
+    const group = getSlotGroup(document);
+    const firstSlot = group.children[0]!;
     if (firstSlot.type === "image") firstSlot.source = null;
     document.assets = document.assets.filter(
       (asset) => asset.id !== "artwork.asset",
@@ -418,7 +427,7 @@ async function testSharedPlaceholderAssetLifecycle(): Promise<void> {
       JSON.stringify(firstSlot),
     ) as typeof firstSlot;
     secondSlot.id = "artwork.secondary";
-    layer.objects.push(secondSlot);
+    group.children.push(secondSlot);
 
     assertEqual(
       (await controller.apply(document)).ok,
@@ -474,7 +483,7 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
     }
   };
   const emptyPresentation = createImageSlotDocument();
-  const slot = emptyPresentation.surfaces[0]!.layers[0]!.objects[0]!;
+  const slot = getSlotGroup(emptyPresentation).children[0]!;
   const behavior = slot.behaviors?.find(
     (candidate) => candidate.type === "pooder.image-slot",
   )!;
@@ -489,7 +498,7 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
   );
 
   const configurableVisual = createImageSlotDocument();
-  configurableVisual.surfaces[0]!.layers[0]!.objects[0]!.behaviors!.push({
+  getSlotGroup(configurableVisual).children[0]!.behaviors!.push({
     type: "pooder.configurable-visual",
     config: { key: "legacy" },
   });
@@ -510,8 +519,8 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
   );
 
   const missingPlaceholderSource = createImageSlotDocument();
-  const missingIdBehavior =
-    missingPlaceholderSource.surfaces[0]!.layers[0]!.objects[0]!.behaviors![0]!;
+  const missingIdBehavior = getSlotGroup(missingPlaceholderSource).children[0]!
+    .behaviors![0]!;
   missingIdBehavior.config = { accepts: ["image/*"] };
   assertEqual(
     (await apply(missingPlaceholderSource)).ok,
@@ -520,11 +529,12 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
   );
 
   const nonImageSlot = createImageSlotDocument();
-  const nonImageObject = nonImageSlot.surfaces[0]!.layers[0]!.objects[0]!;
+  const nonImageObject = getSlotGroup(nonImageSlot).children[0]!;
+  delete (nonImageObject as Partial<EditorImageObject>).contentFit;
   Object.assign(nonImageObject, {
     type: "shape",
     source: { kind: "inline", content: { shape: "rect", params: {} } },
-    appearance: { fill: "#ffffff" },
+    paint: { fill: "#ffffff" },
   });
   assertEqual(
     (await apply(nonImageSlot)).ok,
@@ -556,7 +566,7 @@ function getCommittedMatrix(runtime: Pooder): number[] {
 async function projectCanvasMatrix(
   runtime: Pooder,
   facade: ImageSlotCapabilityApi,
-  placement: EditorImagePlacement,
+  placement: EditorImageContentFit,
 ): Promise<number[]> {
   const original = facade.getViewState().draft?.placement;
   assert(original, "active image-slot draft should expose placement");
@@ -609,13 +619,11 @@ async function testImageSlotCommitAndReopenMatrices(): Promise<void> {
         `${fit} session should open`,
       );
       const expected = await projectCanvasMatrix(runtime, facade, {
-        fit: fit as EditorImagePlacement["fit"],
+        fit: fit as EditorImageContentFit["fit"],
         anchorX: 0.25 + index * 0.15,
         anchorY: 0.7 - index * 0.1,
         zoom: 1.2 + index * 0.1,
         rotation: 17 + index * 9,
-        opacity: 0.85,
-        clip: "frame",
       });
       const committed = await facade.commitSession();
       assertEqual(committed.type, "placed", `${fit} session should commit`);

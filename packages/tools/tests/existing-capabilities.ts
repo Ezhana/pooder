@@ -189,9 +189,16 @@ function createEffectDocument(
         params: Record<string, never>;
       },
 ): EditorDocument {
-  const placement: EditorObject["placement"] = {
+  const geometry = {
     localBounds: { x: 0, y: 0, width: 80, height: 40 },
-    localToParent: [1.15911, 0.31058, -0.20706, 0.77274, 50, 40],
+    localToParent: [1.15911, 0.31058, -0.20706, 0.77274, 50, 40] as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ],
     pivot: { x: 40, y: 20 },
   };
   const visual: EditorObject =
@@ -202,17 +209,17 @@ function createEffectDocument(
           tags: ["visual:test"],
           visible: true,
           locked: false,
-          placement,
+          ...geometry,
           source: { kind: "asset", assetId: "visual.asset" },
-          appearance: {
+          contentFit: {
             fit: "contain",
             anchorX: 0.5,
             anchorY: 0.5,
             zoom: 1,
             rotation: 0,
-            opacity: 1,
-            clip: "frame",
           },
+          opacity: 1,
+          clip: "frame",
           effects: [effect],
         }
       : {
@@ -221,7 +228,7 @@ function createEffectDocument(
           tags: ["visual:test"],
           visible: true,
           locked: false,
-          placement,
+          ...geometry,
           source: {
             kind: "inline",
             content: {
@@ -232,7 +239,7 @@ function createEffectDocument(
           effects: [effect],
         };
   return {
-    version: 7,
+    version: 8,
     assets:
       source.type === "image"
         ? [
@@ -252,12 +259,15 @@ function createEffectDocument(
           canvasBounds: { x: 0, y: 0, width: 200, height: 100 },
           productionBounds: { x: 0, y: 0, width: 200, height: 100 },
         },
-        layers: [
+        objects: [
           {
+            type: "group",
             id: "artwork",
+            tags: [],
             visible: true,
             locked: false,
-            objects: [visual],
+            localToParent: [1, 0, 0, 1, 0, 0],
+            children: [visual],
           },
         ],
       },

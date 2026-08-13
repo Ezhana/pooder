@@ -9,22 +9,20 @@ const imageSlot: EditorObject = {
   type: "image",
   id: "front.image",
   tags: ["slot:image"],
-  placement: {
-    localBounds: { x: 0, y: 0, width: 100, height: 100 },
-    localToParent: [1, 0, 0, 1, 0, 0],
-  },
+  localBounds: { x: 0, y: 0, width: 100, height: 100 },
+  localToParent: [1, 0, 0, 1, 0, 0],
   locked: false,
   visible: true,
   source: { kind: "asset", assetId: "front.image.asset" },
-  appearance: {
+  contentFit: {
     fit: "cover",
     anchorX: 0.5,
     anchorY: 0.5,
     zoom: 1,
     rotation: 0,
-    opacity: 1,
-    clip: "frame",
   },
+  opacity: 1,
+  clip: "frame",
   behaviors: [
     {
       type: "pooder.image-slot",
@@ -68,5 +66,8 @@ and commit produces one scene-space document patch that
 the document.
 
 `selection` and each manipulation operation default to disabled. Any enabled
-manipulation operation implies selection and hit testing. Object or Layer
-locking disables selection and manipulation.
+manipulation operation implies selection and hit testing. Object locking
+disables selection and manipulation; locking does not inherit through groups.
+On a hit chain, the innermost node with enabled selection wins. Selecting an
+enabled ancestor requires explicit drill-in behavior. Constraints resolve once,
+outermost to innermost, in each host node's parent-local space.

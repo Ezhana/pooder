@@ -16,5 +16,5 @@
       "@pooder/geometry-paper": ["../geometry-paper/src/index.ts"]
     }
   },
-  "include": ["tests/image-slot-v7.contract.ts", "src/**/*.ts"]
+  "include": ["tests/image-slot-v8.contract.ts", "src/**/*.ts"]
 }

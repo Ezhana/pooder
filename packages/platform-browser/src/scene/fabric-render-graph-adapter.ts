@@ -887,15 +887,13 @@ export class FabricRenderGraphAdapter implements Service {
     const subjectId = declaredSubjectId;
     if (!subjectId) return null;
     const projectionTargets = this.resolveProjectionTargets(subjectId);
-    const compositeMemberNodeIds = Array.isArray(
-      target.data?.compositeMemberNodeIds,
-    )
-      ? target.data.compositeMemberNodeIds
+    const groupMemberNodeIds = Array.isArray(target.data?.groupMemberNodeIds)
+      ? target.data.groupMemberNodeIds
           .map((value: unknown) => String(value || "").trim())
           .filter(Boolean)
       : [];
-    if (compositeMemberNodeIds.length) {
-      const memberIds = new Set(compositeMemberNodeIds);
+    if (groupMemberNodeIds.length) {
+      const memberIds = new Set(groupMemberNodeIds);
       graph.layers.forEach((layer) =>
         layer.nodes.forEach((node) => {
           if (!memberIds.has(node.id)) return;
@@ -1496,8 +1494,14 @@ export class FabricRenderGraphAdapter implements Service {
         : typeof node.props.evented === "boolean"
           ? node.props.evented
           : selectable;
+    const { strokeWidthMm, dashMm, ...renderProps } = node.props;
+    // Document millimetres and scene units are equivalent at this boundary.
     const commonProps = {
-      ...node.props,
+      ...renderProps,
+      ...(typeof strokeWidthMm === "number"
+        ? { strokeWidth: strokeWidthMm }
+        : {}),
+      ...(Array.isArray(dashMm) ? { strokeDashArray: [...dashMm] } : {}),
       ...(geometry.pathData ? { pathData: geometry.pathData } : {}),
       selectable,
       evented,

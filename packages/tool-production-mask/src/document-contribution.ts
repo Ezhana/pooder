@@ -192,9 +192,7 @@ function validateProductionMaskReferences(
         ),
       );
     } else if (
-      !surface.layers.some((layer) =>
-        layer.objects?.some((object) => containsObject(object, reference.id)),
-      )
+      !surface.objects.some((object) => containsObject(object, reference.id))
     ) {
       diagnostics.push({
         severity: "error",

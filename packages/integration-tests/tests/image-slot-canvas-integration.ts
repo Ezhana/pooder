@@ -230,21 +230,19 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
     tags: ["slot:image"],
     visible: true,
     locked: false,
-    placement: {
-      localBounds: { x: 0, y: 0, width: 120, height: 80 },
-      localToParent: [1, 0, 0, 1, left, 20],
-      pivot: { x: 60, y: 40 },
-    },
+    localBounds: { x: 0, y: 0, width: 120, height: 80 },
+    localToParent: [1, 0, 0, 1, left, 20],
+    pivot: { x: 60, y: 40 },
     source: null,
-    appearance: {
+    contentFit: {
       fit: "cover",
       anchorX: 0.5,
       anchorY: 0.5,
       zoom: 1,
       rotation: 0,
-      opacity: 1,
-      clip: "frame",
     },
+    opacity: 1,
+    clip: "frame",
     behaviors: [
       {
         type: "pooder.image-slot",
@@ -262,7 +260,7 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
 
 function createEmptySlotDocument(): EditorDocument {
   return {
-    version: 7,
+    version: 8,
     assets: [
       {
         id: "image-slot.placeholder.asset",
@@ -285,12 +283,15 @@ function createEmptySlotDocument(): EditorDocument {
           canvasBounds: { x: 0, y: 0, width: 340, height: 120 },
           productionBounds: { x: 0, y: 0, width: 340, height: 120 },
         },
-        layers: [
+        objects: [
           {
-            id: "front.image-slot",
+            type: "group",
+            id: "front.group.image-slot",
+            tags: [],
             visible: true,
             locked: false,
-            objects: [
+            localToParent: [1, 0, 0, 1, 0, 0],
+            children: [
               createEmptySlotObject(OBJECT_ID, 20),
               createEmptySlotObject(SECOND_OBJECT_ID, 180),
             ],
@@ -301,7 +302,7 @@ function createEmptySlotDocument(): EditorDocument {
   };
 }
 
-function createLayeredSlotDocument(): EditorDocument {
+function createOrderedSlotDocument(): EditorDocument {
   const createVisualObject = (
     id: string,
     assetId: string,
@@ -311,21 +312,19 @@ function createLayeredSlotDocument(): EditorDocument {
     tags: ["export:mockup"],
     visible: true,
     locked: true,
-    placement: {
-      localBounds: { x: 0, y: 0, width: 340, height: 120 },
-      localToParent: [1, 0, 0, 1, 0, 0] as MatrixValues,
-      pivot: { x: 170, y: 60 },
-    },
+    localBounds: { x: 0, y: 0, width: 340, height: 120 },
+    localToParent: [1, 0, 0, 1, 0, 0] as MatrixValues,
+    pivot: { x: 170, y: 60 },
     source: { kind: "asset" as const, assetId },
-    appearance: {
+    contentFit: {
       fit: "cover" as const,
       anchorX: 0.5,
       anchorY: 0.5,
       zoom: 1,
       rotation: 0,
-      opacity: 1,
-      clip: "frame" as const,
     },
+    opacity: 1,
+    clip: "frame" as const,
   });
   const document = createEmptySlotDocument();
   document.assets.push(
@@ -343,26 +342,32 @@ function createLayeredSlotDocument(): EditorDocument {
     },
   );
   const surface = document.surfaces[0]!;
-  const slotLayer = surface.layers[0]!;
-  surface.layers = [
+  const slotGroup = surface.objects[0]!;
+  surface.objects = [
     {
-      id: "front.background",
+      type: "group",
+      id: "front.group.background",
+      tags: [],
       visible: true,
       locked: true,
-      objects: [createVisualObject("background", "background.asset")],
+      localToParent: [1, 0, 0, 1, 0, 0],
+      children: [createVisualObject("background", "background.asset")],
     },
-    slotLayer,
+    slotGroup,
     {
-      id: "front.foreground",
+      type: "group",
+      id: "front.group.foreground",
+      tags: [],
       visible: true,
       locked: true,
-      objects: [createVisualObject("foreground", "foreground.asset")],
+      localToParent: [1, 0, 0, 1, 0, 0],
+      children: [createVisualObject("foreground", "foreground.asset")],
     },
   ];
   return document;
 }
 
-async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> {
+async function testImageSlotSessionPreservesDocumentPathOrder(): Promise<void> {
   const runtime = new Pooder();
   const canvas = new ViewportCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -372,10 +377,10 @@ async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> 
   await runtime.extensions.flushActivation();
   const controller = registerEditorDocumentService(runtime);
   try {
-    const applied = await controller.apply(createLayeredSlotDocument());
+    const applied = await controller.apply(createOrderedSlotDocument());
     assert(
       applied.ok,
-      `layered image-slot document should apply (${JSON.stringify(applied.diagnostics)})`,
+      `ordered image-slot document should apply (${JSON.stringify(applied.diagnostics)})`,
     );
     const facade = runtime.capabilities.get<ImageSlotCapabilityApi>(
       IMAGE_SLOT_CAPABILITY_ID,
@@ -385,7 +390,7 @@ async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> 
     assertEqual(
       (await facade.openSession({ objectId: OBJECT_ID })).ok,
       true,
-      "layered image-slot session should open",
+      "ordered image-slot session should open",
     );
     await facade.setAsset("image-slot.upload.asset");
     await adapter.flush();
@@ -403,7 +408,7 @@ async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> 
     );
     assert(
       backgroundIndex >= 0 && workingIndex >= 0 && foregroundIndex >= 0,
-      `layered session items should render (${JSON.stringify(
+      `ordered session items should render (${JSON.stringify(
         visibleItems.map((item) => ({
           id: item.spec?.id,
           data: item.spec?.data,
@@ -412,7 +417,7 @@ async function testImageSlotSessionPreservesDocumentLayerOrder(): Promise<void> 
     );
     assert(
       backgroundIndex < workingIndex && workingIndex < foregroundIndex,
-      "working image should preserve its document position between background and foreground layers",
+      "working image should preserve its document position between background and foreground groups",
     );
     await facade.rollbackSession();
   } finally {
@@ -533,7 +538,7 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
 
 function createNestedDocument(): EditorDocument {
   return {
-    version: 7,
+    version: 8,
     assets: [
       {
         id: "nested-artwork.asset",
@@ -556,76 +561,63 @@ function createNestedDocument(): EditorDocument {
           canvasBounds: { x: 0, y: 0, width: 300, height: 220 },
           productionBounds: { x: 0, y: 0, width: 300, height: 220 },
         },
-        layers: [
+        objects: [
           {
-            id: "artwork",
+            type: "group",
+            id: "group-parent",
+            tags: ["group:test"],
             visible: true,
             locked: false,
-            objects: [
+            localToParent: [
+              ...createLocalToSceneMatrix({
+                position: { x: 142, y: 105 },
+                pivot: { x: 130, y: 96.5 },
+                rotation: 19,
+                scaleX: 1.18,
+                scaleY: 0.82,
+              }).values,
+            ] as MatrixValues,
+            interaction: {
+              selection: { enabled: true },
+            },
+            children: [
               {
-                type: "group",
-                id: "composite-parent",
-                tags: ["composite:test"],
+                type: "image",
+                id: OBJECT_ID,
+                tags: ["slot:image"],
                 visible: true,
                 locked: false,
-                placement: {
-                  localBounds: { x: 35, y: 24, width: 190, height: 145 },
-                  localToParent: [
-                    ...createLocalToSceneMatrix({
-                      position: { x: 142, y: 105 },
-                      pivot: { x: 130, y: 96.5 },
-                      rotation: 19,
-                      scaleX: 1.18,
-                      scaleY: 0.82,
-                    }).values,
-                  ] as MatrixValues,
-                  pivot: { x: 130, y: 96.5 },
+                localBounds: { x: 18, y: 26, width: 110, height: 72 },
+                localToParent: [
+                  ...createLocalToSceneMatrix({
+                    position: { x: 76, y: 64 },
+                    pivot: { x: 73, y: 62 },
+                    rotation: -11,
+                    scaleX: 0.94,
+                    scaleY: 1.08,
+                  }).values,
+                ] as MatrixValues,
+                pivot: { x: 73, y: 62 },
+                source: { kind: "asset", assetId: "nested-artwork.asset" },
+                contentFit: {
+                  fit: "cover",
+                  anchorX: 0.35,
+                  anchorY: 0.65,
+                  zoom: 1.15,
+                  rotation: 7,
                 },
-                interaction: {
-                  selection: { enabled: true },
-                },
-                children: [
+                opacity: 1,
+                clip: "frame",
+                behaviors: [
                   {
-                    type: "image",
-                    id: OBJECT_ID,
-                    tags: ["slot:image"],
-                    visible: true,
-                    locked: false,
-                    placement: {
-                      localBounds: { x: 18, y: 26, width: 110, height: 72 },
-                      localToParent: [
-                        ...createLocalToSceneMatrix({
-                          position: { x: 76, y: 64 },
-                          pivot: { x: 73, y: 62 },
-                          rotation: -11,
-                          scaleX: 0.94,
-                          scaleY: 1.08,
-                        }).values,
-                      ] as MatrixValues,
-                      pivot: { x: 73, y: 62 },
-                    },
-                    source: { kind: "asset", assetId: "nested-artwork.asset" },
-                    appearance: {
-                      fit: "cover",
-                      anchorX: 0.35,
-                      anchorY: 0.65,
-                      zoom: 1.15,
-                      rotation: 7,
-                      opacity: 1,
-                      clip: "frame",
-                    },
-                    behaviors: [
-                      {
-                        type: "pooder.image-slot",
-                        config: {
-                          accepts: ["image/*"],
-                          placeholderSource: {
-                            kind: "asset",
-                            assetId: "image-slot.placeholder.asset",
-                          },
-                        },
+                    type: "pooder.image-slot",
+                    config: {
+                      accepts: ["image/*"],
+                      placeholderSource: {
+                        kind: "asset",
+                        assetId: "image-slot.placeholder.asset",
                       },
-                    ],
+                    },
                   },
                 ],
               },
@@ -682,7 +674,7 @@ function transformBounds(
 
 export async function testImageSlotFabricViewportAndParentTransform(): Promise<void> {
   await testEmptyImageSlotPointerActivation();
-  await testImageSlotSessionPreservesDocumentLayerOrder();
+  await testImageSlotSessionPreservesDocumentPathOrder();
   const runtime = new Pooder();
   const canvas = new ViewportCanvasService();
   const adapter = new FabricRenderGraphAdapter();
@@ -742,8 +734,6 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
         anchorY: 0.31,
         zoom: 1.42,
         rotation: 28,
-        opacity: 0.88,
-        clip: "frame",
       }).ok,
       true,
       "representable nested target placement should render",
@@ -755,14 +745,6 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
       "nested draft should reset before Fabric projection",
     );
     let targetSceneMatrix = getWorkingMatrix(runtime);
-    const parentNode = runtime.services
-      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
-      .getGraph()
-      .layers.flatMap((layer) => layer.nodes)
-      .find(
-        (candidate) => candidate.id === "composite-parent:interaction-proxy",
-      );
-    assert(parentNode, "composite parent projection should exist");
 
     const target: any = {
       angle: 0,
@@ -774,10 +756,6 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
         ...item.spec.data,
         affinePlacement: item.spec.placement,
         renderTarget: "render-graph",
-      },
-      group: {
-        calcTransformMatrix: () =>
-          canvas.toScreenMatrix(parentNode.placement.localToScene).values,
       },
       calcTransformMatrix: () => {
         const centerToLocal = coordinateMatrix("object-local", "object-local", [

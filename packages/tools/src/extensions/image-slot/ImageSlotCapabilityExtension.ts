@@ -40,9 +40,9 @@ import {
   upsertEditorDocumentAsset,
   visitEditorDocumentObjects,
   type EditorDocument,
+  type EditorImageContentFit,
   type EditorImageAsset,
   type EditorImageObject,
-  type EditorImagePlacement,
   type EditorObject,
 } from "@pooder/document";
 import {
@@ -62,14 +62,12 @@ import {
   type SessionRenderDecorationContribution,
 } from "./capability";
 
-const DEFAULT_PLACEMENT: EditorImagePlacement = {
+const DEFAULT_PLACEMENT: EditorImageContentFit = {
   fit: "cover",
   anchorX: 0.5,
   anchorY: 0.5,
   zoom: 1,
   rotation: 0,
-  opacity: 1,
-  clip: "frame",
 };
 
 type ImageSlotOpenSessionResult = { ok: true } | { ok: false; reason: string };
@@ -408,7 +406,6 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         : {
             ...DEFAULT_PLACEMENT,
             fit: draft.placement.fit,
-            clip: draft.placement.clip,
           };
     this.setState({
       phase: "active",
@@ -428,7 +425,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     return { ok: true };
   }
 
-  private updatePlacement(partial: Partial<EditorImagePlacement>) {
+  private updatePlacement(partial: Partial<EditorImageContentFit>) {
     const draft = this.state.draft;
     if (!draft) return { ok: false, reason: "session-not-active" };
     const next = normalizePlacement({ ...draft.placement, ...partial });
@@ -447,7 +444,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     }
     const source = this.resolveDraftImage(draft)?.resolution;
     if (!source) return { ok: false, reason: "resource-load-failed" };
-    const frame = context.object.placement.localBounds;
+    const frame = context.object.localBounds;
     const widthScale = frame.width / Math.max(source.width, 1);
     const heightScale = frame.height / Math.max(source.height, 1);
     const absoluteScale =
@@ -489,7 +486,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!source || (!transform && !input.sceneMatrix)) {
       return { ok: false, reason: "resource-load-failed" };
     }
-    const frame = context.object.placement.localBounds;
+    const frame = context.object.localBounds;
     const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
     if (!objectPlacement) {
       return { ok: false, reason: "geometry-unavailable" };
@@ -536,8 +533,8 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       : Number(transform?.rotation);
     const placement = normalizePlacement({
       ...draft.placement,
-      anchorX: localCenter.x / Math.max(frame.width, 1),
-      anchorY: localCenter.y / Math.max(frame.height, 1),
+      anchorX: (localCenter.x - frame.x) / Math.max(frame.width, 1),
+      anchorY: (localCenter.y - frame.y) / Math.max(frame.height, 1),
       rotation,
       zoom,
     });
@@ -632,7 +629,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         current.id,
         draft.assetId ? { kind: "asset", assetId: draft.assetId } : null,
       );
-      current.appearance = clone(draft.placement);
+      current.contentFit = clone(draft.placement);
       return document;
     });
     if (!result.ok) {
@@ -772,8 +769,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       containerGeometryRef: clone(target.containerGeometryRef),
       ordering: {
         layerId: target.layerId,
-        layerOrder: target.sortKey.layerOrder,
-        objectOrder: target.sortKey.objectOrder,
+        path: [...target.sortKey.path],
         channel: target.sortKey.channel,
         subOrder: target.sortKey.subOrder,
       },
@@ -795,14 +791,14 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     const geometry = resolveImageGeometry({
       source: { src, size: { width, height } },
       frame: coordinateRect("object-local", {
-        left: 0,
-        top: 0,
-        width: context.object.placement.localBounds.width,
-        height: context.object.placement.localBounds.height,
+        left: context.object.localBounds.x,
+        top: context.object.localBounds.y,
+        width: context.object.localBounds.width,
+        height: context.object.localBounds.height,
       }),
       fit: draft.placement.fit,
       transform: draft.placement,
-      ...(draft.placement.clip === "frame" ? { clip: clipFrame } : {}),
+      ...(context.object.clip === "frame" ? { clip: clipFrame } : {}),
     });
     return {
       ...base,
@@ -823,7 +819,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         },
       }),
       data: { autoFocus: true, imageSlotObjectId: draft.objectId },
-      props: { opacity: geometry.opacity },
+      props: { opacity: context.object.opacity ?? 1 },
       ...(geometry.clip
         ? {
             effects: [
@@ -893,7 +889,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     };
     const service = this.getImageResourceService?.();
     const resolution = service
-      ? service.read(descriptor) ?? (await service.ensure(descriptor))
+      ? (service.read(descriptor) ?? (await service.ensure(descriptor)))
       : asset.intrinsicSize
         ? {
             ok: true as const,
@@ -962,7 +958,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       objectPlacement.localBounds,
     );
     const controlsLayerId = `session:${sessionId}:controls`;
-    const controlsLayerOrder = target.sortKey.layerOrder + 1_000_000;
+    const controlsLayerOrder = (target.sortKey.path[0] ?? 0) + 1_000_000;
     const contribution = (
       projection: RenderIntentDraft,
       provenance: string,
@@ -997,8 +993,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           data: { imageSlotObjectId: objectId, type: "image-slot-crop-mask" },
           ordering: {
             layerId: controlsLayerId,
-            layerOrder: controlsLayerOrder,
-            objectOrder: 0,
+            path: [controlsLayerOrder, 0],
           },
         },
         `${IMAGE_SLOT_CAPABILITY_ID}:crop-mask`,
@@ -1026,8 +1021,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           data: { imageSlotObjectId: objectId, type: "image-slot-crop-frame" },
           ordering: {
             layerId: controlsLayerId,
-            layerOrder: controlsLayerOrder,
-            objectOrder: 1,
+            path: [controlsLayerOrder, 1],
           },
         },
         `${IMAGE_SLOT_CAPABILITY_ID}:crop-frame`,
@@ -1101,8 +1095,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           },
           ordering: {
             layerId: controlsLayerId,
-            layerOrder: target.sortKey.layerOrder + 1_000_000,
-            objectOrder: 10,
+            path: [(target.sortKey.path[0] ?? 0) + 1_000_000, 10],
             subOrder: axis === "x" ? 0 : 1,
           },
         },
@@ -1307,11 +1300,13 @@ function toDraft(
     ...(object.source?.kind === "asset"
       ? { assetId: object.source.assetId }
       : {}),
-    placement: clone(object.appearance),
+    placement: clone(object.contentFit),
   };
 }
 
-function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {
+function normalizePlacement(
+  value: EditorImageContentFit,
+): EditorImageContentFit {
   return {
     fit:
       value.fit === "contain" || value.fit === "stretch" ? value.fit : "cover",
@@ -1325,10 +1320,6 @@ function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {
     ),
     zoom: Number.isFinite(value.zoom) && value.zoom > 0 ? value.zoom : 1,
     rotation: Number.isFinite(value.rotation) ? value.rotation : 0,
-    opacity: Number.isFinite(value.opacity)
-      ? Math.max(0, Math.min(1, value.opacity))
-      : 1,
-    clip: value.clip === "none" ? "none" : "frame",
   };
 }
 
@@ -1362,8 +1353,8 @@ function doesDraftLeaveFrameUncovered(
     frame: coordinateRect("object-local", {
       left: 0,
       top: 0,
-      width: object.placement.localBounds.width,
-      height: object.placement.localBounds.height,
+      width: object.localBounds.width,
+      height: object.localBounds.height,
     }),
     fit: draft.placement.fit,
     transform: draft.placement,
@@ -1371,8 +1362,8 @@ function doesDraftLeaveFrameUncovered(
   const objectLocalToImageLocal = invertCoordinateMatrix(
     geometry.imageLocalToObjectLocal,
   );
-  const frameWidth = object.placement.localBounds.width;
-  const frameHeight = object.placement.localBounds.height;
+  const frameWidth = object.localBounds.width;
+  const frameHeight = object.localBounds.height;
   const frameCorners = [
     { space: "object-local" as const, x: 0, y: 0 },
     { space: "object-local" as const, x: frameWidth, y: 0 },

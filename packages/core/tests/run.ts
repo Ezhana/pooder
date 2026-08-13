@@ -2021,7 +2021,7 @@ async function testConstraintResolverServiceBuiltins() {
         {
           type: "path.lowest-tangent",
           source: { sourceId: "static", geometryId: "diamond" },
-          params: { anchor: "composite-center" },
+          params: { anchor: "group-center" },
         },
       ],
       coordinateSpace: "scene",
@@ -2029,7 +2029,7 @@ async function testConstraintResolverServiceBuiltins() {
     assertDeepEqual(
       lowestTangent.result.frame,
       { left: 45, top: 95, width: 10, height: 10 },
-      "path.lowest-tangent should place a composite by its center anchor",
+      "path.lowest-tangent should place a group by its center anchor",
     );
 
     const snapped = resolver.resolve({
@@ -2533,7 +2533,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
-    const createProjection = (id: string, objectOrder: number) => ({
+    const createProjection = (id: string, orderIndex: number) => ({
       id,
       subject: {
         kind: "object" as const,
@@ -2555,11 +2555,11 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
           0,
           0,
           1,
-          objectOrder * 10,
+          orderIndex * 10,
           0,
         ]),
       }),
-      ordering: { layerId: "art", objectOrder },
+      ordering: { layerId: "art", path: [orderIndex] },
     });
     const graph = intents.setDocumentIntents([
       createProjection("logical-object:fill", 0),
@@ -2676,7 +2676,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
-    const createProjection = (id: string, objectOrder: number) => ({
+    const createProjection = (id: string, orderIndex: number) => ({
       id,
       subject: {
         kind: "object" as const,
@@ -2685,8 +2685,8 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
         objectId: "logical-image",
       },
       visual: { type: "image" as const, src: `/${id}.png` },
-      placement: createTestPlacement(objectOrder * 10, 0, 10, 10),
-      ordering: { layerId: "art", layerOrder: 2, objectOrder },
+      placement: createTestPlacement(orderIndex * 10, 0, 10, 10),
+      ordering: { layerId: "art", path: [2, orderIndex] },
     });
     intents.setDocumentIntents([
       createProjection("logical-image:fill", 0),
@@ -2749,7 +2749,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
           visual: { type: "path" },
           placement: createTestPlacement(0, 0, 10, 10),
           props: { pathData: "M0 0L10 0" },
-          ordering: { layerId: "controls", layerOrder: 100 },
+          ordering: { layerId: "controls", path: [100] },
         },
       },
     ]);
@@ -3683,7 +3683,7 @@ async function testRenderIntentPatchMergeHelper() {
     visual: { type: "image" as const, src: "/base.png" },
     placement: createTestPlacement(0, 0, 10, 20),
     coordinateSpace: "scene" as const,
-    ordering: { layerId: "artwork", layerOrder: 1, objectOrder: 2 },
+    ordering: { layerId: "artwork", path: [1, 2] },
     props: { opacity: 0.5 },
   };
 
@@ -3895,7 +3895,6 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
       anchorY: 0.75,
       zoom: 1.2,
       rotation: 15,
-      opacity: 0.8,
     },
     clip: { space: "object-local", ...frame },
   });
@@ -3903,7 +3902,6 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
   assertEqual(resolved.imageLocalBounds.height, 400);
   assertEqual(resolved.imageLocalToObjectLocal.from, "object-local");
   assertEqual(resolved.imageLocalToObjectLocal.to, "object-local");
-  assertEqual(resolved.opacity, 0.8);
   assertEqual(resolved.clip?.space, "object-local");
 }
 

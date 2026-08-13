@@ -40,7 +40,7 @@ This policy defines the capability-first architecture and public naming rules.
 
 ## EditorDocument
 
-- Only the strict v7 model is public. APIs do not expose aliases, migration
+- Only the strict v8 model is public. APIs do not expose aliases, migration
   wrappers, or alternate spellings.
 - Extensions register schemas for every extension state, trait, behavior,
   constraint, and extension-owned Object effect they persist.
@@ -48,6 +48,6 @@ This policy defines the capability-first architecture and public naming rules.
   contains selection, manipulation, and constraints only.
 - Product metadata does not enter the generic document model; express durable
   semantics through typed traits and extension state.
-- Layer hierarchy is represented only by `EditorSurface.layers` array order:
-  index zero is bottommost and the last layer is topmost. `EditorLayer` has no
-  semantic role or independent stack value.
+- Object draw order is surface/group array order plus depth-first traversal;
+  index zero is bottommost. Traits do not alter order. Document groups and
+  runtime render/scene layers are separate concepts.

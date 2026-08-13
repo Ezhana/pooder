@@ -21,7 +21,7 @@ import {
   visitEditorDocumentObjects,
   type EditorDocument,
 } from "../src";
-import { REPRESENTATIVE_V7_DOCUMENT_INPUT } from "./fixtures/representative-v7-document";
+import { REPRESENTATIVE_V8_DOCUMENT_INPUT } from "./fixtures/representative-v8-document";
 
 declare const process: { exit(code: number): never };
 
@@ -50,22 +50,22 @@ function assertDeepEqual(
 }
 
 function representativeDocument(): EditorDocument {
-  return parseEditorDocument(REPRESENTATIVE_V7_DOCUMENT_INPUT);
+  return parseEditorDocument(REPRESENTATIVE_V8_DOCUMENT_INPUT);
 }
 
 function testStrictRoundTrip(): void {
   const document = representativeDocument();
   const restored = parseEditorDocument(JSON.parse(JSON.stringify(document)));
-  assertDeepEqual(restored, document, "strict v7 should round-trip exactly");
+  assertDeepEqual(restored, document, "strict v8 should round-trip exactly");
   assertDeepEqual(
     document.surfaces.map((surface) => surface.id),
     ["front", "back"],
     "surface order should be preserved",
   );
   assertDeepEqual(
-    document.surfaces[0]?.layers.map((layer) => layer.id),
+    document.surfaces[0]?.objects.map((object) => object.id),
     ["front.content", "front.production"],
-    "layer array order should be preserved from bottom to top",
+    "root group order should be preserved from bottom to top",
   );
   assertEqual(
     findEditorDocumentObject(document, "front.feature.hole")?.id,
@@ -75,13 +75,23 @@ function testStrictRoundTrip(): void {
 }
 
 function testUnknownAndLegacyFieldsAreRejected(): void {
+  const v7 = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  v7.version = 7;
+  assertEqual(
+    validateEditorDocument(v7)[0]?.code,
+    "document-version-invalid",
+    "v7 documents should be rejected without a runtime migrator",
+  );
+
   for (const [field, value] of [
     ["config", {}],
     ["views", []],
     ["metadata", {}],
   ] as const) {
     const input = JSON.parse(
-      JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+      JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
     ) as Record<string, unknown>;
     input[field] = value;
     const diagnostic = validateEditorDocument(input)[0];
@@ -98,41 +108,41 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   }
 
   const input = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const surface = (input.surfaces as Array<Record<string, unknown>>)[0]!;
-  const layer = (surface.layers as Array<Record<string, unknown>>)[0]!;
-  const object = (layer.objects as Array<Record<string, unknown>>)[0]!;
+  const group = (surface.objects as Array<Record<string, unknown>>)[0]!;
+  const object = (group.children as Array<Record<string, unknown>>)[0]!;
   object.frame = { x: 0, y: 0, width: 1, height: 1 };
   assertEqual(
     validateEditorDocument(input)[0]?.path,
-    "surfaces[0].layers[0].objects[0].frame",
+    "surfaces[0].objects[0].children[0].frame",
     "legacy object frame should be rejected at its exact path",
   );
 
-  const layerRole = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+  const groupRole = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const legacyLayer = (
-    (layerRole.surfaces as Array<Record<string, unknown>>)[0]!.layers as Array<
+  const legacyGroup = (
+    (groupRole.surfaces as Array<Record<string, unknown>>)[0]!.objects as Array<
       Record<string, unknown>
     >
   )[0]!;
-  legacyLayer.role = "content";
+  legacyGroup.role = "content";
   assertEqual(
-    validateEditorDocument(layerRole)[0]?.path,
-    "surfaces[0].layers[0].role",
-    "legacy layer role should be rejected at its exact path",
+    validateEditorDocument(groupRole)[0]?.path,
+    "surfaces[0].objects[0].role",
+    "legacy group role should be rejected at its exact path",
   );
 
   const guideRole = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const guideLayers = (guideRole.surfaces as Array<Record<string, unknown>>)[0]!
-    .layers as Array<Record<string, unknown>>;
+  const guideGroups = (guideRole.surfaces as Array<Record<string, unknown>>)[0]!
+    .objects as Array<Record<string, unknown>>;
   const guide = (
     (
-      guideLayers[guideLayers.length - 1]!.objects as Array<
+      guideGroups[guideGroups.length - 1]!.children as Array<
         Record<string, unknown>
       >
     )[0]!.traits as Array<Record<string, unknown>>
@@ -145,13 +155,13 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   );
 
   const exportScope = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const exportObject = (
     (
       (exportScope.surfaces as Array<Record<string, unknown>>)[0]!
-        .layers as Array<Record<string, unknown>>
-    )[0]!.objects as Array<Record<string, unknown>>
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
   )[0]!;
   exportObject.traits = [{ type: "core.export", scopes: ["design"] }];
   assertEqual(
@@ -161,13 +171,13 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   );
 
   const unnamespacedTag = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const taggedObject = (
     (
       (unnamespacedTag.surfaces as Array<Record<string, unknown>>)[0]!
-        .layers as Array<Record<string, unknown>>
-    )[0]!.objects as Array<Record<string, unknown>>
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
   )[0]!;
   taggedObject.tags = ["cut"];
   assertEqual(
@@ -177,13 +187,13 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   );
 
   const legacyObjectSource = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const legacyObject = (
     (
       (legacyObjectSource.surfaces as Array<Record<string, unknown>>)[0]!
-        .layers as Array<Record<string, unknown>>
-    )[0]!.objects as Array<Record<string, unknown>>
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
   )[0]!;
   delete legacyObject.type;
   legacyObject.source = { kind: "image", assetId: "front-artwork" };
@@ -196,7 +206,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
 
 function testInvalidNumbersAndUnionsAreRejected(): void {
   const nonFinite = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const geometry = (
     (nonFinite.surfaces as Array<Record<string, unknown>>)[0]!
@@ -210,13 +220,13 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   );
 
   const invalidUnion = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const object = (
     (
       (invalidUnion.surfaces as Array<Record<string, unknown>>)[0]!
-        .layers as Array<Record<string, unknown>>
-    )[0]!.objects as Array<Record<string, unknown>>
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
   )[0]!;
   object.children = [];
   assertEqual(
@@ -224,11 +234,71 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
     "unknown-field",
     "visual objects should reject children",
   );
+
+  for (const [field, value] of [
+    ["opacity", 0.5],
+    ["effects", []],
+    ["localBounds", { x: 0, y: 0, width: 1, height: 1 }],
+    ["source", null],
+    ["paint", {}],
+    [
+      "contentFit",
+      { fit: "cover", anchorX: 0.5, anchorY: 0.5, zoom: 1, rotation: 0 },
+    ],
+  ] as const) {
+    const invalidGroup = JSON.parse(
+      JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+    ) as Record<string, unknown>;
+    const group = (
+      (invalidGroup.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!;
+    group[field] = value;
+    const diagnostic = validateEditorDocument(invalidGroup)[0];
+    assertEqual(
+      diagnostic?.code,
+      "unknown-field",
+      `group ${field} should be rejected`,
+    );
+    assertEqual(
+      diagnostic?.path,
+      `surfaces[0].objects[0].${field}`,
+      `group ${field} rejection path should be stable`,
+    );
+  }
+
+  for (const [path, value, expectedCode] of [
+    ["opacity", -0.01, "unit-interval-required"],
+    ["opacity", 1.01, "unit-interval-required"],
+    ["contentFit.anchorX", -0.01, "unit-interval-required"],
+    ["contentFit.anchorY", 1.01, "unit-interval-required"],
+    ["contentFit.zoom", 0, "positive-number-required"],
+  ] as const) {
+    const invalidNumber = JSON.parse(
+      JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+    ) as Record<string, unknown>;
+    const image = (
+      (
+        (invalidNumber.surfaces as Array<Record<string, unknown>>)[0]!
+          .objects as Array<Record<string, unknown>>
+      )[0]!.children as Array<Record<string, unknown>>
+    )[0]!;
+    if (path === "opacity") image.opacity = value;
+    else {
+      const contentFit = image.contentFit as Record<string, unknown>;
+      contentFit[path.slice("contentFit.".length)] = value;
+    }
+    assertEqual(
+      validateEditorDocument(invalidNumber)[0]?.code,
+      expectedCode,
+      `${path}=${value} should be rejected`,
+    );
+  }
 }
 
 function testGlobalIdsAndReferencesAreStrict(): void {
   const duplicate = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
   const surfaces = duplicate.surfaces as Array<Record<string, unknown>>;
   surfaces[1]!.id = surfaces[0]!.id;
@@ -240,13 +310,13 @@ function testGlobalIdsAndReferencesAreStrict(): void {
   );
 
   const missing = JSON.parse(
-    JSON.stringify(REPRESENTATIVE_V7_DOCUMENT_INPUT),
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const missingLayers = (missing.surfaces as Array<Record<string, unknown>>)[0]!
-    .layers as Array<Record<string, unknown>>;
+  const missingGroups = (missing.surfaces as Array<Record<string, unknown>>)[0]!
+    .objects as Array<Record<string, unknown>>;
   const cutline = (
     (
-      missingLayers[missingLayers.length - 1]!.objects as Array<
+      missingGroups[missingGroups.length - 1]!.children as Array<
         Record<string, unknown>
       >
     )[0]!.effects as Array<Record<string, unknown>>
@@ -285,7 +355,7 @@ function testExtensionSchemasAreStrict(): void {
 
   const effectDocument = cloneEditorDocument(document);
   const target = findEditorDocumentObject(effectDocument, "back.artwork");
-  assert(target, "back artwork should exist");
+  assert(target?.type === "shape", "back artwork should be a shape");
   target.effects = [{ type: "test.effect", payload: { count: 1 } }];
   const effectRegistry = new EffectSchemaRegistry([
     {

@@ -63,8 +63,8 @@ export interface RenderIntentExportAspect {
 
 export interface RenderIntentOrderingAspect {
   layerId: string;
-  layerOrder?: number;
-  objectOrder?: number;
+  /** Lexicographic draw path. Earlier entries and shorter prefixes draw first. */
+  path?: readonly number[];
   channel?: RenderIntentChannel;
   subOrder?: number;
 }
@@ -123,8 +123,7 @@ export interface RenderIntentPatchEntry {
 }
 
 export interface RenderGraphSortKey {
-  layerOrder: number;
-  objectOrder: number;
+  path: readonly number[];
   channel: RenderIntentChannel;
   channelOrder: number;
   subOrder: number;
@@ -1562,8 +1561,7 @@ function createDraftFromPatch(
     },
     ordering: {
       layerId: ordering.layerId,
-      layerOrder: ordering.layerOrder,
-      objectOrder: ordering.objectOrder,
+      path: ordering.path ? [...ordering.path] : undefined,
       channel: ordering.channel,
       subOrder: ordering.subOrder,
     },
@@ -1588,7 +1586,7 @@ function getOrCreateGraphLayer(
 ): RenderGraphLayer {
   const existing = layerMap.get(draft.ordering.layerId);
   if (existing) {
-    existing.order = Math.min(existing.order, draft.ordering.layerOrder ?? 0);
+    existing.order = Math.min(existing.order, draft.ordering.path?.[0] ?? 0);
     existing.visible = existing.visible || draft.export?.visible !== false;
     return existing;
   }
@@ -1596,7 +1594,7 @@ function getOrCreateGraphLayer(
   const layer: RenderGraphLayer = {
     id: draft.ordering.layerId,
     surfaceId: draft.subject.surfaceId,
-    order: draft.ordering.layerOrder ?? 0,
+    order: draft.ordering.path?.[0] ?? 0,
     visible: draft.export?.visible !== false,
     nodes: [],
     effects: [],
@@ -1668,8 +1666,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     visibleWhen: cloneRecord(draft.export?.visibleWhen),
     visible: draft.export?.visible !== false,
     sortKey: {
-      layerOrder: draft.ordering.layerOrder ?? 0,
-      objectOrder: draft.ordering.objectOrder ?? 0,
+      path: [...(draft.ordering.path ?? [])],
       channel,
       channelOrder: CHANNEL_ORDER[channel],
       subOrder: draft.ordering.subOrder ?? 0,
@@ -1707,11 +1704,23 @@ function resolveVisualSource(draft: RenderIntentDraft): {
 
 function compareGraphNodes(a: RenderGraphNode, b: RenderGraphNode): number {
   return (
-    a.sortKey.objectOrder - b.sortKey.objectOrder ||
+    compareSortPaths(a.sortKey.path, b.sortKey.path) ||
     a.sortKey.channelOrder - b.sortKey.channelOrder ||
     a.sortKey.subOrder - b.sortKey.subOrder ||
     a.id.localeCompare(b.id)
   );
+}
+
+function compareSortPaths(
+  left: readonly number[],
+  right: readonly number[],
+): number {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference) return difference;
+  }
+  return left.length - right.length;
 }
 
 function compareGraphLayers(a: RenderGraphLayer, b: RenderGraphLayer): number {

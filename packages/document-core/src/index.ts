@@ -62,8 +62,8 @@ import {
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
   isEditorBuiltinObjectEffect,
-  isEditorCompositeObject,
-  isEditorVisualObject,
+  isEditorGroupObject,
+  isEditorLeafObject,
   isEditorExtensionObjectEffect,
   parseEditorDocument,
   selectEditorDocumentObjects,
@@ -73,14 +73,14 @@ import {
   validateEditorDocumentObjectSchemas,
   validateEditorDocumentAssetReferences,
   type EditorDocument,
+  type AffineMatrix,
   type EditorDocumentCapabilityCollectionOptions,
   type EditorDocumentDiagnostic,
   type EditorDocumentEffectCapabilityResolver,
   type EditorDocumentValidationOptions,
   type DocumentInteractionSpec,
   type EditorExtensionObjectEffect,
-  type EditorLayer,
-  type EditorCompositeObject,
+  type EditorGroupObject,
   type EditorImageObject,
   type EditorImageSlotBehaviorConfig,
   type EditorImageAsset,
@@ -93,7 +93,9 @@ import {
   type ObjectSchemaContext,
   type ObjectSchemaRegistry,
   type ObjectSource,
-  type EditorPrimitiveObject,
+  type EditorLeafObject,
+  type EditorPathObject,
+  type EditorShapeObject,
   type EditorShapeContent,
   type ObjectSelector,
 } from "@pooder/document";
@@ -114,7 +116,6 @@ export interface ResolvedVisual {
   source: ObjectSource;
   pathData?: string;
   imageUrl?: string;
-  text?: string;
   bounds?: GeometryRect;
   contentBounds?: GeometryRect;
   intrinsicSize?: ObjectSize;
@@ -122,12 +123,15 @@ export interface ResolvedVisual {
 }
 
 export interface GeometryResolver {
-  resolve(object: EditorPrimitiveObject): ResolvedVisual | null;
-  hitTest(object: EditorPrimitiveObject, point: GeometryPoint): boolean;
+  resolve(object: EditorPathObject | EditorShapeObject): ResolvedVisual | null;
+  hitTest(
+    object: EditorPathObject | EditorShapeObject,
+    point: GeometryPoint,
+  ): boolean;
 }
 
 export class DefaultGeometryResolver implements GeometryResolver {
-  resolve(object: EditorPrimitiveObject): ResolvedVisual | null {
+  resolve(object: EditorPathObject | EditorShapeObject): ResolvedVisual | null {
     if (object.type === "path") {
       const source = object.source;
       const pathData = source.content.pathData.trim();
@@ -153,7 +157,10 @@ export class DefaultGeometryResolver implements GeometryResolver {
     return resolved ? { source, ...resolved } : null;
   }
 
-  hitTest(object: EditorPrimitiveObject, point: GeometryPoint): boolean {
+  hitTest(
+    object: EditorPathObject | EditorShapeObject,
+    point: GeometryPoint,
+  ): boolean {
     const visual = this.resolve(object);
     if (!visual?.bounds) return false;
     return containsPoint(visual.bounds, point);
@@ -165,20 +172,13 @@ export class SourceResolver {
     private readonly geometryResolver: GeometryResolver = new DefaultGeometryResolver(),
   ) {}
 
-  resolve(
-    object: Exclude<EditorObject, EditorCompositeObject>,
-  ): ResolvedVisual | null {
+  resolve(object: EditorLeafObject): ResolvedVisual | null {
     switch (object.type) {
       case "image":
         return null;
       case "path":
       case "shape":
         return this.geometryResolver.resolve(object);
-      case "text":
-        return {
-          source: object.source,
-          text: object.source.content.text,
-        };
       default:
         return null;
     }
@@ -186,7 +186,7 @@ export class SourceResolver {
 }
 
 export function resolveObjectSource(
-  object: Exclude<EditorObject, EditorCompositeObject>,
+  object: EditorLeafObject,
 ): ResolvedVisual | null {
   return new SourceResolver().resolve(object);
 }
@@ -255,7 +255,7 @@ export type EditorDocumentMutationCallback = (
 export type EditorDocumentMutationFailureReason =
   | "document-not-found"
   | "draft-inactive"
-  | "layer-not-found"
+  | "parent-not-found"
   | "object-not-found"
   | "selector-count-mismatch"
   | "object-type-mismatch"
@@ -378,7 +378,7 @@ export interface EditorDocumentService extends Service {
   onDidChange(listener: (event: EditorDocumentChangeEvent) => void): Disposable;
   insertObject(
     surfaceId: string,
-    layerId: string,
+    parentId: string | null,
     object: EditorObject,
     options?: EditorDocumentObjectInsertOptions,
   ): Promise<EditorDocumentMutationResult>;
@@ -419,7 +419,6 @@ export const EDITOR_DOCUMENT_SERVICE =
 
 interface EffectContext {
   surface: EditorSurface;
-  layer?: EditorLayer;
   object?: EditorObject;
 }
 
@@ -989,7 +988,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   insertObject(
     surfaceId: string,
-    layerId: string,
+    parentId: string | null,
     object: EditorObject,
     options: EditorDocumentObjectInsertOptions = {},
   ): Promise<EditorDocumentMutationResult> {
@@ -997,9 +996,11 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     return this.mutate((document) => {
       for (const surface of document.surfaces) {
         if (surface.id !== surfaceId) continue;
-        const layer = surface.layers.find((item) => item.id === layerId);
-        if (!layer) break;
-        const objects = layer.objects ?? (layer.objects = []);
+        const parent = parentId
+          ? findGroupObject(surface.objects, parentId)
+          : undefined;
+        if (parentId && !parent) break;
+        const objects = parent ? parent.children : surface.objects;
         const index = Number.isInteger(options.index)
           ? Math.max(0, Math.min(options.index as number, objects.length))
           : objects.length;
@@ -1007,7 +1008,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         found = true;
         return;
       }
-      if (!found) throw new DocumentMutationError("layer-not-found");
+      if (!found) throw new DocumentMutationError("parent-not-found");
     });
   }
 
@@ -1185,37 +1186,20 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     const localFrame = manipulation.frame
       ? sceneFrameToLocalFrame(manipulation.frame, manipulation.parentMatrix)
       : undefined;
-    return this.updateObject(manipulation.subjectId, (object) => ({
-      ...object,
-      ...(localFrame
-        ? {
-            placement: {
-              ...object.placement,
-              localBounds: {
-                ...object.placement.localBounds,
-                width: localFrame.width,
-                height: localFrame.height,
-              },
-              localToParent: [
-                object.placement.localToParent[0],
-                object.placement.localToParent[1],
-                object.placement.localToParent[2],
-                object.placement.localToParent[3],
-                localFrame.left,
-                localFrame.top,
-              ],
-            },
-          }
-        : {}),
-      ...(manipulation.rotation === undefined
-        ? {}
+    return this.updateObject(manipulation.subjectId, (object) => {
+      const resized = localFrame
+        ? resizeDocumentObject(object, localFrame)
+        : object;
+      return manipulation.rotation === undefined
+        ? resized
         : {
-            placement: rotateObjectPlacement(
-              object.placement,
+            ...resized,
+            localToParent: rotateObjectLocalToParent(
+              resized.localToParent,
               manipulation.rotation,
             ),
-          }),
-    }));
+          };
+    });
   }
 
   private async mutateDraft(
@@ -1416,13 +1400,59 @@ function translateDocumentObject(
   object: EditorObject,
   delta: { x: number; y: number },
 ): EditorObject {
-  const [a, b, c, d, e, f] = object.placement.localToParent;
+  const [a, b, c, d, e, f] = object.localToParent;
   return {
     ...object,
-    placement: {
-      ...object.placement,
-      localToParent: [a, b, c, d, e + delta.x, f + delta.y],
-    },
+    localToParent: [a, b, c, d, e + delta.x, f + delta.y],
+  };
+}
+
+function resizeDocumentObject(
+  object: EditorObject,
+  frame: GeometryRect,
+): EditorObject {
+  if (isEditorLeafObject(object)) {
+    const [a, b, c, d] = object.localToParent;
+    return {
+      ...object,
+      localBounds: {
+        ...object.localBounds,
+        width: frame.width,
+        height: frame.height,
+      },
+      localToParent: [a, b, c, d, frame.left, frame.top],
+    };
+  }
+  const bounds = deriveGroupLocalBounds(object);
+  if (bounds.width <= 0 || bounds.height <= 0) return object;
+  const currentBounds = transformCoordinateRect(
+    coordinateMatrix("object-local", "parent-local", object.localToParent),
+    bounds,
+  );
+  const scaleX =
+    currentBounds.width > 0 ? frame.width / currentBounds.width : 1;
+  const scaleY =
+    currentBounds.height > 0 ? frame.height / currentBounds.height : 1;
+  const [a, b, c, d] = object.localToParent;
+  const linear = coordinateMatrix("object-local", "parent-local", [
+    a * scaleX,
+    b * scaleY,
+    c * scaleX,
+    d * scaleY,
+    0,
+    0,
+  ]);
+  const linearBounds = transformCoordinateRect(linear, bounds);
+  return {
+    ...object,
+    localToParent: [
+      linear.values[0],
+      linear.values[1],
+      linear.values[2],
+      linear.values[3],
+      frame.left - linearBounds.left,
+      frame.top - linearBounds.top,
+    ],
   };
 }
 
@@ -1525,6 +1555,20 @@ function cloneDocumentObject(object: EditorObject): EditorObject {
   return JSON.parse(JSON.stringify(object)) as EditorObject;
 }
 
+function findGroupObject(
+  objects: readonly EditorObject[],
+  objectId: string,
+): EditorGroupObject | undefined {
+  for (const object of objects) {
+    if (isEditorGroupObject(object)) {
+      if (object.id === objectId) return object;
+      const nested = findGroupObject(object.children, objectId);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
 function replaceSourceObject(
   document: EditorDocument,
   objectId: string,
@@ -1538,16 +1582,14 @@ function replaceSourceObject(
         objects[index] = next;
         return true;
       }
-      if (isEditorCompositeObject(object) && replaceIn(object.children)) {
+      if (isEditorGroupObject(object) && replaceIn(object.children)) {
         return true;
       }
     }
     return false;
   };
   for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      if (replaceIn(layer.objects)) return;
-    }
+    if (replaceIn(surface.objects)) return;
   }
 }
 
@@ -1563,17 +1605,15 @@ function removeSourceObject(
         objects.splice(index, 1);
         return true;
       }
-      if (isEditorCompositeObject(object) && removeFrom(object.children)) {
+      if (isEditorGroupObject(object) && removeFrom(object.children)) {
         return true;
       }
     }
     return false;
   };
   for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      if (removeFrom(layer.objects)) {
-        return true;
-      }
+    if (removeFrom(surface.objects)) {
+      return true;
     }
   }
   return false;
@@ -1758,20 +1798,70 @@ function createFrameAffinePlacement(
     [1, 0, 0, 1, 0, 0],
   ),
 ): AffinePlacement {
-  const { localBounds, localToParent, pivot } = object.placement;
+  const localBounds = isEditorGroupObject(object)
+    ? deriveGroupLocalBounds(object)
+    : coordinateRect("object-local", {
+        left: object.localBounds.x,
+        top: object.localBounds.y,
+        width: object.localBounds.width,
+        height: object.localBounds.height,
+      });
+  const pivot = (isEditorLeafObject(object) ? object.pivot : undefined) ?? {
+    x: localBounds.left + localBounds.width / 2,
+    y: localBounds.top + localBounds.height / 2,
+  };
   return createAffinePlacement({
-    localBounds: {
-      left: localBounds.x,
-      top: localBounds.y,
-      width: localBounds.width,
-      height: localBounds.height,
-    },
+    localBounds,
     pivot,
     localToScene: multiplyCoordinateMatrices(
       parentLocalToScene,
-      coordinateMatrix("object-local", "parent-local", localToParent),
+      coordinateMatrix("object-local", "parent-local", object.localToParent),
     ),
   });
+}
+
+function deriveGroupLocalBounds(
+  group: EditorGroupObject,
+): import("@pooder/core").CoordinateRect<"object-local"> {
+  let bounds: import("@pooder/core").CoordinateRect<"object-local"> | undefined;
+  for (const child of group.children) {
+    const childBounds = isEditorGroupObject(child)
+      ? deriveGroupLocalBounds(child)
+      : coordinateRect("object-local", {
+          left: child.localBounds.x,
+          top: child.localBounds.y,
+          width: child.localBounds.width,
+          height: child.localBounds.height,
+        });
+    const transformed = transformCoordinateRect(
+      coordinateMatrix("object-local", "object-local", child.localToParent),
+      childBounds,
+    );
+    if (!bounds) {
+      bounds = transformed;
+      continue;
+    }
+    const left = Math.min(bounds.left, transformed.left);
+    const top = Math.min(bounds.top, transformed.top);
+    const right = Math.max(
+      bounds.left + bounds.width,
+      transformed.left + transformed.width,
+    );
+    const bottom = Math.max(
+      bounds.top + bounds.height,
+      transformed.top + transformed.height,
+    );
+    bounds = coordinateRect("object-local", {
+      left,
+      top,
+      width: right - left,
+      height: bottom - top,
+    });
+  }
+  return (
+    bounds ??
+    coordinateRect("object-local", { left: 0, top: 0, width: 0, height: 0 })
+  );
 }
 
 export const DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID = "document-object";
@@ -1803,7 +1893,7 @@ export function createDocumentObjectGeometrySource(
           match = { object, placement };
           return true;
         }
-        if (isEditorCompositeObject(object)) {
+        if (isEditorGroupObject(object)) {
           visit(
             object.children,
             coordinateMatrix(
@@ -1816,12 +1906,20 @@ export function createDocumentObjectGeometrySource(
         return Boolean(match);
       });
     };
-    document.surfaces.some((surface) =>
-      surface.layers.some((layer) => {
-        visit(layer.objects);
-        return Boolean(match);
-      }),
-    );
+    document.surfaces.some((surface) => {
+      visit(
+        surface.objects,
+        coordinateMatrix("parent-local", "scene", [
+          1,
+          0,
+          0,
+          1,
+          surface.geometry.canvasBounds.x,
+          surface.geometry.canvasBounds.y,
+        ]),
+      );
+      return Boolean(match);
+    });
     return match;
   };
 
@@ -1829,7 +1927,7 @@ export function createDocumentObjectGeometrySource(
     const resolved = findPlacement(ref.geometryId);
     if (!resolved) return null;
     const { object, placement } = resolved;
-    if (isEditorCompositeObject(object)) {
+    if (isEditorGroupObject(object)) {
       const bounds = transformCoordinateRect(
         placement.localToScene,
         placement.localBounds,
@@ -1845,10 +1943,10 @@ export function createDocumentObjectGeometrySource(
           geometryId: child.id,
           ...(ref.purpose ? { purpose: ref.purpose } : {}),
         })),
-        metadata: { objectId: object.id, composite: true },
+        metadata: { objectId: object.id, group: true },
       };
     }
-    const usesFrameGeometry = object.type === "image" || object.type === "text";
+    const usesFrameGeometry = object.type === "image";
     const visual = usesFrameGeometry
       ? ({ source: object.source } satisfies ResolvedVisual)
       : resolveObjectSource(object);
@@ -1963,60 +2061,54 @@ function getDocumentObjectDescriptors(document: EditorDocument) {
     space: "object-local" | "scene";
     metadata: Record<string, unknown>;
   }> = [];
-  document.surfaces.forEach((surface) =>
-    surface.layers.forEach((layer) => {
-      const visit = (objects: EditorObject[] | undefined) =>
-        objects?.forEach((object) => {
-          descriptors.push({
-            ref: {
-              sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
-              geometryId: object.id,
-            },
-            kind: isEditorCompositeObject(object)
-              ? "compound"
-              : object.type === "image" || object.type === "text"
-                ? "rect"
-                : "path",
-            space: isEditorCompositeObject(object) ? "scene" : "object-local",
-            metadata: {
-              objectId: object.id,
-              surfaceId: surface.id,
-              layerId: layer.id,
-            },
-          });
-          if (isEditorCompositeObject(object)) visit(object.children);
+  document.surfaces.forEach((surface) => {
+    const visit = (objects: EditorObject[] | undefined) =>
+      objects?.forEach((object) => {
+        descriptors.push({
+          ref: {
+            sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+            geometryId: object.id,
+          },
+          kind: isEditorGroupObject(object)
+            ? "compound"
+            : object.type === "image"
+              ? "rect"
+              : "path",
+          space: isEditorGroupObject(object) ? "scene" : "object-local",
+          metadata: {
+            objectId: object.id,
+            surfaceId: surface.id,
+          },
         });
-      visit(layer.objects);
-    }),
-  );
+        if (isEditorGroupObject(object)) visit(object.children);
+      });
+    visit(surface.objects);
+  });
   return descriptors;
 }
 
-function rotateObjectPlacement(
-  placement: EditorObject["placement"],
+function rotateObjectLocalToParent(
+  localToParent: EditorDocumentMatrix,
   rotationDegrees: number,
-): EditorObject["placement"] {
-  const [a, b, c, d, e, f] = placement.localToParent;
+): AffineMatrix {
+  const [a, b, c, d, e, f] = localToParent;
   const currentRotation = Math.atan2(b, a);
   const targetRotation = (rotationDegrees * Math.PI) / 180;
   const radians = targetRotation - currentRotation;
   const cosine = Math.cos(radians);
   const sine = Math.sin(radians);
-  return {
-    ...placement,
-    localToParent: [
-      cosine * a - sine * b,
-      sine * a + cosine * b,
-      cosine * c - sine * d,
-      sine * c + cosine * d,
-      e,
-      f,
-    ],
-  };
+  return [
+    cosine * a - sine * b,
+    sine * a + cosine * b,
+    cosine * c - sine * d,
+    sine * c + cosine * d,
+    e,
+    f,
+  ];
 }
 
 function createRejectedDocumentSnapshot(): EditorDocument {
-  return { version: 7, assets: [], extensions: {}, surfaces: [] };
+  return { version: 8, assets: [], extensions: {}, surfaces: [] };
 }
 
 function createResult(
@@ -2095,75 +2187,79 @@ function createBaseRenderIntentDrafts(
 ): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
   document.surfaces.forEach((surface, surfaceIndex) => {
-    surface.layers.forEach((layer, layerIndex) => {
-      const visit = (
-        objects: EditorObject[] | undefined,
-        parentLocalToScene = coordinateMatrix(
-          "parent-local",
-          "scene",
-          [1, 0, 0, 1, 0, 0],
-        ),
-        compositeId?: string,
-        objectsPath = `/surfaces/${surfaceIndex}/layers/${layerIndex}/objects`,
-      ) => {
-        objects?.forEach((object, index) => {
-          const objectPath = `${objectsPath}/${index}`;
-          const framePlacement = createFrameAffinePlacement(
-            object,
-            parentLocalToScene,
-          );
-          const interaction = createObjectInteractionAspect(
-            object,
-            objectSchemaRegistry,
-            { document, objectId: object.id, path: objectPath },
-          );
-          if (isEditorCompositeObject(object)) {
-            if (interaction) {
-              drafts.push(
-                createCompositeInteractionProxyDraft(
-                  surface,
-                  layer,
-                  object,
-                  layerIndex,
-                  index,
-                  framePlacement,
-                  interaction,
-                ),
-              );
-            }
-            visit(
-              object.children,
-              coordinateMatrix(
-                "parent-local",
-                "scene",
-                framePlacement.localToScene.values,
+    const visit = (
+      objects: EditorObject[] | undefined,
+      parentLocalToScene = coordinateMatrix("parent-local", "scene", [
+        1,
+        0,
+        0,
+        1,
+        surface.geometry.canvasBounds.x,
+        surface.geometry.canvasBounds.y,
+      ]),
+      ancestorVisible = true,
+      groupId?: string,
+      objectsPath = `/surfaces/${surfaceIndex}/objects`,
+      pathPrefix: readonly number[] = [],
+    ) => {
+      objects?.forEach((object, index) => {
+        const objectPath = `${objectsPath}/${index}`;
+        const orderingPath = [...pathPrefix, index];
+        const visible = ancestorVisible && object.visible;
+        const framePlacement = createFrameAffinePlacement(
+          object,
+          parentLocalToScene,
+        );
+        const interaction = createObjectInteractionAspect(
+          object,
+          objectSchemaRegistry,
+          { document, objectId: object.id, path: objectPath },
+        );
+        if (isEditorGroupObject(object)) {
+          if (interaction) {
+            drafts.push(
+              createGroupInteractionProxyDraft(
+                surface,
+                object,
+                orderingPath,
+                visible,
+                framePlacement,
+                interaction,
               ),
-              object.id,
-              `${objectPath}/children`,
             );
-            return;
           }
-          const draft = createObjectRenderIntentDraft(
-            surface,
-            layer,
-            object,
-            layerIndex,
-            index,
-            resolvedImages.get(object.id),
-            object.type === "image"
-              ? resolveImageVisualAsset(document, object as EditorImageObject)
-              : undefined,
-            framePlacement,
-            compositeId,
-            interaction,
-            object.type === "image" &&
-              isImageSlotPlaceholderFallback(object as EditorImageObject),
+          visit(
+            object.children,
+            coordinateMatrix(
+              "parent-local",
+              "scene",
+              framePlacement.localToScene.values,
+            ),
+            visible,
+            object.id,
+            `${objectPath}/children`,
+            orderingPath,
           );
-          if (draft) drafts.push(draft);
-        });
-      };
-      visit(layer.objects);
-    });
+          return;
+        }
+        const draft = createObjectRenderIntentDraft(
+          surface,
+          object,
+          orderingPath,
+          visible,
+          resolvedImages.get(object.id),
+          object.type === "image"
+            ? resolveImageVisualAsset(document, object)
+            : undefined,
+          framePlacement,
+          groupId,
+          interaction,
+          object.type === "image" && isImageSlotPlaceholderFallback(object),
+        );
+        if (draft) drafts.push(draft);
+      });
+    };
+    visit(surface.objects);
   });
   const draftsById = new Map(drafts.map((draft) => [draft.id, draft]));
   visitDocumentVisualObjects(document, (object) => {
@@ -2215,31 +2311,28 @@ function createBaseRenderIntentDrafts(
 
 function visitDocumentVisualObjects(
   document: EditorDocument,
-  visitor: (object: Exclude<EditorObject, EditorCompositeObject>) => void,
+  visitor: (object: EditorLeafObject) => void,
 ): void {
   const visit = (objects: EditorObject[] | undefined) =>
     objects?.forEach((object) => {
-      if (isEditorCompositeObject(object)) visit(object.children);
+      if (isEditorGroupObject(object)) visit(object.children);
       else visitor(object);
     });
-  document.surfaces.forEach((surface) =>
-    surface.layers.forEach((layer) => visit(layer.objects)),
-  );
+  document.surfaces.forEach((surface) => visit(surface.objects));
 }
 
-function createCompositeInteractionProxyDraft(
+function createGroupInteractionProxyDraft(
   surface: EditorSurface,
-  layer: EditorLayer,
-  object: EditorCompositeObject,
-  layerIndex: number,
-  index: number,
+  object: EditorGroupObject,
+  path: readonly number[],
+  visible: boolean,
   placement: AffinePlacement,
   interaction: InteractionSpec,
 ): RenderIntentDraft {
   const memberNodeIds: string[] = [];
   const collectMembers = (children: EditorObject[]) =>
     children.forEach((child) => {
-      if (isEditorCompositeObject(child)) collectMembers(child.children);
+      if (isEditorGroupObject(child)) collectMembers(child.children);
       else memberNodeIds.push(child.id);
     });
   collectMembers(object.children);
@@ -2248,9 +2341,9 @@ function createCompositeInteractionProxyDraft(
     subject: {
       kind: "object",
       surfaceId: surface.id,
-      layerId: layer.id,
+      layerId: surface.id,
       objectId: object.id,
-      objectType: "composite",
+      objectType: "group",
     },
     visual: { type: "rect" },
     containerGeometryRef: {
@@ -2260,11 +2353,10 @@ function createCompositeInteractionProxyDraft(
     },
     placement,
     interaction,
-    export: { visible: true, tags: [...object.tags] },
+    export: { visible, tags: [...object.tags] },
     ordering: {
-      layerId: layer.id,
-      layerOrder: layerIndex,
-      objectOrder: index,
+      layerId: surface.id,
+      path,
       channel: "overlay",
       subOrder: 1,
     },
@@ -2275,31 +2367,27 @@ function createCompositeInteractionProxyDraft(
     },
     data: {
       id: object.id,
-      compositeProxy: true,
-      compositeMemberNodeIds: memberNodeIds,
+      groupProxy: true,
+      groupMemberNodeIds: memberNodeIds,
       documentSurfaceId: surface.id,
-      layerId: layer.id,
+      layerId: surface.id,
     },
   };
 }
 
 function createObjectRenderIntentDraft(
   surface: EditorSurface,
-  layer: EditorLayer,
-  object: EditorObject,
-  layerIndex: number,
-  index: number,
+  object: EditorLeafObject,
+  path: readonly number[],
+  visible: boolean,
   imageResolution?: ImageResourceResolution,
   imageAsset?: EditorImageAsset,
   framePlacement: AffinePlacement = createFrameAffinePlacement(object),
-  compositeId?: string,
+  groupId?: string,
   interaction?: InteractionSpec,
   placeholderFallback = false,
 ): RenderIntentDraft | null {
-  if (!isEditorVisualObject(object)) return null;
-  const objectOrder = index;
-  const layerOrder = layerIndex;
-  const locked = object.locked === true || layer.locked === true;
+  const locked = object.locked === true;
   const objectEffects = cloneObjectEffects(object.effects);
   const isGuide =
     object.traits?.some((trait) => trait.type === "core.guide") ?? false;
@@ -2323,7 +2411,7 @@ function createObjectRenderIntentDraft(
     subject: {
       kind: "object" as const,
       surfaceId: surface.id,
-      layerId: layer.id,
+      layerId: surface.id,
       objectId: object.id,
       objectType: object.type,
     },
@@ -2344,27 +2432,27 @@ function createObjectRenderIntentDraft(
       purpose: "export" as const,
     },
     ordering: {
-      layerId: layer.id,
-      layerOrder,
-      objectOrder,
+      layerId: surface.id,
+      path,
       channel: "normal" as const,
       subOrder: 0,
     },
     export: {
-      visible: (layer.visible ?? true) && (object.visible ?? true),
+      visible,
       tags,
     },
     ...(interaction ? { interaction } : {}),
     props: {
-      ...(object.appearance ?? {}),
+      ...(object.type === "image" ? {} : (object.paint ?? {})),
+      opacity: object.opacity ?? 1,
       ...(isGuide || placeholderFallback ? { excludeFromExport: true } : {}),
     },
     data: {
       id: object.id,
-      layerId: layer.id,
+      layerId: surface.id,
       documentSurfaceId: surface.id,
       documentObjectType: object.type,
-      ...(compositeId ? { compositeId } : {}),
+      ...(groupId ? { groupId } : {}),
       ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
       ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
@@ -2417,13 +2505,6 @@ function createObjectRenderIntentDraft(
       },
     };
   }
-  if (visual.text !== undefined) {
-    return {
-      ...base,
-      visual: { type: "text" },
-      props: { ...base.props, text: visual.text, source: object.source },
-    };
-  }
   return null;
 }
 
@@ -2449,18 +2530,17 @@ function createImageRenderIntentDraft(
         }
       : undefined;
   const image = resolved;
-  const appearance = placeholderFallback
+  const contentFit = placeholderFallback
     ? {
-        ...object.appearance,
+        ...object.contentFit,
         fit: "stretch" as const,
         anchorX: 0.5,
         anchorY: 0.5,
         zoom: 1,
         rotation: 0,
-        opacity: 1,
       }
-    : object.appearance;
-  const fit = appearance.fit;
+    : object.contentFit;
+  const fit = contentFit.fit;
   const geometryDescriptor = image
     ? {
         source: {
@@ -2468,16 +2548,14 @@ function createImageRenderIntentDraft(
           size: { width: image.width, height: image.height },
         },
         frame: coordinateRect("object-local", {
-          left: 0,
-          top: 0,
-          width: object.placement.localBounds.width,
-          height: object.placement.localBounds.height,
+          left: object.localBounds.x,
+          top: object.localBounds.y,
+          width: object.localBounds.width,
+          height: object.localBounds.height,
         }),
         fit,
-        transform: appearance,
-        ...(appearance.clip === "frame" && clipFrame
-          ? { clip: clipFrame }
-          : {}),
+        transform: contentFit,
+        ...(object.clip === "frame" && clipFrame ? { clip: clipFrame } : {}),
       }
     : undefined;
   const geometry = geometryDescriptor
@@ -2526,9 +2604,9 @@ function createImageRenderIntentDraft(
       : base.placement,
     props: {
       ...base.props,
-      ...appearance,
+      ...contentFit,
       source: object.source,
-      opacity: geometry?.opacity ?? appearance.opacity,
+      opacity: object.opacity ?? 1,
       ...(geometry?.clip ? { clip: geometry.clip } : {}),
     },
     data: {
@@ -2664,7 +2742,7 @@ async function resolveDocumentImageResources(
   const pending: Array<Promise<void>> = [];
   const collect = (objects: EditorObject[] | undefined) =>
     objects?.forEach((object) => {
-      if (isEditorCompositeObject(object)) {
+      if (isEditorGroupObject(object)) {
         collect(object.children);
         return;
       }
@@ -2683,9 +2761,7 @@ async function resolveDocumentImageResources(
         }),
       );
     });
-  document.surfaces.forEach((surface) =>
-    surface.layers.forEach((layer) => collect(layer.objects)),
-  );
+  document.surfaces.forEach((surface) => collect(surface.objects));
   if (pending.length) await Promise.all(pending);
   return resolutions;
 }
@@ -2713,7 +2789,7 @@ export async function collectUnresolvableImageObjectIds(
   const collect = (objects: EditorObject[] | undefined, visible: boolean) =>
     objects?.forEach((object) => {
       const objectVisible = visible && (object.visible ?? true);
-      if (isEditorCompositeObject(object)) {
+      if (isEditorGroupObject(object)) {
         collect(object.children, objectVisible);
         return;
       }
@@ -2733,11 +2809,7 @@ export async function collectUnresolvableImageObjectIds(
         }),
       );
     });
-  document.surfaces.forEach((surface) =>
-    surface.layers.forEach((layer) =>
-      collect(layer.objects, layer.visible ?? true),
-    ),
-  );
+  document.surfaces.forEach((surface) => collect(surface.objects, true));
   if (pending.length) await Promise.all(pending);
   return unresolvable;
 }
@@ -2820,31 +2892,28 @@ function normalizeRenderIntentPatches(
 function collectEffectEntries(document: EditorDocument): EffectEntry[] {
   const entries: EffectEntry[] = [];
   document.surfaces.forEach((surface, surfaceIndex) => {
-    surface.layers.forEach((layer, layerIndex) => {
-      const collectObjectEntries = (
-        objects: EditorObject[] | undefined,
-        objectsPath: string,
-      ) =>
-        objects?.forEach((object, objectIndex) => {
-          const objectPath = `${objectsPath}/${objectIndex}`;
+    const collectObjectEntries = (
+      objects: EditorObject[] | undefined,
+      objectsPath: string,
+    ) =>
+      objects?.forEach((object, objectIndex) => {
+        const objectPath = `${objectsPath}/${objectIndex}`;
+        if (isEditorLeafObject(object)) {
           object.effects?.forEach((effect, effectIndex) => {
             if (isEditorExtensionObjectEffect(effect)) {
               entries.push({
                 effect,
-                context: { surface, layer, object },
+                context: { surface, object },
                 path: `${objectPath}/effects/${effectIndex}`,
               });
             }
           });
-          if (isEditorCompositeObject(object)) {
-            collectObjectEntries(object.children, `${objectPath}/children`);
-          }
-        });
-      collectObjectEntries(
-        layer.objects,
-        `/surfaces/${surfaceIndex}/layers/${layerIndex}/objects`,
-      );
-    });
+        }
+        if (isEditorGroupObject(object)) {
+          collectObjectEntries(object.children, `${objectPath}/children`);
+        }
+      });
+    collectObjectEntries(surface.objects, `/surfaces/${surfaceIndex}/objects`);
   });
   return entries;
 }
@@ -2877,36 +2946,23 @@ function resolveRenderIntentTarget(
   context: EffectContext,
   _document: EditorDocument,
 ): RenderIntentDraft["subject"] | null {
-  if (!context.object || !context.layer) return null;
+  if (!context.object) return null;
   return {
     kind: "object",
     surfaceId: context.surface.id,
-    layerId: context.layer.id,
+    layerId: context.surface.id,
     objectId: context.object.id,
     objectType: context.object.type,
   };
 }
 
-function findLayerContext(document: EditorDocument, layerId: string) {
-  for (const surface of document.surfaces) {
-    const layer = surface.layers.find((item) => item.id === layerId);
-    if (layer) return { surface, layer };
-  }
-  return null;
-}
-
 function findObjectContext(document: EditorDocument, objectId: string) {
   for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      const object = findEditorDocumentObject(
-        {
-          ...document,
-          surfaces: [{ ...surface, layers: [layer] }],
-        },
-        objectId,
-      );
-      if (object) return { surface, layer, object };
-    }
+    const object = findEditorDocumentObject(
+      { ...document, surfaces: [surface] },
+      objectId,
+    );
+    if (object) return { surface, object };
   }
   return null;
 }

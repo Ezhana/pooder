@@ -6,7 +6,7 @@ import type {
 import type {
   EditorDocument,
   EditorImageAsset,
-  EditorImagePlacement,
+  EditorImageContentFit,
 } from "@pooder/document";
 
 export interface ImageSlotDocumentController {
@@ -49,7 +49,7 @@ export type ImageSlotPlacementPreset =
 export interface ImageSlotSessionDraft {
   objectId: string;
   assetId?: string;
-  placement: EditorImagePlacement;
+  placement: EditorImageContentFit;
 }
 
 export interface ImageSlotViewState {
@@ -68,7 +68,7 @@ export type ImageSlotSessionResult =
       type: "placed";
       objectId: string;
       assetId: string;
-      placement: EditorImagePlacement;
+      placement: EditorImageContentFit;
     }
   | { type: "cleared"; objectId: string };
 
@@ -106,7 +106,7 @@ export interface ImageSlotCapabilityApi {
     options?: { placement?: "reset" | "preserve" },
   ): Promise<{ ok: boolean; reason?: string }>;
   clearResource(): Promise<{ ok: boolean; reason?: string }>;
-  updatePlacement(partial: Partial<EditorImagePlacement>): {
+  updatePlacement(partial: Partial<EditorImageContentFit>): {
     ok: boolean;
     reason?: string;
   };

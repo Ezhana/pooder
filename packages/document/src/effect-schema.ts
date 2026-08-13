@@ -128,12 +128,11 @@ function visitRawEffects(
   if (!isRecord(value) || !Array.isArray(value.surfaces)) return;
   value.surfaces.forEach((surface, surfaceIndex) => {
     if (!isRecord(surface)) return;
-    if (!Array.isArray(surface.layers)) return;
-    surface.layers.forEach((layer, layerIndex) => {
-      if (!isRecord(layer)) return;
-      const layerPath = `surfaces[${surfaceIndex}].layers[${layerIndex}]`;
-      visitObjectEffects(layer.objects, `${layerPath}.objects`, visitor);
-    });
+    visitObjectEffects(
+      surface.objects,
+      `surfaces[${surfaceIndex}].objects`,
+      visitor,
+    );
   });
 }
 

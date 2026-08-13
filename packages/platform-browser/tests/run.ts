@@ -735,7 +735,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 10, 10),
-      ordering: { layerId: "bg", layerOrder: 0 },
+      ordering: { layerId: "bg", path: [0] },
       props: { width: 10, height: 10 },
     },
     {
@@ -748,7 +748,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 5, 5),
-      ordering: { layerId: "art", layerOrder: 1 },
+      ordering: { layerId: "art", path: [1] },
       props: { width: 5, height: 5 },
       effects: [
         {
@@ -774,7 +774,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 7, 8),
-      ordering: { layerId: "art", layerOrder: 1 },
+      ordering: { layerId: "art", path: [1] },
       export: { visible: false, tags: ["mockup"] },
       props: { width: 7, height: 8 },
     },
@@ -1251,7 +1251,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
         },
       },
       placement: createTestPlacement(100, 120, 200, 160),
-      ordering: { layerId: "art", layerOrder: 0 },
+      ordering: { layerId: "art", path: [0] },
     },
     {
       id: "resolved-slot",
@@ -1273,7 +1273,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
           rotation: 15,
         }),
       }),
-      ordering: { layerId: "art", layerOrder: 0, objectOrder: 1 },
+      ordering: { layerId: "art", path: [0, 1] },
     },
   ]);
 
@@ -1381,7 +1381,7 @@ async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
         objectId: "art",
       },
       visual: { type: "rect" },
-      ordering: { layerId: "art", layerOrder: 0 },
+      ordering: { layerId: "art", path: [0] },
       props: { width: 5, height: 5 },
     },
   ]);
@@ -1645,7 +1645,7 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
         objectId: "bg",
       },
       visual: { type: "rect" },
-      ordering: { layerId: "bg", layerOrder: 0 },
+      ordering: { layerId: "bg", path: [0] },
       props: { width: 10, height: 10 },
     },
   ]);
@@ -1787,7 +1787,7 @@ async function testFabricRenderGraphAdapterConsumesSceneSpace() {
       visual: { type: "path" },
       coordinateSpace: "scene",
       placement: createTestPlacement(0, 0, 10, 10),
-      ordering: { layerId: "overlay", layerOrder: 0 },
+      ordering: { layerId: "overlay", path: [0] },
       props: { pathData: "M 0 0 L 10 0 L 10 10 Z" },
     },
   ]);
@@ -1822,7 +1822,7 @@ async function testFabricRenderGraphAdapterDoesNotSizePathFromFrame() {
       },
       visual: { type: "path" },
       placement: createTestPlacement(30, 30, 531, 531),
-      ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
+      ordering: { layerId: "front.dieline-overlay", path: [0] },
       props: {
         fill: "transparent",
         pathData: "M0 0H531V531H0Z",
@@ -1886,7 +1886,7 @@ async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft(
           [2, 0, 0, 2, 10, 12],
         ),
       }),
-      ordering: { layerId: "front.dieline-overlay", objectOrder: 0 },
+      ordering: { layerId: "front.dieline-overlay", path: [0] },
       props: {
         pathData: "M0 0H40V20H0Z",
       },
@@ -1935,8 +1935,7 @@ async function testFabricRenderGraphAdapterRespectsLayerArrayOrder() {
       placement: createTestPlacement(30, 30, 531, 531),
       ordering: {
         layerId: "front.dieline-overlay",
-        layerOrder: 30,
-        objectOrder: 0,
+        path: [30, 0],
       },
       props: {
         fill: "transparent",
@@ -1959,8 +1958,7 @@ async function testFabricRenderGraphAdapterRespectsLayerArrayOrder() {
     placement: createTestPlacement(30, 30, 531, 531),
     ordering: {
       layerId: "image.overlay",
-      layerOrder: 31,
-      objectOrder: 0,
+      path: [31, 0],
     },
     props: {
       fill: "rgba(22, 119, 255, 0.08)",
@@ -1987,7 +1985,7 @@ async function testFabricRenderGraphAdapterRespectsLayerArrayOrder() {
     typeof guideOrder === "number" &&
       typeof uploadOrder === "number" &&
       uploadOrder > guideOrder,
-    "later document layer indexes should render above earlier layers",
+    "later render graph layer orders should render above earlier layers",
   );
 
   await runtime.dispose();
@@ -2049,7 +2047,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(0, 0, 10, 10),
-      ordering: { layerId: "art", objectOrder: 0 },
+      ordering: { layerId: "art", path: [0] },
       props: { width: 10, height: 10 },
       interaction: { manipulation: { move: { enabled: true } } },
     },
@@ -2063,7 +2061,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(20, 0, 10, 10),
-      ordering: { layerId: "art", objectOrder: 1 },
+      ordering: { layerId: "art", path: [1] },
       props: { width: 10, height: 10 },
       interaction: {
         manipulation: {
@@ -2093,7 +2091,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(40, 0, 10, 10),
-      ordering: { layerId: "art", objectOrder: 2 },
+      ordering: { layerId: "art", path: [2] },
       props: { width: 10, height: 10 },
       interaction: {
         enabledWhen: {
@@ -2123,7 +2121,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(60, 0, 10, 10),
-      ordering: { layerId: "art", objectOrder: 3 },
+      ordering: { layerId: "art", path: [3] },
       props: {
         width: 10,
         height: 10,
@@ -2141,7 +2139,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(80, 0, 10, 10),
-      ordering: { layerId: "art", objectOrder: 4 },
+      ordering: { layerId: "art", path: [4] },
       props: { width: 10, height: 10 },
       interaction: {
         manipulation: {
@@ -2160,7 +2158,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(100, 0, 10, 10),
-      ordering: { layerId: "art", objectOrder: 5 },
+      ordering: { layerId: "art", path: [5] },
       props: { width: 10, height: 10 },
       interaction: {
         activation: {
@@ -2179,7 +2177,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       },
       visual: { type: "image" },
       placement: createTestPlacement(12, 24, 80, 60),
-      ordering: { layerId: "art", objectOrder: 6 },
+      ordering: { layerId: "art", path: [6] },
       interaction: {
         hitRegion: { type: "frame", space: "scene" },
         activation: { action: { commandId: "test.open" } },
@@ -2204,7 +2202,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
         geometryId: "placed-export",
         purpose: "export",
       },
-      ordering: { layerId: "art", objectOrder: 7 },
+      ordering: { layerId: "art", path: [7] },
       interaction: {
         hitRegion: { type: "frame", space: "scene" },
         manipulation: { move: { enabled: true } },
@@ -2644,7 +2642,7 @@ async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(10, 20, 10, 10),
-      ordering: { layerId: "art", objectOrder: 0 },
+      ordering: { layerId: "art", path: [0] },
       interaction: interactionSpec,
     },
     {
@@ -2657,7 +2655,7 @@ async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
       },
       visual: { type: "rect" },
       placement: createTestPlacement(50, 20, 10, 10),
-      ordering: { layerId: "art", objectOrder: 1 },
+      ordering: { layerId: "art", path: [1] },
       interaction: interactionSpec,
     },
   ]);
@@ -4624,7 +4622,7 @@ async function main() {
       testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft,
     ],
     [
-      "uses document layer array order for graph stacking",
+      "uses render graph layer array order for graph stacking",
       testFabricRenderGraphAdapterRespectsLayerArrayOrder,
     ],
     [

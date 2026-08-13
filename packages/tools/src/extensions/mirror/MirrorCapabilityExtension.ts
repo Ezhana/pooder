@@ -11,10 +11,11 @@ import {
   type RenderIntentPatch,
   type RenderIntentService,
 } from "@pooder/core";
-import type {
-  EditorDocument,
-  EditorExtensionObjectEffect,
-  EditorObject,
+import {
+  findEditorDocumentObject,
+  type EditorDocument,
+  type EditorExtensionObjectEffect,
+  type EditorObject,
 } from "@pooder/document";
 import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
 import {
@@ -258,11 +259,5 @@ function findDocumentObject(
   document: EditorDocument,
   objectId: string,
 ): EditorObject | undefined {
-  for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      const object = layer.objects?.find((item) => item.id === objectId);
-      if (object) return object;
-    }
-  }
-  return undefined;
+  return findEditorDocumentObject(document, objectId);
 }

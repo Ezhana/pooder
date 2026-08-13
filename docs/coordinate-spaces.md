@@ -4,8 +4,9 @@ Pooder uses exactly four coordinate spaces:
 
 - `object-local`: geometry relative to the object itself, such as an
   object-relative clip path.
-- `parent-local`: geometry relative to the containing document object or
-  layer. Persisted document objects use this space.
+- `parent-local`: geometry relative to the containing document object. For a
+  surface root object, the parent origin is `surface.geometry.canvasBounds`'s
+  origin. Persisted document objects use this space.
 - `scene`: the canonical editor and render-graph space.
 - `screen`: browser viewport pixels.
 
@@ -17,7 +18,8 @@ inside one coordinate-space implementation.
 
 ## Boundary rules
 
-- A document object's frame and transform are `parent-local`.
+- A document node's `localToParent` transform is `parent-local`; only document
+  leaves persist `localBounds` and `pivot`.
 - A formal `RenderGraphNode` is always `scene`. A render intent in another
   space is rejected with `render-intent-non-scene-space`; its producer must
   project it before compilation.
@@ -52,8 +54,9 @@ interface AffinePlacement {
 `localBounds` describes geometry only. Its `left` and `top` may be non-zero and
 must never be interpreted as scene position. `localToScene` is the sole
 placement fact and stays intact through RenderIntent and RenderGraph. A
-Composite owns recursive `children`; each child frame and transform is
-parent-local, and nesting is flattened by recursive matrix multiplication.
+Group owns recursive `children`; each child transform is parent-local, and
+nesting is flattened by recursive matrix multiplication. Only leaves have a
+persisted local frame.
 Rotation, non-uniform and negative scale,
 skew, and translation are therefore preserved without decomposition. `pivot`
 is an editing anchor in local coordinates, not an additional transform.

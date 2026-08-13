@@ -198,11 +198,7 @@ export function registerBuiltinConstraints(
   registerIfMissing(resolver, "rect.clamp-center", resolveRectClampCenter);
   registerIfMissing(resolver, "path.nearest-point", resolvePathNearestPoint);
   registerIfMissing(resolver, "path.follow", resolvePathNearestPoint);
-  registerIfMissing(
-    resolver,
-    "path.lowest-tangent",
-    resolvePathLowestTangent,
-  );
+  registerIfMissing(resolver, "path.lowest-tangent", resolvePathLowestTangent);
   registerIfMissing(resolver, "object-frame.contain", resolveRectContain);
   registerIfMissing(resolver, "rect.snap", resolveRectSnap);
   registerIfMissing(resolver, "snap.points", resolveSnapPoints);
@@ -304,11 +300,7 @@ function resolvePathNearestPoint(
       };
     }
   }
-  const next = moveResultAnchorToPosition(
-    result,
-    constrained,
-    constraint,
-  );
+  const next = moveResultAnchorToPosition(result, constrained, constraint);
   if (
     constraint.type === "path.follow" &&
     constraint.params?.contain === true
@@ -363,7 +355,7 @@ function getConstraintAnchor(
   if (
     result.frame &&
     (constraint.params?.anchor === "center" ||
-      constraint.params?.anchor === "composite-center")
+      constraint.params?.anchor === "group-center")
   ) {
     return {
       x: result.frame.left + result.frame.width / 2,
@@ -381,7 +373,7 @@ function moveResultAnchorToPosition(
   if (
     !result.frame ||
     (constraint.params?.anchor !== "center" &&
-      constraint.params?.anchor !== "composite-center")
+      constraint.params?.anchor !== "group-center")
   ) {
     return moveResultToPosition(result, position);
   }

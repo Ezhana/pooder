@@ -1,6 +1,7 @@
 import type { DocumentExtensionRegistry } from "./extension-schema";
 import {
   findEditorDocumentObject,
+  isEditorLeafObject,
   visitEditorDocumentObjects,
   type AssetSource,
   type EditorAsset,
@@ -53,6 +54,7 @@ export function collectEditorDocumentAssetReferences(
       );
     });
 
+    if (!isEditorLeafObject(object)) return;
     object.effects?.forEach((effect, effectIndex) => {
       const schema = effectSchemas?.get(effect.type);
       if (!schema?.collectAssetReferences || !("payload" in effect)) return;

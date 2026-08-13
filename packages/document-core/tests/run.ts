@@ -46,7 +46,7 @@ function assertDeepEqual(
 
 function createDocument(): EditorDocument {
   return {
-    version: 7,
+    version: 8,
     assets: [
       {
         id: "artwork.asset",
@@ -63,23 +63,24 @@ function createDocument(): EditorDocument {
           canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
           productionBounds: { x: 5, y: 5, width: 90, height: 90 },
         },
-        layers: [
+        objects: [
           {
+            type: "group",
             id: "front.content",
+            tags: [],
             visible: true,
             locked: false,
-            objects: [
+            localToParent: [1, 0, 0, 1, 0, 0],
+            children: [
               {
                 type: "shape",
                 id: "clip-source",
                 tags: ["clip:source"],
                 visible: false,
                 locked: true,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 80, height: 60 },
-                  localToParent: [1, 0, 0, 1, 10, 20],
-                  pivot: { x: 40, y: 30 },
-                },
+                localBounds: { x: 0, y: 0, width: 80, height: 60 },
+                localToParent: [1, 0, 0, 1, 10, 20],
+                pivot: { x: 40, y: 30 },
                 source: {
                   kind: "inline",
                   content: { shape: "rect", params: {} },
@@ -91,21 +92,19 @@ function createDocument(): EditorDocument {
                 tags: ["artwork:test"],
                 visible: true,
                 locked: false,
-                placement: {
-                  localBounds: { x: 0, y: 0, width: 80, height: 60 },
-                  localToParent: [1, 0.25, -0.1, 1, 10, 20],
-                  pivot: { x: 40, y: 30 },
-                },
+                localBounds: { x: 0, y: 0, width: 80, height: 60 },
+                localToParent: [1, 0.25, -0.1, 1, 10, 20],
+                pivot: { x: 40, y: 30 },
                 source: { kind: "asset", assetId: "artwork.asset" },
-                appearance: {
+                contentFit: {
                   fit: "cover",
                   anchorX: 0.5,
                   anchorY: 0.5,
                   zoom: 1,
                   rotation: 0,
-                  opacity: 1,
-                  clip: "frame",
                 },
+                opacity: 1,
+                clip: "frame",
                 effects: [
                   {
                     type: "core.geometry.clip",
@@ -139,18 +138,16 @@ function testSourceResolution(): void {
     tags: [],
     visible: true,
     locked: false,
-    placement: {
-      localBounds: { x: 0, y: 0, width: 1, height: 1 },
-      localToParent: [1, 0, 0, 1, 0, 0] as [
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-      ],
-      pivot: { x: 0, y: 0 },
-    },
+    localBounds: { x: 0, y: 0, width: 1, height: 1 },
+    localToParent: [1, 0, 0, 1, 0, 0] as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ],
+    pivot: { x: 0, y: 0 },
   };
   assert(
     resolveObjectSource({
@@ -159,15 +156,6 @@ function testSourceResolution(): void {
       source: { kind: "inline", content: { shape: "circle", params: {} } },
     })?.pathData,
     "shape source should resolve geometry",
-  );
-  assertEqual(
-    resolveObjectSource({
-      ...base,
-      type: "text",
-      source: { kind: "inline", content: { text: "Label" } },
-    })?.text,
-    "Label",
-    "text source should resolve content",
   );
 }
 
@@ -217,56 +205,138 @@ async function testStrictApplyAndGeometry(): Promise<void> {
   }
 }
 
-async function testDocumentLayerArrayDefinesRenderGraphOrder(): Promise<void> {
+async function testDocumentDepthFirstOrderDefinesRenderGraphOrder(): Promise<void> {
   const document = createDocument();
-  document.surfaces[0]!.layers = ["bottom", "middle", "top"].map(
-    (id, layerIndex) => ({
-      id,
+  const shape = (id: string) => ({
+    type: "shape" as const,
+    id,
+    tags: [],
+    visible: true,
+    locked: false,
+    localBounds: { x: 0, y: 0, width: 10, height: 10 },
+    localToParent: [1, 0, 0, 1, 0, 0] as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ],
+    source: {
+      kind: "inline" as const,
+      content: { shape: "rect" as const, params: {} },
+    },
+  });
+  document.surfaces[0]!.objects = [
+    {
+      type: "group",
+      id: "z-root",
+      tags: [],
       visible: true,
       locked: false,
-      objects: [
+      localToParent: [1, 0, 0, 1, 0, 0],
+      children: [
+        shape("z-first"),
         {
-          type: "shape" as const,
-          id: `${id}.object`,
+          type: "group",
+          id: "a-nested-group",
           tags: [],
           visible: true,
           locked: false,
-          placement: {
-            localBounds: { x: 0, y: 0, width: 10, height: 10 },
-            localToParent: [1, 0, 0, 1, layerIndex, layerIndex],
-            pivot: { x: 0, y: 0 },
-          },
-          source: {
-            kind: "inline" as const,
-            content: { shape: "rect" as const, params: {} },
-          },
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [shape("y-nested")],
         },
       ],
-    }),
-  );
+    },
+    shape("a-last"),
+  ];
 
   const runtime = new Pooder();
   const controller = registerEditorDocumentService(runtime);
   try {
     const applied = await controller.apply(document);
-    assert(applied.ok, "layer ordering document should apply");
+    assert(applied.ok, "root group ordering document should apply");
     const graph = runtime.services
       .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
       .getGraph();
     assertDeepEqual(
       graph.layers.map((layer) => layer.id),
-      ["bottom", "middle", "top"],
-      "RenderGraph should use document layer indexes from bottom to top",
+      ["front"],
+      "document groups should not create render layers",
+    );
+    assertDeepEqual(
+      graph.layers[0]?.nodes.map((node) => node.id),
+      ["z-first", "y-nested", "a-last"],
+      "RenderGraph nodes should follow document DFS order rather than id order",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testGroupFlatteningPreservesRenderProjection(): Promise<void> {
+  const grouped = createDocument();
+  const group = grouped.surfaces[0]!.objects[0]!;
+  assert(group.type === "group", "flattening fixture root should be a group");
+  group.localToParent = [1, 0, 0, 1, 30, 40];
+
+  const flattened = JSON.parse(JSON.stringify(grouped)) as EditorDocument;
+  const flattenedGroup = flattened.surfaces[0]!.objects[0]!;
+  assert(
+    flattenedGroup.type === "group",
+    "flattening clone root should be a group",
+  );
+  flattened.surfaces[0]!.objects = flattenedGroup.children.map((child) => {
+    const [a, b, c, d, e, f] = child.localToParent;
+    return {
+      ...child,
+      visible: flattenedGroup.visible && child.visible,
+      localToParent: [a, b, c, d, e + 30, f + 40] as typeof child.localToParent,
+    };
+  });
+
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  const renderProjection = () =>
+    runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .map((node) => ({
+        id: node.id,
+        type: node.type,
+        visual: node.visual,
+        placement: node.placement,
+        props: node.props,
+        effects: node.effects,
+        visible: node.visible,
+        tags: node.tags,
+      }));
+  try {
+    assert(
+      (await controller.apply(grouped)).ok,
+      "grouped document should apply",
+    );
+    const groupedProjection = renderProjection();
+    assert(
+      (await controller.apply(flattened)).ok,
+      "flattened document should apply",
+    );
+    assertDeepEqual(
+      renderProjection(),
+      groupedProjection,
+      "expanding a group in place should preserve its render projection",
+    );
+
+    group.visible = false;
+    assert(
+      (await controller.apply(grouped)).ok,
+      "hidden ancestor document should apply",
     );
     assertEqual(
-      graph.layers[0]?.order,
-      0,
-      "the first layer should be bottommost",
-    );
-    assertEqual(
-      graph.layers.at(-1)?.order,
-      2,
-      "the last layer should be topmost",
+      renderProjection().find((node) => node.id === "artwork")?.visible,
+      false,
+      "ancestor visibility should be ANDed into visible descendants",
     );
   } finally {
     await runtime.dispose();
@@ -308,9 +378,10 @@ async function testSceneTranslationCommit(): Promise<void> {
       parentMatrix: [2, 0, 0, 2, 0, 0],
     });
     assert(result.ok, "scene translation should commit");
+    const exportedGroup = controller.export()?.surfaces[0]!.objects[0];
+    assert(exportedGroup?.type === "group", "exported root should be a group");
     assertDeepEqual(
-      controller.export()?.surfaces[0]!.layers[0]!.objects[1]!.placement
-        .localToParent,
+      exportedGroup.children[1]!.localToParent,
       [1, 0.25, -0.1, 1, 20, 25],
       "scene delta should convert to parent-local translation",
     );
@@ -324,9 +395,10 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
   const controller = registerEditorDocumentService(runtime);
   try {
     const document = createDocument();
-    const layer = document.surfaces[0]!.layers[0]!;
-    const artwork = layer.objects.find((object) => object.id === "artwork")!;
-    layer.objects.push({
+    const group = document.surfaces[0]!.objects[0]!;
+    assert(group.type === "group", "fixture root should be a group");
+    const artwork = group.children.find((object) => object.id === "artwork")!;
+    group.children.push({
       ...JSON.parse(JSON.stringify(artwork)),
       id: "artwork-copy",
       effects: undefined,
@@ -343,10 +415,12 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
     );
     assert(updated.ok, "target image upload should commit");
     const exported = controller.export()!;
-    const target = exported.surfaces[0]!.layers[0]!.objects.find(
+    const exportedGroup = exported.surfaces[0]!.objects[0]!;
+    assert(exportedGroup.type === "group", "exported root should be a group");
+    const target = exportedGroup.children.find(
       (object) => object.id === "artwork",
     );
-    const sibling = exported.surfaces[0]!.layers[0]!.objects.find(
+    const sibling = exportedGroup.children.find(
       (object) => object.id === "artwork-copy",
     );
     assert(
@@ -385,11 +459,11 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
       { expectedCount: 1 },
     );
     assert(hidden.ok, "visibility-only image update should commit");
-    const hiddenTarget = controller
-      .export()!
-      .surfaces[0]!.layers[0]!.objects.find(
-        (object) => object.id === "artwork",
-      );
+    const hiddenGroup = controller.export()!.surfaces[0]!.objects[0]!;
+    assert(hiddenGroup.type === "group", "exported root should be a group");
+    const hiddenTarget = hiddenGroup.children.find(
+      (object) => object.id === "artwork",
+    );
     assert(
       hiddenTarget?.type === "image",
       "visibility-only update should retain the image object",
@@ -413,11 +487,11 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
       { expectedCount: 1 },
     );
     assert(cleared.ok, "explicit null source should clear the resource");
-    const clearedTarget = controller
-      .export()!
-      .surfaces[0]!.layers[0]!.objects.find(
-        (object) => object.id === "artwork",
-      );
+    const clearedGroup = controller.export()!.surfaces[0]!.objects[0]!;
+    assert(clearedGroup.type === "group", "exported root should be a group");
+    const clearedTarget = clearedGroup.children.find(
+      (object) => object.id === "artwork",
+    );
     assert(
       clearedTarget?.type === "image" && clearedTarget.source === null,
       "explicit null should persist an empty image source",
@@ -437,19 +511,24 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
 async function testUnresolvableImageDetection(): Promise<void> {
   const document = createDocument();
   const surface = document.surfaces[0]!;
-  const layer = surface.layers[0]!;
-  const template = layer.objects.find(
+  const group = surface.objects[0]!;
+  assert(group.type === "group", "fixture root should be a group");
+  const template = group.children.find(
     (object): object is EditorImageObject => object.type === "image",
   )!;
   document.assets.push(
-    { id: "missing.asset", type: "image", source: { kind: "url", url: "/missing.png" } },
+    {
+      id: "missing.asset",
+      type: "image",
+      source: { kind: "url", url: "/missing.png" },
+    },
     {
       id: "placeholder.asset",
       type: "image",
       source: { kind: "url", url: "/placeholder.png" },
     },
   );
-  layer.objects.push(
+  group.children.push(
     {
       ...template,
       id: "missing",
@@ -475,11 +554,14 @@ async function testUnresolvableImageDetection(): Promise<void> {
       ],
     } as EditorImageObject,
   );
-  surface.layers.push({
+  surface.objects.push({
+    type: "group",
     id: "front.hidden",
+    tags: [],
     visible: false,
     locked: false,
-    objects: [
+    localToParent: [1, 0, 0, 1, 0, 0],
+    children: [
       {
         ...template,
         id: "missing-in-hidden-layer",
@@ -529,7 +611,8 @@ async function main(): Promise<void> {
   testSourceResolution();
   testSceneFrameConversion();
   await testStrictApplyAndGeometry();
-  await testDocumentLayerArrayDefinesRenderGraphOrder();
+  await testDocumentDepthFirstOrderDefinesRenderGraphOrder();
+  await testGroupFlatteningPreservesRenderProjection();
   await testRejectedDocumentsRemainAtomic();
   await testSceneTranslationCommit();
   await testImageUploadReplacesOnlyTheTargetSource();

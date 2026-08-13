@@ -1,10 +1,10 @@
 /**
- * Representative converged v7 fixture. It covers ordering, two-sided
- * surfaces, custom
- * dieline/feature objects, an image slot, and a production-mask declaration.
+ * Representative strict v8 fixture. It covers ordering, two-sided surfaces,
+ * custom dieline/feature objects, an image slot, and a production-mask
+ * declaration.
  */
-export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
-  version: 7,
+export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
+  version: 8,
   assets: [
     {
       id: "front-artwork",
@@ -59,36 +59,37 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
         exportBounds: { x: 0, y: 0, width: 100, height: 120 },
         safeBounds: { x: 5, y: 5, width: 90, height: 110 },
       },
-      layers: [
+      objects: [
         {
+          type: "group",
           id: "front.content",
+          tags: [],
           visible: true,
           locked: false,
-          objects: [
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [
             {
               type: "image",
               id: "front.image-slot",
               tags: ["slot:front"],
               visible: true,
               locked: false,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 80, height: 90 },
-                localToParent: [1, 0, 0, 1, 10, 15],
-                pivot: { x: 0, y: 0 },
-              },
+              localBounds: { x: 0, y: 0, width: 80, height: 90 },
+              localToParent: [1, 0, 0, 1, 10, 15],
+              pivot: { x: 0, y: 0 },
               source: {
                 kind: "asset",
                 assetId: "front-artwork",
               },
-              appearance: {
+              contentFit: {
                 fit: "cover",
                 anchorX: 0.5,
                 anchorY: 0.5,
                 zoom: 1,
                 rotation: 0,
-                opacity: 1,
-                clip: "frame",
               },
+              opacity: 1,
+              clip: "frame",
               behaviors: [
                 {
                   type: "pooder.image-slot",
@@ -105,21 +106,22 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
           ],
         },
         {
+          type: "group",
           id: "front.production",
+          tags: [],
           visible: true,
           locked: true,
-          objects: [
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [
             {
               type: "path",
               id: "front.dieline",
               tags: ["guide:cut"],
               visible: true,
               locked: true,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 94, height: 114 },
-                localToParent: [1, 0, 0, 1, 3, 3],
-                pivot: { x: 0, y: 0 },
-              },
+              localBounds: { x: 0, y: 0, width: 94, height: 114 },
+              localToParent: [1, 0, 0, 1, 3, 3],
+              pivot: { x: 0, y: 0 },
               source: {
                 kind: "inline",
                 content: {
@@ -127,13 +129,13 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
                   sourceBounds: { x: 3, y: 3, width: 94, height: 114 },
                 },
               },
-              appearance: {
-                fill: "none",
+              paint: {
+                fill: null,
                 stroke: "#ff00ff",
-                strokeWidth: 0.2,
-                opacity: 1,
-                dash: [],
+                strokeWidthMm: 0.2,
+                dashMm: [],
               },
+              opacity: 1,
               traits: [{ type: "core.guide" }],
               effects: [
                 {
@@ -149,16 +151,15 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
               tags: ["feature:hole"],
               visible: false,
               locked: true,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 8, height: 8 },
-                localToParent: [1, 0, 0, 1, 46, 8],
-                pivot: { x: 0, y: 0 },
-              },
+              localBounds: { x: 0, y: 0, width: 8, height: 8 },
+              localToParent: [1, 0, 0, 1, 46, 8],
+              pivot: { x: 0, y: 0 },
               source: {
                 kind: "inline",
                 content: { shape: "circle", params: {} },
               },
-              appearance: { fill: "#000000", opacity: 1 },
+              paint: { fill: "#000000" },
+              opacity: 1,
               traits: [
                 {
                   type: "popecho.feature-operand",
@@ -179,23 +180,24 @@ export const REPRESENTATIVE_V7_DOCUMENT_INPUT = {
         exportBounds: { x: 0, y: 0, width: 100, height: 120 },
         safeBounds: { x: 5, y: 5, width: 90, height: 110 },
       },
-      layers: [
+      objects: [
         {
+          type: "group",
           id: "back.content",
+          tags: [],
           visible: true,
           locked: false,
-          objects: [
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [
             {
               type: "shape",
               id: "back.artwork",
               tags: ["artwork:back"],
               visible: true,
               locked: false,
-              placement: {
-                localBounds: { x: 0, y: 0, width: 80, height: 90 },
-                localToParent: [1, 0, 0, 1, 10, 15],
-                pivot: { x: 0, y: 0 },
-              },
+              localBounds: { x: 0, y: 0, width: 80, height: 90 },
+              localToParent: [1, 0, 0, 1, 10, 15],
+              pivot: { x: 0, y: 0 },
               source: {
                 kind: "inline",
                 content: { shape: "rect", params: {} },

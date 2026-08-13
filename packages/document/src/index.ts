@@ -50,7 +50,7 @@ export interface DocumentInteractionSpec {
   };
 }
 
-export const EDITOR_DOCUMENT_VERSION = 7 as const;
+export const EDITOR_DOCUMENT_VERSION = 8 as const;
 export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
 export type EditorDocumentDiagnosticSeverity = "error" | "warning";
 export type EditorDocumentDiagnosticStage =
@@ -95,30 +95,36 @@ export interface EditorSurface {
     exportBounds?: RectMm;
     safeBounds?: RectMm;
   };
-  layers: EditorLayer[];
-}
-
-export interface EditorLayer {
-  id: string;
-  visible: boolean;
-  locked: boolean;
+  /** Draw order is array order plus depth-first traversal; index 0 is bottom. */
   objects: EditorObject[];
 }
 
-export interface EditorObjectBase {
+/** Facts shared by every node in the document object tree. */
+export interface EditorNodeBase {
   id: string;
   tags: string[];
+  /** Visibility is inherited with logical AND from every ancestor. */
   visible: boolean;
+  /** Locking applies only to this node and is not inherited. */
   locked: boolean;
-  placement: {
-    localBounds: RectMm;
-    localToParent: AffineMatrix;
-    pivot: PointMm;
-  };
+  /** Object-local to parent-local coordinates. */
+  localToParent: AffineMatrix;
   traits?: EditorObjectTrait[];
-  effects?: EditorObjectEffect[];
   behaviors?: EditorObjectBehavior[];
   interaction?: DocumentInteractionSpec;
+}
+
+/** Fields owned only by pixel-producing leaf nodes. */
+export interface EditorLeafBase extends EditorNodeBase {
+  /** Intrinsic geometry bounds; x/y describe geometry, not placement. */
+  localBounds: RectMm;
+  /** Editing anchor only; it does not participate in geometry transforms. */
+  pivot?: PointMm;
+  /** Per-object opacity in [0, 1]. Defaults to 1 and is not inherited. */
+  opacity?: number;
+  /** Whether content is clipped to localBounds. Defaults to "none". */
+  clip?: "frame" | "none";
+  effects?: EditorObjectEffect[];
 }
 
 export type EditorAssetDataSource =
@@ -154,22 +160,19 @@ export interface EditorAssetReferenceBinding {
   replace(source: AssetSource): void;
 }
 
-export interface EditorImagePlacement {
+export interface EditorImageContentFit {
   fit: "cover" | "contain" | "stretch";
   anchorX: number;
   anchorY: number;
   zoom: number;
   rotation: number;
-  opacity: number;
-  clip: "frame" | "none";
 }
 
-export interface EditorPrimitiveAppearance {
+export interface EditorPaint {
   fill?: string | null;
   stroke?: string | null;
-  strokeWidth?: number;
-  opacity?: number;
-  dash?: number[];
+  strokeWidthMm?: number;
+  dashMm?: number[];
 }
 
 export interface EditorImageSlotBehaviorConfig {
@@ -189,60 +192,56 @@ export interface EditorPathContent {
   sourceSize?: EditorSize;
 }
 
-export interface EditorShapeContent {
-  shape: "rect" | "circle" | "ellipse" | "heart";
-  params: Record<string, JsonValue>;
-}
-
-export interface EditorTextContent {
-  text: string;
-}
+export type EditorShapeContent =
+  | {
+      shape: "rect";
+      params: { width?: number; height?: number };
+    }
+  | {
+      shape: "circle";
+      params: { radius?: number };
+    }
+  | {
+      shape: "ellipse";
+      params: { rx?: number; ry?: number; width?: number; height?: number };
+    }
+  | {
+      shape: "heart";
+      params: { width?: number; height?: number };
+    };
 
 export type ObjectSource = AssetSource | InlineSource | null;
 
-export interface EditorImageObject extends EditorObjectBase {
+export interface EditorImageObject extends EditorLeafBase {
   type: "image";
   source: AssetSource | null;
-  appearance: EditorImagePlacement;
-  children?: never;
+  contentFit: EditorImageContentFit;
 }
 
-export interface EditorPathObject extends EditorObjectBase {
+export interface EditorPathObject extends EditorLeafBase {
   type: "path";
   source: InlineSource<EditorPathContent>;
-  appearance?: EditorPrimitiveAppearance;
-  children?: never;
+  paint?: EditorPaint;
 }
 
-export interface EditorShapeObject extends EditorObjectBase {
+export interface EditorShapeObject extends EditorLeafBase {
   type: "shape";
   source: InlineSource<EditorShapeContent>;
-  appearance?: EditorPrimitiveAppearance;
-  children?: never;
+  paint?: EditorPaint;
 }
 
-export interface EditorTextObject extends EditorObjectBase {
-  type: "text";
-  source: InlineSource<EditorTextContent>;
-  appearance?: EditorPrimitiveAppearance;
-  children?: never;
-}
-
-export type EditorPrimitiveObject =
+export type EditorLeafObject =
+  | EditorImageObject
   | EditorPathObject
-  | EditorShapeObject
-  | EditorTextObject;
+  | EditorShapeObject;
 
-export type EditorVisualObject = EditorImageObject | EditorPrimitiveObject;
-
-export interface EditorCompositeObject extends EditorObjectBase {
+/** Structural transform node. It does not produce pixels. */
+export interface EditorGroupObject extends EditorNodeBase {
   type: "group";
   children: EditorObject[];
-  source?: never;
-  appearance?: never;
 }
 
-export type EditorObject = EditorVisualObject | EditorCompositeObject;
+export type EditorObject = EditorLeafObject | EditorGroupObject;
 
 export interface EditorExtensionObjectEffect<TPayload = JsonValue> {
   type: string;
@@ -301,7 +300,6 @@ export interface EditorDocumentValidatorContext {
   document: EditorDocument;
   path: string;
   surface?: EditorSurface;
-  layer?: EditorLayer;
   object?: EditorObject;
   effect?: EditorExtensionObjectEffect;
   addDiagnostic(diagnostic: EditorDocumentValidatorDiagnostic): void;
@@ -339,11 +337,9 @@ export interface EditorDocumentObjectVisitContext {
   document: EditorDocument;
   surface: EditorSurface;
   surfaceIndex: number;
-  layer: EditorLayer;
-  layerIndex: number;
   object: EditorObject;
   objectIndex: number;
-  parentObject?: EditorCompositeObject;
+  parentObject?: EditorGroupObject;
   path: string;
 }
 
@@ -351,15 +347,15 @@ export type EditorDocumentObjectVisitor = (
   context: EditorDocumentObjectVisitContext,
 ) => void;
 
-export function isEditorCompositeObject(
+export function isEditorGroupObject(
   object: EditorObject,
-): object is EditorCompositeObject {
+): object is EditorGroupObject {
   return object.type === "group";
 }
 
-export function isEditorVisualObject(
+export function isEditorLeafObject(
   object: EditorObject,
-): object is EditorVisualObject {
+): object is EditorLeafObject {
   return object.type !== "group";
 }
 
@@ -387,35 +383,28 @@ export function visitEditorDocumentObjects(
   visitor: EditorDocumentObjectVisitor,
 ): void {
   document.surfaces.forEach((surface, surfaceIndex) => {
-    surface.layers.forEach((layer, layerIndex) => {
-      const visit = (
-        objects: EditorObject[],
-        basePath: string,
-        parentObject?: EditorCompositeObject,
-      ) => {
-        objects.forEach((object, objectIndex) => {
-          const path = `${basePath}[${objectIndex}]`;
-          visitor({
-            document,
-            surface,
-            surfaceIndex,
-            layer,
-            layerIndex,
-            object,
-            objectIndex,
-            ...(parentObject ? { parentObject } : {}),
-            path,
-          });
-          if (isEditorCompositeObject(object)) {
-            visit(object.children, `${path}.children`, object);
-          }
+    const visit = (
+      objects: EditorObject[],
+      basePath: string,
+      parentObject?: EditorGroupObject,
+    ) => {
+      objects.forEach((object, objectIndex) => {
+        const path = `${basePath}[${objectIndex}]`;
+        visitor({
+          document,
+          surface,
+          surfaceIndex,
+          object,
+          objectIndex,
+          ...(parentObject ? { parentObject } : {}),
+          path,
         });
-      };
-      visit(
-        layer.objects,
-        `surfaces[${surfaceIndex}].layers[${layerIndex}].objects`,
-      );
-    });
+        if (isEditorGroupObject(object)) {
+          visit(object.children, `${path}.children`, object);
+        }
+      });
+    };
+    visit(surface.objects, `surfaces[${surfaceIndex}].objects`);
   });
 }
 
@@ -500,6 +489,7 @@ export function collectEditorDocumentCapabilityRequirements(
     ? new Set(options.availableCapabilityIds)
     : undefined;
   visitEditorDocumentObjects(document, ({ object, path }) => {
+    if (!isEditorLeafObject(object)) return;
     object.effects?.forEach((effect, index) => {
       if (!isEditorExtensionObjectEffect(effect)) return;
       const effectPath = `${path}.effects[${index}]`;

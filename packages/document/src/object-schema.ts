@@ -117,7 +117,7 @@ export function validateEditorDocumentObjectSchemas(
 ): EditorDocumentDiagnostic[] {
   const diagnostics: EditorDocumentDiagnostic[] = [];
   const visitObjects = (
-    objects: EditorDocument["surfaces"][number]["layers"][number]["objects"],
+    objects: EditorDocument["surfaces"][number]["objects"],
     path: string,
   ) => {
     objects.forEach((object, objectIndex) => {
@@ -160,18 +160,13 @@ export function validateEditorDocumentObjectSchemas(
           );
         });
       }
-      if (Array.isArray(object.children)) {
+      if (object.type === "group") {
         visitObjects(object.children, `${objectPath}.children`);
       }
     });
   };
   document.surfaces.forEach((surface, surfaceIndex) =>
-    surface.layers.forEach((layer, layerIndex) =>
-      visitObjects(
-        layer.objects,
-        `surfaces[${surfaceIndex}].layers[${layerIndex}].objects`,
-      ),
-    ),
+    visitObjects(surface.objects, `surfaces[${surfaceIndex}].objects`),
   );
   return diagnostics;
 }

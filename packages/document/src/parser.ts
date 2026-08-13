@@ -7,22 +7,20 @@ import type {
   DocumentInteractionSpec,
   EditorAsset,
   EditorAssetDataSource,
-  EditorCompositeObject,
   EditorDocument,
   EditorDocumentDiagnostic,
   EditorDocumentValidationOptions,
+  EditorGroupObject,
+  EditorImageContentFit,
   EditorImageObject,
-  EditorImagePlacement,
-  EditorLayer,
+  EditorLeafObject,
   EditorObject,
   EditorObjectBehavior,
   EditorObjectEffect,
   EditorObjectTrait,
-  EditorPrimitiveAppearance,
-  EditorPrimitiveObject,
+  EditorPaint,
   EditorPathContent,
   EditorShapeContent,
-  EditorTextContent,
   EditorRect,
   EditorSurface,
   JsonValue,
@@ -31,8 +29,8 @@ import type {
 } from "./index";
 import {
   isEditorBuiltinObjectEffect,
-  isEditorCompositeObject,
   isEditorExtensionObjectEffect,
+  isEditorLeafObject,
   visitEditorDocumentObjects,
 } from "./index";
 
@@ -53,15 +51,15 @@ export function parseEditorDocument(value: unknown): EditorDocument {
   try {
     const input = record(value, "document");
     exact(input, ["version", "assets", "extensions", "surfaces"], "document");
-    if (input.version !== 7) {
+    if (input.version !== 8) {
       fail(
         "document-version-invalid",
-        "EditorDocument version must be exactly 7.",
+        "EditorDocument version must be exactly 8.",
         "version",
       );
     }
     const document: EditorDocument = {
-      version: 7,
+      version: 8,
       assets: array(input.assets, "assets").map(parseAsset),
       extensions: parseExtensions(input.extensions),
       surfaces: array(input.surfaces, "surfaces").map(parseSurface),
@@ -116,19 +114,15 @@ export function validateEditorDocument(
   document.surfaces.forEach((surface, surfaceIndex) => {
     const surfacePath = `surfaces[${surfaceIndex}]`;
     runValidators({ document, surface, path: surfacePath });
-    surface.layers.forEach((layer, layerIndex) => {
-      const layerPath = `${surfacePath}.layers[${layerIndex}]`;
-      runValidators({ document, surface, layer, path: layerPath });
-    });
   });
-  visitEditorDocumentObjects(document, ({ surface, layer, object, path }) => {
-    runValidators({ document, surface, layer, object, path });
+  visitEditorDocumentObjects(document, ({ surface, object, path }) => {
+    runValidators({ document, surface, object, path });
+    if (!isEditorLeafObject(object)) return;
     object.effects?.forEach((effect, index) => {
       if (!isEditorExtensionObjectEffect(effect)) return;
       runValidators({
         document,
         surface,
-        layer,
         object,
         effect,
         path: `${path}.effects[${index}]`,
@@ -196,7 +190,7 @@ function parseExtensions(value: unknown): Record<string, JsonValue> {
 function parseSurface(value: unknown, index: number): EditorSurface {
   const path = `surfaces[${index}]`;
   const input = record(value, path);
-  exact(input, ["id", "title", "geometry", "layers"], path);
+  exact(input, ["id", "title", "geometry", "objects"], path);
   const geometry = record(input.geometry, `${path}.geometry`);
   exact(
     geometry,
@@ -234,36 +228,23 @@ function parseSurface(value: unknown, index: number): EditorSurface {
             ),
           }),
     },
-    layers: array(input.layers, `${path}.layers`).map((layer, layerIndex) =>
-      parseLayer(layer, `${path}.layers[${layerIndex}]`),
-    ),
-  };
-}
-
-function parseLayer(value: unknown, path: string): EditorLayer {
-  const input = record(value, path);
-  exact(input, ["id", "visible", "locked", "objects"], path);
-  return {
-    id: identifier(input.id, `${path}.id`),
-    visible: boolean(input.visible, `${path}.visible`),
-    locked: boolean(input.locked, `${path}.locked`),
-    objects: array(input.objects, `${path}.objects`).map((object, index) =>
-      parseObject(object, `${path}.objects[${index}]`),
+    objects: array(input.objects, `${path}.objects`).map(
+      (object, objectIndex) =>
+        parseObject(object, `${path}.objects[${objectIndex}]`),
     ),
   };
 }
 
 function parseObject(value: unknown, path: string): EditorObject {
   const input = record(value, path);
-  const commonFields = [
+  const nodeFields = [
     "type",
     "id",
     "tags",
     "visible",
     "locked",
-    "placement",
+    "localToParent",
     "traits",
-    "effects",
     "behaviors",
     "interaction",
   ];
@@ -272,19 +253,15 @@ function parseObject(value: unknown, path: string): EditorObject {
     tags: parseTags(input.tags, `${path}.tags`),
     visible: boolean(input.visible, `${path}.visible`),
     locked: boolean(input.locked, `${path}.locked`),
-    placement: parsePlacement(input.placement, `${path}.placement`),
+    localToParent: parseAffineMatrix(
+      input.localToParent,
+      `${path}.localToParent`,
+    ),
     ...(input.traits === undefined
       ? {}
       : {
           traits: array(input.traits, `${path}.traits`).map((trait, index) =>
             parseTrait(trait, `${path}.traits[${index}]`),
-          ),
-        }),
-    ...(input.effects === undefined
-      ? {}
-      : {
-          effects: array(input.effects, `${path}.effects`).map(
-            (effect, index) => parseEffect(effect, `${path}.effects[${index}]`),
           ),
         }),
     ...(input.behaviors === undefined
@@ -305,68 +282,80 @@ function parseObject(value: unknown, path: string): EditorObject {
         }),
   };
   if (input.type === "group") {
-    exact(input, [...commonFields, "children"], path);
+    exact(input, [...nodeFields, "children"], path);
     return {
       ...base,
       type: "group",
       children: array(input.children, `${path}.children`).map((child, index) =>
         parseObject(child, `${path}.children[${index}]`),
       ),
-    } satisfies EditorCompositeObject;
+    } satisfies EditorGroupObject;
   }
-  if (input.type === "image") {
-    exact(input, [...commonFields, "source", "appearance"], path);
-    return {
-      ...base,
-      type: "image",
-      source: parseImageObjectSource(input.source, `${path}.source`),
-      appearance: parseImageAppearance(input.appearance, `${path}.appearance`),
-    } satisfies EditorImageObject;
-  }
-  if (
-    input.type !== "path" &&
-    input.type !== "shape" &&
-    input.type !== "text"
-  ) {
-    fail("object-type-invalid", "Object type is invalid.", `${path}.type`);
-  }
-  exact(input, [...commonFields, "source", "appearance"], path);
-  return {
+  const leafFields = [
+    ...nodeFields,
+    "localBounds",
+    "pivot",
+    "opacity",
+    "clip",
+    "effects",
+  ];
+  const leaf = {
     ...base,
-    type: input.type,
-    source: parseInlineObjectSource(input.type, input.source, `${path}.source`),
-    ...(input.appearance === undefined
+    localBounds: parseRect(input.localBounds, `${path}.localBounds`),
+    ...(input.pivot === undefined
+      ? {}
+      : { pivot: parsePoint(input.pivot, `${path}.pivot`) }),
+    ...(input.opacity === undefined
+      ? {}
+      : { opacity: unitInterval(input.opacity, `${path}.opacity`) }),
+    ...(input.clip === undefined
+      ? {}
+      : { clip: parseClip(input.clip, `${path}.clip`) }),
+    ...(input.effects === undefined
       ? {}
       : {
-          appearance: parsePrimitiveAppearance(
-            input.appearance,
-            `${path}.appearance`,
+          effects: array(input.effects, `${path}.effects`).map(
+            (effect, index) => parseEffect(effect, `${path}.effects[${index}]`),
           ),
         }),
-  } as EditorPrimitiveObject;
+  };
+  if (input.type === "image") {
+    exact(input, [...leafFields, "source", "contentFit"], path);
+    return {
+      ...leaf,
+      type: "image",
+      source: parseImageObjectSource(input.source, `${path}.source`),
+      contentFit: parseImageContentFit(input.contentFit, `${path}.contentFit`),
+    } satisfies EditorImageObject;
+  }
+  if (input.type !== "path" && input.type !== "shape") {
+    fail("object-type-invalid", "Object type is invalid.", `${path}.type`);
+  }
+  exact(input, [...leafFields, "source", "paint"], path);
+  return {
+    ...leaf,
+    type: input.type,
+    source: parseInlineObjectSource(input.type, input.source, `${path}.source`),
+    ...(input.paint === undefined
+      ? {}
+      : {
+          paint: parsePaint(input.paint, `${path}.paint`),
+        }),
+  } as EditorLeafObject;
 }
 
-function parsePlacement(
-  value: unknown,
-  path: string,
-): EditorObject["placement"] {
-  const input = record(value, path);
-  exact(input, ["localBounds", "localToParent", "pivot"], path);
-  const matrix = array(input.localToParent, `${path}.localToParent`);
+function parseAffineMatrix(value: unknown, path: string): AffineMatrix {
+  const matrix = array(value, path);
   if (matrix.length !== 6) {
     fail(
       "affine-matrix-invalid",
       "Affine matrix must contain 6 numbers.",
-      `${path}.localToParent`,
+      path,
     );
   }
-  return {
-    localBounds: parseRect(input.localBounds, `${path}.localBounds`),
-    localToParent: matrix.map((entry, index) =>
-      finite(entry, `${path}.localToParent[${index}]`),
-    ) as AffineMatrix,
-    pivot: parsePoint(input.pivot, `${path}.pivot`),
-  };
+  return matrix.map((entry, index) =>
+    finite(entry, `${path}[${index}]`),
+  ) as AffineMatrix;
 }
 
 function parseImageObjectSource(
@@ -390,10 +379,10 @@ function parseImageObjectSource(
 }
 
 function parseInlineObjectSource(
-  type: "path" | "shape" | "text",
+  type: "path" | "shape",
   value: unknown,
   path: string,
-): EditorPrimitiveObject["source"] {
+): EditorLeafObject["source"] {
   const input = record(value, path);
   exact(input, ["kind", "content"], path);
   if (input.kind !== "inline") {
@@ -442,52 +431,68 @@ function parseInlineObjectSource(
         `${path}.content.shape`,
       );
     }
-    const parsed: EditorShapeContent = {
-      shape: content.shape as EditorShapeContent["shape"],
-      params: jsonRecord(content.params, `${path}.content.params`),
-    };
+    const shape = content.shape as EditorShapeContent["shape"];
+    const paramsPath = `${path}.content.params`;
+    const params = record(content.params, paramsPath);
+    const parseOptionalNumber = (key: string) =>
+      params[key] === undefined
+        ? {}
+        : { [key]: finite(params[key], `${paramsPath}.${key}`) };
+    const parsed = (() => {
+      if (shape === "rect" || shape === "heart") {
+        exact(params, ["width", "height"], paramsPath);
+        return {
+          shape,
+          params: {
+            ...parseOptionalNumber("width"),
+            ...parseOptionalNumber("height"),
+          },
+        };
+      }
+      if (shape === "circle") {
+        exact(params, ["radius"], paramsPath);
+        return {
+          shape,
+          params: { ...parseOptionalNumber("radius") },
+        };
+      }
+      exact(params, ["rx", "ry", "width", "height"], paramsPath);
+      return {
+        shape: "ellipse" as const,
+        params: {
+          ...parseOptionalNumber("rx"),
+          ...parseOptionalNumber("ry"),
+          ...parseOptionalNumber("width"),
+          ...parseOptionalNumber("height"),
+        },
+      };
+    })() as EditorShapeContent;
     return { kind: "inline", content: parsed };
   }
-  exact(content, ["text"], `${path}.content`);
-  const parsed: EditorTextContent = {
-    text: string(content.text, `${path}.content.text`),
-  };
-  return { kind: "inline", content: parsed };
+  fail("object-type-invalid", "Object type is invalid.", `${path}.type`);
 }
 
-function parseImageAppearance(
+function parseImageContentFit(
   value: unknown,
   path: string,
-): EditorImagePlacement {
+): EditorImageContentFit {
   const input = record(value, path);
-  exact(
-    input,
-    ["fit", "anchorX", "anchorY", "zoom", "rotation", "opacity", "clip"],
-    path,
-  );
+  exact(input, ["fit", "anchorX", "anchorY", "zoom", "rotation"], path);
   if (!["cover", "contain", "stretch"].includes(input.fit as string)) {
     fail("image-fit-invalid", "Image fit is invalid.", `${path}.fit`);
   }
-  if (input.clip !== "frame" && input.clip !== "none") {
-    fail("image-clip-invalid", "Image clip is invalid.", `${path}.clip`);
-  }
   return {
-    fit: input.fit as EditorImagePlacement["fit"],
-    anchorX: finite(input.anchorX, `${path}.anchorX`),
-    anchorY: finite(input.anchorY, `${path}.anchorY`),
-    zoom: finite(input.zoom, `${path}.zoom`),
+    fit: input.fit as EditorImageContentFit["fit"],
+    anchorX: unitInterval(input.anchorX, `${path}.anchorX`),
+    anchorY: unitInterval(input.anchorY, `${path}.anchorY`),
+    zoom: positive(input.zoom, `${path}.zoom`),
     rotation: finite(input.rotation, `${path}.rotation`),
-    opacity: finite(input.opacity, `${path}.opacity`),
-    clip: input.clip,
   };
 }
 
-function parsePrimitiveAppearance(
-  value: unknown,
-  path: string,
-): EditorPrimitiveAppearance {
+function parsePaint(value: unknown, path: string): EditorPaint {
   const input = record(value, path);
-  exact(input, ["fill", "stroke", "strokeWidth", "opacity", "dash"], path);
+  exact(input, ["fill", "stroke", "strokeWidthMm", "dashMm"], path);
   const color = (entry: unknown, entryPath: string) =>
     entry === null ? null : string(entry, entryPath);
   return {
@@ -497,17 +502,16 @@ function parsePrimitiveAppearance(
     ...(input.stroke === undefined
       ? {}
       : { stroke: color(input.stroke, `${path}.stroke`) }),
-    ...(input.strokeWidth === undefined
-      ? {}
-      : { strokeWidth: finite(input.strokeWidth, `${path}.strokeWidth`) }),
-    ...(input.opacity === undefined
-      ? {}
-      : { opacity: finite(input.opacity, `${path}.opacity`) }),
-    ...(input.dash === undefined
+    ...(input.strokeWidthMm === undefined
       ? {}
       : {
-          dash: array(input.dash, `${path}.dash`).map((entry, index) =>
-            finite(entry, `${path}.dash[${index}]`),
+          strokeWidthMm: finite(input.strokeWidthMm, `${path}.strokeWidthMm`),
+        }),
+    ...(input.dashMm === undefined
+      ? {}
+      : {
+          dashMm: array(input.dashMm, `${path}.dashMm`).map((entry, index) =>
+            finite(entry, `${path}.dashMm[${index}]`),
           ),
         }),
   };
@@ -759,9 +763,6 @@ function validateDocumentReferences(
   );
   document.surfaces.forEach((surface, surfaceIndex) => {
     addId(surface.id, `surfaces[${surfaceIndex}].id`);
-    surface.layers.forEach((layer, layerIndex) =>
-      addId(layer.id, `surfaces[${surfaceIndex}].layers[${layerIndex}].id`),
-    );
   });
   const objects = new Map<
     string,
@@ -773,63 +774,50 @@ function validateDocumentReferences(
   });
   const assetIds = new Set(document.assets.map((asset) => asset.id));
   const dependencies = new Map<string, Set<string>>();
-  visitEditorDocumentObjects(
-    document,
-    ({ object, surface, path, parentObject }) => {
-      if (parentObject && object.interaction) {
+  visitEditorDocumentObjects(document, ({ object, surface, path }) => {
+    const imageSource = object.type === "image" ? object.source : null;
+    if (imageSource && !assetIds.has(imageSource.assetId)) {
+      diagnostics.push(
+        diagnostic(
+          "image-asset-missing",
+          `Image asset "${imageSource.assetId}" does not exist.`,
+          `${path}.source.assetId`,
+        ),
+      );
+    }
+    if (!isEditorLeafObject(object)) return;
+    object.effects?.forEach((effect, index) => {
+      if (!isEditorBuiltinObjectEffect(effect)) return;
+      const isClip = effect.type === "core.geometry.clip";
+      const field = isClip ? "sourceObjectId" : "operandObjectId";
+      const targetId = isClip ? effect.sourceObjectId : effect.operandObjectId;
+      const target = objects.get(targetId);
+      const effectPath = `${path}.effects[${index}].${field}`;
+      if (!target) {
         diagnostics.push(
           diagnostic(
-            "composite-child-interaction-invalid",
-            "Composite child interaction belongs to its composite owner.",
-            `${path}.interaction`,
+            "object-effect-target-missing",
+            `Object "${object.id}" references missing object "${targetId}".`,
+            effectPath,
           ),
         );
+        return;
       }
-      const imageSource = object.type === "image" ? object.source : null;
-      if (imageSource && !assetIds.has(imageSource.assetId)) {
+      if (target.surfaceId !== surface.id) {
         diagnostics.push(
           diagnostic(
-            "image-asset-missing",
-            `Image asset "${imageSource.assetId}" does not exist.`,
-            `${path}.source.assetId`,
+            "object-effect-cross-surface",
+            `Object "${object.id}" references another surface.`,
+            effectPath,
           ),
         );
+        return;
       }
-      object.effects?.forEach((effect, index) => {
-        if (!isEditorBuiltinObjectEffect(effect)) return;
-        const isClip = effect.type === "core.geometry.clip";
-        const field = isClip ? "sourceObjectId" : "operandObjectId";
-        const targetId = isClip
-          ? effect.sourceObjectId
-          : effect.operandObjectId;
-        const target = objects.get(targetId);
-        const effectPath = `${path}.effects[${index}].${field}`;
-        if (!target) {
-          diagnostics.push(
-            diagnostic(
-              "object-effect-target-missing",
-              `Object "${object.id}" references missing object "${targetId}".`,
-              effectPath,
-            ),
-          );
-          return;
-        }
-        if (target.surfaceId !== surface.id) {
-          diagnostics.push(
-            diagnostic(
-              "object-effect-cross-surface",
-              `Object "${object.id}" references another surface.`,
-              effectPath,
-            ),
-          );
-          return;
-        }
-        const targets = dependencies.get(object.id) ?? new Set<string>();
-        targets.add(targetId);
-        dependencies.set(object.id, targets);
-      });
-    },
-  );
+      const targets = dependencies.get(object.id) ?? new Set<string>();
+      targets.add(targetId);
+      dependencies.set(object.id, targets);
+    });
+  });
   const visited = new Set<string>();
   const active = new Set<string>();
   const visit = (id: string) => {
@@ -941,6 +929,29 @@ function finite(value: unknown, path: string): number {
   return value;
 }
 
+function positive(value: unknown, path: string): number {
+  const result = finite(value, path);
+  if (result <= 0) {
+    fail("positive-number-required", "Expected a number greater than 0.", path);
+  }
+  return result;
+}
+
+function unitInterval(value: unknown, path: string): number {
+  const result = finite(value, path);
+  if (result < 0 || result > 1) {
+    fail("unit-interval-required", "Expected a number in [0, 1].", path);
+  }
+  return result;
+}
+
+function parseClip(value: unknown, path: string): "frame" | "none" {
+  if (value !== "frame" && value !== "none") {
+    fail("object-clip-invalid", "Object clip is invalid.", path);
+  }
+  return value;
+}
+
 function jsonRecord(value: unknown, path: string): Record<string, JsonValue> {
   const parsed = json(value, path);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -980,7 +991,7 @@ function exact(
   if (unknown) {
     fail(
       "unknown-field",
-      `Field "${unknown}" is not allowed in EditorDocument v7.`,
+      `Field "${unknown}" is not allowed in EditorDocument v8.`,
       `${path}.${unknown}`,
     );
   }

@@ -1,6 +1,6 @@
 # App Workflow Composition
 
-Status: EditorDocument v7
+Status: EditorDocument v8
 Date: 2026-07-29
 
 Applications compose workflows from EditorDocument, core services, browser
@@ -10,33 +10,33 @@ group.
 
 ## Document-owned dieline and feature
 
-- A cutline is a normal Visual Object with a path/shape `source`, a
+- A cutline is a normal leaf Object with a path/shape `source`, a
   `core.guide` trait, and the namespaced `guide:cut` tag.
-- A Feature is a Composite Object. The cutline owns ordered
+- A Feature is a Group Object. The cutline owns ordered
   `core.geometry.boolean` effects that reference Feature operands by object id.
 - A clipped artwork Object owns `core.geometry.clip` and references the
   cutline. Preview and export use the referenced object's final geometry.
-- Layer remains the coarse render partition. Composite provides local
-  coordinates, logical selection, and linked interaction only.
-- `surface.layers` is the only source of layer hierarchy: `layers[0]` is the
-  bottom layer and the final layer is the top layer. Layer roles and runtime
-  stack metadata do not participate in ordering.
+- A Group provides local coordinates, logical selection, and linked interaction
+  only. It is not a render or scene layer.
+- Surface/group object arrays plus depth-first traversal define draw order.
+  Index zero is bottommost; roles, traits, and runtime stack metadata do not
+  participate in document ordering.
 - Guide objects use the `core.guide` trait for guide behavior. Applications
-  that need guides on top place their guide layer last in the array.
+  that need guides on top place the guide object or group last in the array.
 
-The document compiler recursively composes transforms and emits every Visual
-child as an independent RenderIntent. An interactive Composite emits one
+The document compiler recursively composes transforms and emits every leaf
+child as an independent RenderIntent. An interactive Group emits one
 transparent proxy; it never creates a Fabric group.
 
 ## App-owned feature workflow
 
 The application opens an `EditorDocumentService.openSession()` whose draft is
 the product-level Feature preset. Its derive callback converts the preset to
-`EditorCompositeObject[]`. Working mutations regenerate RenderIntent
+`EditorGroupObject[]`. Working mutations regenerate RenderIntent
 immediately; commit promotes the working document and rollback reapplies the
 snapshot.
 
-Composite movement declares `path.follow` or `path.lowest-tangent` against:
+Group movement declares `path.follow` or `path.lowest-tangent` against:
 
 ```ts
 {
