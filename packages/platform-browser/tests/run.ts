@@ -34,6 +34,7 @@ import {
   applyAlphaMaskData,
   applyTransparentColorToAlpha,
   createBoundaryOutputMaskAlpha,
+  createOutputMaskAlpha,
 } from "../src";
 import type {
   FabricRenderGraphReconcileOptions,
@@ -3962,6 +3963,112 @@ function testOutputMaskTreatsNearWhiteAsTransparent() {
   assertEqual(alpha?.[2 * width + 2], 255, "outline mask should fill interior");
 }
 
+function testOutputMaskKeepsArtDrawnInTheTransparentColor() {
+  const width = 5;
+  const height = 5;
+  const data = new Uint8ClampedArray(width * height * 4);
+  const setPixel = (x: number, y: number) => {
+    const index = (y * width + x) * 4;
+    data[index] = 255;
+    data[index + 1] = 255;
+    data[index + 2] = 255;
+    data[index + 3] = 255;
+  };
+
+  for (let index = 1; index <= 3; index += 1) {
+    setPixel(index, 1);
+    setPixel(index, 3);
+    setPixel(1, index);
+    setPixel(3, index);
+  }
+
+  const alpha = createOutputMaskAlpha(data, width, height, "outline", {
+    red: 255,
+    green: 255,
+    blue: 255,
+    tolerance: 8,
+  });
+
+  assertEqual(
+    alpha?.[2 * width + 2],
+    255,
+    "outline mask should ignore the transparent color when it would erase the whole mask",
+  );
+  assertEqual(alpha?.[0], 0, "fallback mask should leave outside transparent");
+}
+
+async function testSceneExportFallsBackToTheUnmaskedImage() {
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    async createDetachedRenderObject() {
+      return {};
+    },
+  };
+  service.geometrySource = {};
+  service.renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          id: "artwork",
+          visible: true,
+          nodes: [
+            {
+              id: "shape",
+              visible: true,
+              exportKeys: ["shape"],
+              tags: ["mockup"],
+              props: {},
+              data: {},
+            },
+          ],
+        },
+      ],
+    }),
+  };
+  service.renderGraphAdapter = {
+    createExportRenderObjectSpec: () => ({ id: "shape", type: "rect" }),
+  };
+  service.createExportCanvas = () => ({
+    add() {},
+    dispose() {},
+    renderAll() {},
+    toDataURL() {
+      return "data:image/png;base64,raw";
+    },
+  });
+  service.applyOutputMask = async () => {
+    throw new Error("browser-scene-export-output-mask-invalid");
+  };
+
+  const originalWarn = console.warn;
+  let warning: unknown[] | null = null;
+  console.warn = (...args: unknown[]) => {
+    warning = args;
+  };
+
+  try {
+    const result = await service.exportImage({
+      crop: {
+        type: "sceneRect",
+        rect: { left: 0, top: 0, width: 100, height: 80 },
+      },
+      outputMask: { mode: "outline", sourceKey: "templateFrame" },
+    });
+
+    assertEqual(
+      result.url,
+      "data:image/png;base64,raw",
+      "scene export should fall back to the unmasked export when the mask is invalid",
+    );
+    assert(
+      String(warning?.[0] || "").includes("Output mask is invalid"),
+      "scene export should warn when falling back from an invalid output mask",
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
 async function testSceneExportAppliesOutputMask() {
   const source = {
     data: {
@@ -4046,85 +4153,6 @@ async function testSceneExportAppliesOutputMask() {
     { left: 0, top: 0, width: 100, height: 80 },
     "scene export should pass resolved crop to output mask",
   );
-}
-
-async function testSceneExportFallsBackWhenOutputMaskIsInvalid() {
-  const source = {
-    data: {
-      exportKeys: ["element"],
-      layerId: "image.user",
-    },
-    visible: true,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 50, y: 40 };
-    },
-    async clone() {
-      return {
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
-  };
-  const exportCanvas = {
-    add() {},
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,raw";
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
-  service.canvasService = {
-    selectObjects: () => [source],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
-  service.applyOutputMask = async () => {
-    throw new Error("browser-scene-export-output-mask-invalid");
-  };
-
-  const originalWarn = console.warn;
-  let warning: unknown[] | null = null;
-  console.warn = (...args: unknown[]) => {
-    warning = args;
-  };
-
-  try {
-    const result = await service.exportImage({
-      crop: {
-        type: "sceneRect",
-        rect: { left: 0, top: 0, width: 100, height: 80 },
-      },
-      outputMask: { mode: "outline", sourceKey: "templateFrame" },
-      source: { layerIds: ["image.user"] },
-    });
-
-    assertEqual(
-      result.url,
-      "data:image/png;base64,raw",
-      "scene export should fall back to the unmasked export when the mask is invalid",
-    );
-    assert(
-      String(warning?.[0] || "").includes("Output mask is invalid"),
-      "scene export should warn when falling back from an invalid output mask",
-    );
-  } finally {
-    console.warn = originalWarn;
-  }
 }
 
 async function testSceneExportRejectsMissingOutputMaskSource() {
@@ -4514,6 +4542,14 @@ async function main() {
     [
       "treats near-white output mask pixels as transparent",
       testOutputMaskTreatsNearWhiteAsTransparent,
+    ],
+    [
+      "keeps output mask art drawn in the transparent color",
+      testOutputMaskKeepsArtDrawnInTheTransparentColor,
+    ],
+    [
+      "falls back to the unmasked export when the output mask is invalid",
+      testSceneExportFallsBackToTheUnmaskedImage,
     ],
     [
       "registers render graph adapter in browser host",

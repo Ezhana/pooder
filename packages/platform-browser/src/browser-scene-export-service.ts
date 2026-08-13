@@ -66,6 +66,13 @@ function normalizeMultiplier(value: unknown): number {
   return Number.isFinite(number) ? Math.max(1, number) : 2;
 }
 
+function isInvalidOutputMaskError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "browser-scene-export-output-mask-invalid"
+  );
+}
+
 function isPositiveRect(rect: BrowserSceneExportRect): boolean {
   return (
     Number.isFinite(rect.left) &&
@@ -160,7 +167,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       exportCanvas.renderAll();
       const exportedUrl = exportCanvas.toDataURL({ format, multiplier: 1 });
       const url = options.outputMask
-        ? await this.applyOutputMask(
+        ? await this.applyOutputMaskWithFallback(
             exportedUrl,
             options.outputMask.sourceKey,
             {
@@ -283,6 +290,31 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       width: source.widthMm,
       height: source.heightMm,
     };
+  }
+
+  private async applyOutputMaskWithFallback(
+    sourceUrl: string,
+    sourceKey: string,
+    options: {
+      crop: BrowserSceneExportRect;
+      height: number;
+      multiplier: number;
+      mode: "alpha" | "outline" | "shape";
+      sceneToTarget: Matrix2D<"scene", "screen">;
+      transparentColor?: SceneExportOutputMaskTransparentColor;
+      width: number;
+    },
+  ): Promise<string> {
+    try {
+      return await this.applyOutputMask(sourceUrl, sourceKey, options);
+    } catch (error) {
+      if (!isInvalidOutputMaskError(error)) throw error;
+      console.warn(
+        "[BrowserSceneExportService] Output mask is invalid; using the unmasked export.",
+        error,
+      );
+      return sourceUrl;
+    }
   }
 
   private async applyOutputMask(

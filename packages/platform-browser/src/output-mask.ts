@@ -281,20 +281,25 @@ export function applyAlphaMaskData(
   return next;
 }
 
-function toMaskAlpha(
+export function createOutputMaskAlpha(
   data: Uint8ClampedArray,
   width: number,
   height: number,
   mode: SceneExportOutputMaskMode,
   transparentColor?: SceneExportOutputMaskTransparentColor,
 ): Uint8ClampedArray | null {
+  const buildAlpha = (pixels: Uint8ClampedArray) =>
+    mode === "outline"
+      ? createBoundaryOutputMaskAlpha(pixels, width, height)
+      : createAlphaMask(pixels, width, height);
+
   const maskData = applyTransparentColorToAlpha(data, transparentColor);
+  const alpha = buildAlpha(maskData);
+  if (alpha || maskData === data) return alpha;
 
-  if (mode === "outline") {
-    return createBoundaryOutputMaskAlpha(maskData, width, height);
-  }
-
-  return createAlphaMask(maskData, width, height);
+  // Mask art drawn in the transparent color leaves nothing behind once the
+  // color is knocked out, so keep the untouched pixels instead.
+  return buildAlpha(data);
 }
 
 function rewriteMaskCanvasAlpha(
@@ -316,7 +321,7 @@ function rewriteMaskCanvasAlpha(
     throw new Error("browser-scene-export-output-mask-unreadable");
   }
 
-  const alpha = toMaskAlpha(
+  const alpha = createOutputMaskAlpha(
     imageData.data,
     canvas.width,
     canvas.height,
