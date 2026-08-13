@@ -114,9 +114,9 @@ export function coordinateMatrix<
   };
 }
 
-export function identityCoordinateMatrix<
-  TSpace extends CoordinateSpace,
->(space: TSpace): Matrix2D<TSpace, TSpace> {
+export function identityCoordinateMatrix<TSpace extends CoordinateSpace>(
+  space: TSpace,
+): Matrix2D<TSpace, TSpace> {
   return coordinateMatrix(space, space, [1, 0, 0, 1, 0, 0]);
 }
 
@@ -147,7 +147,10 @@ export function invertCoordinateMatrix<
 >(matrix: Matrix2D<TFrom, TTo>): Matrix2D<TTo, TFrom> {
   const [a, b, c, d, e, f] = matrix.values;
   const determinant = a * d - b * c;
-  if (!Number.isFinite(determinant) || Math.abs(determinant) <= Number.EPSILON) {
+  if (
+    !Number.isFinite(determinant) ||
+    Math.abs(determinant) <= Number.EPSILON
+  ) {
     throw new Error(
       `Cannot invert singular ${matrix.from} -> ${matrix.to} coordinate matrix.`,
     );
@@ -258,8 +261,12 @@ export function createLocalToSceneMatrix(options: {
     b,
     c,
     d,
-    finiteCoordinate(options.position.x) - a * options.pivot.x - c * options.pivot.y,
-    finiteCoordinate(options.position.y) - b * options.pivot.x - d * options.pivot.y,
+    finiteCoordinate(options.position.x) -
+      a * options.pivot.x -
+      c * options.pivot.y,
+    finiteCoordinate(options.position.y) -
+      b * options.pivot.x -
+      d * options.pivot.y,
   ]);
 }
 

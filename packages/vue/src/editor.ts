@@ -8,10 +8,7 @@ import {
 import type { EditorDocument } from "@pooder/document";
 import { collectUnresolvableImageObjectIds } from "@pooder/document-core";
 
-import {
-  getPooderRuntimeCore,
-  type PooderRuntime,
-} from "./runtime";
+import { getPooderRuntimeCore, type PooderRuntime } from "./runtime";
 
 const getEditorRuntimeCore = (runtime: PooderRuntime): Pooder =>
   getPooderRuntimeCore(runtime) as Pooder;
@@ -70,9 +67,9 @@ export function collectPooderUnresolvableImages(
   runtime: PooderRuntime,
   document: EditorDocument,
 ): Promise<string[]> {
-  const service = getEditorRuntimeCore(runtime).services.get<
-    ImageResourceService
-  >(IMAGE_RESOURCE_SERVICE);
+  const service = getEditorRuntimeCore(
+    runtime,
+  ).services.get<ImageResourceService>(IMAGE_RESOURCE_SERVICE);
   return collectUnresolvableImageObjectIds(document, service);
 }
 

@@ -33,7 +33,9 @@ export function createMask(
   } = options;
 
   const resolvedMode =
-    maskMode === "auto" ? inferMaskMode(imageData, alphaOpaqueCutoff) : maskMode;
+    maskMode === "auto"
+      ? inferMaskMode(imageData, alphaOpaqueCutoff)
+      : maskMode;
 
   const mask = new Uint8Array(paddedWidth * paddedHeight);
 
@@ -398,7 +400,9 @@ export function findMinimalConnectRadius(
   return high;
 }
 
-export function polygonSignedArea(points: Array<{ x: number; y: number }>): number {
+export function polygonSignedArea(
+  points: Array<{ x: number; y: number }>,
+): number {
   if (points.length < 3) return 0;
   let sum = 0;
   for (let i = 0; i < points.length; i++) {

@@ -29,7 +29,9 @@ for (const entry of packageDirectories) {
     }
     const source = await readSourceTree(join(packageRoot, "src"));
     if (/from\s+["']@pooder\/kit(?:\/|["'])/.test(source)) {
-      violations.push(`${manifest.name}: base editor source must not import Kit`);
+      violations.push(
+        `${manifest.name}: base editor source must not import Kit`,
+      );
     }
   }
 
@@ -61,7 +63,10 @@ for (const entry of packageDirectories) {
   }
 }
 
-const kitSource = await readFile(join(packagesRoot, "kit/src/index.ts"), "utf8");
+const kitSource = await readFile(
+  join(packagesRoot, "kit/src/index.ts"),
+  "utf8",
+);
 const kitManifest = JSON.parse(
   await readFile(join(packagesRoot, "kit/package.json"), "utf8"),
 );
@@ -84,7 +89,9 @@ for (const exportedName of kitSource.matchAll(/\b(create[A-Z]\w+)\b/g)) {
 }
 
 if (violations.length > 0) {
-  throw new Error(`Tool package boundary violations:\n- ${violations.join("\n- ")}`);
+  throw new Error(
+    `Tool package boundary violations:\n- ${violations.join("\n- ")}`,
+  );
 }
 
 console.log("Tool package boundaries passed.");

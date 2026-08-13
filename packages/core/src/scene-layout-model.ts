@@ -163,16 +163,22 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   const defaultPreviewBounds = {
     xMm: 0,
     yMm: 0,
-    widthMm: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneFrames.previewBounds.widthMm, {
-      minMm,
-      maxMm,
-      stepMm,
-    }),
-    heightMm: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneFrames.previewBounds.heightMm, {
-      minMm,
-      maxMm,
-      stepMm,
-    }),
+    widthMm: sanitizeMmValue(
+      DEFAULT_SIZE_STATE.sceneFrames.previewBounds.widthMm,
+      {
+        minMm,
+        maxMm,
+        stepMm,
+      },
+    ),
+    heightMm: sanitizeMmValue(
+      DEFAULT_SIZE_STATE.sceneFrames.previewBounds.heightMm,
+      {
+        minMm,
+        maxMm,
+        stepMm,
+      },
+    ),
   };
   const previewBounds = defaultPreviewBounds;
   const aspectRaw = Number(
@@ -245,7 +251,9 @@ type ResolvedSurfaceSceneFrames = SurfaceSceneFrames & {
   viewportFocusFrame: SceneFrameMm;
 };
 
-function deriveSceneFrames(frames: SurfaceSceneFrames): ResolvedSurfaceSceneFrames {
+function deriveSceneFrames(
+  frames: SurfaceSceneFrames,
+): ResolvedSurfaceSceneFrames {
   const { previewBounds, productionFrame, viewportFocusFrame } = frames;
   return {
     previewBounds,
@@ -271,7 +279,8 @@ function resolveFrameOffset(
     viewportCenterY - (focusFrame.yMm + focusFrame.heightMm / 2) * scale;
 
   const offsetLeftX = padding - frame.xMm * scale;
-  const offsetRightX = canvasWidth - padding - (frame.xMm + frame.widthMm) * scale;
+  const offsetRightX =
+    canvasWidth - padding - (frame.xMm + frame.widthMm) * scale;
   const offsetTopY = padding - frame.yMm * scale;
   const offsetBottomY =
     canvasHeight - padding - (frame.yMm + frame.heightMm) * scale;

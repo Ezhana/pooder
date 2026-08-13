@@ -44,9 +44,11 @@ async function testGeometryRepresentationsRemainPurposeScoped() {
             space: "scene",
             bounds: { left: 0, top: 0, width: 80, height: 60 },
             rect: { left: 0, top: 0, width: 80, height: 60 },
-            localToScene: coordinateMatrix("scene", "scene", [
-              1, 0, 0, 1, 0, 0,
-            ]),
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
           },
           {
             kind: "rect",
@@ -58,9 +60,11 @@ async function testGeometryRepresentationsRemainPurposeScoped() {
             space: "scene",
             bounds: { left: -5, top: -5, width: 90, height: 70 },
             rect: { left: -5, top: -5, width: 90, height: 70 },
-            localToScene: coordinateMatrix("scene", "scene", [
-              1, 0, 0, 1, 0, 0,
-            ]),
+            localToScene: coordinateMatrix(
+              "scene",
+              "scene",
+              [1, 0, 0, 1, 0, 0],
+            ),
           },
         ],
       }),
@@ -163,7 +167,9 @@ async function testMultiObjectInteractionPreviewsAndCommitsAtomically() {
 
 async function main() {
   await testGeometryRepresentationsRemainPurposeScoped();
-  console.log("PASS keeps GeometryRef preview and export representations separate");
+  console.log(
+    "PASS keeps GeometryRef preview and export representations separate",
+  );
   await testMultiObjectInteractionPreviewsAndCommitsAtomically();
   console.log("PASS previews and commits multi-object interactions atomically");
   console.log("All core foundation contracts passed.");

@@ -29,7 +29,8 @@ export interface CapabilityDefinition<TFacade = unknown> {
   onUnregister?(): void;
 }
 
-export interface RegisteredCapabilityDefinition<TFacade = unknown>
-  extends CapabilityDefinition<TFacade> {
+export interface RegisteredCapabilityDefinition<
+  TFacade = unknown,
+> extends CapabilityDefinition<TFacade> {
   extensionId: string;
 }

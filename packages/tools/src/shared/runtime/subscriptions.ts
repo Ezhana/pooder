@@ -32,7 +32,10 @@ export class SubscriptionBag {
     });
   }
 
-  onConfigChange(configService: ConfigLike, handler: (event: any) => void): void {
+  onConfigChange(
+    configService: ConfigLike,
+    handler: (event: any) => void,
+  ): void {
     this.add(configService.onAnyChange(handler));
   }
 

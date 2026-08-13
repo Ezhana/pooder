@@ -10,9 +10,7 @@ import {
 import { IMAGE_SLOT_CAPABILITY_ID } from "../extensions/image-slot";
 import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
 import { collectOfficialToolDocumentCapabilityRequirements } from "./index";
-import {
-  IMAGE_SLOT_BEHAVIOR_TYPE,
-} from "./behavior-schemas";
+import { IMAGE_SLOT_BEHAVIOR_TYPE } from "./behavior-schemas";
 
 const OFFICIAL_TOOL_EFFECT_FACTORIES: Record<
   string,

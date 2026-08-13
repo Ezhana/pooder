@@ -26,8 +26,7 @@ export type {
 
 const DEFAULT_DESIGN_EXPORT_TAGS = ["export:design"] as const;
 
-export interface DesignExportExtensionOptions
-  extends DesignExportCapabilityOptions {
+export interface DesignExportExtensionOptions extends DesignExportCapabilityOptions {
   id?: string;
   contributeCommands?: boolean;
 }
@@ -47,7 +46,8 @@ export class DesignExportExtension implements ExtensionDefinition {
   private readonly contributeLegacyCommands: boolean;
 
   constructor(options: DesignExportExtensionOptions = {}) {
-    this.id = String(options.id || DESIGN_EXPORT_CAPABILITY_ID).trim() ||
+    this.id =
+      String(options.id || DESIGN_EXPORT_CAPABILITY_ID).trim() ||
       DESIGN_EXPORT_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || DESIGN_EXPORT_CAPABILITY_ID;
     this.configuredSource = options.source;
@@ -55,9 +55,8 @@ export class DesignExportExtension implements ExtensionDefinition {
   }
 
   activate(context: ExtensionContext) {
-    this.exportService = context.services.getOrThrow<SceneExportService>(
-      SCENE_EXPORT_SERVICE,
-    );
+    this.exportService =
+      context.services.getOrThrow<SceneExportService>(SCENE_EXPORT_SERVICE);
   }
 
   contribute(): ExtensionContributions {

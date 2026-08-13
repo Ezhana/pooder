@@ -7,8 +7,7 @@ import {
   type DesignExportExtensionOptions,
 } from "./DesignExportExtension";
 
-export interface DesignExportCapabilityExtensionOptions
-  extends DesignExportCapabilityOptions {
+export interface DesignExportCapabilityExtensionOptions extends DesignExportCapabilityOptions {
   id?: string;
 }
 

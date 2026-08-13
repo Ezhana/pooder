@@ -720,8 +720,13 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const projectionIds = this.normalizeSelectorValues(selector.projectionIds);
     if (
       projectionIds &&
-      !projectionIds.has(String(data.renderGraphNodeId || data.renderIntentId || data.id || "").trim())
-    ) return false;
+      !projectionIds.has(
+        String(
+          data.renderGraphNodeId || data.renderIntentId || data.id || "",
+        ).trim(),
+      )
+    )
+      return false;
     const layerIds = this.normalizeSelectorValues(selector.layerIds);
     if (
       layerIds &&
@@ -739,9 +744,10 @@ export default class CanvasService implements Service, CanvasServiceContract {
       const normalizedObjectTags = new Set(
         objectTags.map((tag: unknown) => String(tag || "").trim()),
       );
-      const matches = selector.tagMatch === "any"
-        ? Array.from(tags).some((tag) => normalizedObjectTags.has(tag))
-        : Array.from(tags).every((tag) => normalizedObjectTags.has(tag));
+      const matches =
+        selector.tagMatch === "any"
+          ? Array.from(tags).some((tag) => normalizedObjectTags.has(tag))
+          : Array.from(tags).every((tag) => normalizedObjectTags.has(tag));
       if (!matches) {
         return false;
       }
@@ -952,18 +958,14 @@ export default class CanvasService implements Service, CanvasServiceContract {
     const placement = spec.placement;
     if (placement) {
       const bounds = placement.localBounds;
-      const centerToLocal = coordinateMatrix(
-        "object-local",
-        "object-local",
-        [
-          1,
-          0,
-          0,
-          1,
-          bounds.left + bounds.width / 2,
-          bounds.top + bounds.height / 2,
-        ],
-      );
+      const centerToLocal = coordinateMatrix("object-local", "object-local", [
+        1,
+        0,
+        0,
+        1,
+        bounds.left + bounds.width / 2,
+        bounds.top + bounds.height / 2,
+      ]);
       const centerToTarget = multiplyCoordinateMatrices(
         sceneToTarget,
         multiplyCoordinateMatrices(placement.localToScene, centerToLocal),

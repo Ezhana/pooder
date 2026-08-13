@@ -1731,7 +1731,9 @@ function compareGraphLayers(a: RenderGraphLayer, b: RenderGraphLayer): number {
   return a.order - b.order || a.id.localeCompare(b.id);
 }
 
-function normalizeGraphLayerNodeOrder(layer: RenderGraphLayer): RenderGraphLayer {
+function normalizeGraphLayerNodeOrder(
+  layer: RenderGraphLayer,
+): RenderGraphLayer {
   return {
     ...layer,
     nodes: layer.nodes

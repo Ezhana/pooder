@@ -48,8 +48,9 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
     const configService = context.get<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    const surfaceFrameService =
-      context.get<SurfaceFrameService>(SURFACE_FRAME_SERVICE);
+    const surfaceFrameService = context.get<SurfaceFrameService>(
+      SURFACE_FRAME_SERVICE,
+    );
 
     if (!canvasService || !surfaceFrameService) {
       throw new Error(
@@ -60,9 +61,7 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
     this.canvasService = canvasService;
     this.configService = configService;
     this.surfaceFrameService = surfaceFrameService;
-    this.subscriptions.add(
-      canvasService.on("resized", this.onCanvasResized),
-    );
+    this.subscriptions.add(canvasService.on("resized", this.onCanvasResized));
     this.subscriptions.add(
       surfaceFrameService.onAnyFramesChange((event) => {
         this.invalidateLayout(event.surfaceId);
@@ -188,7 +187,7 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
   ): SceneLayoutSnapshot | null {
     const hadPrevious = this.layoutBySurfaceId.has(surfaceId);
     const previous = hadPrevious
-      ? this.layoutBySurfaceId.get(surfaceId) ?? null
+      ? (this.layoutBySurfaceId.get(surfaceId) ?? null)
       : undefined;
     const comparableNext = nextLayout
       ? {
