@@ -85,20 +85,20 @@ export class DesignExportExtension implements ExtensionDefinition {
 
   async exportImage(
     options: ExportImageOptions = {},
-  ): Promise<ExportImageResult> {
+  ): Promise<ExportImageResult[]> {
     if (!this.exportService) {
       throw new Error("design-export-not-initialized");
     }
 
     try {
-      const result = await this.exportService.exportImage({
+      const results = await this.exportService.exportImages({
         ...options,
         crop: options.crop ?? { type: "frame", frame: "cut" },
         includeHidden: options.includeHidden ?? true,
         source: options.source ?? this.resolveDefaultSource(),
       });
 
-      return {
+      return results.map((result) => ({
         url: result.url,
         width: result.width,
         height: result.height,
@@ -106,7 +106,8 @@ export class DesignExportExtension implements ExtensionDefinition {
         multiplier: result.multiplier,
         source: result.source,
         crop: result.crop,
-      };
+        surfaceId: result.surfaceId,
+      }));
     } catch (error) {
       if (error instanceof Error) {
         if (error.message === "browser-scene-export-empty") {

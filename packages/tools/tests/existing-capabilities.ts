@@ -74,6 +74,17 @@ class FakeSceneExportService {
     if (this.error) throw this.error;
     return this.response;
   }
+
+  async exportImages(options: Record<string, unknown>) {
+    const result = await this.exportImage(options);
+    const surfaceId =
+      typeof options.surfaceId === "string" && options.surfaceId.trim()
+        ? options.surfaceId
+        : typeof result.surfaceId === "string"
+          ? result.surfaceId
+          : "front";
+    return [{ ...result, surfaceId }];
+  }
 }
 
 const FRAMES = {
@@ -251,7 +262,7 @@ function createEffectDocument(
             },
           ]
         : [],
-    extensions: {},
+    extension: { required: [], states: {} },
     surfaces: [
       {
         id: "front",
@@ -288,6 +299,7 @@ async function testDesignExportCapability(): Promise<void> {
       elementIds: ["visual"],
       tags: ["design"],
     },
+    surfaceId: "front",
     url: "data:image/png;base64,design",
     width: 90,
   };
@@ -325,12 +337,17 @@ async function testDesignExportCapability(): Promise<void> {
       "design export should delegate the explicit source",
     );
     assertEqual(
-      result.url,
+      result[0]?.url,
       "data:image/png;base64,design",
       "design export url",
     );
+    assertEqual(
+      result[0]?.surfaceId,
+      "front",
+      "design export should include the surface id",
+    );
     assertDeepEqual(
-      result.source,
+      result[0]?.source,
       {
         layerIds: ["artwork"],
         elementIds: ["visual"],
@@ -339,7 +356,7 @@ async function testDesignExportCapability(): Promise<void> {
       "design export should map the platform source result",
     );
     assertDeepEqual(
-      result.crop,
+      result[0]?.crop,
       { left: 1, top: 2, width: 30, height: 20 },
       "design export should map the platform crop",
     );

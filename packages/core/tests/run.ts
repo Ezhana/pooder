@@ -3295,6 +3295,57 @@ async function testPreparedSurfaceFramePublicationRejectsConcurrentUpdates() {
   );
 }
 
+async function testSurfaceFrameActivateSurfaceKeepsInsertionOrder(): Promise<void> {
+  const frames = new DefaultSurfaceFrameService();
+  const changes: Array<string | null> = [];
+  frames.onActiveSurfaceChange((event) => changes.push(event.surfaceId));
+  const front = {
+    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
+    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+  };
+  const back = {
+    previewBounds: { xMm: 120, yMm: 0, widthMm: 100, heightMm: 80 },
+    productionFrame: { xMm: 125, yMm: 5, widthMm: 90, heightMm: 70 },
+  };
+  frames.importFrames({ front, back });
+  assertDeepEqual(
+    frames.listSurfaceIds(),
+    ["front", "back"],
+    "surface ids should keep document insertion order",
+  );
+  assertEqual(
+    frames.getActiveSurfaceId(),
+    "front",
+    "import should activate the first surface",
+  );
+  assertDeepEqual(
+    frames.getFrames()?.previewBounds,
+    front.previewBounds,
+    "omitted getFrames should use the active surface",
+  );
+
+  frames.activateSurface("back");
+  assertEqual(frames.getActiveSurfaceId(), "back", "activateSurface should switch");
+  assertDeepEqual(
+    frames.getFrames()?.previewBounds,
+    back.previewBounds,
+    "active surface frames should follow activateSurface",
+  );
+  assertDeepEqual(
+    changes,
+    ["front", "back"],
+    "active surface listeners should see import then switch",
+  );
+
+  let rejected = false;
+  try {
+    frames.activateSurface("missing");
+  } catch {
+    rejected = true;
+  }
+  assertEqual(rejected, true, "unknown surfaces should reject activateSurface");
+}
+
 async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
   const frames = new DefaultSurfaceFrameService();
   const changes: string[] = [];
@@ -4080,6 +4131,10 @@ async function main() {
     [
       "rejects prepared surface frames after concurrent updates",
       testPreparedSurfaceFramePublicationRejectsConcurrentUpdates,
+    ],
+    [
+      "activates surfaces without rebuilding frames",
+      testSurfaceFrameActivateSurfaceKeepsInsertionOrder,
     ],
     [
       "sorts render intent patch entries deterministically",

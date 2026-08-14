@@ -30,10 +30,11 @@ export interface ExportImageResult {
   multiplier: number;
   source: SceneExportSourceResult;
   crop: CoordinateRect<"scene">;
+  surfaceId: string;
 }
 
 export interface DesignExportCapabilityApi {
-  exportImage(options?: ExportImageOptions): Promise<ExportImageResult>;
+  exportImage(options?: ExportImageOptions): Promise<ExportImageResult[]>;
 }
 
 export function createDesignExportCapabilityDefinition(

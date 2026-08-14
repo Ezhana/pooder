@@ -82,7 +82,7 @@ function createImageSlotDocument(): EditorDocument {
         intrinsicSize: { width: 300, height: 200 },
       },
     ],
-    extensions: {},
+    extension: { required: [], states: {} },
     surfaces: [
       {
         id: "front",

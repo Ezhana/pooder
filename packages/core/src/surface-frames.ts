@@ -7,12 +7,18 @@ export interface SurfaceFrameChangeEvent {
   frames: SurfaceSceneFrames | null;
 }
 
+export interface ActiveSurfaceChangeEvent {
+  surfaceId: string | null;
+}
+
 export interface PreparedSurfaceFramePublication {
   readonly framesBySurfaceId: Readonly<Record<string, SurfaceSceneFrames>>;
 }
 
 export interface SurfaceFrameService extends Service {
   clear(): void;
+  activateSurface(surfaceId: string): void;
+  getActiveSurfaceId(): string | null;
   getFrames(surfaceId?: string): SurfaceSceneFrames | null;
   importFrames(framesBySurfaceId: Record<string, SurfaceSceneFrames>): void;
   prepareImportFrames(
@@ -29,6 +35,9 @@ export interface SurfaceFrameService extends Service {
     publication: PreparedSurfaceFramePublication,
   ): void;
   listSurfaceIds(): string[];
+  onActiveSurfaceChange(
+    listener: (event: ActiveSurfaceChangeEvent) => void,
+  ): Disposable;
   onAnyFramesChange(
     listener: (event: SurfaceFrameChangeEvent) => void,
   ): Disposable;
@@ -107,6 +116,7 @@ function normalizeFrames(frames: SurfaceSceneFrames): SurfaceSceneFrames {
 
 export class DefaultSurfaceFrameService implements SurfaceFrameService {
   private readonly framesBySurfaceId = new Map<string, SurfaceSceneFrames>();
+  private activeSurfaceId: string | null = null;
   private revision = 0;
   private readonly listenersBySurfaceId = new Map<
     string,
@@ -114,6 +124,9 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
   >();
   private readonly anyListeners = new Set<
     (event: SurfaceFrameChangeEvent) => void
+  >();
+  private readonly activeSurfaceListeners = new Set<
+    (event: ActiveSurfaceChangeEvent) => void
   >();
   private readonly preparedPublications = new WeakMap<
     PreparedSurfaceFramePublication,
@@ -132,15 +145,32 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
 
   clear(): void {
     const previous = Array.from(this.framesBySurfaceId.keys());
-    if (!previous.length) return;
+    if (!previous.length && this.activeSurfaceId === null) return;
     this.framesBySurfaceId.clear();
     this.revision += 1;
     previous.forEach((surfaceId) => this.emit(surfaceId));
+    this.setActiveSurfaceId(null);
+  }
+
+  activateSurface(surfaceId: string): void {
+    const normalized = normalizeId(surfaceId);
+    if (!normalized) {
+      throw new Error("SurfaceFrameService requires surfaceId.");
+    }
+    if (!this.framesBySurfaceId.has(normalized)) {
+      throw new Error(`Unknown surface "${normalized}".`);
+    }
+    this.setActiveSurfaceId(normalized);
+  }
+
+  getActiveSurfaceId(): string | null {
+    return this.activeSurfaceId;
   }
 
   getFrames(surfaceId?: string): SurfaceSceneFrames | null {
     const normalized = normalizeId(surfaceId);
-    const key = normalized || this.listSurfaceIds()[0];
+    const key =
+      normalized || this.activeSurfaceId || this.listSurfaceIds()[0] || "";
     if (!key) return null;
     const frames = this.framesBySurfaceId.get(key);
     return frames ? cloneFrames(frames) : null;
@@ -203,6 +233,7 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
       this.framesBySurfaceId.set(surfaceId, frames),
     );
     if (prepared.changedSurfaceIds.length) this.revision += 1;
+    this.reconcileActiveSurface();
     if (options.notify === false) {
       this.pendingPublicationNotifications.set(
         publication,
@@ -227,7 +258,18 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
   }
 
   listSurfaceIds(): string[] {
-    return Array.from(this.framesBySurfaceId.keys()).sort();
+    return Array.from(this.framesBySurfaceId.keys());
+  }
+
+  onActiveSurfaceChange(
+    listener: (event: ActiveSurfaceChangeEvent) => void,
+  ): Disposable {
+    this.activeSurfaceListeners.add(listener);
+    return {
+      dispose: () => {
+        this.activeSurfaceListeners.delete(listener);
+      },
+    };
   }
 
   onAnyFramesChange(
@@ -292,6 +334,23 @@ export class DefaultSurfaceFrameService implements SurfaceFrameService {
       );
     }
     return prepared;
+  }
+
+  private reconcileActiveSurface(): void {
+    if (
+      this.activeSurfaceId &&
+      this.framesBySurfaceId.has(this.activeSurfaceId)
+    ) {
+      return;
+    }
+    this.setActiveSurfaceId(this.listSurfaceIds()[0] ?? null);
+  }
+
+  private setActiveSurfaceId(surfaceId: string | null): void {
+    if (this.activeSurfaceId === surfaceId) return;
+    this.activeSurfaceId = surfaceId;
+    const event = { surfaceId };
+    this.activeSurfaceListeners.forEach((listener) => listener(event));
   }
 
   private emit(surfaceId: string): void {

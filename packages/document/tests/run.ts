@@ -6,6 +6,7 @@ import {
   collectEditorDocumentAssetReferences,
   createAssetReferenceBinding,
   collectEditorDocumentCapabilityRequirements,
+  collectEditorDocumentExtensionRequirements,
   findEditorDocumentObject,
   getEditorDocumentObjects,
   isAssetSource,
@@ -72,6 +73,15 @@ function testStrictRoundTrip(): void {
     "front.feature.hole",
     "nested object lookup should work",
   );
+  assertDeepEqual(
+    collectEditorDocumentExtensionRequirements(document),
+    [
+      "pooder.kit.image-slot",
+      "pooder.production-mask",
+      "pooder.kit.edge-detection",
+    ],
+    "required extensions are document-scoped",
+  );
 }
 
 function testUnknownAndLegacyFieldsAreRejected(): void {
@@ -89,6 +99,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
     ["config", {}],
     ["views", []],
     ["metadata", {}],
+    ["extensions", {}],
   ] as const) {
     const input = JSON.parse(
       JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
@@ -106,6 +117,24 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
       `${field} path should be stable`,
     );
   }
+
+  const surfaceExtension = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const firstSurface = (
+    surfaceExtension.surfaces as Array<Record<string, unknown>>
+  )[0]!;
+  firstSurface.extension = { required: ["pooder.kit.image-slot"] };
+  assertEqual(
+    validateEditorDocument(surfaceExtension)[0]?.code,
+    "unknown-field",
+    "surface.extension should be rejected",
+  );
+  assertEqual(
+    validateEditorDocument(surfaceExtension)[0]?.path,
+    "surfaces[0].extension",
+    "surface.extension path should be stable",
+  );
 
   const input = JSON.parse(
     JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
@@ -446,11 +475,26 @@ function testObjectSelectors(): void {
     "front.image-slot",
     "single-object selector should resolve the image slot",
   );
+  assertDeepEqual(
+    selectEditorDocumentObjects(document, {
+      surfaceIds: ["back"],
+      tags: ["slot:front"],
+    }).map((object) => object.id),
+    [],
+    "surfaceIds should not match tags on another surface",
+  );
+  assertDeepEqual(
+    selectEditorDocumentObjects(document, { surfaceIds: ["back"] }).map(
+      (object) => object.id,
+    ),
+    ["back.content", "back.artwork"],
+    "surfaceIds should collect only that surface's objects",
+  );
 }
 
 function testCentralAssetReferenceLifecycle(): void {
   const document = representativeDocument();
-  document.extensions = {};
+  document.extension = { required: [], states: {} };
   const slot = findEditorDocumentObject(document, "front.image-slot");
   assert(
     slot?.type === "image",
@@ -533,7 +577,7 @@ function testOrphanReclamationUsesRegisteredExtensionReferences(): void {
               createAssetReferenceBinding(
                 source,
                 "image",
-                `extensions.pooder.production-mask.masks.${maskId}.production.source`,
+                `extension.states.pooder.production-mask.masks.${maskId}.production.source`,
                 (replacement) => {
                   production.source = replacement;
                 },

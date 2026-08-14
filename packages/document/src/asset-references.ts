@@ -69,7 +69,7 @@ export function collectEditorDocumentAssetReferences(
     });
   });
 
-  for (const [extensionId, state] of Object.entries(document.extensions)) {
+  for (const [extensionId, state] of Object.entries(document.extension.states)) {
     const contribution = options.extensionRegistry?.get(extensionId);
     references.push(
       ...(contribution?.collectAssetReferences?.(state, {

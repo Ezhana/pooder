@@ -55,7 +55,7 @@ function createDocument(): EditorDocument {
         intrinsicSize: { width: 200, height: 100 },
       },
     ],
-    extensions: {},
+    extension: { required: [], states: {} },
     surfaces: [
       {
         id: "front",
@@ -189,6 +189,16 @@ async function testStrictApplyAndGeometry(): Promise<void> {
       "scene",
     );
     assert(bounds.value, "document object geometry should be registered");
+
+    const activated = await controller.activateSurface("front");
+    assertEqual(activated.ok, true, "activateSurface should succeed");
+    assertEqual(
+      controller.getActiveSurfaceId(),
+      "front",
+      "apply should activate the first document surface",
+    );
+    const missing = await controller.activateSurface("missing");
+    assertEqual(missing.ok, false, "unknown surfaces should fail");
 
     const beforeRevision = renderIntents.getGraph().revision;
     const mutation = await controller.updateObject("artwork", (object) => ({

@@ -275,7 +275,7 @@ function createEmptySlotDocument(): EditorDocument {
         intrinsicSize: { width: 120, height: 80 },
       },
     ],
-    extensions: {},
+    extension: { required: [], states: {} },
     surfaces: [
       {
         id: "front",
@@ -553,7 +553,7 @@ function createNestedDocument(): EditorDocument {
         intrinsicSize: { width: 120, height: 80 },
       },
     ],
-    extensions: {},
+    extension: { required: [], states: {} },
     surfaces: [
       {
         id: "front",

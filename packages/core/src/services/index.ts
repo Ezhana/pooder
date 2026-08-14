@@ -72,6 +72,7 @@ export type {
   SceneLayoutService,
 } from "../render";
 export type {
+  ActiveSurfaceChangeEvent,
   PreparedSurfaceFramePublication,
   SurfaceFrameChangeEvent,
   SurfaceFrameService,

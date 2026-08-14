@@ -79,10 +79,17 @@ export interface PointMm {
   y: number;
 }
 
+export interface EditorDocumentExtension {
+  /** Extension ids this document needs. Authored by the BFF; never inferred. */
+  required: string[];
+  /** Persisted extension-owned state, keyed by those ids. */
+  states: Record<string, JsonValue>;
+}
+
 export interface EditorDocument {
   version: EditorDocumentVersion;
   assets: EditorAsset[];
-  extensions: Record<string, JsonValue>;
+  extension: EditorDocumentExtension;
   surfaces: EditorSurface[];
 }
 
@@ -184,6 +191,7 @@ export interface ObjectSelector {
   ids?: readonly string[];
   tags?: readonly string[];
   tagMatch?: "all" | "any";
+  surfaceIds?: readonly string[];
 }
 
 export interface EditorPathContent {
@@ -445,9 +453,13 @@ export function selectEditorDocumentObjects(
   document: EditorDocument,
   selector: ObjectSelector = {},
 ): EditorObject[] {
-  return getEditorDocumentObjects(document).filter((object) =>
-    matchesObjectSelector(object, selector),
-  );
+  const surfaceIds = normalizeSelectorValues(selector.surfaceIds);
+  const objects: EditorObject[] = [];
+  visitEditorDocumentObjects(document, ({ object, surface }) => {
+    if (surfaceIds && !surfaceIds.has(surface.id)) return;
+    if (matchesObjectSelector(object, selector)) objects.push(object);
+  });
+  return objects;
 }
 
 export function selectOneEditorDocumentObject(
@@ -467,6 +479,21 @@ function normalizeSelectorValues(
     values.map((value) => value.trim()).filter((value) => value.length > 0),
   );
   return normalized.size ? normalized : undefined;
+}
+
+export function collectEditorDocumentExtensionRequirements(
+  document: EditorDocument,
+): string[] {
+  return uniqueRequirementIds(document.extension.required);
+}
+
+function uniqueRequirementIds(values: readonly string[] | undefined): string[] {
+  const requirements = new Set<string>();
+  values?.forEach((id) => {
+    const normalized = String(id || "").trim();
+    if (normalized) requirements.add(normalized);
+  });
+  return Array.from(requirements);
 }
 
 export function collectEditorDocumentCapabilityRequirements(

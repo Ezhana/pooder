@@ -292,15 +292,31 @@ class FakeSceneLayoutService {
 
 class FakeSurfaceFrameService {
   private listeners = new Set<(event: { surfaceId: string }) => void>();
+  private activeSurfaceId: string | null;
 
-  constructor(private framesBySurfaceId: Record<string, SurfaceSceneFrames>) {}
+  constructor(private framesBySurfaceId: Record<string, SurfaceSceneFrames>) {
+    this.activeSurfaceId = Object.keys(framesBySurfaceId)[0] ?? null;
+  }
+
+  activateSurface(surfaceId: string) {
+    this.activeSurfaceId = surfaceId;
+  }
+
+  getActiveSurfaceId() {
+    return this.activeSurfaceId;
+  }
 
   listSurfaceIds() {
     return Object.keys(this.framesBySurfaceId);
   }
 
-  getFrames(surfaceId: string) {
-    return this.framesBySurfaceId[surfaceId] ?? null;
+  getFrames(surfaceId?: string) {
+    const key = surfaceId || this.activeSurfaceId || this.listSurfaceIds()[0];
+    return key ? (this.framesBySurfaceId[key] ?? null) : null;
+  }
+
+  onActiveSurfaceChange() {
+    return { dispose() {} };
   }
 
   onAnyFramesChange(listener: (event: { surfaceId: string }) => void) {
@@ -359,10 +375,12 @@ function createMutableSurfaceFrames(
   const frameListeners = new Set<(event: any) => void>();
   return {
     getFrames: (surfaceId?: string) => {
-      const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
+      const key = surfaceId || Array.from(frameMap.keys())[0];
       return key ? (frameMap.get(key) ?? null) : null;
     },
-    listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
+    getActiveSurfaceId: () => Array.from(frameMap.keys())[0] ?? null,
+    listSurfaceIds: () => Array.from(frameMap.keys()),
+    onActiveSurfaceChange: () => ({ dispose() {} }),
     onAnyFramesChange: (listener: (event: any) => void) => {
       frameListeners.add(listener);
       return { dispose: () => frameListeners.delete(listener) };
@@ -1408,10 +1426,12 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   const frameListeners = new Set<(event: any) => void>();
   const surfaceFrames = {
     getFrames: (surfaceId?: string) => {
-      const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
+      const key = surfaceId || Array.from(frameMap.keys())[0];
       return key ? (frameMap.get(key) ?? null) : null;
     },
-    listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
+    getActiveSurfaceId: () => Array.from(frameMap.keys())[0] ?? null,
+    listSurfaceIds: () => Array.from(frameMap.keys()),
+    onActiveSurfaceChange: () => ({ dispose() {} }),
     onAnyFramesChange: (listener: (event: any) => void) => {
       frameListeners.add(listener);
       return { dispose: () => frameListeners.delete(listener) };
@@ -1500,10 +1520,12 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
       });
     },
     getFrames: (surfaceId?: string) => {
-      const key = surfaceId || Array.from(frameMap.keys()).sort()[0];
+      const key = surfaceId || Array.from(frameMap.keys())[0];
       return key ? (frameMap.get(key) ?? null) : null;
     },
-    listSurfaceIds: () => Array.from(frameMap.keys()).sort(),
+    getActiveSurfaceId: () => Array.from(frameMap.keys())[0] ?? null,
+    listSurfaceIds: () => Array.from(frameMap.keys()),
+    onActiveSurfaceChange: () => ({ dispose() {} }),
     onAnyFramesChange: (listener: (event: any) => void) => {
       frameListeners.add(listener);
       return { dispose: () => frameListeners.delete(listener) };
@@ -3482,6 +3504,100 @@ async function testSceneExportUsesThePreviewClipContract() {
   );
 }
 
+async function testSceneExportImagesExportsEachSurface() {
+  const createExportCanvas = () => ({
+    add() {},
+    dispose() {},
+    renderAll() {},
+    toDataURL() {
+      return "data:image/png;base64,surface";
+    },
+  });
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    async createDetachedRenderObject() {
+      return {};
+    },
+  };
+  service.surfaceFrameService = {
+    getActiveSurfaceId: () => "front",
+    listSurfaceIds: () => ["front", "back"],
+    getFrames: () => null,
+  };
+  service.renderIntentService = {
+    getGraph: () => ({
+      layers: [
+        {
+          id: "art-front",
+          surfaceId: "front",
+          visible: true,
+          nodes: [
+            {
+              id: "front-shape",
+              visible: true,
+              exportKeys: ["front-shape"],
+              tags: ["export:design"],
+              props: {},
+              effects: [],
+            },
+          ],
+        },
+        {
+          id: "art-back",
+          surfaceId: "back",
+          visible: true,
+          nodes: [
+            {
+              id: "back-shape",
+              visible: true,
+              exportKeys: ["back-shape"],
+              tags: ["export:design"],
+              props: {},
+              effects: [],
+            },
+          ],
+        },
+      ],
+    }),
+  };
+  service.renderGraphAdapter = {
+    createExportRenderObjectSpec: (
+      _layer: unknown,
+      node: { id: string },
+    ) => ({
+      id: node.id,
+      type: "rect",
+      props: { width: 10, height: 10 },
+      effects: [],
+    }),
+  };
+  service.createExportCanvas = createExportCanvas;
+
+  const crop = {
+    type: "sceneRect" as const,
+    rect: { left: 0, top: 0, width: 10, height: 10 },
+  };
+  const results = await service.exportImages({ crop, includeHidden: true });
+  assertEqual(results.length, 2, "exportImages should emit one result per surface");
+  assertEqual(results[0]?.surfaceId, "front", "first export should keep document order");
+  assertEqual(results[1]?.surfaceId, "back", "second export should keep document order");
+
+  const active = await service.exportImage({ crop, includeHidden: true });
+  assertEqual(
+    active.surfaceId,
+    "front",
+    "exportImage should target the active surface",
+  );
+
+  const requested = await service.exportImages({
+    crop,
+    includeHidden: true,
+    surfaceId: "back",
+  });
+  assertEqual(requested.length, 1, "exportImages should honor an explicit surfaceId");
+  assertEqual(requested[0]?.surfaceId, "back", "explicit surfaceId should select that surface");
+}
+
 async function testSceneExportMatchesRenderGraphNodeIds() {
   const source = {
     data: {
@@ -4674,6 +4790,10 @@ async function main() {
     [
       "uses the preview clip contract during export",
       testSceneExportUsesThePreviewClipContract,
+    ],
+    [
+      "exports each surface without switching the active tab",
+      testSceneExportImagesExportsEachSurface,
     ],
   ];
 

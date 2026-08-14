@@ -22,28 +22,35 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
       source: { kind: "url", url: "https://example.test/placeholder.svg" },
     },
   ],
-  extensions: {
-    "pooder.production-mask": {
-      masks: {
-        "front.white-ink": {
-          surfaceId: "front",
-          process: "white-ink",
-          production: {
-            enabled: true,
-            referenceObjectId: "front.image-slot",
-            source: { kind: "asset", assetId: "front-white-ink" },
-            alpha: {
-              selection: "transparent",
-              mapping: "threshold",
-              threshold: 0.2,
-              softness: 0.05,
-              outputOpacity: 1,
+  extension: {
+    required: [
+      "pooder.kit.image-slot",
+      "pooder.production-mask",
+      "pooder.kit.edge-detection",
+    ],
+    states: {
+      "pooder.production-mask": {
+        masks: {
+          "front.white-ink": {
+            surfaceId: "front",
+            process: "white-ink",
+            production: {
+              enabled: true,
+              referenceObjectId: "front.image-slot",
+              source: { kind: "asset", assetId: "front-white-ink" },
+              alpha: {
+                selection: "transparent",
+                mapping: "threshold",
+                threshold: 0.2,
+                softness: 0.05,
+                outputOpacity: 1,
+              },
             },
-          },
-          presentation: {
-            originalVisible: true,
-            originalMaskVisible: true,
-            currentMaskVisible: true,
+            presentation: {
+              originalVisible: true,
+              originalMaskVisible: true,
+              currentMaskVisible: true,
+            },
           },
         },
       },

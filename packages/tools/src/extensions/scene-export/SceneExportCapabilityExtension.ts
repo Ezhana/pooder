@@ -79,6 +79,7 @@ export class SceneExportCapabilityExtension implements ExtensionDefinition {
         multiplier: result.multiplier,
         source: result.source,
         crop: result.crop,
+        surfaceId: result.surfaceId,
       };
     } catch (error) {
       if (error instanceof Error) {

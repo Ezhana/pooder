@@ -172,7 +172,11 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
   private resolveSurfaceId(surfaceId?: string): string {
     const normalized = String(surfaceId || "").trim();
     if (normalized) return normalized;
-    return this.surfaceFrameService?.listSurfaceIds()[0] ?? "";
+    return (
+      this.surfaceFrameService?.getActiveSurfaceId() ||
+      this.surfaceFrameService?.listSurfaceIds()[0] ||
+      ""
+    );
   }
 
   private emit(surfaceId: string, layout: SceneLayoutSnapshot | null) {

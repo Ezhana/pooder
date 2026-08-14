@@ -19,6 +19,7 @@ export interface SceneExportCapabilityResult {
   multiplier: number;
   source: SceneExportSourceResult;
   crop: CoordinateRect<"scene">;
+  surfaceId: string;
 }
 
 export interface SceneExportCapabilityApi {

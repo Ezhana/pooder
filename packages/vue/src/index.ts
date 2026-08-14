@@ -18,6 +18,7 @@ export type {
   PooderRuntime,
   PooderSessionApi,
 } from "./runtime";
+export type { ActivateEditorSurfaceResult } from "@pooder/document-core";
 export type {
   ApplyEditorDocumentResult,
   DocumentDraft,
