@@ -14,6 +14,9 @@ function resourceUrl(resource: ImageResourceDescriptor): string | null {
 function probe(src: string): Promise<ImageResourceResolution> {
   return new Promise((resolve) => {
     const image = new Image();
+    if (/^https?:\/\//i.test(src)) {
+      image.crossOrigin = "anonymous";
+    }
     image.onload = () => {
       const width = Number(image.naturalWidth || image.width);
       const height = Number(image.naturalHeight || image.height);
