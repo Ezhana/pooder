@@ -14,8 +14,7 @@ import {
   type SceneExportCapabilityResult,
 } from "./capability";
 
-export interface SceneExportCapabilityExtensionOptions
-  extends SceneExportCapabilityOptions {
+export interface SceneExportCapabilityExtensionOptions extends SceneExportCapabilityOptions {
   id?: string;
 }
 
@@ -32,15 +31,15 @@ export class SceneExportCapabilityExtension implements ExtensionDefinition {
   private readonly capabilityId: string;
 
   constructor(options: SceneExportCapabilityExtensionOptions = {}) {
-    this.id = String(options.id || SCENE_EXPORT_CAPABILITY_ID).trim() ||
+    this.id =
+      String(options.id || SCENE_EXPORT_CAPABILITY_ID).trim() ||
       SCENE_EXPORT_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || SCENE_EXPORT_CAPABILITY_ID;
   }
 
   activate(context: ExtensionContext) {
-    this.exportService = context.services.getOrThrow<SceneExportService>(
-      SCENE_EXPORT_SERVICE,
-    );
+    this.exportService =
+      context.services.getOrThrow<SceneExportService>(SCENE_EXPORT_SERVICE);
   }
 
   deactivate() {

@@ -16,4 +16,3 @@ export function computeDetectEdgeSize(
     height: expandedBounds.height * scale,
   };
 }
-

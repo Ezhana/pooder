@@ -11,11 +11,13 @@ import {
   type RenderIntentPatch,
   type RenderIntentService,
 } from "@pooder/core";
-import type {
-  EditorDocument,
-  EditorEffect,
-  EditorObject,
+import {
+  findEditorDocumentObject,
+  type EditorDocument,
+  type EditorExtensionObjectEffect,
+  type EditorObject,
 } from "@pooder/document";
+import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
 import {
   MIRROR_CAPABILITY_ID,
   createMirrorCapabilityDefinition,
@@ -31,8 +33,7 @@ import {
 const MIRROR_RUNTIME_PATCH_SOURCE = "pooder.kit.mirror.runtime";
 const DEFAULT_EXTENSION_ID = "pooder.kit.mirror";
 
-export interface MirrorCapabilityExtensionOptions
-  extends MirrorCapabilityOptions {
+export interface MirrorCapabilityExtensionOptions extends MirrorCapabilityOptions {
   id?: string;
 }
 
@@ -76,6 +77,9 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
           capabilityId: this.capabilityId,
         }),
       ],
+      documentExtensions: [
+        { id: this.id, effects: [getOfficialToolEffectSchema("mirror")] },
+      ],
       renderIntentCompilers: [this.createRenderIntentCompiler()],
     };
   }
@@ -89,7 +93,7 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
   }
 
   private createRenderIntentCompiler(): RenderIntentCompilerContribution<
-    EditorEffect<MirrorEffectPayload>,
+    EditorExtensionObjectEffect<MirrorEffectPayload>,
     EditorDocument
   > {
     return {
@@ -101,14 +105,17 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
 
   private compileDocumentMirrorEffect(
     context: RenderIntentCompilerContext<
-      EditorEffect<MirrorEffectPayload>,
+      EditorExtensionObjectEffect<MirrorEffectPayload>,
       EditorDocument
     >,
   ): RenderIntentPatch | void {
     if (context.target.kind !== "object" || !context.target.objectId) return;
 
-    const object = findDocumentObject(context.document, context.target.objectId);
-    if (!object?.frame) return;
+    const object = findDocumentObject(
+      context.document,
+      context.target.objectId,
+    );
+    if (!object) return;
 
     const state = normalizeMirrorState(context.effect.payload);
     return {
@@ -223,7 +230,12 @@ function createMirrorTransform(
   const scaleX = flipX ? -1 : 1;
   const scaleY = flipY ? -1 : 1;
   return coordinateMatrix("object-local", "object-local", [
-    scaleX, 0, 0, scaleY, 0, 0,
+    scaleX,
+    0,
+    0,
+    scaleY,
+    0,
+    0,
   ]);
 }
 
@@ -247,11 +259,5 @@ function findDocumentObject(
   document: EditorDocument,
   objectId: string,
 ): EditorObject | undefined {
-  for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      const object = layer.objects?.find((item) => item.id === objectId);
-      if (object) return object;
-    }
-  }
-  return undefined;
+  return findEditorDocumentObject(document, objectId);
 }

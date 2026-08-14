@@ -1,152 +1,65 @@
 # App Workflow Composition
 
-Status: P6.S2 documentation
-Date: 2026-05-11
+Status: EditorDocument v8
+Date: 2026-07-29
 
-Applications compose product workflows from core services, browser platform
-services, and kit capabilities. Kit no longer owns storefront tool ids or
-business workflow orchestration.
+Applications compose workflows from EditorDocument, core services, browser
+platform services, and the remaining focused Tool capabilities. Dieline and
+Feature have no capability, tool, command, configuration state, or renderer
+group.
 
-## Register Capabilities
+## Document-owned dieline and feature
 
-Install only the capabilities the app workflow needs, and pass app-owned layer
-ids and config namespaces.
+- A cutline is a normal leaf Object with a path/shape `source`, a
+  `core.guide` trait, and the namespaced `guide:cut` tag.
+- A Feature is a Group Object. The cutline owns ordered
+  `core.geometry.boolean` effects that reference Feature operands by object id.
+- A clipped artwork Object owns `core.geometry.clip` and references the
+  cutline. Preview and export use the referenced object's final geometry.
+- A Group provides local coordinates, logical selection, and linked interaction
+  only. It is not a render or scene layer.
+- Surface/group object arrays plus depth-first traversal define draw order.
+  Index zero is bottommost; roles, traits, and runtime stack metadata do not
+  participate in document ordering.
+- Guide objects use the `core.guide` trait for guide behavior. Applications
+  that need guides on top place the guide object or group last in the array.
 
-```ts
-import { Pooder } from "@pooder/core";
-import {
-  createDesignExportCapability,
-  createDielineGeometryCapability,
-  createEdgeDetectionCapability,
-  createImagePlacementCapability,
-  type ImagePlacementCapabilityApi,
-} from "@pooder/tools";
+The document compiler recursively composes transforms and emits every leaf
+child as an independent RenderIntent. An interactive Group emits one
+transparent proxy; it never creates a Fabric group.
 
-const runtime = new Pooder();
+## App-owned feature workflow
 
-runtime.extensions.registerMany([
-  createImagePlacementCapability({
-    configNamespace: "storefrontImage",
-    layers: {
-      imageLayerId: "app.image",
-      overlayLayerId: "app.image.overlay",
-    },
-  }),
-  createEdgeDetectionCapability(),
-  createDielineGeometryCapability({
-    configNamespace: "storefrontDieline",
-    layers: {
-      targetLayerId: "app.dieline",
-      imageClipLayerIds: ["app.image"],
-    },
-  }),
-  createDesignExportCapability({
-    layers: {
-      sourceLayerIds: ["app.image", "app.dieline"],
-    },
-  }),
-]);
+The application opens an `EditorDocumentService.openSession()` whose draft is
+the product-level Feature preset. Its derive callback converts the preset to
+`EditorGroupObject[]`. Working mutations regenerate RenderIntent
+immediately; commit promotes the working document and rollback reapplies the
+snapshot.
 
-await runtime.extensions.flushActivation();
-```
-
-The browser host still needs platform services such as canvas, layout, scene
-adapter, and export. Applications should attach those platform services in the
-same place they create the canvas host.
-
-## Define App Tools Outside Kit
-
-Store product tool metadata in the application. The catalog owns labels,
-icons, ordering, workflow handlers, and visibility.
+Group movement declares `path.follow` or `path.lowest-tangent` against:
 
 ```ts
-type StorefrontToolId = "image" | "whiteInk" | "dieline";
-
-interface StorefrontTool {
-  id: StorefrontToolId;
-  label: string;
-  workflow: "session" | "instant";
-  activate(): Promise<void> | void;
-}
-
-const tools: StorefrontTool[] = [
-  {
-    id: "image",
-    label: "Image",
-    workflow: "session",
-    activate: async () => {
-      const image =
-        runtime.capabilities.getOrThrow<ImagePlacementCapabilityApi>(
-          "pooder.kit.image-placement",
-        );
-      await image.validateSession();
-    },
-  },
-];
-```
-
-The application may still map legacy kit ids to app tool ids during migration,
-but the app catalog should be the source of truth.
-
-## Compose A Dieline Workflow
-
-A product workflow can orchestrate multiple kit capabilities without activating
-a kit-owned toolbar tool.
-
-```ts
-import type {
-  DesignExportCapabilityApi,
-  DielineGeometryCapabilityApi,
-  EdgeDetectionCapabilityApi,
-} from "@pooder/tools";
-
-async function applyDielineFromArtwork() {
-  const exportImage =
-    runtime.capabilities.getOrThrow<DesignExportCapabilityApi>(
-      "pooder.kit.design-export",
-    );
-  const edgeDetection =
-    runtime.capabilities.getOrThrow<EdgeDetectionCapabilityApi>(
-      "pooder.kit.edge-detection",
-    );
-  const dieline =
-    runtime.capabilities.getOrThrow<DielineGeometryCapabilityApi>(
-      "pooder.kit.dieline-geometry",
-    );
-
-  const crop = await exportImage.exportImage({
-    sourceLayerIds: ["app.image"],
-    crop: { type: "frame", frame: "trim" },
-    format: "png",
-  });
-
-  const edge = await edgeDetection.detectEdge(crop.url);
-
-  dieline.applyDetectedPath(edge, {
-    sourceImage: {
-      width: crop.width,
-      height: crop.height,
-    },
-  });
-
-  dieline.upsertPathElement({
-    layerId: "app.dieline",
-    elementId: "app.dieline.path",
-    pathData: edge.pathData,
-    style: { stroke: "#00a3ff", fill: "transparent" },
-  });
+{
+  sourceId: "document-object",
+  geometryId: cutlineObjectId
 }
 ```
 
-## Workflow Rules
+Interactive preview and completion validation both use the core
+`ConstraintResolverService`. Applications subscribe to
+`EditorDocumentService.onDidChange()`.
 
-- App tool ids should be short product concepts such as `image`, `whiteInk`, or
-  `dieline`; kit capability ids stay namespaced, such as
-  `pooder.kit.image-placement`.
-- App workflows call typed capability facades directly.
-- App workflows create or pass app-owned layer ids before invoking kit
-  capabilities.
-- Session, activation, dirty state, route state, and toolbar visibility belong
-  to the application. Use core workflow sessions if the workflow needs
-  runtime-managed session state.
-- Do not infer app tool availability from installed kit extensions.
+## Edge detection
+
+Edge Detection remains a focused capability. After detection, the application
+atomically updates the cutline's Object Source, source bounds/size, and frame
+through `EditorDocumentService`. Runtime `dieline.*` configuration is input to
+document creation only and is not mutated after the document exists.
+
+## Workflow rules
+
+- Object Source and Document transforms are persisted facts.
+- Geometry snapshots, RenderIntent, RenderGraph, and Fabric objects are
+  rebuildable projections.
+- Tool availability is derived from Object behaviors, guide/feature traits,
+  Interaction, extension state, and extension-owned Object effects.

@@ -4,8 +4,9 @@ Pooder uses exactly four coordinate spaces:
 
 - `object-local`: geometry relative to the object itself, such as an
   object-relative clip path.
-- `parent-local`: geometry relative to the containing document object or
-  layer. Persisted document objects use this space.
+- `parent-local`: geometry relative to the containing document object. For a
+  surface root object, the parent origin is `surface.geometry.canvasBounds`'s
+  origin. Persisted document objects use this space.
 - `scene`: the canonical editor and render-graph space.
 - `screen`: browser viewport pixels.
 
@@ -17,7 +18,8 @@ inside one coordinate-space implementation.
 
 ## Boundary rules
 
-- A document object's frame and transform are `parent-local`.
+- A document node's `localToParent` transform is `parent-local`; only document
+  leaves persist `localFrame` and `localPivot`.
 - A formal `RenderGraphNode` is always `scene`. A render intent in another
   space is rejected with `render-intent-non-scene-space`; its producer must
   project it before compilation.
@@ -51,12 +53,19 @@ interface AffinePlacement {
 
 `localBounds` describes geometry only. Its `left` and `top` may be non-zero and
 must never be interpreted as scene position. `localToScene` is the sole
-placement fact and stays intact through RenderIntent and RenderGraph; nesting is
-flattened by matrix multiplication. A document object may name a
-`parentObjectId`; its frame and transform are then interpreted in that parent's
-local space. Rotation, non-uniform and negative scale,
+placement fact and stays intact through RenderIntent and RenderGraph. A
+Group owns recursive `children`; each child transform is parent-local, and
+nesting is flattened by recursive matrix multiplication. Only leaves have a
+persisted local frame.
+Rotation, non-uniform and negative scale,
 skew, and translation are therefore preserved without decomposition. `pivot`
 is an editing anchor in local coordinates, not an additional transform.
+
+The two sides use different words on purpose. A document leaf declares a
+`localFrame`: the rectangle its content is placed into. `AffinePlacement`
+reports `localBounds`: the measured extent of whatever the node actually
+produces, which for an image draft is the bitmap rather than the frame. Do not
+treat the two as synonyms when reading compiler code.
 
 The document compiler is the compatibility boundary that converts persisted
 parent-local frame/transform fields into `AffinePlacement`. Platform adapters do

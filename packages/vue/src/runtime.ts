@@ -3,6 +3,7 @@ import { Pooder } from "@pooder/core";
 import {
   registerEditorDocumentService,
   type ApplyEditorDocumentOptions,
+  type EditorDocumentPublication,
   type EditorDocumentSession,
   type EditorDocumentService,
   type OpenEditorDocumentSessionInput,
@@ -65,9 +66,19 @@ export interface PooderRuntime {
 
 export interface InstallPooderDocumentOptions extends Omit<
   ApplyEditorDocumentOptions,
-  "afterApply"
+  "afterPublish" | "publicationParticipants"
 > {
-  afterApply?: (
+  publicationParticipants?: readonly {
+    prepare(
+      runtime: PooderRuntime,
+      document: EditorDocument,
+      service: EditorDocumentService,
+    ):
+      | EditorDocumentPublication
+      | void
+      | Promise<EditorDocumentPublication | void>;
+  }[];
+  afterPublish?: (
     runtime: PooderRuntime,
     document: EditorDocument,
     service: EditorDocumentService,
@@ -132,8 +143,14 @@ export function installPooderDocument(
     effectSchemaRegistry: options.effectSchemaRegistry,
     resolveEffectCapabilityId: options.resolveEffectCapabilityId,
     validators: options.validators,
-    afterApply: async (_runtime, document) => {
-      await options.afterApply?.(runtime, document, service);
+    publicationParticipants: options.publicationParticipants?.map(
+      (participant) => ({
+        prepare: ({ document }) =>
+          participant.prepare(runtime, document, service),
+      }),
+    ),
+    afterPublish: async (_runtime, document) => {
+      await options.afterPublish?.(runtime, document, service);
     },
   });
   runtimeDocuments.set(runtime, service);

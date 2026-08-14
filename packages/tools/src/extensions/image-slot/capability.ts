@@ -1,11 +1,25 @@
-import type { CapabilityDefinition, SceneElementInput } from "@pooder/core";
+import type {
+  CapabilityDefinition,
+  ImageResourceDescriptor,
+  SessionRenderAuxiliaryVisual,
+} from "@pooder/core";
 import type {
   EditorDocument,
-  EditorImagePlacement,
-  EditorImageResource,
+  EditorImageAsset,
+  EditorImageContentFit,
 } from "@pooder/document";
 
 export interface ImageSlotDocumentController {
+  mutate(
+    callback: (document: EditorDocument) => EditorDocument | void,
+  ): Promise<
+    | { ok: true; document: EditorDocument }
+    | {
+        ok: false;
+        reason: string;
+        diagnostics: import("@pooder/document").EditorDocumentDiagnostic[];
+      }
+  >;
   updateObject(
     objectId: string,
     update: (
@@ -34,8 +48,8 @@ export type ImageSlotPlacementPreset =
 
 export interface ImageSlotSessionDraft {
   objectId: string;
-  resource?: EditorImageResource;
-  placement: EditorImagePlacement;
+  assetId?: string;
+  placement: EditorImageContentFit;
 }
 
 export interface ImageSlotViewState {
@@ -53,20 +67,21 @@ export type ImageSlotSessionResult =
   | {
       type: "placed";
       objectId: string;
-      resource: EditorImageResource;
-      placement: EditorImagePlacement;
+      assetId: string;
+      placement: EditorImageContentFit;
     }
   | { type: "cleared"; objectId: string };
 
-export interface SessionSceneDecorationContext {
+export interface SessionRenderDecorationContext {
   objectId: string;
   surfaceId: string;
 }
 
-export interface SessionSceneDecorationContribution {
+export interface SessionRenderDecorationContribution {
   id: string;
-  placement: "underlay" | "overlay" | "controls";
-  provide(context: SessionSceneDecorationContext): SceneElementInput[];
+  provide(
+    context: SessionRenderDecorationContext,
+  ): Array<Omit<SessionRenderAuxiliaryVisual, "sessionId" | "role">>;
 }
 
 export interface ImageSlotCapabilityApi {
@@ -82,12 +97,16 @@ export interface ImageSlotCapabilityApi {
   onDidChange(listener: (state: ImageSlotViewState) => void): {
     dispose(): void;
   };
-  setResource(
-    resource: EditorImageResource,
+  setAsset(
+    assetId: string,
+    options?: { placement?: "reset" | "preserve" },
+  ): Promise<{ ok: boolean; reason?: string }>;
+  stageAsset(
+    asset: EditorImageAsset,
     options?: { placement?: "reset" | "preserve" },
   ): Promise<{ ok: boolean; reason?: string }>;
   clearResource(): Promise<{ ok: boolean; reason?: string }>;
-  updatePlacement(partial: Partial<EditorImagePlacement>): {
+  updatePlacement(partial: Partial<EditorImageContentFit>): {
     ok: boolean;
     reason?: string;
   };
@@ -100,8 +119,8 @@ export interface ImageSlotCapabilityApi {
     ImageSlotSessionResult | { type: "error"; reason: string }
   >;
   rollbackSession(): Promise<{ ok: boolean; reason?: string }>;
-  registerSessionSceneDecoration(
-    contribution: SessionSceneDecorationContribution,
+  registerSessionRenderDecoration(
+    contribution: SessionRenderDecorationContribution,
   ): { dispose(): void };
 }
 

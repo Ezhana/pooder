@@ -58,7 +58,11 @@ export interface RenderObjectSpec {
   id: string;
   subjectId?: string;
   type: RenderObjectType;
+  /** Logical container geometry, excluding visual fit and placement. */
+  containerGeometryRef?: GeometryRef;
+  /** Final visual geometry used by interactive preview renderers. */
   previewGeometryRef?: GeometryRef;
+  /** Final visual geometry used by export renderers. */
   exportGeometryRef?: GeometryRef;
   props: RenderProps;
   data?: Record<string, any>;
@@ -205,13 +209,11 @@ export interface RenderEffectRendererContribution<
   ): void | Promise<void>;
 }
 
-export interface RegisteredRenderEffectDefinition
-  extends RenderEffectDefinition {
+export interface RegisteredRenderEffectDefinition extends RenderEffectDefinition {
   extensionId: string;
 }
 
-export interface RegisteredRenderEffectRenderer
-  extends RenderEffectRendererContribution {
+export interface RegisteredRenderEffectRenderer extends RenderEffectRendererContribution {
   extensionId: string;
 }
 
@@ -442,14 +444,6 @@ export function evaluateRuntimeCondition(
   }
 }
 
-/** @deprecated Use CoordinatePoint with an explicit space. */
-export type CanvasPoint<TSpace extends CoordinateSpace = CoordinateSpace> =
-  CoordinatePoint<TSpace>;
-
-/** @deprecated Use CoordinateRect with an explicit space. */
-export type CanvasRect<TSpace extends CoordinateSpace = CoordinateSpace> =
-  CoordinateRect<TSpace>;
-
 export interface CanvasSize {
   width: number;
   height: number;
@@ -496,12 +490,13 @@ export interface CanvasServiceEventMap {
 }
 
 export interface CanvasObjectSelector {
+  /** Logical subject ids, never backend projection ids. */
   ids?: readonly string[];
+  projectionIds?: readonly string[];
   layerIds?: readonly string[];
-  subjectIds?: readonly string[];
-  renderIntentIds?: readonly string[];
   types?: readonly string[];
   tags?: readonly string[];
+  tagMatch?: "all" | "any";
   visible?: boolean;
   data?: Record<string, unknown>;
 }

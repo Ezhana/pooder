@@ -1,31 +1,30 @@
 import {
-  DefaultSurfaceFrameService,
-  RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
   RENDER_INTENT_SERVICE,
-  RenderIntentCompilerRegistryService,
-  RenderIntentService,
-  SURFACE_FRAME_SERVICE,
-  type Service,
-  type ServiceIdentifier,
+  Pooder,
+  type GeometrySourceService,
+  type ImageResourceService,
+  type RenderIntentService,
 } from "@pooder/core";
 import {
-  applyEditorDocument,
-  createEditorDocumentController,
+  resolveEditorDocumentAsset,
+  type EditorDocument,
+  type EditorImageObject,
+} from "@pooder/document";
+import {
+  collectUnresolvableImageObjectIds,
+  registerEditorDocumentService,
   resolveObjectSource,
   sceneFrameToLocalFrame,
-  SourceResolver,
 } from "../src";
-import { EffectSchemaRegistry, type EditorEffect } from "@pooder/document";
 
-declare const process: {
-  exit(code: number): never;
-};
+declare const process: { exit(code: number): never };
 
-function assert(condition: unknown, message: string) {
+function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-function assertEqual<T>(actual: T, expected: T, message: string) {
+function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(
       `${message} (expected ${String(expected)}, got ${String(actual)})`,
@@ -33,7 +32,11 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
   }
 }
 
-function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
+function assertDeepEqual(
+  actual: unknown,
+  expected: unknown,
+  message: string,
+): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
   if (actualJson !== expectedJson) {
@@ -41,455 +44,579 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
-const TEST_SURFACE_FRAMES = {
-  previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-  productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-  viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-};
-
-function createRuntime() {
-  const renderIntentService = new RenderIntentService();
-  const compilerRegistry = new RenderIntentCompilerRegistryService();
-  const surfaceFrameService = new DefaultSurfaceFrameService();
-  const services = new Map<ServiceIdentifier<Service>, Service>([
-    [RENDER_INTENT_SERVICE, renderIntentService],
-    [RENDER_INTENT_COMPILER_REGISTRY_SERVICE, compilerRegistry],
-    [SURFACE_FRAME_SERVICE, surfaceFrameService],
-  ]);
-
+function createDocument(): EditorDocument {
   return {
-    runtime: {
-      config: {
-        state: {} as Record<string, unknown>,
-        export() {
-          return { ...this.state };
-        },
-        get<T = unknown>(key: string, defaultValue?: T): T {
-          return (this.state[key] as T) ?? (defaultValue as T);
-        },
-        import(data: Record<string, unknown>) {
-          this.state = { ...data };
-        },
-        update(key: string, value: unknown) {
-          this.state[key] = value;
-        },
+    version: 8,
+    assets: [
+      {
+        id: "artwork.asset",
+        type: "image",
+        source: { kind: "url", url: "/artwork.png" },
+        intrinsicSize: { width: 200, height: 100 },
       },
-      services: {
-        register<T extends Service>(
-          service: T,
-          identifier?: ServiceIdentifier<T>,
-        ) {
-          if (!identifier) return false;
-          services.set(identifier, service);
-          return true;
+    ],
+    extensions: {},
+    surfaces: [
+      {
+        id: "front",
+        geometry: {
+          canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+          productionBounds: { x: 5, y: 5, width: 90, height: 90 },
         },
-        get<T extends Service>(
-          identifier: ServiceIdentifier<T>,
-        ): T | undefined {
-          return services.get(identifier) as T | undefined;
-        },
-        getOrThrow<T extends Service>(identifier: ServiceIdentifier<T>): T {
-          const service = services.get(
-            identifier as ServiceIdentifier<Service>,
-          );
-          if (!service) throw new Error("service missing");
-          return service as T;
-        },
+        objects: [
+          {
+            type: "group",
+            id: "front.content",
+            tags: [],
+            visible: true,
+            locked: false,
+            localToParent: [1, 0, 0, 1, 0, 0],
+            children: [
+              {
+                type: "shape",
+                id: "clip-source",
+                tags: ["clip:source"],
+                visible: false,
+                locked: true,
+                localFrame: { x: 0, y: 0, width: 80, height: 60 },
+                localToParent: [1, 0, 0, 1, 10, 20],
+                localPivot: { x: 40, y: 30 },
+                source: {
+                  kind: "inline",
+                  content: { shape: "rect", params: {} },
+                },
+              },
+              {
+                type: "image",
+                id: "artwork",
+                tags: ["artwork:test"],
+                visible: true,
+                locked: false,
+                localFrame: { x: 0, y: 0, width: 80, height: 60 },
+                localToParent: [1, 0.25, -0.1, 1, 10, 20],
+                localPivot: { x: 40, y: 30 },
+                source: { kind: "asset", assetId: "artwork.asset" },
+                contentFit: {
+                  fit: "cover",
+                  anchorX: 0.5,
+                  anchorY: 0.5,
+                  zoom: 1,
+                  rotation: 0,
+                  clip: "frame",
+                },
+                opacity: 1,
+                effects: [
+                  {
+                    type: "core.geometry.clip",
+                    sourceObjectId: "clip-source",
+                    participation: "both",
+                  },
+                ],
+                interaction: {
+                  selection: { enabled: true },
+                  manipulation: {
+                    move: {
+                      enabled: true,
+                      constraints: [{ spec: { type: "rect.contain" } }],
+                    },
+                    resize: { enabled: true },
+                    rotate: { enabled: true },
+                  },
+                },
+              },
+            ],
+          },
+        ],
       },
-      capabilities: {
-        has(id: string) {
-          return id === "test.effect";
-        },
-        get() {
-          return undefined;
-        },
-      },
-    },
-    renderIntentService,
-    compilerRegistry,
+    ],
   };
 }
 
-function resolveTestEffectCapabilityId(
-  effect: EditorEffect,
-): string | undefined {
-  return (
-    effect.capabilityId ||
-    (effect.type === "custom" ? "test.effect" : undefined)
-  );
-}
-
-function testSourceResolver() {
-  const resolver = new SourceResolver();
-  assertDeepEqual(
-    resolver.resolve({
-      kind: "image",
-      resource: {
-        kind: "url",
-        url: "/art.png",
-        intrinsicSize: { width: 120, height: 80 },
-      },
-    })?.bounds,
-    { left: 0, top: 0, width: 120, height: 80 },
-    "url source should resolve intrinsic bounds",
-  );
+function testSourceResolution(): void {
+  const base = {
+    id: "test",
+    tags: [],
+    visible: true,
+    locked: false,
+    localFrame: { x: 0, y: 0, width: 1, height: 1 },
+    localToParent: [1, 0, 0, 1, 0, 0] as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ],
+    localPivot: { x: 0, y: 0 },
+  };
   assert(
     resolveObjectSource({
-      kind: "shape",
-      shape: "circle",
-      params: { radius: 10 },
-    })?.pathData?.startsWith("M10 0"),
-    "shape source should resolve path data",
-  );
-  assertEqual(
-    resolveObjectSource({ kind: "text", text: "Label" })?.text,
-    "Label",
-    "text source should resolve text content",
+      ...base,
+      type: "shape",
+      source: { kind: "inline", content: { shape: "circle", params: {} } },
+    })?.pathData,
+    "shape source should resolve geometry",
   );
 }
 
-async function testApplyEditorDocument() {
-  const { runtime, renderIntentService, compilerRegistry } = createRuntime();
-  compilerRegistry.registerCompiler("test", {
-    capabilityId: "test.effect",
-    effectType: "custom",
-    compile({ target }) {
-      return {
-        id: target.objectId ?? "missing",
-        props: { compiled: true },
-      };
+async function testStrictApplyAndGeometry(): Promise<void> {
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const result = await controller.apply(createDocument());
+    assert(
+      result.ok,
+      `strict document should apply (${JSON.stringify(result.diagnostics)})`,
+    );
+    const renderIntents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const artwork = renderIntents
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find((node) => node.subjectId === "artwork");
+    assert(artwork, "artwork should compile into the render graph");
+
+    const geometry = runtime.services.getOrThrow<GeometrySourceService>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    const bounds = geometry.getBounds(
+      {
+        sourceId: "document-object",
+        geometryId: "artwork",
+        purpose: "preview",
+      },
+      "scene",
+    );
+    assert(bounds.value, "document object geometry should be registered");
+
+    const beforeRevision = renderIntents.getGraph().revision;
+    const mutation = await controller.updateObject("artwork", (object) => ({
+      ...object,
+      visible: false,
+    }));
+    assert(mutation.ok, "object mutation should commit");
+    assert(
+      renderIntents.getGraph().revision > beforeRevision,
+      "committed mutation should republish render intent",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testDocumentDepthFirstOrderDefinesRenderGraphOrder(): Promise<void> {
+  const document = createDocument();
+  const shape = (id: string) => ({
+    type: "shape" as const,
+    id,
+    tags: [],
+    visible: true,
+    locked: false,
+    localFrame: { x: 0, y: 0, width: 10, height: 10 },
+    localToParent: [1, 0, 0, 1, 0, 0] as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ],
+    source: {
+      kind: "inline" as const,
+      content: { shape: "rect" as const, params: {} },
     },
   });
-
-  const result = await applyEditorDocument(
-    runtime,
+  document.surfaces[0]!.objects = [
     {
-      version: 7,
-      config: { mode: "test" },
-      surfaces: [
+      type: "group",
+      id: "z-root",
+      tags: [],
+      visible: true,
+      locked: false,
+      localToParent: [1, 0, 0, 1, 0, 0],
+      children: [
+        shape("z-first"),
         {
-          id: "front",
-          size: { width: 100, height: 100, unit: "mm" },
-          frames: TEST_SURFACE_FRAMES,
-          layers: [
-            {
-              id: "artwork",
-              objects: [
-                {
-                  id: "shape",
-                  frame: { x: 10, y: 20, width: 40, height: 40 },
-                  source: {
-                    kind: "shape",
-                    shape: "rect",
-                    params: { width: 20, height: 20 },
-                  },
-                  effects: [{ type: "custom" }],
-                  interaction: {
-                    selection: { enabled: false },
-                    activation: {
-                      action: { commandId: "test.open-session" },
-                    },
-                    manipulation: {
-                      move: {
-                        enabled: true,
-                        constraints: [{ spec: { type: "rect.contain" } }],
-                      },
-                      resize: { enabled: true },
-                      rotate: { enabled: false },
-                    },
-                  },
-                },
-                {
-                  id: "label",
-                  frame: { x: 5, y: 6, width: 30, height: 10 },
-                  source: { kind: "text", text: "Label" },
-                },
-                {
-                  id: "empty-image-slot",
-                  frame: { x: 20, y: 30, width: 50, height: 60 },
-                  source: { kind: "image" },
-                  placement: {
-                    fit: "cover",
-                    anchorX: 0.5,
-                    anchorY: 0.5,
-                    zoom: 1,
-                    rotation: 0,
-                    opacity: 1,
-                    clip: "frame",
-                  },
-                  slot: {},
-                  interaction: { hitRegion: { type: "frame" } },
-                },
-              ],
-            },
-          ],
+          type: "group",
+          id: "a-nested-group",
+          tags: [],
+          visible: true,
+          locked: false,
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [shape("y-nested")],
         },
       ],
     },
-    {
-      effectSchemaRegistry: new EffectSchemaRegistry([
-        {
-          effectType: "custom",
-          capabilityId: "test.effect",
-          validate: () => [],
-        },
-      ]),
-      resolveEffectCapabilityId: resolveTestEffectCapabilityId,
-    },
-  );
+    shape("a-last"),
+  ];
 
-  assertEqual(result.ok, true, "document should apply");
-  const graph = renderIntentService.getGraph();
-  const node = graph.layers[0]?.nodes.find((item) => item.id === "shape");
-  const labelNode = graph.layers[0]?.nodes.find((item) => item.id === "label");
-  const emptySlotNode = graph.layers[0]?.nodes.find(
-    (item) => item.id === "empty-image-slot",
-  );
-  assertEqual(node?.id, "shape", "source object should become a render node");
-  assertEqual(node?.type, "path", "shape source should render as path");
-  assertEqual(labelNode?.type, "text", "text source should render as text");
-  assertEqual(
-    labelNode?.props.text,
-    "Label",
-    "text source should write text props",
-  );
-  assertEqual(
-    node?.props.compiled,
-    true,
-    "generic effect compiler should patch node",
-  );
-  assertEqual(
-    node?.interaction?.manipulation?.move?.enabled,
-    true,
-    "object interaction should enable drag",
-  );
-  assertEqual(
-    node?.interaction?.manipulation?.move?.constraints?.[0]?.spec.type,
-    "rect.contain",
-    "object interaction constraints should translate to render intent",
-  );
-  assertEqual(
-    node?.interaction?.activation?.action.commandId,
-    "test.open-session",
-    "object activation should translate to render intent",
-  );
-  assertEqual(
-    emptySlotNode?.visible,
-    true,
-    "empty image slots should remain visible to frame hit testing",
-  );
-  assertEqual(
-    emptySlotNode?.visual?.src,
-    undefined,
-    "empty image slots should not synthesize content resources",
-  );
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const applied = await controller.apply(document);
+    assert(applied.ok, "root group ordering document should apply");
+    const graph = runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph();
+    assertDeepEqual(
+      graph.layers.map((layer) => layer.id),
+      ["front"],
+      "document groups should not create render layers",
+    );
+    assertDeepEqual(
+      graph.layers[0]?.nodes.map((node) => node.id),
+      ["z-first", "y-nested", "a-last"],
+      "RenderGraph nodes should follow document DFS order rather than id order",
+    );
+  } finally {
+    await runtime.dispose();
+  }
 }
 
-async function testControllerUpdatesOnlyChangedRenderIntents() {
-  const { runtime, renderIntentService } = createRuntime();
-  const controller = createEditorDocumentController(runtime);
-  const document = {
-    version: 7 as const,
-    config: {},
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 100, unit: "mm" as const },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "artwork",
-            objects: ["first", "second"].map((id, index) => ({
-              id,
-              frame: { x: index * 20, y: 0, width: 10, height: 10 },
-              source: {
-                kind: "shape" as const,
-                shape: "rect" as const,
-                params: { width: 10, height: 10 },
-              },
-            })),
-          },
-        ],
-      },
-    ],
-  };
-  const applied = await controller.apply(document);
-  assertEqual(applied.ok, true, "controller document should apply");
-  const reasons: unknown[] = [];
-  renderIntentService.onDidChange((event) => reasons.push(event.reason));
+async function testGroupFlatteningPreservesRenderProjection(): Promise<void> {
+  const grouped = createDocument();
+  const group = grouped.surfaces[0]!.objects[0]!;
+  assert(group.type === "group", "flattening fixture root should be a group");
+  group.localToParent = [1, 0, 0, 1, 30, 40];
 
-  const updated = await controller.updateObject("first", (current) => ({
-    ...current,
-    style: { ...(current.style ?? {}), opacity: 0.5 },
-  }));
-  assertEqual(updated.ok, true, "controller object update should succeed");
-  assertDeepEqual(
-    reasons,
-    [{ type: "base-updated", intentIds: ["first"] }],
-    "controller updates should publish only changed render intents",
-  );
-}
-
-async function testDocumentServiceDraftIsolation() {
-  const { runtime } = createRuntime();
-  const service = createEditorDocumentController(runtime);
-  const applied = await service.apply({
-    version: 7,
-    config: {},
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 100, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "artwork",
-            objects: [
-              {
-                id: "shape",
-                frame: { x: 10, y: 20, width: 30, height: 40 },
-                source: { kind: "shape", shape: "rect", params: {} },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-  assertEqual(applied.ok, true, "draft fixture should apply");
-  const events: string[] = [];
-  service.onDidChange((event) => events.push(event.type));
-  const draft = await service.beginDraft();
-  const invalid = await draft.mutate((document) => {
-    document.surfaces = [];
-  });
-  assertEqual(invalid.ok, false, "invalid draft mutation should fail");
-  assertEqual(
-    service.export("working")?.surfaces.length,
-    1,
-    "failed mutation must not pollute working state",
-  );
-  const updated = await draft.mutate((document) => {
-    const object = document.surfaces[0]?.layers[0]?.objects?.[0];
-    if (object?.frame) object.frame.x = 25;
-  });
-  assertEqual(
-    updated.ok,
-    true,
-    "valid draft mutation should update working state",
-  );
-  assertEqual(
-    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
-    10,
-    "draft mutation should not change committed state",
-  );
-  await draft.rollback();
-  assertEqual(
-    service.export("working")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
-    10,
-    "rollback should restore committed state",
-  );
-  const commitDraft = await service.beginDraft();
-  const commitMutation = await commitDraft.mutate((document) => {
-    const object = document.surfaces[0]?.layers[0]?.objects?.[0];
-    if (object?.frame) object.frame.x = 35;
-  });
-  assertEqual(commitMutation.ok, true, "commit draft mutation should succeed");
-  await commitDraft.commit();
-  assertEqual(
-    service.export("committed")?.surfaces[0]?.layers[0]?.objects?.[0]?.frame?.x,
-    35,
-    "commit should atomically promote working state",
-  );
-
-  const committedBeforeInvalidApply = service.export("committed");
-  const invalidApply = await service.apply({
-    version: 7,
-    config: {},
-    surfaces: [],
-  });
-  assertEqual(invalidApply.ok, false, "invalid document apply should fail");
-  assertDeepEqual(
-    service.export("committed"),
-    committedBeforeInvalidApply,
-    "validation failure must preserve the complete committed document",
-  );
-  assertDeepEqual(
-    events,
-    ["mutate", "rollback", "mutate", "commit"],
-    "draft events should be explicit",
-  );
-}
-
-async function testDocumentServiceCommitsSceneTranslationBySubject() {
-  const { runtime, renderIntentService } = createRuntime();
-  const service = createEditorDocumentController(runtime);
-  const applied = await service.apply({
-    version: 7,
-    config: {},
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 100, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "artwork",
-            objects: [
-              {
-                id: "shape",
-                frame: { x: 10, y: 20, width: 30, height: 40 },
-                source: { kind: "shape", shape: "rect", params: {} },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-  assertEqual(applied.ok, true, "translation fixture should apply");
-  const previousRevision = renderIntentService.getGraph().revision;
-
-  const result = await service.commitManipulation({
-    subjectId: "shape",
-    sceneTransformPatch: {
-      type: "translate",
-      coordinateSpace: "scene",
-      delta: { space: "scene", x: 20, y: 10 },
-    },
-    parentMatrix: [2, 0, 0, 2, 0, 0],
-  });
-
-  assertEqual(result.ok, true, "scene translation should commit");
-  assertDeepEqual(
-    service.export()?.surfaces[0]?.layers[0]?.objects?.[0]?.frame,
-    { x: 20, y: 25, width: 30, height: 40 },
-    "scene delta should be converted to parent-local document coordinates",
-  );
+  const flattened = JSON.parse(JSON.stringify(grouped)) as EditorDocument;
+  const flattenedGroup = flattened.surfaces[0]!.objects[0]!;
   assert(
-    renderIntentService.getGraph().revision > previousRevision,
-    "document commit should regenerate the RenderGraph",
+    flattenedGroup.type === "group",
+    "flattening clone root should be a group",
+  );
+  flattened.surfaces[0]!.objects = flattenedGroup.children.map((child) => {
+    const [a, b, c, d, e, f] = child.localToParent;
+    return {
+      ...child,
+      visible: flattenedGroup.visible && child.visible,
+      localToParent: [a, b, c, d, e + 30, f + 40] as typeof child.localToParent,
+    };
+  });
+
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  const renderProjection = () =>
+    runtime.services
+      .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
+      .getGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .map((node) => ({
+        id: node.id,
+        type: node.type,
+        visual: node.visual,
+        placement: node.placement,
+        props: node.props,
+        effects: node.effects,
+        visible: node.visible,
+        tags: node.tags,
+      }));
+  try {
+    assert(
+      (await controller.apply(grouped)).ok,
+      "grouped document should apply",
+    );
+    const groupedProjection = renderProjection();
+    assert(
+      (await controller.apply(flattened)).ok,
+      "flattened document should apply",
+    );
+    assertDeepEqual(
+      renderProjection(),
+      groupedProjection,
+      "expanding a group in place should preserve its render projection",
+    );
+
+    group.visible = false;
+    assert(
+      (await controller.apply(grouped)).ok,
+      "hidden ancestor document should apply",
+    );
+    assertEqual(
+      renderProjection().find((node) => node.id === "artwork")?.visible,
+      false,
+      "ancestor visibility should be ANDed into visible descendants",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testRejectedDocumentsRemainAtomic(): Promise<void> {
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const initial = await controller.apply(createDocument());
+    assert(initial.ok, "initial document should apply");
+    const invalid = { ...createDocument(), metadata: {} };
+    const rejected = await controller.apply(invalid);
+    assertEqual(rejected.ok, false, "unknown document fields should reject");
+    assertEqual(
+      controller.export()?.surfaces[0]?.id,
+      "front",
+      "rejected apply should preserve the committed document",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testSceneTranslationCommit(): Promise<void> {
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const applied = await controller.apply(createDocument());
+    assert(applied.ok, "translation fixture should apply");
+    const result = await controller.commitManipulation({
+      subjectId: "artwork",
+      sceneTransformPatch: {
+        type: "translate",
+        coordinateSpace: "scene",
+        delta: { space: "scene", x: 20, y: 10 },
+      },
+      parentMatrix: [2, 0, 0, 2, 0, 0],
+    });
+    assert(result.ok, "scene translation should commit");
+    const exportedGroup = controller.export()?.surfaces[0]!.objects[0];
+    assert(exportedGroup?.type === "group", "exported root should be a group");
+    assertDeepEqual(
+      exportedGroup.children[1]!.localToParent,
+      [1, 0.25, -0.1, 1, 20, 25],
+      "scene delta should convert to parent-local translation",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
+  const runtime = new Pooder();
+  const controller = registerEditorDocumentService(runtime);
+  try {
+    const document = createDocument();
+    const group = document.surfaces[0]!.objects[0]!;
+    assert(group.type === "group", "fixture root should be a group");
+    const artwork = group.children.find((object) => object.id === "artwork")!;
+    group.children.push({
+      ...JSON.parse(JSON.stringify(artwork)),
+      id: "artwork-copy",
+      effects: undefined,
+    });
+    assert(
+      (await controller.apply(document)).ok,
+      "shared image fixture should apply",
+    );
+
+    const updated = await controller.updateImageResources(
+      { ids: ["artwork"] },
+      { source: { kind: "url", url: "/replacement.png" } },
+      { expectedCount: 1 },
+    );
+    assert(updated.ok, "target image upload should commit");
+    const exported = controller.export()!;
+    const exportedGroup = exported.surfaces[0]!.objects[0]!;
+    assert(exportedGroup.type === "group", "exported root should be a group");
+    const target = exportedGroup.children.find(
+      (object) => object.id === "artwork",
+    );
+    const sibling = exportedGroup.children.find(
+      (object) => object.id === "artwork-copy",
+    );
+    assert(
+      target?.type === "image" && sibling?.type === "image",
+      "images should retain type",
+    );
+    assert(
+      target.source?.assetId !== sibling.source?.assetId,
+      "upload should replace only the target source reference",
+    );
+    const targetAsset = resolveEditorDocumentAsset(
+      exported,
+      target.source,
+      "image",
+    );
+    const siblingAsset = resolveEditorDocumentAsset(
+      exported,
+      sibling.source,
+      "image",
+    );
+    assertEqual(
+      targetAsset?.source.kind === "url" ? targetAsset.source.url : undefined,
+      "/replacement.png",
+      "target should resolve the replacement asset",
+    );
+    assertEqual(
+      siblingAsset?.source.kind === "url" ? siblingAsset.source.url : undefined,
+      "/artwork.png",
+      "sibling should retain the shared original asset",
+    );
+
+    const replacementAssetId = target.source?.assetId;
+    const hidden = await controller.updateImageResources(
+      { ids: ["artwork"] },
+      { visible: false },
+      { expectedCount: 1 },
+    );
+    assert(hidden.ok, "visibility-only image update should commit");
+    const hiddenGroup = controller.export()!.surfaces[0]!.objects[0]!;
+    assert(hiddenGroup.type === "group", "exported root should be a group");
+    const hiddenTarget = hiddenGroup.children.find(
+      (object) => object.id === "artwork",
+    );
+    assert(
+      hiddenTarget?.type === "image",
+      "visibility-only update should retain the image object",
+    );
+    assertEqual(
+      hiddenTarget.source?.assetId,
+      replacementAssetId,
+      "omitting source should preserve the current resource",
+    );
+    assertEqual(
+      controller
+        .export()!
+        .assets.some((asset) => asset.id === replacementAssetId),
+      true,
+      "visibility-only update should not reclaim the current resource",
+    );
+
+    const cleared = await controller.updateImageResources(
+      { ids: ["artwork"] },
+      { source: null },
+      { expectedCount: 1 },
+    );
+    assert(cleared.ok, "explicit null source should clear the resource");
+    const clearedGroup = controller.export()!.surfaces[0]!.objects[0]!;
+    assert(clearedGroup.type === "group", "exported root should be a group");
+    const clearedTarget = clearedGroup.children.find(
+      (object) => object.id === "artwork",
+    );
+    assert(
+      clearedTarget?.type === "image" && clearedTarget.source === null,
+      "explicit null should persist an empty image source",
+    );
+    assertEqual(
+      controller
+        .export()!
+        .assets.some((asset) => asset.id === replacementAssetId),
+      false,
+      "clearing the source should reclaim the orphaned resource",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+async function testUnresolvableImageDetection(): Promise<void> {
+  const document = createDocument();
+  const surface = document.surfaces[0]!;
+  const group = surface.objects[0]!;
+  assert(group.type === "group", "fixture root should be a group");
+  const template = group.children.find(
+    (object): object is EditorImageObject => object.type === "image",
+  )!;
+  document.assets.push(
+    {
+      id: "missing.asset",
+      type: "image",
+      source: { kind: "url", url: "/missing.png" },
+    },
+    {
+      id: "placeholder.asset",
+      type: "image",
+      source: { kind: "url", url: "/placeholder.png" },
+    },
+  );
+  group.children.push(
+    {
+      ...template,
+      id: "missing",
+      source: { kind: "asset", assetId: "missing.asset" },
+    },
+    {
+      ...template,
+      id: "missing-hidden",
+      visible: false,
+      source: { kind: "asset", assetId: "missing.asset" },
+    },
+    {
+      ...template,
+      id: "empty-slot",
+      source: null,
+      behaviors: [
+        {
+          type: "pooder.image-slot",
+          config: {
+            placeholderSource: { kind: "asset", assetId: "placeholder.asset" },
+          },
+        },
+      ],
+    } as EditorImageObject,
+  );
+  surface.objects.push({
+    type: "group",
+    id: "front.hidden",
+    tags: [],
+    visible: false,
+    locked: false,
+    localToParent: [1, 0, 0, 1, 0, 0],
+    children: [
+      {
+        ...template,
+        id: "missing-in-hidden-layer",
+        source: { kind: "asset", assetId: "missing.asset" },
+      },
+    ],
+  });
+
+  const ensured: string[] = [];
+  const service: Pick<ImageResourceService, "read" | "ensure"> = {
+    read: (resource) =>
+      resource.kind === "url" && resource.url === "/artwork.png"
+        ? { ok: true, src: resource.url, width: 200, height: 100 }
+        : undefined,
+    ensure: async (resource) => {
+      ensured.push(resource.kind === "url" ? resource.url : "");
+      return { ok: false, reason: "load-failed" };
+    },
+  };
+
+  assertDeepEqual(
+    await collectUnresolvableImageObjectIds(document, service),
+    ["missing"],
+    "only drawable images with unavailable bytes should be reported",
+  );
+  // Skipped objects must not even be asked for: a hidden image or an empty slot's
+  // placeholder never reaches the exported pixels, so blocking on them would be wrong.
+  assertDeepEqual(
+    ensured,
+    ["/missing.png"],
+    "established resources should not be re-fetched and skipped ones not fetched at all",
   );
 }
 
-function testSceneFrameUsesInverseParentMatrix() {
+function testSceneFrameConversion(): void {
   assertDeepEqual(
     sceneFrameToLocalFrame(
       { left: 30, top: 50, width: 40, height: 20 },
       [2, 0, 0, 2, 10, 10],
     ),
     { left: 10, top: 20, width: 20, height: 10 },
-    "scene frame should be converted through the inverse parent matrix",
+    "scene frame should use the inverse parent matrix",
   );
 }
 
-async function main() {
-  testSourceResolver();
-  testSceneFrameUsesInverseParentMatrix();
-  await testApplyEditorDocument();
-  await testControllerUpdatesOnlyChangedRenderIntents();
-  await testDocumentServiceDraftIsolation();
-  await testDocumentServiceCommitsSceneTranslationBySubject();
+async function main(): Promise<void> {
+  testSourceResolution();
+  testSceneFrameConversion();
+  await testStrictApplyAndGeometry();
+  await testDocumentDepthFirstOrderDefinesRenderGraphOrder();
+  await testGroupFlatteningPreservesRenderProjection();
+  await testRejectedDocumentsRemainAtomic();
+  await testSceneTranslationCommit();
+  await testImageUploadReplacesOnlyTheTargetSource();
+  await testUnresolvableImageDetection();
   console.log("ok");
 }
 

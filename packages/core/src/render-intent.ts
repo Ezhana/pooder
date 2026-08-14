@@ -63,18 +63,23 @@ export interface RenderIntentExportAspect {
 
 export interface RenderIntentOrderingAspect {
   layerId: string;
+  /** Runtime render-layer order. Independent from the node's intra-layer path. */
   layerOrder?: number;
-  objectOrder?: number;
+  /** Lexicographic draw path. Earlier entries and shorter prefixes draw first. */
+  path?: readonly number[];
   channel?: RenderIntentChannel;
   subOrder?: number;
-  stack?: number;
 }
 
 export interface RenderIntentDraft {
   id: string;
   subject: RenderIntentSubject;
   visual?: RenderIntentVisualAspect;
+  /** Logical container geometry, excluding boolean and visual placement. */
+  containerGeometryRef?: GeometryRef;
+  /** Final visual geometry used by interactive preview renderers. */
   previewGeometryRef?: GeometryRef;
+  /** Final visual geometry used by export renderers. */
   exportGeometryRef?: GeometryRef;
   placement?: RenderIntentPlacementAspect;
   effects?: RenderEffectSpec[];
@@ -121,7 +126,7 @@ export interface RenderIntentPatchEntry {
 
 export interface RenderGraphSortKey {
   layerOrder: number;
-  objectOrder: number;
+  path: readonly number[];
   channel: RenderIntentChannel;
   channelOrder: number;
   subOrder: number;
@@ -134,6 +139,7 @@ export interface RenderGraphNode {
   surfaceId: string;
   type: RenderObjectSpec["type"];
   visual?: RenderIntentSource;
+  containerGeometryRef: GeometryRef;
   previewGeometryRef: GeometryRef;
   exportGeometryRef: GeometryRef;
   coordinateSpace: "scene";
@@ -147,6 +153,56 @@ export interface RenderGraphNode {
   visible: boolean;
   tags: string[];
   sortKey: RenderGraphSortKey;
+  provenance: RenderGraphNodeProvenance;
+}
+
+export type RenderGraphNodeProvenance =
+  | { readonly type: "document" }
+  | {
+      readonly type: "session";
+      readonly sessionId: string;
+      readonly contributionId: string;
+      readonly source: string;
+      readonly role: "override" | "auxiliary";
+      readonly priority: number;
+      readonly replacementTarget?: SessionRenderReplacementTarget;
+    };
+
+export interface SessionRenderReplacementTarget {
+  /** Logical business subject replaced by the temporary projection. */
+  readonly subjectId: string;
+  /** Optional concrete document projection. Omit to replace every projection. */
+  readonly projectionId?: string;
+}
+
+interface SessionRenderContributionBase {
+  readonly sessionId: string;
+  readonly subjectId: string;
+  readonly surfaceId: string;
+  readonly provenance: string;
+  readonly priority: number;
+  /** Must use an id independent from the persistent document projection. */
+  readonly projection: RenderIntentDraft;
+}
+
+export interface SessionRenderOverride extends SessionRenderContributionBase {
+  readonly role: "override";
+  readonly replacementTarget: SessionRenderReplacementTarget;
+}
+
+export interface SessionRenderAuxiliaryVisual extends SessionRenderContributionBase {
+  readonly role: "auxiliary";
+  readonly replacementTarget?: never;
+}
+
+export type SessionRenderContribution =
+  | SessionRenderOverride
+  | SessionRenderAuxiliaryVisual;
+
+export interface SessionRenderScope extends Disposable {
+  readonly sessionId: string;
+  replace(contributions: readonly SessionRenderContribution[]): RenderGraph;
+  clear(): boolean;
 }
 
 /**
@@ -163,7 +219,6 @@ export interface RenderGraphLayer {
   id: string;
   surfaceId: string;
   order: number;
-  stack: number;
   visible: boolean;
   nodes: RenderGraphNode[];
   effects: RenderEffectSpec[];
@@ -176,6 +231,67 @@ export interface RenderGraph {
   layers: RenderGraphLayer[];
   projectionMemberships: RenderGraphProjectionMembership[];
   diagnostics: RenderIntentDiagnostic[];
+}
+
+export interface RenderGraphNodeSelector {
+  /** Logical document/runtime subject ids. */
+  ids?: readonly string[];
+  /** Runtime projection ids; use only for projection-specific diagnostics. */
+  projectionIds?: readonly string[];
+  tags?: readonly string[];
+  tagMatch?: "all" | "any";
+  visible?: boolean;
+}
+
+export function selectRenderGraphNodes(
+  graph: RenderGraph,
+  selector: RenderGraphNodeSelector = {},
+): RenderGraphNode[] {
+  const ids = selectorValues(selector.ids);
+  const projectionIds = selectorValues(selector.projectionIds);
+  const tags = selectorValues(selector.tags);
+  return graph.layers.flatMap((layer) =>
+    layer.nodes.filter((node) => {
+      if (ids && !ids.has(node.subjectId)) return false;
+      if (projectionIds && !projectionIds.has(node.id)) return false;
+      if (selector.visible !== undefined && node.visible !== selector.visible)
+        return false;
+      if (!tags) return true;
+      const nodeTags = new Set(node.tags);
+      return selector.tagMatch === "any"
+        ? Array.from(tags).some((tag) => nodeTags.has(tag))
+        : Array.from(tags).every((tag) => nodeTags.has(tag));
+    }),
+  );
+}
+
+export function selectOneRenderGraphNode(
+  graph: RenderGraph,
+  selector: RenderGraphNodeSelector,
+): RenderGraphNode | undefined {
+  const nodes = selectRenderGraphNodes(graph, selector);
+  if (nodes.length > 1) throw new Error("render-graph-selector-ambiguous");
+  return nodes[0];
+}
+
+function selectorValues(
+  values: readonly string[] | undefined,
+): Set<string> | undefined {
+  if (!values?.length) return undefined;
+  const normalized = new Set(
+    values.map((value) => value.trim()).filter(Boolean),
+  );
+  return normalized.size ? normalized : undefined;
+}
+
+export type RenderIntentDocumentPublicationMode = "replace" | "update";
+
+/**
+ * Opaque candidate produced without mutating the live RenderIntent state.
+ * Publish rejects candidates prepared before a runtime patch changed.
+ */
+export interface PreparedRenderIntentDocumentPublication {
+  readonly graph: RenderGraph;
 }
 
 export interface RenderIntentCompilerContext<
@@ -225,6 +341,13 @@ export type RenderIntentChangeReason =
       type: "runtime-condition";
       operation: "set" | "delete" | "clear";
       keys: string[];
+    }
+  | {
+      type: "session-render";
+      operation: "replace" | "clear";
+      sessionId: string;
+      projectionIds: string[];
+      subjectIds: string[];
     };
 
 export interface RenderIntentChangeEvent {
@@ -294,6 +417,9 @@ const CRITICAL_PATCH_FIELDS = [
 const CLEARABLE_ROOT_FIELDS = new Set([
   "subject",
   "visual",
+  "containerGeometryRef",
+  "previewGeometryRef",
+  "exportGeometryRef",
   "placement",
   "effects",
   "interaction",
@@ -314,6 +440,40 @@ class RegistryDisposable implements Disposable {
     if (this.disposed) return;
     this.disposed = true;
     this.disposeFn();
+  }
+}
+
+class SessionRenderScopeImpl implements SessionRenderScope {
+  private disposed = false;
+
+  constructor(
+    private readonly service: RenderIntentService,
+    readonly sessionId: string,
+  ) {}
+
+  replace(contributions: readonly SessionRenderContribution[]): RenderGraph {
+    this.ensureActive();
+    return this.service.setSessionRenderContributions(
+      this.sessionId,
+      contributions,
+    );
+  }
+
+  clear(): boolean {
+    this.ensureActive();
+    return this.service.clearSessionRenderContributions(this.sessionId);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.service.clearSessionRenderContributions(this.sessionId);
+  }
+
+  private ensureActive(): void {
+    if (this.disposed) {
+      throw new Error(`Session render scope "${this.sessionId}" is disposed.`);
+    }
   }
 }
 
@@ -379,36 +539,115 @@ export class RenderIntentService implements Service {
   }>();
   private baseIntents: RenderIntentDraft[] = [];
   private runtimePatches = new Map<string, RequiredRuntimePatchEntry>();
+  private sessionRenderContributions = new Map<
+    string,
+    SessionRenderContribution[]
+  >();
   private runtimeConditionValues = new Map<string, unknown>();
   private graph: RenderGraph = createRenderGraph([], 0);
   private revision = 0;
   private runtimePatchSequence = 0;
+  private runtimePatchRevision = 0;
+  private sessionRenderRevision = 0;
+  private readonly preparedDocumentPublications = new WeakMap<
+    PreparedRenderIntentDocumentPublication,
+    {
+      baseIntents: RenderIntentDraft[];
+      graph: RenderGraph;
+      reason: RenderIntentChangeReason | null;
+      runtimePatchRevision: number;
+      sessionRenderRevision: number;
+    }
+  >();
+  private readonly pendingDocumentPublicationNotifications = new WeakMap<
+    PreparedRenderIntentDocumentPublication,
+    RenderIntentChangeReason | null
+  >();
 
   init(): void {}
 
   setDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
-    this.baseIntents = intents.map(cloneDraft);
-    return this.recompile({ type: "base-replaced" });
+    return this.publishDocumentIntents(
+      this.prepareDocumentIntents(intents, "replace"),
+    );
   }
 
   updateDocumentIntents(intents: readonly RenderIntentDraft[]): RenderGraph {
-    const previous = this.graph;
-    this.baseIntents = intents.map(cloneDraft);
-    this.revision += 1;
+    return this.publishDocumentIntents(
+      this.prepareDocumentIntents(intents, "update"),
+    );
+  }
+
+  prepareDocumentIntents(
+    intents: readonly RenderIntentDraft[],
+    mode: RenderIntentDocumentPublicationMode = "replace",
+  ): PreparedRenderIntentDocumentPublication {
+    const baseIntents = intents.map(cloneDraft);
     const merged = mergeRenderIntentPatchEntries(
-      this.baseIntents,
+      baseIntents,
       Array.from(this.runtimePatches.values()),
     );
-    this.graph = createRenderGraph(
+    const graph = createComposedRenderGraph(
       merged.drafts,
-      this.revision,
+      this.listSessionRenderContributions(),
+      this.revision + 1,
       merged.diagnostics,
     );
-    const intentIds = collectChangedRenderIntentIds(previous, this.graph);
-    if (intentIds.length) {
-      this.emitChange({ type: "base-updated", intentIds });
+    const reason =
+      mode === "replace"
+        ? ({ type: "base-replaced" } as const)
+        : createBaseUpdateReason(this.graph, graph);
+    const publication: PreparedRenderIntentDocumentPublication = {
+      graph: cloneGraph(graph),
+    };
+    this.preparedDocumentPublications.set(publication, {
+      baseIntents,
+      graph,
+      reason,
+      runtimePatchRevision: this.runtimePatchRevision,
+      sessionRenderRevision: this.sessionRenderRevision,
+    });
+    return publication;
+  }
+
+  publishDocumentIntents(
+    publication: PreparedRenderIntentDocumentPublication,
+    options: { notify?: boolean } = {},
+  ): RenderGraph {
+    const prepared = this.requireCurrentDocumentPublication(publication);
+    this.preparedDocumentPublications.delete(publication);
+    this.baseIntents = prepared.baseIntents;
+    this.graph = prepared.graph;
+    this.revision = prepared.graph.revision;
+    if (options.notify === false) {
+      this.pendingDocumentPublicationNotifications.set(
+        publication,
+        prepared.reason,
+      );
+    } else if (prepared.reason) {
+      this.emitChange(prepared.reason);
     }
     return this.getGraph();
+  }
+
+  assertDocumentIntentsPublicationCurrent(
+    publication: PreparedRenderIntentDocumentPublication,
+  ): void {
+    this.requireCurrentDocumentPublication(publication);
+  }
+
+  notifyDocumentIntentsPublished(
+    publication: PreparedRenderIntentDocumentPublication,
+  ): void {
+    if (!this.pendingDocumentPublicationNotifications.has(publication)) {
+      throw new Error(
+        "RenderIntent publication has no pending change notification.",
+      );
+    }
+    const reason =
+      this.pendingDocumentPublicationNotifications.get(publication) ?? null;
+    this.pendingDocumentPublicationNotifications.delete(publication);
+    if (reason) this.emitChange(reason);
   }
 
   getDocumentIntents(): RenderIntentDraft[] {
@@ -417,6 +656,119 @@ export class RenderIntentService implements Service {
 
   getGraph(): RenderGraph {
     return cloneGraph(this.graph);
+  }
+
+  /** Pure persistent projection used by export and other document reads. */
+  getDocumentGraph(): RenderGraph {
+    const merged = mergeRenderIntentPatchEntries(
+      this.baseIntents,
+      Array.from(this.runtimePatches.values()),
+    );
+    return createRenderGraph(merged.drafts, this.revision, merged.diagnostics);
+  }
+
+  createSessionRenderScope(sessionId: string): SessionRenderScope {
+    return new SessionRenderScopeImpl(
+      this,
+      normalizeId(sessionId, "SessionRenderContribution.sessionId"),
+    );
+  }
+
+  setSessionRenderContributions(
+    sessionId: string,
+    contributions: readonly SessionRenderContribution[],
+  ): RenderGraph {
+    const normalizedSessionId = normalizeId(
+      sessionId,
+      "SessionRenderContribution.sessionId",
+    );
+    const normalized = normalizeSessionRenderContributions(
+      normalizedSessionId,
+      contributions,
+    );
+    if (!normalized.length) {
+      this.clearSessionRenderContributions(normalizedSessionId);
+      return this.getGraph();
+    }
+    const previous = this.sessionRenderContributions.get(normalizedSessionId);
+    if (sameJsonValue(previous, normalized)) return this.getGraph();
+    const candidateContributions = Array.from(
+      this.sessionRenderContributions.entries(),
+    ).flatMap(([candidateSessionId, items]) =>
+      candidateSessionId === normalizedSessionId
+        ? normalized
+        : items.map(cloneRecord),
+    );
+    if (!this.sessionRenderContributions.has(normalizedSessionId)) {
+      candidateContributions.push(...normalized.map(cloneRecord));
+    }
+    const merged = mergeRenderIntentPatchEntries(
+      this.baseIntents,
+      Array.from(this.runtimePatches.values()),
+    );
+    const nextGraph = createComposedRenderGraph(
+      merged.drafts,
+      candidateContributions,
+      this.revision + 1,
+      merged.diagnostics,
+    );
+    const changedProjectionIds = collectChangedRenderIntentIds(
+      this.graph,
+      nextGraph,
+    );
+    this.sessionRenderContributions.set(normalizedSessionId, normalized);
+    this.sessionRenderRevision += 1;
+    this.revision += 1;
+    this.graph = nextGraph;
+    const reason = {
+      type: "session-render",
+      operation: "replace",
+      sessionId: normalizedSessionId,
+      projectionIds: changedProjectionIds,
+      subjectIds: Array.from(new Set(normalized.map((item) => item.subjectId))),
+    } as const;
+    this.emitChange(reason);
+    return this.getGraph();
+  }
+
+  clearSessionRenderContributions(sessionId: string): boolean {
+    const normalizedSessionId = normalizeId(
+      sessionId,
+      "SessionRenderContribution.sessionId",
+    );
+    const previous = this.sessionRenderContributions.get(normalizedSessionId);
+    if (!previous) return false;
+    const candidateContributions = Array.from(
+      this.sessionRenderContributions.entries(),
+    ).flatMap(([candidateSessionId, items]) =>
+      candidateSessionId === normalizedSessionId ? [] : items.map(cloneRecord),
+    );
+    const merged = mergeRenderIntentPatchEntries(
+      this.baseIntents,
+      Array.from(this.runtimePatches.values()),
+    );
+    const nextGraph = createComposedRenderGraph(
+      merged.drafts,
+      candidateContributions,
+      this.revision + 1,
+      merged.diagnostics,
+    );
+    const changedProjectionIds = collectChangedRenderIntentIds(
+      this.graph,
+      nextGraph,
+    );
+    this.sessionRenderContributions.delete(normalizedSessionId);
+    this.sessionRenderRevision += 1;
+    this.revision += 1;
+    this.graph = nextGraph;
+    this.emitChange({
+      type: "session-render",
+      operation: "clear",
+      sessionId: normalizedSessionId,
+      projectionIds: changedProjectionIds,
+      subjectIds: Array.from(new Set(previous.map((item) => item.subjectId))),
+    });
+    return true;
   }
 
   getRuntimeConditionValue(key: string): unknown {
@@ -510,6 +862,7 @@ export class RenderIntentService implements Service {
     const id = normalizeId(intentId, "RenderIntentPatch.id");
     if (!this.runtimePatches.delete(getRuntimePatchKey(source, id)))
       return false;
+    this.runtimePatchRevision += 1;
     this.recompile({
       type: "runtime-patch",
       operation: "remove",
@@ -530,6 +883,7 @@ export class RenderIntentService implements Service {
         ),
       );
       this.runtimePatches.clear();
+      this.runtimePatchRevision += 1;
       this.recompile({
         type: "runtime-patch",
         operation: "clear",
@@ -548,6 +902,7 @@ export class RenderIntentService implements Service {
       }
     }
     if (!removed) return false;
+    this.runtimePatchRevision += 1;
     this.recompile({
       type: "runtime-patch",
       operation: "clear",
@@ -567,8 +922,9 @@ export class RenderIntentService implements Service {
       this.baseIntents,
       Array.from(this.runtimePatches.values()),
     );
-    this.graph = createRenderGraph(
+    this.graph = createComposedRenderGraph(
       merged.drafts,
+      this.listSessionRenderContributions(),
       this.revision,
       merged.diagnostics,
     );
@@ -592,7 +948,44 @@ export class RenderIntentService implements Service {
     const sequence =
       entry.sequence ?? existing?.sequence ?? this.runtimePatchSequence++;
     this.runtimePatches.set(key, normalizePatchEntry(entry, sequence));
+    this.runtimePatchRevision += 1;
   }
+
+  private requireCurrentDocumentPublication(
+    publication: PreparedRenderIntentDocumentPublication,
+  ) {
+    const prepared = this.preparedDocumentPublications.get(publication);
+    if (!prepared) {
+      throw new Error(
+        "RenderIntent publication is invalid or already published.",
+      );
+    }
+    if (prepared.runtimePatchRevision !== this.runtimePatchRevision) {
+      throw new Error(
+        "RenderIntent publication is stale because runtime patches changed after prepare.",
+      );
+    }
+    if (prepared.sessionRenderRevision !== this.sessionRenderRevision) {
+      throw new Error(
+        "RenderIntent publication is stale because session render contributions changed after prepare.",
+      );
+    }
+    return prepared;
+  }
+
+  private listSessionRenderContributions(): SessionRenderContribution[] {
+    return Array.from(this.sessionRenderContributions.values()).flatMap(
+      (items) => items.map(cloneRecord),
+    );
+  }
+}
+
+function createBaseUpdateReason(
+  previous: RenderGraph,
+  next: RenderGraph,
+): RenderIntentChangeReason | null {
+  const intentIds = collectChangedRenderIntentIds(previous, next);
+  return intentIds.length ? { type: "base-updated", intentIds } : null;
 }
 
 function collectChangedRenderIntentIds(
@@ -619,7 +1012,6 @@ function collectRenderIntentSnapshots(graph: RenderGraph) {
           effects: layer.effects,
           id: layer.id,
           order: layer.order,
-          stack: layer.stack,
           surfaceId: layer.surfaceId,
           visible: layer.visible,
         },
@@ -891,10 +1283,7 @@ export function createRenderGraph(
   });
 
   const layers = Array.from(layerMap.values())
-    .map((layer) => ({
-      ...layer,
-      nodes: layer.nodes.sort(compareGraphNodes),
-    }))
+    .map(normalizeGraphLayerNodeOrder)
     .sort(compareGraphLayers);
   const projectionMemberships = collectProjectionMemberships(layers);
 
@@ -905,6 +1294,229 @@ export function createRenderGraph(
     projectionMemberships,
     diagnostics,
   };
+}
+
+function createComposedRenderGraph(
+  documentDrafts: readonly RenderIntentDraft[],
+  contributions: readonly SessionRenderContribution[],
+  revision: number,
+  diagnostics: readonly RenderIntentDiagnostic[],
+): RenderGraph {
+  const documentGraph = createRenderGraph(
+    documentDrafts,
+    revision,
+    diagnostics,
+  );
+  if (!contributions.length) return documentGraph;
+
+  const documentNodes = documentGraph.layers.flatMap((layer) => layer.nodes);
+  const overrides = contributions
+    .filter((item): item is SessionRenderOverride => item.role === "override")
+    .sort(compareSessionRenderContributions);
+  const activeOverrides = new Set<SessionRenderOverride>();
+  const suppressedProjectionIds = new Set<string>();
+  documentNodes.forEach((node) => {
+    const winner = overrides.find(
+      (override) =>
+        override.surfaceId === node.surfaceId &&
+        override.replacementTarget.subjectId === node.subjectId &&
+        (!override.replacementTarget.projectionId ||
+          override.replacementTarget.projectionId === node.id),
+    );
+    if (!winner) return;
+    activeOverrides.add(winner);
+    suppressedProjectionIds.add(node.id);
+  });
+
+  const activeContributions = contributions.filter(
+    (item) => item.role === "auxiliary" || activeOverrides.has(item),
+  );
+  const documentProjectionIds = new Set(documentNodes.map((node) => node.id));
+  const sessionProjectionIds = new Set<string>();
+  activeContributions.forEach((item) => {
+    const projectionId = item.projection.id;
+    if (
+      documentProjectionIds.has(projectionId) ||
+      sessionProjectionIds.has(projectionId)
+    ) {
+      throw new Error(
+        `Session projection "${projectionId}" must be independent from every document and session projection id.`,
+      );
+    }
+    sessionProjectionIds.add(projectionId);
+  });
+
+  const contributionByProjectionId = new Map(
+    activeContributions.map((item) => [item.projection.id, item] as const),
+  );
+  const sessionGraph = createRenderGraph(
+    activeContributions.map(toSessionRenderDraft),
+    revision,
+  );
+  sessionGraph.layers.forEach((layer) => {
+    layer.nodes.forEach((node) => {
+      const contribution = contributionByProjectionId.get(node.id);
+      if (!contribution) return;
+      node.provenance = {
+        type: "session",
+        sessionId: contribution.sessionId,
+        contributionId: contribution.projection.id,
+        source: contribution.provenance,
+        role: contribution.role,
+        priority: contribution.priority,
+        ...(contribution.role === "override"
+          ? { replacementTarget: { ...contribution.replacementTarget } }
+          : {}),
+      };
+    });
+  });
+
+  const layersById = new Map<string, RenderGraphLayer>();
+  documentGraph.layers.forEach((layer) => {
+    layersById.set(layer.id, {
+      ...layer,
+      nodes: layer.nodes.filter(
+        (node) => !suppressedProjectionIds.has(node.id),
+      ),
+      effects: layer.effects.map(cloneRecord),
+    });
+  });
+  sessionGraph.layers.forEach((sessionLayer) => {
+    const layer = layersById.get(sessionLayer.id);
+    if (!layer) {
+      layersById.set(sessionLayer.id, {
+        ...sessionLayer,
+        nodes: sessionLayer.nodes.map(cloneRecord),
+        effects: sessionLayer.effects.map(cloneRecord),
+      });
+      return;
+    }
+    layer.order = Math.min(layer.order, sessionLayer.order);
+    layer.visible = layer.visible || sessionLayer.visible;
+    layer.nodes.push(...sessionLayer.nodes.map(cloneRecord));
+    layer.nodes.sort(compareGraphNodes);
+  });
+
+  const layers = Array.from(layersById.values())
+    .map(normalizeGraphLayerNodeOrder)
+    .sort(compareGraphLayers);
+  return {
+    revision,
+    surfaceIds: Array.from(
+      new Set([...documentGraph.surfaceIds, ...sessionGraph.surfaceIds]),
+    ),
+    layers,
+    projectionMemberships: collectProjectionMemberships(layers),
+    diagnostics: [
+      ...documentGraph.diagnostics.map(cloneRecord),
+      ...sessionGraph.diagnostics.map(cloneRecord),
+    ],
+  };
+}
+
+function normalizeSessionRenderContributions(
+  sessionId: string,
+  contributions: readonly SessionRenderContribution[],
+): SessionRenderContribution[] {
+  const projectionIds = new Set<string>();
+  return contributions.map((input) => {
+    const contributionSessionId = normalizeId(
+      input.sessionId,
+      "SessionRenderContribution.sessionId",
+    );
+    if (contributionSessionId !== sessionId) {
+      throw new Error(
+        `Session render contribution belongs to "${contributionSessionId}", not scope "${sessionId}".`,
+      );
+    }
+    const subjectId = normalizeId(
+      input.subjectId,
+      "SessionRenderContribution.subjectId",
+    );
+    const surfaceId = normalizeId(
+      input.surfaceId,
+      "SessionRenderContribution.surfaceId",
+    );
+    const provenance = normalizeId(
+      input.provenance,
+      "SessionRenderContribution.provenance",
+    );
+    const priority = Number(input.priority);
+    if (!Number.isFinite(priority)) {
+      throw new Error("SessionRenderContribution.priority must be finite.");
+    }
+    const projection = cloneDraft(input.projection);
+    projection.id = normalizeId(
+      projection.id,
+      "SessionRenderContribution.projection.id",
+    );
+    if (projectionIds.has(projection.id)) {
+      throw new Error(`Duplicate session projection id "${projection.id}".`);
+    }
+    projectionIds.add(projection.id);
+    projection.subject = {
+      ...projection.subject,
+      kind: "object",
+      surfaceId,
+      layerId: projection.ordering.layerId,
+      objectId: subjectId,
+    };
+    projection.props = {
+      ...(projection.props ?? {}),
+      excludeFromExport: true,
+    };
+    if (input.role === "auxiliary") {
+      return {
+        role: "auxiliary",
+        sessionId,
+        subjectId,
+        surfaceId,
+        provenance,
+        priority,
+        projection,
+      };
+    }
+    if (input.role !== "override") {
+      throw new Error("SessionRenderContribution.role is invalid.");
+    }
+    const replacementSubjectId = normalizeId(
+      input.replacementTarget?.subjectId,
+      "SessionRenderContribution.replacementTarget.subjectId",
+    );
+    const projectionId = String(
+      input.replacementTarget?.projectionId ?? "",
+    ).trim();
+    return {
+      role: "override",
+      sessionId,
+      subjectId,
+      surfaceId,
+      provenance,
+      priority,
+      projection,
+      replacementTarget: {
+        subjectId: replacementSubjectId,
+        ...(projectionId ? { projectionId } : {}),
+      },
+    };
+  });
+}
+
+function toSessionRenderDraft(
+  contribution: SessionRenderContribution,
+): RenderIntentDraft {
+  return cloneDraft(contribution.projection);
+}
+
+function compareSessionRenderContributions(
+  left: SessionRenderContribution,
+  right: SessionRenderContribution,
+): number {
+  return (
+    right.priority - left.priority ||
+    left.sessionId.localeCompare(right.sessionId) ||
+    left.projection.id.localeCompare(right.projection.id)
+  );
 }
 
 function collectProjectionMemberships(
@@ -952,12 +1564,12 @@ function createDraftFromPatch(
     ordering: {
       layerId: ordering.layerId,
       layerOrder: ordering.layerOrder,
-      objectOrder: ordering.objectOrder,
+      path: ordering.path ? [...ordering.path] : undefined,
       channel: ordering.channel,
       subOrder: ordering.subOrder,
-      stack: ordering.stack,
     },
     visual: patch.visual,
+    containerGeometryRef: patch.containerGeometryRef,
     previewGeometryRef: patch.previewGeometryRef,
     exportGeometryRef: patch.exportGeometryRef,
     placement: patch.placement,
@@ -978,7 +1590,6 @@ function getOrCreateGraphLayer(
   const existing = layerMap.get(draft.ordering.layerId);
   if (existing) {
     existing.order = Math.min(existing.order, draft.ordering.layerOrder ?? 0);
-    existing.stack = Math.min(existing.stack, draft.ordering.stack ?? 0);
     existing.visible = existing.visible || draft.export?.visible !== false;
     return existing;
   }
@@ -987,7 +1598,6 @@ function getOrCreateGraphLayer(
     id: draft.ordering.layerId,
     surfaceId: draft.subject.surfaceId,
     order: draft.ordering.layerOrder ?? 0,
-    stack: draft.ordering.stack ?? 0,
     visible: draft.export?.visible !== false,
     nodes: [],
     effects: [],
@@ -1019,6 +1629,14 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     surfaceId: draft.subject.surfaceId,
     type,
     visual: source.source,
+    containerGeometryRef: cloneRecord(
+      draft.containerGeometryRef ??
+        draft.previewGeometryRef ?? {
+          sourceId: "render-intent",
+          geometryId: defaultGeometryId,
+          purpose: "preview",
+        },
+    ),
     previewGeometryRef: cloneRecord(
       draft.previewGeometryRef ?? {
         sourceId: "render-intent",
@@ -1035,7 +1653,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     ),
     coordinateSpace: "scene",
     exportKeys: normalizeIdList([id, ...(draft.export?.keys ?? [])]),
-    tags: normalizeIdList(draft.export?.tags),
+    tags: cloneTagList(draft.export?.tags),
     placement: cloneRecord(draft.placement),
     props: {
       ...(draft.props ?? {}),
@@ -1044,7 +1662,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
       ...(draft.data ?? {}),
       renderIntentId: draft.id,
       subject: draft.subject,
-      tags: normalizeIdList(draft.export?.tags),
+      tags: cloneTagList(draft.export?.tags),
     },
     effects: draft.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
@@ -1052,12 +1670,17 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     visible: draft.export?.visible !== false,
     sortKey: {
       layerOrder: draft.ordering.layerOrder ?? 0,
-      objectOrder: draft.ordering.objectOrder ?? 0,
+      path: [...(draft.ordering.path ?? [])],
       channel,
       channelOrder: CHANNEL_ORDER[channel],
       subOrder: draft.ordering.subOrder ?? 0,
     },
+    provenance: { type: "document" },
   };
+}
+
+function cloneTagList(tags: readonly string[] | undefined): string[] {
+  return tags ? [...tags] : [];
 }
 
 function resolveVisualSource(draft: RenderIntentDraft): {
@@ -1085,15 +1708,41 @@ function resolveVisualSource(draft: RenderIntentDraft): {
 
 function compareGraphNodes(a: RenderGraphNode, b: RenderGraphNode): number {
   return (
-    a.sortKey.objectOrder - b.sortKey.objectOrder ||
+    compareSortPaths(a.sortKey.path, b.sortKey.path) ||
     a.sortKey.channelOrder - b.sortKey.channelOrder ||
     a.sortKey.subOrder - b.sortKey.subOrder ||
     a.id.localeCompare(b.id)
   );
 }
 
+function compareSortPaths(
+  left: readonly number[],
+  right: readonly number[],
+): number {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference) return difference;
+  }
+  return left.length - right.length;
+}
+
 function compareGraphLayers(a: RenderGraphLayer, b: RenderGraphLayer): number {
-  return a.stack - b.stack || a.order - b.order || a.id.localeCompare(b.id);
+  return a.order - b.order || a.id.localeCompare(b.id);
+}
+
+function normalizeGraphLayerNodeOrder(
+  layer: RenderGraphLayer,
+): RenderGraphLayer {
+  return {
+    ...layer,
+    nodes: layer.nodes
+      .map((node) => ({
+        ...node,
+        sortKey: { ...node.sortKey, layerOrder: layer.order },
+      }))
+      .sort(compareGraphNodes),
+  };
 }
 
 function mergeDraft(
@@ -1105,6 +1754,9 @@ function mergeDraft(
     ...patch,
     subject: { ...base.subject, ...patch.subject },
     visual: mergeOptionalRecord(base.visual, patch.visual),
+    containerGeometryRef: cloneRecord(
+      patch.containerGeometryRef ?? base.containerGeometryRef,
+    ),
     previewGeometryRef: cloneRecord(
       patch.previewGeometryRef ?? base.previewGeometryRef,
     ),
@@ -1145,6 +1797,9 @@ function mergePatch(
       ...clearedBase,
       subject: { ...clearedBase.subject, ...(patch.subject ?? {}) },
       visual: mergeOptionalRecord(clearedBase.visual, patch.visual),
+      containerGeometryRef: cloneRecord(
+        patch.containerGeometryRef ?? clearedBase.containerGeometryRef,
+      ),
       previewGeometryRef: cloneRecord(
         patch.previewGeometryRef ?? clearedBase.previewGeometryRef,
       ),

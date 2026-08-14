@@ -11,6 +11,7 @@ import {
   SESSION_SERVICE,
   computeSceneLayout,
   computeDragInteraction,
+  ConfigurationService,
   containsPoint,
   containsRect,
   coordinateMatrix,
@@ -28,10 +29,16 @@ import {
   resolveImageGeometry,
   resolveImageFitScale,
   resolveViewPaddingPx,
+  selectOneRenderGraphNode,
+  selectRenderGraphNodes,
   createServiceToken,
   type CanvasService,
+  type CoordinatePoint,
+  type CoordinateRect,
+  type CoordinateSpace,
   type ExtensionDefinition,
   type InteractionService,
+  type Matrix2D,
   type RenderIntentChangeEvent,
   type RenderIntentService,
   type SceneChangeEvent,
@@ -133,11 +140,11 @@ class FakeLayoutCanvasService implements CanvasService {
   getSceneOffset() {
     return { x: 0, y: 0 };
   }
-  toScreenPoint(point: { x: number; y: number }) {
-    return point;
+  toScreenPoint(point: CoordinatePoint<"scene">): CoordinatePoint<"screen"> {
+    return { ...point, space: "screen" };
   }
-  toScenePoint(point: { x: number; y: number }) {
-    return point;
+  toScenePoint(point: CoordinatePoint<"screen">): CoordinatePoint<"scene"> {
+    return { ...point, space: "scene" };
   }
   toScreenLength(value: number) {
     return value;
@@ -145,27 +152,39 @@ class FakeLayoutCanvasService implements CanvasService {
   toSceneLength(value: number) {
     return value;
   }
-  toScreenRect(rect: {
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  }) {
-    return rect;
+  toScreenMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "scene">,
+  ): Matrix2D<TFrom, "screen"> {
+    return coordinateMatrix(matrix.from, "screen", matrix.values);
   }
-  toSceneRect(rect: {
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  }) {
-    return rect;
+  toSceneMatrix<TFrom extends CoordinateSpace>(
+    matrix: Matrix2D<TFrom, "screen">,
+  ): Matrix2D<TFrom, "scene"> {
+    return coordinateMatrix(matrix.from, "scene", matrix.values);
+  }
+  toScreenRect(rect: CoordinateRect<"scene">): CoordinateRect<"screen"> {
+    return { ...rect, space: "screen" };
+  }
+  toSceneRect(rect: CoordinateRect<"screen">): CoordinateRect<"scene"> {
+    return { ...rect, space: "scene" };
   }
   getSceneViewportRect() {
-    return { left: 0, top: 0, width: this.width, height: this.height };
+    return {
+      space: "scene" as const,
+      left: 0,
+      top: 0,
+      width: this.width,
+      height: this.height,
+    };
   }
   getScreenViewportRect() {
-    return { left: 0, top: 0, width: this.width, height: this.height };
+    return {
+      space: "screen" as const,
+      left: 0,
+      top: 0,
+      width: this.width,
+      height: this.height,
+    };
   }
   async loadImageSize() {
     return null;
@@ -989,6 +1008,7 @@ async function testSceneSelectors() {
       scene
         .selectLayers({
           tags: ["design", "missing"],
+          tagMatch: "any",
           metadata: { owner: "app" },
         })
         .map((layer) => layer.id),
@@ -1007,6 +1027,7 @@ async function testSceneSelectors() {
           types: ["image", "path"],
           visible: false,
           tags: ["helper", "mockup"],
+          tagMatch: "any",
           metadata: { selected: true },
         })
         .map((element) => element.id),
@@ -1598,7 +1619,6 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       composition: {
         entries: [
           { source: "local", layerIds: ["underlay"] },
-          { source: "render-graph", interaction: "disabled" },
           { source: "local", layerIds: ["controls"] },
         ],
       },
@@ -1616,7 +1636,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
     });
     assertDeepEqual(
       scenes.getActiveRoot()?.composition.entries.map((entry) => entry.source),
-      ["local", "document", "local"],
+      ["local", "local"],
     );
 
     const other = await sessions.open({
@@ -1993,6 +2013,25 @@ async function testConstraintResolverServiceBuiltins() {
       "path.nearest-point should use generic geometry nearest point lookup",
     );
 
+    const lowestTangent = resolver.resolve({
+      transform: {
+        frame: { left: 0, top: 0, width: 10, height: 10 },
+      },
+      constraints: [
+        {
+          type: "path.lowest-tangent",
+          source: { sourceId: "static", geometryId: "diamond" },
+          params: { anchor: "group-center" },
+        },
+      ],
+      coordinateSpace: "scene",
+    });
+    assertDeepEqual(
+      lowestTangent.result.frame,
+      { left: 45, top: 95, width: 10, height: 10 },
+      "path.lowest-tangent should place a group by its center anchor",
+    );
+
     const snapped = resolver.resolve({
       transform: { position: { x: 23, y: 36 } },
       constraints: [
@@ -2017,6 +2056,7 @@ async function testConstraintResolverServiceBuiltins() {
             id: "frame",
             rect: { left: 100, top: 10, width: 80, height: 60 },
             thresholdPx: 6,
+            includeCenters: false,
           },
         },
       ],
@@ -2046,6 +2086,7 @@ async function testConstraintResolverServiceBuiltins() {
         id: "frame",
         rect: { left: 100, top: 10, width: 80, height: 60 },
         thresholdPx: 6,
+        includeCenters: false,
       },
     };
     const evaluatedPreview = resolver.resolve({
@@ -2101,10 +2142,13 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
         frame: result.frame ? { ...result.frame, left: 10 } : result.frame,
       };
     });
-    resolver.registerConstraint("test.phase", (result, _constraint, context) => {
-      resolvedPhases.push(context.phase);
-      return result;
-    });
+    resolver.registerConstraint(
+      "test.phase",
+      (result, _constraint, context) => {
+        resolvedPhases.push(context.phase);
+        return result;
+      },
+    );
     resolver.registerConstraint("test.resize", (result) => ({
       ...result,
       size: { width: 50, height: 60 },
@@ -2191,10 +2235,13 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
     const committedKinds: string[] = [];
     const committedPatches: unknown[] = [];
     let manipulationActionPayload: any;
+    let manipulationActionCompleted = false;
     runtime.services
       .getOrThrow(COMMAND_SERVICE)
-      .registerCommand("interaction.transform", (payload) => {
+      .registerCommand("interaction.transform", async (payload) => {
         manipulationActionPayload = payload;
+        await Promise.resolve();
+        manipulationActionCompleted = true;
       });
     interaction.onDidCommitManipulation((event) => {
       committedKinds.push(event.kind);
@@ -2223,6 +2270,7 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
         "scene",
         [1, 0, 0, 1, 1, 2],
       ),
+      projectionId: "image.fill",
       subject: {
         subjectId: "image",
         projectionTargets: ["image.fill", "image.outline"].map(
@@ -2249,6 +2297,17 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       manipulationActionPayload.sceneMatrix,
       moveCommit.sceneMatrix,
       "manipulation actions should receive the absolute scene matrix",
+    );
+    assertEqual(
+      manipulationActionCompleted,
+      false,
+      "manipulation action should still be pending before the explicit wait",
+    );
+    await interaction.waitForManipulationAction(moveCommit);
+    assertEqual(
+      manipulationActionCompleted,
+      true,
+      "manipulation action wait should resolve after the command completes",
     );
     const staleBoundsMove = interaction.previewManipulation("move", {
       spec: {
@@ -2313,6 +2372,24 @@ async function testInteractionServiceOwnsStateConstraintsAndDispatch() {
       moveCommit.projectionPatches.map((patch) => patch.target.projectionId),
       ["image.fill", "image.outline"],
       "one logical operation should emit one patch per projection target",
+    );
+    assertDeepEqual(
+      moveCommit.projectionPatches[0]?.transform,
+      {
+        type: "replace-matrix",
+        coordinateSpace: "scene",
+        matrix: coordinateMatrix("object-local", "scene", [1, 0, 0, 1, 10, 2]),
+      },
+      "the initiating move projection should use an absolute matrix based on the interaction start",
+    );
+    assertDeepEqual(
+      moveCommit.projectionPatches[1]?.transform,
+      {
+        type: "translate",
+        coordinateSpace: "scene",
+        delta: { space: "scene", x: 10, y: 2 },
+      },
+      "secondary projections should apply the total interaction delta to their stable source placement",
     );
     const resizePreview = interaction.previewManipulation("resize", {
       spec,
@@ -2456,7 +2533,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
     const intents = runtime.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
-    const createProjection = (id: string, objectOrder: number) => ({
+    const createProjection = (id: string, orderIndex: number) => ({
       id,
       subject: {
         kind: "object" as const,
@@ -2465,6 +2542,12 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
         objectId: "logical-object",
       },
       visual: { type: "rect" as const },
+      export: {
+        tags: [
+          "subject:logical-object",
+          `projection:${id.slice(id.lastIndexOf(":") + 1)}`,
+        ],
+      },
       placement: createAffinePlacement({
         localBounds: { left: 0, top: 0, width: 10, height: 10 },
         localToScene: coordinateMatrix("object-local", "scene", [
@@ -2472,11 +2555,11 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
           0,
           0,
           1,
-          objectOrder * 10,
+          orderIndex * 10,
           0,
         ]),
       }),
-      ordering: { layerId: "art", objectOrder },
+      ordering: { layerId: "art", path: [orderIndex] },
     });
     const graph = intents.setDocumentIntents([
       createProjection("logical-object:fill", 0),
@@ -2491,6 +2574,37 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
         },
       ],
       "RenderGraph should explicitly index every projection of a logical subject",
+    );
+    assertEqual(
+      selectRenderGraphNodes(graph, { ids: ["logical-object"] }).length,
+      2,
+      "subject selectors should return every runtime projection",
+    );
+    assertThrows(
+      () => selectOneRenderGraphNode(graph, { ids: ["logical-object"] }),
+      "render-graph-selector-ambiguous",
+    );
+    assertEqual(
+      selectOneRenderGraphNode(graph, {
+        projectionIds: ["logical-object:outline"],
+      })?.subjectId,
+      "logical-object",
+      "projection selectors should remain available for diagnostics",
+    );
+    assertEqual(
+      selectRenderGraphNodes(graph, {
+        tags: ["subject:logical-object", "projection:fill"],
+      })[0]?.id,
+      "logical-object:fill",
+      "runtime tag selectors should match every requested tag by default",
+    );
+    assertEqual(
+      selectRenderGraphNodes(graph, {
+        tags: ["projection:missing", "projection:outline"],
+        tagMatch: "any",
+      })[0]?.id,
+      "logical-object:outline",
+      "runtime tag selectors should support explicit any matching",
     );
 
     const interaction =
@@ -2534,6 +2648,347 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
         },
       ],
       "selection should expose the logical subject instead of a render target",
+    );
+  });
+}
+
+function createTestPlacement(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+) {
+  return createAffinePlacement({
+    localBounds: { left: 0, top: 0, width, height },
+    localToScene: coordinateMatrix("object-local", "scene", [
+      1,
+      0,
+      0,
+      1,
+      left,
+      top,
+    ]),
+  });
+}
+
+async function testRenderGraphSeparatesLayerOrderFromNodePath() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createProjection = (
+      id: string,
+      layerId: string,
+      layerOrder: number,
+      path: readonly number[],
+    ) => ({
+      id,
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId,
+        objectId: id,
+      },
+      visual: { type: "rect" as const },
+      placement: createTestPlacement(0, 0, 10, 10),
+      ordering: { layerId, layerOrder, path },
+    });
+    const graph = intents.setDocumentIntents([
+      createProjection("later-node", "later-layer", 20, [0]),
+      createProjection("earlier-node", "earlier-layer", 10, [999]),
+    ]);
+
+    assertDeepEqual(
+      graph.layers.map((layer) => layer.id),
+      ["earlier-layer", "later-layer"],
+      "runtime layer order must not be inferred from the node path",
+    );
+    assertEqual(graph.layers[0]?.nodes[0]?.sortKey.layerOrder, 10);
+    assertDeepEqual(graph.layers[0]?.nodes[0]?.sortKey.path, [999]);
+  });
+}
+
+async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createProjection = (id: string, orderIndex: number) => ({
+      id,
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId: "art",
+        objectId: "logical-image",
+      },
+      visual: { type: "image" as const, src: `/${id}.png` },
+      placement: createTestPlacement(orderIndex * 10, 0, 10, 10),
+      ordering: { layerId: "art", path: [2, orderIndex] },
+    });
+    intents.setDocumentIntents([
+      createProjection("logical-image:fill", 0),
+      createProjection("logical-image:outline", 1),
+    ]);
+    const sessionRenderChanges: RenderIntentChangeEvent[] = [];
+    intents.onDidChange((event) => sessionRenderChanges.push(event));
+
+    const session = await runtime.services.getOrThrow(SESSION_SERVICE).open({
+      descriptor: {
+        sessionId: "session:image-slot",
+        ownerId: "test",
+        scope: { subjectId: "logical-image", surfaceId: "front" },
+        interactionMode: "exclusive",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    const scope = session.own(
+      intents.createSessionRenderScope(session.descriptor.sessionId),
+    );
+    scope.replace([
+      {
+        role: "override",
+        sessionId: session.descriptor.sessionId,
+        subjectId: "logical-image",
+        surfaceId: "front",
+        provenance: "test:image-slot-working",
+        priority: 100,
+        replacementTarget: {
+          subjectId: "logical-image",
+          projectionId: "logical-image:fill",
+        },
+        projection: {
+          ...createProjection("session:working-image", 0),
+          subject: {
+            kind: "object",
+            surfaceId: "wrong-input-is-normalized",
+            layerId: "art",
+            objectId: "wrong-input-is-normalized",
+          },
+          visual: { type: "image", src: "/working.png" },
+        },
+      },
+      {
+        role: "auxiliary",
+        sessionId: session.descriptor.sessionId,
+        subjectId: "logical-image",
+        surfaceId: "front",
+        provenance: "test:snap-guide",
+        priority: 110,
+        projection: {
+          id: "session:snap-guide",
+          subject: {
+            kind: "object",
+            surfaceId: "front",
+            layerId: "controls",
+            objectId: "logical-image",
+          },
+          visual: { type: "path" },
+          placement: createTestPlacement(0, 0, 10, 10),
+          props: { pathData: "M0 0L10 0" },
+          ordering: { layerId: "controls", path: [100] },
+        },
+      },
+    ]);
+    assertDeepEqual(
+      sessionRenderChanges.at(-1)?.reason,
+      {
+        type: "session-render",
+        operation: "replace",
+        sessionId: "session:image-slot",
+        projectionIds: [
+          "logical-image:fill",
+          "session:snap-guide",
+          "session:working-image",
+        ],
+        subjectIds: ["logical-image"],
+      },
+      "session render changes should name only projections changed by composition",
+    );
+
+    let graph = intents.getGraph();
+    assertDeepEqual(
+      graph.layers.flatMap((layer) => layer.nodes.map((node) => node.id)),
+      ["session:working-image", "logical-image:outline", "session:snap-guide"],
+      "session override should replace only its concrete target at document order",
+    );
+    const working = selectOneRenderGraphNode(graph, {
+      projectionIds: ["session:working-image"],
+    });
+    assertEqual(working?.subjectId, "logical-image");
+    assertDeepEqual(working?.provenance, {
+      type: "session",
+      sessionId: "session:image-slot",
+      contributionId: "session:working-image",
+      source: "test:image-slot-working",
+      role: "override",
+      priority: 100,
+      replacementTarget: {
+        subjectId: "logical-image",
+        projectionId: "logical-image:fill",
+      },
+    });
+    assertEqual(
+      working?.props.excludeFromExport,
+      true,
+      "temporary projections should be non-exportable by construction",
+    );
+    assertDeepEqual(
+      intents
+        .getDocumentGraph()
+        .layers.flatMap((layer) => layer.nodes.map((node) => node.id)),
+      ["logical-image:fill", "logical-image:outline"],
+      "document graph should remain stable while the session graph is active",
+    );
+
+    const competingScope = intents.createSessionRenderScope(
+      "session:priority-winner",
+    );
+    competingScope.replace([
+      {
+        role: "override",
+        sessionId: "session:priority-winner",
+        subjectId: "logical-image",
+        surfaceId: "front",
+        provenance: "test:priority-winner",
+        priority: 200,
+        replacementTarget: {
+          subjectId: "logical-image",
+          projectionId: "logical-image:fill",
+        },
+        projection: {
+          ...createProjection("session:priority-working-image", 0),
+          visual: { type: "image", src: "/priority-working.png" },
+        },
+      },
+    ]);
+    assertEqual(
+      selectOneRenderGraphNode(intents.getGraph(), {
+        projectionIds: ["session:priority-working-image"],
+      })?.provenance.type,
+      "session",
+      "the highest-priority override should own an overlapping target",
+    );
+    assertEqual(
+      selectOneRenderGraphNode(intents.getGraph(), {
+        projectionIds: ["session:working-image"],
+      }),
+      undefined,
+      "lower-priority replacement projections should not leak into the graph",
+    );
+    competingScope.dispose();
+    assertEqual(
+      selectOneRenderGraphNode(intents.getGraph(), {
+        projectionIds: ["session:working-image"],
+      })?.subjectId,
+      "logical-image",
+      "ending the focused override should reveal the previous session projection",
+    );
+
+    await session.cancel();
+    graph = intents.getGraph();
+    assertDeepEqual(
+      graph.layers.flatMap((layer) => layer.nodes.map((node) => node.id)),
+      ["logical-image:fill", "logical-image:outline"],
+      "session termination should atomically remove auxiliaries and restore targets",
+    );
+  });
+}
+
+async function testRenderIntentGeometryRolesRemainIndependent() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const placement = createAffinePlacement({
+      localBounds: { left: 0, top: 0, width: 80, height: 60 },
+      localToScene: coordinateMatrix(
+        "object-local",
+        "scene",
+        [1, 0, 0, 1, 10, 20],
+      ),
+    });
+    const defaultGraph = intents.setDocumentIntents([
+      {
+        id: "default-geometry",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "art",
+          objectId: "default-geometry",
+        },
+        visual: { type: "rect" },
+        placement,
+        ordering: { layerId: "art" },
+      },
+    ]);
+    const defaultNode = defaultGraph.layers[0]?.nodes[0];
+    assertDeepEqual(
+      defaultNode?.containerGeometryRef,
+      defaultNode?.previewGeometryRef,
+      "container geometry should inherit preview geometry by default",
+    );
+    assertDeepEqual(
+      defaultNode?.exportGeometryRef,
+      {
+        sourceId: "render-intent",
+        geometryId: "default-geometry",
+        purpose: "export",
+      },
+      "export geometry should retain its independent default purpose",
+    );
+
+    const containerRef = {
+      sourceId: "document-object",
+      geometryId: "image",
+      variant: "base",
+    };
+    intents.setDocumentIntents([
+      {
+        id: "image",
+        subject: {
+          kind: "object",
+          surfaceId: "front",
+          layerId: "art",
+          objectId: "image",
+        },
+        visual: { type: "image", src: "/image.png" },
+        placement,
+        containerGeometryRef: containerRef,
+        previewGeometryRef: {
+          sourceId: "render-intent",
+          geometryId: "image-preview",
+          purpose: "preview",
+        },
+        exportGeometryRef: {
+          sourceId: "render-intent",
+          geometryId: "image-export",
+          purpose: "export",
+        },
+        ordering: { layerId: "art" },
+      },
+    ]);
+    containerRef.geometryId = "mutated-input";
+    intents.patchIntent("test.geometry", {
+      id: "image",
+      containerGeometryRef: {
+        sourceId: "document-object",
+        geometryId: "patched-image",
+        variant: "base",
+      },
+    });
+    const node = intents.getGraph().layers[0]?.nodes[0];
+    assertEqual(node?.containerGeometryRef.geometryId, "patched-image");
+    assertEqual(node?.previewGeometryRef.geometryId, "image-preview");
+    assertEqual(node?.exportGeometryRef.geometryId, "image-export");
+    const clonedDraft = intents.getDocumentIntents()[0];
+    if (clonedDraft?.containerGeometryRef) {
+      clonedDraft.containerGeometryRef.geometryId = "mutated-clone";
+    }
+    assertEqual(
+      intents.getDocumentIntents()[0]?.containerGeometryRef?.geometryId,
+      "image",
+      "draft cloning should isolate container geometry refs",
     );
   });
 }
@@ -2585,7 +3040,7 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
           objectType: "image",
         },
         visual: { type: "image", src: "/base.png" },
-        placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
+        placement: createTestPlacement(0, 0, 100, 100),
         ordering: { layerId: "artwork" },
       },
     ]);
@@ -2596,7 +3051,7 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
     });
     intents.patchIntent("source-b", {
       id: "image",
-      placement: { frame: { x: 10, y: 20, width: 30, height: 40 } },
+      placement: createTestPlacement(10, 20, 30, 40),
       props: { opacity: 0.5 },
     });
 
@@ -2607,8 +3062,8 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
       "runtime patches from one source should keep visual replacement",
     );
     assertDeepEqual(
-      node?.frame,
-      { x: 10, y: 20, width: 30, height: 40 },
+      node?.placement,
+      createTestPlacement(10, 20, 30, 40),
       "runtime patches from another source should keep placement",
     );
     assertEqual(
@@ -2629,8 +3084,8 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
       "clearing one source should not remove another source's visual patch",
     );
     assertDeepEqual(
-      node?.frame,
-      { x: 0, y: 0, width: 100, height: 100 },
+      node?.placement,
+      createTestPlacement(0, 0, 100, 100),
       "clearing one source should remove only that source's placement patch",
     );
 
@@ -2701,6 +3156,7 @@ async function testRenderIntentDocumentUpdatesAreScoped() {
         objectId: id,
       },
       visual: { type: "rect" as const },
+      placement: createTestPlacement(0, 0, 10, 10),
       ordering: { layerId: "art" },
       props: { opacity, width: 10, height: 10 },
     });
@@ -2731,6 +3187,112 @@ async function testRenderIntentDocumentUpdatesAreScoped() {
       "equivalent document updates should not emit render invalidations",
     );
   });
+}
+
+async function testPreparedRenderIntentPublicationRejectsStaleRuntimePatches() {
+  await withRuntime(async (runtime) => {
+    const intents = runtime.services.getOrThrow<RenderIntentService>(
+      RENDER_INTENT_SERVICE,
+    );
+    const createIntent = (src: string) => ({
+      id: "image",
+      subject: {
+        kind: "object" as const,
+        surfaceId: "front",
+        layerId: "artwork",
+        objectId: "image",
+      },
+      visual: { type: "image" as const, src },
+      placement: createTestPlacement(0, 0, 10, 10),
+      ordering: { layerId: "artwork" },
+    });
+    intents.setDocumentIntents([createIntent("/before.png")]);
+    const prepared = intents.prepareDocumentIntents(
+      [createIntent("/candidate.png")],
+      "update",
+    );
+    const revisionBeforePatch = intents.getGraph().revision;
+    assertEqual(
+      intents.getGraph().layers[0]?.nodes[0]?.visual?.src,
+      "/before.png",
+      "prepare must not replace the live graph",
+    );
+    intents.patchIntent("session", {
+      id: "image",
+      visual: { replacement: { src: "/runtime.png" } },
+    });
+    const graphAfterPatch = intents.getGraph();
+    let rejected = false;
+    try {
+      intents.publishDocumentIntents(prepared);
+    } catch (error) {
+      rejected = String(error).includes("runtime patches changed");
+    }
+    assertEqual(rejected, true, "stale prepared graph should be rejected");
+    assertEqual(
+      intents.getGraph().revision,
+      revisionBeforePatch + 1,
+      "rejected publication must not increment graph revision",
+    );
+    assertDeepEqual(
+      intents.getGraph(),
+      graphAfterPatch,
+      "rejected publication must preserve the runtime-patched graph",
+    );
+  });
+}
+
+async function testPreparedConfigurationPublicationRejectsConcurrentUpdates() {
+  const config = new ConfigurationService();
+  config.update("mode", "stable");
+  const prepared = config.prepareImport({ mode: "candidate" });
+  config.update("session", "concurrent");
+
+  let rejected = false;
+  try {
+    config.publishImport(prepared);
+  } catch (error) {
+    rejected = String(error).includes("configuration changed");
+  }
+  assertEqual(rejected, true, "stale configuration publication should reject");
+  assertDeepEqual(
+    config.export(),
+    { mode: "stable", session: "concurrent" },
+    "stale configuration publication must preserve concurrent updates",
+  );
+}
+
+async function testPreparedSurfaceFramePublicationRejectsConcurrentUpdates() {
+  const frames = new DefaultSurfaceFrameService();
+  const stable = {
+    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
+    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+  };
+  frames.importFrames({ front: stable });
+  const prepared = frames.prepareImportFrames({
+    front: {
+      ...stable,
+      productionFrame: { ...stable.productionFrame, widthMm: 85 },
+    },
+  });
+  const concurrent = {
+    ...stable,
+    productionFrame: { ...stable.productionFrame, widthMm: 88 },
+  };
+  frames.setFrames("front", concurrent);
+
+  let rejected = false;
+  try {
+    frames.publishImportFrames(prepared);
+  } catch (error) {
+    rejected = String(error).includes("frames changed");
+  }
+  assertEqual(rejected, true, "stale surface frame publication should reject");
+  assertDeepEqual(
+    frames.getFrames("front"),
+    concurrent,
+    "stale surface frame publication must preserve concurrent updates",
+  );
 }
 
 async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
@@ -2780,6 +3342,7 @@ async function testRenderIntentPatchEntriesAreSortedDeterministically() {
           objectId: "image",
         },
         visual: { type: "image", src: "/base.png" },
+        placement: createTestPlacement(0, 0, 10, 10),
         ordering: { layerId: "artwork" },
       },
     ]);
@@ -2828,7 +3391,7 @@ async function testRenderIntentPatchClearRemovesOnlyTargetField() {
           replacement: { src: "/replacement.png" },
           fallback: { src: "/fallback.png" },
         },
-        placement: { frame: { x: 0, y: 0, width: 10, height: 10 } },
+        placement: createTestPlacement(0, 0, 10, 10),
         ordering: { layerId: "artwork" },
       },
     ]);
@@ -2840,7 +3403,7 @@ async function testRenderIntentPatchClearRemovesOnlyTargetField() {
 
     const node = intents.getGraph().layers[0]?.nodes[0];
     assertEqual(node?.visual?.src, "/fallback.png");
-    assertDeepEqual(node?.frame, { x: 0, y: 0, width: 10, height: 10 });
+    assertDeepEqual(node?.placement, createTestPlacement(0, 0, 10, 10));
   });
 }
 
@@ -2916,8 +3479,8 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
           objectType: "image",
         },
         visual: { type: "image", src: "/base.png" },
-        coordinateSpace: "screen",
-        placement: { frame: { x: 0, y: 0, width: 100, height: 100 } },
+        coordinateSpace: "scene",
+        placement: createTestPlacement(0, 0, 100, 100),
         ordering: { layerId: "artwork" },
         export: {
           keys: ["image.export"],
@@ -2998,21 +3561,18 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
     });
 
     const node = intents.getGraph().layers[0]?.nodes[0];
+    assert(node, "interaction render node should exist");
     assertEqual(
-      node?.props.selectable,
+      node.props.selectable,
       undefined,
       "interaction should not write renderer-specific selectable props",
     );
     assertEqual(
-      node?.props.evented,
+      node.props.evented,
       undefined,
       "interaction should not write renderer-specific evented props",
     );
-    assertEqual(
-      node?.data.locked,
-      false,
-      "lock state should remain document data rather than interaction state",
-    );
+    assertEqual(node.data.locked, false);
     assertDeepEqual(
       node?.interaction,
       {
@@ -3063,9 +3623,9 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
       "interaction constraints should stay on the graph interaction aspect",
     );
     assertEqual(
-      node?.coordinateSpace,
-      "screen",
-      "render intent coordinate space should become graph node state",
+      node.coordinateSpace,
+      "scene",
+      "formal render graph nodes should remain in scene space",
     );
     assertDeepEqual(
       node?.exportKeys,
@@ -3074,8 +3634,8 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
     );
     assertDeepEqual(
       node?.tags,
-      ["design", "mockup"],
-      "render intent export tags should normalize into graph node state",
+      [" design ", "design", "mockup"],
+      "render intent export tags should pass through to graph node state",
     );
     assertEqual(
       "exportable" in ((node ?? {}) as unknown as Record<string, unknown>),
@@ -3100,6 +3660,7 @@ async function testRenderIntentObjectLocalEffects() {
           objectId: "target",
         },
         visual: { type: "rect" },
+        placement: createTestPlacement(0, 0, 10, 10),
         ordering: { layerId: "artwork" },
         props: { width: 10, height: 10 },
         effects: [
@@ -3109,6 +3670,7 @@ async function testRenderIntentObjectLocalEffects() {
             source: {
               id: "clip-source",
               type: "rect",
+              space: "scene",
               props: { width: 5, height: 5 },
             },
             coordinateMode: "absolute",
@@ -3156,9 +3718,9 @@ async function testRenderIntentPatchMergeHelper() {
       objectId: "object",
     },
     visual: { type: "image" as const, src: "/base.png" },
-    placement: { frame: { x: 0, y: 0, width: 10, height: 20 } },
+    placement: createTestPlacement(0, 0, 10, 20),
     coordinateSpace: "scene" as const,
-    ordering: { layerId: "artwork", layerOrder: 1, objectOrder: 2 },
+    ordering: { layerId: "artwork", path: [1, 2] },
     props: { opacity: 0.5 },
   };
 
@@ -3370,7 +3932,6 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
       anchorY: 0.75,
       zoom: 1.2,
       rotation: 15,
-      opacity: 0.8,
     },
     clip: { space: "object-local", ...frame },
   });
@@ -3378,7 +3939,6 @@ async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
   assertEqual(resolved.imageLocalBounds.height, 400);
   assertEqual(resolved.imageLocalToObjectLocal.from, "object-local");
   assertEqual(resolved.imageLocalToObjectLocal.to, "object-local");
-  assertEqual(resolved.opacity, 0.8);
   assertEqual(resolved.clip?.space, "object-local");
 }
 
@@ -3490,12 +4050,36 @@ async function main() {
       testRenderGraphRecordsSubjectProjectionMemberships,
     ],
     [
+      "separates runtime layer order from node draw paths",
+      testRenderGraphSeparatesLayerOrderFromNodePath,
+    ],
+    [
+      "composes and atomically cleans session render overrides",
+      testSessionRenderOverridesComposeAndCleanUpAtomically,
+    ],
+    [
+      "keeps render intent container, preview, and export geometry independent",
+      testRenderIntentGeometryRolesRemainIndependent,
+    ],
+    [
       "scopes document render intent updates by semantic diff",
       testRenderIntentDocumentUpdatesAreScoped,
     ],
     [
       "emits surface frame changes only for semantic updates",
       testSurfaceFrameImportsOnlyEmitSemanticChanges,
+    ],
+    [
+      "rejects prepared render intents after concurrent runtime patches",
+      testPreparedRenderIntentPublicationRejectsStaleRuntimePatches,
+    ],
+    [
+      "rejects prepared configuration after concurrent updates",
+      testPreparedConfigurationPublicationRejectsConcurrentUpdates,
+    ],
+    [
+      "rejects prepared surface frames after concurrent updates",
+      testPreparedSurfaceFramePublicationRejectsConcurrentUpdates,
     ],
     [
       "sorts render intent patch entries deterministically",

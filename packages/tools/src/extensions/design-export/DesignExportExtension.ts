@@ -8,7 +8,6 @@ import {
   SceneExportService,
   type SceneExportSourceSelector,
 } from "@pooder/core";
-import { KIT_LEGACY_LAYER_PRESET } from "../../shared/constants/layers";
 import {
   createDesignExportCapabilityDefinition,
   DESIGN_EXPORT_CAPABILITY_ID,
@@ -25,12 +24,9 @@ export type {
   ExportImageResult,
 } from "./capability";
 
-const DEFAULT_EXPORT_LAYER_IDS = [
-  KIT_LEGACY_LAYER_PRESET.imageObject,
-] as const;
+const DEFAULT_DESIGN_EXPORT_TAGS = ["export:design"] as const;
 
-export interface DesignExportExtensionOptions
-  extends DesignExportCapabilityOptions {
+export interface DesignExportExtensionOptions extends DesignExportCapabilityOptions {
   id?: string;
   contributeCommands?: boolean;
 }
@@ -50,7 +46,8 @@ export class DesignExportExtension implements ExtensionDefinition {
   private readonly contributeLegacyCommands: boolean;
 
   constructor(options: DesignExportExtensionOptions = {}) {
-    this.id = String(options.id || DESIGN_EXPORT_CAPABILITY_ID).trim() ||
+    this.id =
+      String(options.id || DESIGN_EXPORT_CAPABILITY_ID).trim() ||
       DESIGN_EXPORT_CAPABILITY_ID;
     this.capabilityId = options.capabilityId || DESIGN_EXPORT_CAPABILITY_ID;
     this.configuredSource = options.source;
@@ -58,9 +55,8 @@ export class DesignExportExtension implements ExtensionDefinition {
   }
 
   activate(context: ExtensionContext) {
-    this.exportService = context.services.getOrThrow<SceneExportService>(
-      SCENE_EXPORT_SERVICE,
-    );
+    this.exportService =
+      context.services.getOrThrow<SceneExportService>(SCENE_EXPORT_SERVICE);
   }
 
   contribute(): ExtensionContributions {
@@ -83,7 +79,7 @@ export class DesignExportExtension implements ExtensionDefinition {
   private resolveDefaultSource(): SceneExportSourceSelector {
     if (this.configuredSource) return this.configuredSource;
     return {
-      layerIds: DEFAULT_EXPORT_LAYER_IDS,
+      tags: DEFAULT_DESIGN_EXPORT_TAGS,
     };
   }
 

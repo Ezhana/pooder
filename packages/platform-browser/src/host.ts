@@ -1,5 +1,6 @@
 import type {
   GeometrySourceService,
+  ImageResourceService,
   Service,
   ServiceIdentifier,
   SurfaceFrameService,
@@ -41,7 +42,7 @@ export interface BrowserHostAttachment {
   readonly browserSceneExportService: BrowserSceneExportService;
   readonly canvasService: CanvasService;
   readonly fabricRenderGraphAdapter: FabricRenderGraphAdapter;
-  readonly imageResourceService: BrowserImageResourceService;
+  readonly imageResourceService: ImageResourceService;
   readonly objectImageResolverService: BrowserObjectImageResolverService;
   readonly sceneLayoutService: SceneLayoutService;
   dispose(): void;
@@ -79,7 +80,7 @@ export interface AttachBrowserHostOptions {
     callback: ResizeObserverCallback,
   ) => ResizeObserverLike;
   createSceneLayoutService?: () => SceneLayoutService;
-  createImageResourceService?: () => BrowserImageResourceService;
+  createImageResourceService?: () => ImageResourceService;
   createObjectImageResolverService?: () => BrowserObjectImageResolverService;
 }
 

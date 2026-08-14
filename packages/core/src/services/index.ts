@@ -72,6 +72,7 @@ export type {
   SceneLayoutService,
 } from "../render";
 export type {
+  PreparedSurfaceFramePublication,
   SurfaceFrameChangeEvent,
   SurfaceFrameService,
 } from "../surface-frames";
@@ -82,6 +83,7 @@ export type {
   RenderGraph,
   RenderGraphLayer,
   RenderGraphNode,
+  RenderGraphNodeProvenance,
   RenderGraphProjectionMembership,
   RenderIntentChangeEvent,
   RenderIntentChangeReason,
@@ -93,9 +95,15 @@ export type {
   RenderIntentPatch,
   RenderIntentPatchEntry,
   RenderIntentSubject,
+  SessionRenderAuxiliaryVisual,
+  SessionRenderContribution,
+  SessionRenderOverride,
+  SessionRenderReplacementTarget,
+  SessionRenderScope,
 } from "../render-intent";
 export type { SceneChangeEvent } from "./SceneService";
 export type {
   ConfigurationDefinitionsChangeEvent,
+  PreparedConfigurationPublication,
   RegisteredConfigurationDefinition,
 } from "./ConfigurationService";

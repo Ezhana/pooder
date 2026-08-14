@@ -2,9 +2,10 @@ import type Disposable from "./disposable";
 
 export type TypedEventMap = object;
 
-export type TypedEventListener<TEventMap extends TypedEventMap, TKey extends keyof TEventMap> = (
-  event: TEventMap[TKey],
-) => void;
+export type TypedEventListener<
+  TEventMap extends TypedEventMap,
+  TKey extends keyof TEventMap,
+> = (event: TEventMap[TKey]) => void;
 
 /**
  * Small synchronous event primitive used by public services. Event names and
@@ -24,9 +25,7 @@ export class TypedEventEmitter<TEventMap extends TypedEventMap> {
     const listeners =
       this.listeners.get(type) ??
       new Set<(event: TEventMap[keyof TEventMap]) => void>();
-    listeners.add(
-      listener as (event: TEventMap[keyof TEventMap]) => void,
-    );
+    listeners.add(listener as (event: TEventMap[keyof TEventMap]) => void);
     this.listeners.set(type, listeners);
     return {
       dispose: () => {

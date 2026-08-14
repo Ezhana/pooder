@@ -1,7 +1,15 @@
 import {
+  DocumentExtensionRegistry,
+  validateEditorDocumentAssetReferences,
+  type EditorDocument,
+} from "@pooder/document";
+
+import {
   POODER_PRODUCTION_MASK_CAPABILITY_ID,
-  POODER_PRODUCTION_MASK_EFFECT_SCHEMA,
+  POODER_PRODUCTION_MASK_DOCUMENT_CONTRIBUTION,
   createProductionMaskCapability,
+  type ProductionMaskCapabilityApi,
+  type ProductionMaskDocumentState,
 } from "../src";
 
 declare const process: { exit(code: number): never };
@@ -10,82 +18,200 @@ const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message);
 };
 
-const validPayload = {
-  process: "reverse",
-  enabled: true,
-  reference: { type: "document-object", objectId: "front.image" },
-  source: {
-    type: "image-resource",
-    resource: { kind: "url", url: "https://example.com/reverse.png" },
-  },
-  alpha: {
-    selection: "transparent",
-    mapping: "threshold",
-    threshold: 0.2,
-    softness: 0.05,
-    outputOpacity: 1,
-  },
+const alpha = {
+  selection: "transparent" as const,
+  mapping: "threshold" as const,
+  threshold: 0.2,
+  softness: 0.05,
+  outputOpacity: 1,
 };
 
-const validate = (payload: unknown, id = "front.reverse") =>
-  POODER_PRODUCTION_MASK_EFFECT_SCHEMA.validate(payload, {
-    effect: { id, type: "production-mask", payload },
-    effectPath: "surfaces[0].layers[0].effects[0]",
-    effectType: "production-mask",
-  });
+const createState = (): ProductionMaskDocumentState => ({
+  masks: {
+    "front.reverse": {
+      surfaceId: "front",
+      process: "reverse",
+      production: {
+        enabled: true,
+        referenceObjectId: "front.image",
+        source: { kind: "asset", assetId: "reverse-mask" },
+        alpha,
+      },
+      presentation: {
+        originalVisible: true,
+        originalMaskVisible: false,
+        currentMaskVisible: true,
+      },
+    },
+  },
+});
+
+const createDocument = (): EditorDocument => ({
+  version: 8,
+  assets: [
+    {
+      id: "artwork",
+      type: "image",
+      source: { kind: "url", url: "https://example.com/artwork.png" },
+    },
+    {
+      id: "reverse-mask",
+      type: "image",
+      source: { kind: "url", url: "https://example.com/reverse.png" },
+    },
+  ],
+  extensions: {
+    [POODER_PRODUCTION_MASK_CAPABILITY_ID]: createState() as unknown as never,
+  },
+  surfaces: [
+    {
+      id: "front",
+      geometry: {
+        canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+        productionBounds: { x: 0, y: 0, width: 100, height: 100 },
+      },
+      objects: [
+        {
+          type: "group",
+          id: "artwork",
+          tags: [],
+          visible: true,
+          locked: false,
+          localToParent: [1, 0, 0, 1, 0, 0],
+          children: [
+            {
+              type: "image",
+              id: "front.image",
+              tags: ["export:design"],
+              visible: true,
+              locked: false,
+              localFrame: { x: 0, y: 0, width: 100, height: 100 },
+              localToParent: [1, 0, 0, 1, 0, 0],
+              localPivot: { x: 0, y: 0 },
+              source: { kind: "asset", assetId: "artwork" },
+              contentFit: {
+                fit: "cover",
+                anchorX: 0.5,
+                anchorY: 0.5,
+                zoom: 1,
+                rotation: 0,
+                clip: "frame",
+              },
+              opacity: 1,
+            },
+          ],
+        },
+      ],
+    },
+  ],
+});
 
 async function main() {
+  const contribution = POODER_PRODUCTION_MASK_DOCUMENT_CONTRIBUTION;
   assert(
-    validate(validPayload).length === 0,
-    "valid production masks should pass validation",
+    contribution.stateSchema?.validate(createState(), {
+      extensionId: POODER_PRODUCTION_MASK_CAPABILITY_ID,
+      path: "extensions",
+    }).length === 0,
+    "valid production-mask extension state should pass schema validation",
   );
   assert(
-    validate({ ...validPayload, enabled: true, source: undefined }).some(
-      (issue) => issue.path === "source",
-    ),
-    "enabled production masks should require a source",
+    contribution.stateSchema
+      ?.validate(
+        {
+          ...createState(),
+          masks: {
+            ...createState().masks,
+            "front.reverse": {
+              ...createState().masks["front.reverse"],
+              presentation: { currentMaskVisible: "yes" },
+            },
+          },
+        },
+        {
+          extensionId: POODER_PRODUCTION_MASK_CAPABILITY_ID,
+          path: "extensions",
+        },
+      )
+      .some((issue) => issue.path?.endsWith("presentation.originalVisible")),
+    "invalid presentation state should be rejected",
+  );
+
+  const document = createDocument();
+  assert(
+    contribution.validateReferences?.(createState(), document).length === 0,
+    "valid mask asset and object references should pass",
+  );
+  const missingReferences = createState();
+  missingReferences.masks["front.reverse"].production.referenceObjectId =
+    "missing-object";
+  missingReferences.masks["front.reverse"].production.source = {
+    kind: "asset",
+    assetId: "missing-asset",
+  };
+  const missingDocument = createDocument();
+  missingDocument.extensions[POODER_PRODUCTION_MASK_CAPABILITY_ID] =
+    missingReferences as unknown as never;
+  const referenceDiagnostics = [
+    ...(contribution.validateReferences?.(missingReferences, missingDocument) ??
+      []),
+    ...validateEditorDocumentAssetReferences(missingDocument, {
+      extensionRegistry: new DocumentExtensionRegistry([contribution]),
+    }),
+  ];
+  assert(
+    referenceDiagnostics.some(
+      (item) => item.code === "production-mask-object-missing",
+    ) &&
+      referenceDiagnostics.some(
+        (item) => item.code === "asset-reference-missing",
+      ),
+    "missing mask object and asset references should be rejected",
+  );
+
+  const extension = createProductionMaskCapability();
+  const contributions = extension.contribute();
+  assert(
+    (contributions.documentExtensions?.[0] as { id?: string } | undefined)
+      ?.id === POODER_PRODUCTION_MASK_CAPABILITY_ID,
+    "production masks should register their document contribution",
   );
   assert(
-    validate({
-      ...validPayload,
-      alpha: { ...validPayload.alpha, threshold: 2 },
-    }).some((issue) => issue.path === "alpha.threshold"),
-    "production alpha parameters should stay in the unit interval",
+    contributions.renderIntentCompilers?.length === undefined,
+    "production-mask state should not be carried by a render-intent compiler",
   );
-  assert(
-    validate(validPayload, "").some(
-      (issue) => issue.code === "effect-id-required",
-    ),
-    "production masks should require stable effect ids",
-  );
-  const capability = createProductionMaskCapability();
-  assert(
-    capability.id === POODER_PRODUCTION_MASK_CAPABILITY_ID,
-    "factory should use the production mask capability id",
-  );
-  const compiler = capability.contribute().renderIntentCompilers?.[0];
-  assert(
-    compiler?.capabilityId === POODER_PRODUCTION_MASK_CAPABILITY_ID &&
-      compiler.effectType === "production-mask",
-    "production mask effects should contribute their RenderIntent compiler",
-  );
-  const compiled = await compiler?.compile({
-    document: { version: 7, config: {}, surfaces: [] },
-    effect: {
-      id: "front.production-mask.reverse",
-      type: "production-mask",
-      payload: validPayload,
-    },
-    target: {
-      kind: "layer",
-      surfaceId: "front",
-      layerId: "front.production-masks",
+
+  const facade = contributions.capabilities?.[0]
+    ?.facade as ProductionMaskCapabilityApi;
+  assert(facade, "production-mask capability facade should be contributed");
+  let persisted = document;
+  facade.syncDocument(document, {
+    async mutate(mutator) {
+      persisted = JSON.parse(JSON.stringify(persisted)) as EditorDocument;
+      mutator(persisted);
+      return { ok: true, document: persisted };
     },
   });
-  const compiledPatch = Array.isArray(compiled) ? compiled[0] : compiled;
+  const productionBefore = JSON.stringify(
+    createState().masks["front.reverse"].production,
+  );
+  const updated = await facade.updatePreview({ currentMaskVisible: false });
+  const persistedState = persisted.extensions[
+    POODER_PRODUCTION_MASK_CAPABILITY_ID
+  ] as unknown as ProductionMaskDocumentState;
   assert(
-    compiledPatch?.id === "front.image",
-    "production mask compiler should bind the effect to its reference object",
+    updated.ok,
+    "preview preference should persist through the document controller",
+  );
+  assert(
+    persistedState.masks["front.reverse"].presentation.currentMaskVisible ===
+      false,
+    "preview preference should be written immediately",
+  );
+  assert(
+    JSON.stringify(persistedState.masks["front.reverse"].production) ===
+      productionBefore,
+    "preview persistence must not publish or rewrite session production state",
   );
   console.log("ok");
 }

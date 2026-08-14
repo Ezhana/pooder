@@ -5,13 +5,18 @@ export interface SourceSize {
 
 export interface SourceSizeCache {
   ensureImageSize: (src: string) => Promise<SourceSize | null>;
-  rememberSourceSize: (src: string, size: Partial<SourceSize>) => SourceSize | null;
+  rememberSourceSize: (
+    src: string,
+    size: Partial<SourceSize>,
+  ) => SourceSize | null;
   getSourceSize: (src: string) => SourceSize | null;
   deleteSourceSize: (src: string) => void;
   clear: () => void;
 }
 
-export function normalizeSourceSize(size: Partial<SourceSize>): SourceSize | null {
+export function normalizeSourceSize(
+  size: Partial<SourceSize>,
+): SourceSize | null {
   const width = Number(size.width || 0);
   const height = Number(size.height || 0);
   if (!Number.isFinite(width) || !Number.isFinite(height)) return null;

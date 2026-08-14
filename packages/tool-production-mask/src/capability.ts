@@ -1,13 +1,16 @@
 import type {
   CapabilityDefinition,
+  ImageResourceDescriptor,
   SessionPhase,
   SessionTerminalReason,
 } from "@pooder/core";
 import type {
+  AssetSource,
   EditorDocument,
   EditorDocumentDiagnostic,
-  EditorImageResource,
 } from "@pooder/document";
+
+type EditorImageResource = ImageResourceDescriptor;
 
 import {
   IMAGE_MASK_CAPABILITY_ID,
@@ -42,19 +45,30 @@ export interface ProductionMaskAlphaParameters {
   outputOpacity?: number;
 }
 
-export type ProductionMaskSource =
-  | { type: "reference-object" }
-  | { type: "image-resource"; resource: EditorImageResource };
+export type ProductionMaskSource = { kind: "reference-object" } | AssetSource;
 
-export interface ProductionMaskProjectionSource {
-  objectIds?: string[];
-  tags?: string[];
+export type ProductionMaskProcess = "white-ink" | "reverse" | "spot-uv";
+
+export interface ProductionMaskPresentationState {
+  originalVisible: boolean;
+  originalMaskVisible: boolean;
+  currentMaskVisible: boolean;
 }
 
-export interface ProductionMaskSessionProjection {
-  placement: "below" | "above";
-  source: ProductionMaskProjectionSource;
-  surfaceScope?: "same-surface" | "all";
+export interface ProductionMaskDocumentEntry {
+  surfaceId: string;
+  process: ProductionMaskProcess;
+  production: {
+    enabled: boolean;
+    referenceObjectId: string;
+    source: { kind: "reference-object" } | AssetSource;
+    alpha: ProductionMaskAlphaParameters;
+  };
+  presentation: ProductionMaskPresentationState;
+}
+
+export interface ProductionMaskDocumentState {
+  masks: Record<string, ProductionMaskDocumentEntry>;
 }
 
 export interface ProductionMaskPreviewStyle {
@@ -62,7 +76,7 @@ export interface ProductionMaskPreviewStyle {
   opacity?: number;
 }
 
-export interface ProductionMaskEffectPayload {
+export interface ProductionMaskSettings {
   process: string;
   enabled: boolean;
   reference: ProductionMaskDocumentReference;
@@ -70,7 +84,6 @@ export interface ProductionMaskEffectPayload {
   source?: ProductionMaskSource;
   alpha: ProductionMaskAlphaParameters;
   preview?: ProductionMaskPreviewStyle;
-  sessionProjections?: ProductionMaskSessionProjection[];
 }
 
 export interface ProductionMaskCapabilityOptions {
@@ -90,10 +103,11 @@ export interface ProductionMaskDocumentController {
 }
 
 export interface ProductionMaskDescriptor {
-  effectId: string;
+  maskId: string;
   layerId: string | null;
   surfaceId: string;
-  payload: ProductionMaskEffectPayload;
+  settings: ProductionMaskSettings;
+  presentation: ProductionMaskPresentationState;
 }
 
 export interface ProductionMaskSessionDraft {
@@ -117,7 +131,7 @@ export interface ProductionMaskViewState {
 }
 
 export interface ProductionMaskSessionOpenEvent {
-  effectId: string;
+  maskId: string;
   process: string;
   sessionId: string;
   source: "api";
@@ -125,7 +139,7 @@ export interface ProductionMaskSessionOpenEvent {
 }
 
 export interface ProductionMaskSessionCloseEvent {
-  effectId: string;
+  maskId: string;
   reason: SessionTerminalReason;
   sessionId: string;
 }
@@ -137,11 +151,12 @@ export type ProductionMaskCapabilityChangeEvent =
 
 export type ProductionMaskOperationFailureReason =
   | "document-not-bound"
-  | "effect-not-found"
+  | "mask-not-found"
   | "reference-not-found"
   | "session-conflict"
   | "session-not-active"
   | "source-empty"
+  | "transient-resource"
   | "document-update-failed";
 
 export type ProductionMaskOperationResult =
@@ -163,7 +178,7 @@ export interface ProductionMaskCapabilityApi {
     dispose(): void;
   };
   openSession(input: {
-    effectId?: string;
+    maskId?: string;
     process?: string;
   }): Promise<ProductionMaskOperationResult>;
   getViewState(): ProductionMaskViewState;
@@ -178,7 +193,7 @@ export interface ProductionMaskCapabilityApi {
     originalVisible?: boolean;
     originalMaskVisible?: boolean;
     currentMaskVisible?: boolean;
-  }): ProductionMaskOperationResult;
+  }): Promise<ProductionMaskOperationResult>;
   commitSession(): Promise<ProductionMaskOperationResult>;
   rollbackSession(): Promise<ProductionMaskOperationResult>;
   generateMask(

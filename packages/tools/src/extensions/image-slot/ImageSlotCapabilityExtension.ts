@@ -1,12 +1,13 @@
 import {
   CANVAS_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
+  IMAGE_RESOURCE_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  SCENE_SERVICE,
   SESSION_SERVICE,
+  coordinateMatrix,
   coordinateRect,
   createAffinePlacement,
-  createLocalToSceneMatrix,
   invertCoordinateMatrix,
   multiplyCoordinateMatrices,
   resolveImageFitScale,
@@ -19,20 +20,35 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionDefinition,
+  type GeometrySourceService,
+  type ImageResourceDescriptor,
+  type ImageResourceResolution,
+  type ImageResourceService,
   type InteractionOperationPhase,
-  type SceneHandle,
   type SceneLayoutService,
-  type SceneService,
+  type RenderGraphNode,
+  type RenderIntentDraft,
   type RenderIntentService,
+  type SessionRenderContribution,
+  type SessionRenderScope,
   type SessionHandle,
   type SessionService,
 } from "@pooder/core";
-import type {
-  EditorDocument,
-  EditorImageObject,
-  EditorImagePlacement,
-  EditorImageResource,
+import {
+  findEditorDocumentObject,
+  setEditorImageObjectSource,
+  upsertEditorDocumentAsset,
+  visitEditorDocumentObjects,
+  type EditorDocument,
+  type EditorImageContentFit,
+  type EditorImageAsset,
+  type EditorImageObject,
+  type EditorObject,
 } from "@pooder/document";
+import {
+  IMAGE_SLOT_BEHAVIOR_DEFINITION,
+  IMAGE_SLOT_BEHAVIOR_TYPE,
+} from "../../document/behavior-schemas";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
@@ -43,16 +59,15 @@ import {
   type ImageSlotSessionDraft,
   type ImageSlotPlacementPreset,
   type ImageSlotViewState,
-  type SessionSceneDecorationContribution,
+  type SessionRenderDecorationContribution,
 } from "./capability";
 
-const DEFAULT_PLACEMENT: EditorImagePlacement = {
+const DEFAULT_PLACEMENT: EditorImageContentFit = {
   fit: "cover",
   anchorX: 0.5,
   anchorY: 0.5,
   zoom: 1,
   rotation: 0,
-  opacity: 1,
   clip: "frame",
 };
 
@@ -82,61 +97,107 @@ interface ImageSlotRectSnapFeedback {
   }>;
 }
 
+export interface ImageSlotCapabilityExtensionOptions {
+  outsideFramePolicy?: "free" | "warn" | "strict";
+}
+
 export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   readonly id = IMAGE_SLOT_CAPABILITY_ID;
   readonly metadata = { name: "ImageSlotCapabilityExtension" };
-  readonly activation = { requiresServices: [SCENE_SERVICE, SESSION_SERVICE] };
+  readonly activation = {
+    requiresServices: [
+      GEOMETRY_SOURCE_SERVICE,
+      RENDER_INTENT_SERVICE,
+      SESSION_SERVICE,
+    ],
+  };
   private document: EditorDocument | null = null;
   private controller: ImageSlotDocumentController | null = null;
-  private original: ImageSlotSessionDraft | null = null;
   private state: ImageSlotViewState = { phase: "idle", draft: null };
   private readonly listeners = new Set<(state: ImageSlotViewState) => void>();
   private readonly decorations = new Map<
     string,
-    SessionSceneDecorationContribution
+    SessionRenderDecorationContribution
   >();
-  private sceneService?: SceneService;
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
+  private geometrySource?: GeometrySourceService;
   private renderIntentService?: RenderIntentService;
   private sessionService?: SessionService;
-  private sceneHandle: SceneHandle | null = null;
   private sceneLayoutSubscription: { dispose(): void } | null = null;
+  private sessionRenderScope: SessionRenderScope | null = null;
+  private sessionTerminalSubscription: { dispose(): void } | null = null;
+  private snapFeedback: ImageSlotRectSnapFeedback | undefined;
   private sessionHandle: SessionHandle<ImageSlotSessionDraft> | null = null;
+  private resolvedAsset: {
+    assetId: string;
+    resolution: Extract<ImageResourceResolution, { ok: true }>;
+  } | null = null;
+  private stagedAsset: EditorImageAsset | null = null;
+  private getImageResourceService?: () => ImageResourceService | undefined;
   private openingSession: {
     objectId: string;
     promise: Promise<ImageSlotOpenSessionResult>;
   } | null = null;
 
+  constructor(
+    private readonly options: ImageSlotCapabilityExtensionOptions = {},
+  ) {}
+
   activate(context: ExtensionContext): void {
     this.canvasService = context.services.get<CanvasService>(CANVAS_SERVICE);
     this.sceneLayoutService =
       context.services.get<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
-    this.sceneService =
-      context.services.getOrThrow<SceneService>(SCENE_SERVICE);
-    this.renderIntentService = context.services.get<RenderIntentService>(
+    this.geometrySource = context.services.getOrThrow<GeometrySourceService>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    this.renderIntentService = context.services.getOrThrow<RenderIntentService>(
       RENDER_INTENT_SERVICE,
     );
     this.sessionService =
       context.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    this.getImageResourceService = () =>
+      context.services.get<ImageResourceService>(IMAGE_RESOURCE_SERVICE);
+    this.sessionTerminalSubscription?.dispose();
+    this.sessionTerminalSubscription = this.sessionService.onDidTerminate(
+      (event) => {
+        if (
+          event.descriptor.sessionId ===
+          this.sessionHandle?.descriptor.sessionId
+        ) {
+          this.finalizeTerminatedSession();
+        }
+      },
+    );
   }
 
   async deactivate(): Promise<void> {
-    this.disposeScene();
     if (this.sessionHandle && this.sessionHandle.phase !== "closed") {
       await this.sessionHandle.cancel();
     }
+    this.disposeSessionRender();
+    this.sessionTerminalSubscription?.dispose();
+    this.sessionTerminalSubscription = null;
     this.sessionHandle = null;
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
-    this.sceneService = undefined;
+    this.geometrySource = undefined;
     this.renderIntentService = undefined;
     this.sessionService = undefined;
+    this.getImageResourceService = undefined;
+    this.resolvedAsset = null;
+    this.stagedAsset = null;
   }
 
   contribute(): ExtensionContributions {
     return {
       capabilities: [createImageSlotCapabilityDefinition(this.facade())],
+      documentExtensions: [
+        {
+          id: this.id,
+          behaviors: [IMAGE_SLOT_BEHAVIOR_DEFINITION],
+        },
+      ],
       commands: [
         {
           id: IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
@@ -168,14 +229,18 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       this.state.draft &&
       !findImageSlot(document, this.state.draft.objectId)
     ) {
-      this.disposeScene();
       const sessionHandle = this.sessionHandle;
-      this.sessionHandle = null;
+      this.state = { phase: "idle", draft: null };
+      this.listeners.forEach((listener) => listener(clone(this.state)));
       if (sessionHandle && sessionHandle.phase !== "closed") {
-        void sessionHandle.cancel();
+        void sessionHandle.cancel().catch(() => {
+          if (this.sessionHandle === sessionHandle) {
+            this.finalizeTerminatedSession();
+          }
+        });
+      } else {
+        this.finalizeTerminatedSession();
       }
-      this.original = null;
-      this.setState({ phase: "idle", draft: null });
     }
   }
 
@@ -189,17 +254,23 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         this.listeners.add(listener);
         return { dispose: () => this.listeners.delete(listener) };
       },
-      setResource: (resource, options) => this.setResource(resource, options),
+      setAsset: (assetId, options) => this.setAsset(assetId, options),
+      stageAsset: (asset, options) => this.stageAsset(asset, options),
       clearResource: () => this.clearResource(),
       updatePlacement: (partial) => this.updatePlacement(partial),
       applyPlacementPreset: (preset) => this.applyPlacementPreset(preset),
       validateSession: () => this.validateSession(),
       commitSession: () => this.commitSession(),
       rollbackSession: () => this.rollbackSession(),
-      registerSessionSceneDecoration: (contribution) => {
+      registerSessionRenderDecoration: (contribution) => {
         this.decorations.set(contribution.id, contribution);
-        this.renderSessionScene();
-        return { dispose: () => this.decorations.delete(contribution.id) };
+        this.publishSessionRenderContributions();
+        return {
+          dispose: () => {
+            this.decorations.delete(contribution.id);
+            this.publishSessionRenderContributions();
+          },
+        };
       },
     };
   }
@@ -252,7 +323,19 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     ) {
       return { ok: false as const, reason: "session-owner-conflict" };
     }
-    const draft = toDraft(object);
+    if (!this.resolveDocumentObjectPlacement(objectId)) {
+      return { ok: false as const, reason: "geometry-unavailable" };
+    }
+    const draft = toDraft(object, this.document!);
+    this.stagedAsset = null;
+    if (draft.assetId) {
+      const resolved = await this.resolveAsset(draft.assetId);
+      if (!resolved.ok) {
+        this.resolvedAsset = null;
+      }
+    } else {
+      this.resolvedAsset = null;
+    }
     const sessionId = `image-slot:${objectId}`;
     try {
       this.sessionHandle =
@@ -276,42 +359,68 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     } catch {
       return { ok: false as const, reason: "session-owner-conflict" };
     }
-    this.original = clone(draft);
     this.setState({ phase: "active", draft });
-    this.createSessionScene(context.surfaceId, object);
+    this.startSessionRender(context.surfaceId);
     return { ok: true };
   }
 
-  private async setResource(
-    resource: EditorImageResource,
+  private async setAsset(
+    assetId: string,
     options: { placement?: "reset" | "preserve" } = {},
   ) {
     const draft = this.state.draft;
     if (!draft) return { ok: false, reason: "session-not-active" };
-    releaseUncommittedResource(
-      draft.resource,
-      this.original?.resource,
-      resource,
-    );
+    const normalizedAssetId = String(assetId || "").trim();
+    if (!normalizedAssetId) return { ok: false, reason: "asset-id-required" };
+    const resolved = await this.resolveAsset(normalizedAssetId);
+    if (!resolved.ok) return { ok: false, reason: "resource-load-failed" };
+    this.stagedAsset = null;
+    this.updateDraftAsset(normalizedAssetId, options);
+    return { ok: true };
+  }
+
+  private async stageAsset(
+    asset: EditorImageAsset,
+    options: { placement?: "reset" | "preserve" } = {},
+  ) {
+    const draft = this.state.draft;
+    if (!draft) return { ok: false, reason: "session-not-active" };
+    const stagedAsset = clone(asset);
+    const assetId = String(stagedAsset.id || "").trim();
+    if (!assetId) return { ok: false, reason: "asset-id-required" };
+    const resolved = await this.resolveImageAsset(stagedAsset);
+    if (!resolved.ok) return { ok: false, reason: "resource-load-failed" };
+    this.stagedAsset = stagedAsset;
+    this.updateDraftAsset(assetId, options);
+    return { ok: true };
+  }
+
+  private updateDraftAsset(
+    assetId: string,
+    options: { placement?: "reset" | "preserve" },
+  ): void {
+    const draft = this.state.draft;
+    if (!draft) return;
     const placement =
       options.placement === "preserve"
         ? draft.placement
         : {
             ...DEFAULT_PLACEMENT,
+            // Cropping is a slot property, not part of the user's pan/zoom.
             fit: draft.placement.fit,
             clip: draft.placement.clip,
           };
     this.setState({
       phase: "active",
-      draft: { ...draft, resource: clone(resource), placement },
+      draft: { ...draft, assetId, placement },
     });
-    return { ok: true };
   }
 
   private async clearResource() {
     const draft = this.state.draft;
     if (!draft) return { ok: false, reason: "session-not-active" };
-    releaseUncommittedResource(draft.resource, this.original?.resource);
+    this.resolvedAsset = null;
+    this.stagedAsset = null;
     this.setState({
       phase: "active",
       draft: { objectId: draft.objectId, placement: draft.placement },
@@ -319,7 +428,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     return { ok: true };
   }
 
-  private updatePlacement(partial: Partial<EditorImagePlacement>) {
+  private updatePlacement(partial: Partial<EditorImageContentFit>) {
     const draft = this.state.draft;
     if (!draft) return { ok: false, reason: "session-not-active" };
     const next = normalizePlacement({ ...draft.placement, ...partial });
@@ -333,12 +442,12 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       draft && this.document
         ? findImageSlotContext(this.document, draft.objectId)
         : null;
-    const source = draft?.resource?.intrinsicSize;
     if (!draft || !context) {
       return { ok: false, reason: "session-not-active" };
     }
+    const source = this.resolveDraftImage(draft)?.resolution;
     if (!source) return { ok: false, reason: "resource-load-failed" };
-    const frame = context.object.frame;
+    const frame = context.object.localFrame;
     const widthScale = frame.width / Math.max(source.width, 1);
     const heightScale = frame.height / Math.max(source.height, 1);
     const absoluteScale =
@@ -371,19 +480,20 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       draft && this.document
         ? findImageSlotContext(this.document, draft.objectId)
         : null;
-    const source = draft?.resource?.intrinsicSize;
     const transform = input.transform;
     const phase = input.phase ?? "preview";
     if (!draft || !context || (objectId && objectId !== draft.objectId)) {
       return { ok: false, reason: "session-not-active" };
     }
+    const source = this.resolveDraftImage(draft)?.resolution;
     if (!source || (!transform && !input.sceneMatrix)) {
       return { ok: false, reason: "resource-load-failed" };
     }
-    const frame = context.object.frame;
-    const objectPlacement =
-      this.resolveDocumentObjectPlacement(draft.objectId) ??
-      createFallbackObjectPlacement(context.object);
+    const frame = context.object.localFrame;
+    const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
+    if (!objectPlacement) {
+      return { ok: false, reason: "geometry-unavailable" };
+    }
     const imageLocalToObjectLocal = input.sceneMatrix
       ? multiplyCoordinateMatrices(
           invertCoordinateMatrix(objectPlacement.localToScene),
@@ -426,20 +536,18 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       : Number(transform?.rotation);
     const placement = normalizePlacement({
       ...draft.placement,
-      anchorX: localCenter.x / Math.max(frame.width, 1),
-      anchorY: localCenter.y / Math.max(frame.height, 1),
+      anchorX: (localCenter.x - frame.x) / Math.max(frame.width, 1),
+      anchorY: (localCenter.y - frame.y) / Math.max(frame.height, 1),
       rotation,
       zoom,
     });
     this.setState(
       { phase: "active", draft: { ...draft, placement } },
-      { renderScene: phase === "commit" },
+      { publishRender: false },
     );
-    this.renderSnapGuides(
-      phase === "commit" ? undefined : input.metadata?.rectSnap,
-      draft.objectId,
-      frame,
-    );
+    this.snapFeedback =
+      phase === "commit" ? undefined : input.metadata?.rectSnap;
+    this.publishSessionRenderContributions();
     return { ok: true };
   }
 
@@ -448,24 +556,28 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     if (!draft) return { ok: false as const, reason: "session-not-active" };
     this.setState(
       { ...this.state, phase: "validating" },
-      { renderScene: false },
+      { publishRender: false },
     );
-    if (draft.resource && !draft.resource.intrinsicSize) {
+    if (draft.assetId && !this.resolveDraftImage(draft)) {
       this.setState(
         {
           ...this.state,
           phase: "error",
           error: "resource-load-failed",
         },
-        { renderScene: false },
+        { publishRender: false },
       );
       return { ok: false as const, reason: "resource-load-failed" };
     }
-    const policy = this.document?.config["imageSlot.outsideFramePolicy"];
+    const policy = this.options.outsideFramePolicy;
     if (
       policy === "strict" &&
       this.document &&
-      isDraftOutsideFrame(this.document, draft)
+      doesDraftLeaveFrameUncovered(
+        this.document,
+        draft,
+        this.resolveDraftImage(draft)?.resolution,
+      )
     ) {
       this.setState(
         {
@@ -473,13 +585,13 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           phase: "error",
           error: "validation-failed",
         },
-        { renderScene: false },
+        { publishRender: false },
       );
       return { ok: false as const, reason: "outside-frame" };
     }
     this.setState(
       { ...this.state, phase: "active", error: undefined },
-      { renderScene: false },
+      { publishRender: false },
     );
     return { ok: true as const };
   }
@@ -487,50 +599,60 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private async commitSession() {
     const validation = await this.validateSession();
     const draft = this.state.draft;
-    if (!validation.ok || !draft || !this.controller)
+    if (!validation.ok || !draft || !this.controller || !this.document)
       return {
         type: "error" as const,
         reason: validation.ok ? "commit-failed" : validation.reason,
       };
     this.setState(
       { ...this.state, phase: "committing" },
-      { renderScene: false },
+      { publishRender: false },
     );
-    const result = await this.controller.updateObject(
-      draft.objectId,
-      (current) => {
-        if (current.source.kind !== "image" || !("placement" in current))
-          return current;
-        return {
-          ...current,
-          source: {
-            kind: "image",
-            ...(draft.resource ? { resource: clone(draft.resource) } : {}),
-          },
-          placement: clone(draft.placement),
-        };
-      },
-    );
+    const stagedAsset =
+      draft.assetId && this.stagedAsset?.id === draft.assetId
+        ? this.stagedAsset
+        : null;
+    if (
+      draft.assetId &&
+      !stagedAsset &&
+      !this.document.assets.some((asset) => asset.id === draft.assetId)
+    ) {
+      this.setState(
+        { ...this.state, phase: "error", error: "commit-failed" },
+        { publishRender: false },
+      );
+      return { type: "error" as const, reason: "asset-not-found" };
+    }
+    const result = await this.controller.mutate((document) => {
+      if (stagedAsset) upsertEditorDocumentAsset(document, stagedAsset);
+      const current = findEditorDocumentObject(document, draft.objectId);
+      if (!current || current.type !== "image") return;
+      setEditorImageObjectSource(
+        document,
+        current.id,
+        draft.assetId ? { kind: "asset", assetId: draft.assetId } : null,
+      );
+      current.contentFit = clone(draft.placement);
+      return document;
+    });
     if (!result.ok) {
       this.setState(
         { ...this.state, phase: "error", error: "commit-failed" },
-        { renderScene: false },
+        { publishRender: false },
       );
       return { type: "error" as const, reason: result.reason };
     }
     this.document = result.document;
-    this.disposeScene();
     if (this.sessionHandle?.phase === "active") {
       await this.sessionHandle.commit();
+    } else {
+      this.finalizeTerminatedSession();
     }
-    this.sessionHandle = null;
-    this.original = null;
-    this.setState({ phase: "idle", draft: null });
-    return draft.resource
+    return draft.assetId
       ? {
           type: "placed" as const,
           objectId: draft.objectId,
-          resource: draft.resource,
+          assetId: draft.assetId,
           placement: draft.placement,
         }
       : { type: "cleared" as const, objectId: draft.objectId };
@@ -538,363 +660,503 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
 
   private async rollbackSession() {
     if (!this.state.draft) return { ok: false, reason: "session-not-active" };
-    releaseUncommittedResource(
-      this.state.draft.resource,
-      this.original?.resource,
-    );
-    this.disposeScene();
     if (this.sessionHandle?.phase === "active") {
       await this.sessionHandle.rollback();
+    } else {
+      this.finalizeTerminatedSession();
     }
-    this.sessionHandle = null;
-    this.original = null;
-    this.setState({ phase: "idle", draft: null });
     return { ok: true };
   }
 
   private setState(
     state: ImageSlotViewState,
-    options: { renderScene?: boolean } = {},
+    options: { publishRender?: boolean } = {},
   ): void {
     this.state = clone(state);
     if (this.state.draft && this.sessionHandle?.phase === "active") {
       this.sessionHandle.updateDraft(this.state.draft);
-      if (options.renderScene !== false) this.renderSessionScene();
+      if (options.publishRender !== false) {
+        this.publishSessionRenderContributions();
+      }
     }
     this.listeners.forEach((listener) => listener(clone(this.state)));
   }
 
-  private createSessionScene(
-    surfaceId: string,
-    object: EditorImageObject,
-  ): void {
-    this.disposeScene();
-    if (!this.sceneService || !this.sessionHandle) return;
-    const sceneId = `image-slot:${object.id}:scene`;
-    this.sceneService.getSceneHandle(sceneId)?.dispose();
-    const projections = object.slot?.sessionProjections ?? [];
-    const renderGraphEntries = (placement: "underlay" | "overlay") =>
-      projections
-        .filter((projection) => projection.placement === placement)
-        .map((projection) => ({
-          source: "render-graph" as const,
-          interaction: "disabled" as const,
-          filter: ({
-            node,
-          }: {
-            node: { subjectId: string; surfaceId: string; tags: string[] };
-          }) => {
-            if (node.subjectId === object.id) return false;
-            if (
-              projection.surfaceScope !== "all" &&
-              node.surfaceId !== surfaceId
-            )
-              return false;
-            return (
-              projection.source.objectIds?.includes(node.subjectId) === true ||
-              node.tags.some(
-                (tag) => projection.source.tags?.includes(tag) === true,
-              )
-            );
-          },
-        }));
-    this.sceneHandle = this.sceneService.createScene({
-      id: sceneId,
-      owner: {
-        type: "session",
-        sessionId: this.sessionHandle.descriptor.sessionId,
-      },
-      composition: {
-        entries: [
-          ...renderGraphEntries("underlay"),
-          { source: "local", layerIds: ["image-slot.underlay"] },
-          { source: "local", layerIds: ["image-slot.working"] },
-          ...renderGraphEntries("overlay"),
-          { source: "local", layerIds: ["image-slot.overlay"] },
-          { source: "local", layerIds: ["image-slot.controls"] },
-        ],
-      },
-    });
-    ["underlay", "working", "overlay", "controls"].forEach((name, order) =>
-      this.sceneHandle?.addLayer({
-        id: `image-slot.${name}`,
-        order,
-        visible: true,
-      }),
+  private startSessionRender(surfaceId: string): void {
+    this.disposeSessionRender();
+    if (!this.sessionHandle || !this.renderIntentService) return;
+    const scope = this.renderIntentService.createSessionRenderScope(
+      this.sessionHandle.descriptor.sessionId,
     );
+    this.sessionRenderScope = this.sessionHandle.own(scope);
     this.sceneLayoutSubscription =
       this.sceneLayoutService?.onLayoutChange(surfaceId, () =>
-        this.renderSessionScene(),
+        this.publishSessionRenderContributions(),
       ) ?? null;
-    this.renderSessionScene();
+    this.publishSessionRenderContributions();
   }
 
-  private renderSessionScene(): void {
-    const scene = this.sceneHandle;
+  private publishSessionRenderContributions(): void {
+    const scope = this.sessionRenderScope;
+    const session = this.sessionHandle;
     const draft = this.state.draft;
-    if (!scene || !draft || !this.document) return;
-    scene
-      .selectElements()
-      .forEach((element) => scene.removeElement(element.id));
+    if (!scope || !session || !draft || !this.document) return;
     const context = findImageSlotContext(this.document, draft.objectId);
-    if (!context) return;
-    const resource = draft.resource;
-    if (resource?.intrinsicSize) {
-      const src = resourceLocation(resource);
-      const objectPlacement =
-        this.resolveDocumentObjectPlacement(draft.objectId) ??
-        createFallbackObjectPlacement(context.object);
-      const objectSceneBounds = transformCoordinateRect(
-        objectPlacement.localToScene,
-        objectPlacement.localBounds,
-      );
-      const clipFrame = resolveImageSlotClipFrame(
-        this.document,
-        context,
-        objectPlacement,
-      );
-      const geometry = resolveImageGeometry({
-        source: { src, size: resource.intrinsicSize },
-        frame: coordinateRect("object-local", {
-          left: 0,
-          top: 0,
-          width: context.object.frame.width,
-          height: context.object.frame.height,
-        }),
-        fit: draft.placement.fit,
-        transform: draft.placement,
-        ...(draft.placement.clip === "frame"
-          ? {
-              clip: clipFrame,
-            }
-          : {}),
-      });
-      scene.addElement({
-        id: `image-slot:${draft.objectId}:working`,
-        layerId: "image-slot.working",
-        type: "image",
-        renderGraphProjection: {
-          subjectId: draft.objectId,
-          type: "image",
-        },
-        src,
-        width: geometry.imageLocalBounds.width,
-        height: geometry.imageLocalBounds.height,
-        placement: createAffinePlacement({
-          localBounds: geometry.imageLocalBounds,
-          localToScene: multiplyCoordinateMatrices(
-            objectPlacement.localToScene,
-            geometry.imageLocalToObjectLocal,
-          ),
-          pivot: {
-            x:
-              geometry.imageLocalBounds.left +
-              geometry.imageLocalBounds.width / 2,
-            y:
-              geometry.imageLocalBounds.top +
-              geometry.imageLocalBounds.height / 2,
-          },
-        }),
-        data: {
-          autoFocus: true,
-          imageSlotObjectId: draft.objectId,
-        },
-        style: {
-          opacity: geometry.opacity,
-        },
-        ...(geometry.clip
-          ? {
-              effects: [
-                createImageSlotClipEffect(
-                  draft.objectId,
-                  geometry.clip,
-                  objectPlacement,
-                ),
-              ],
-            }
-          : {}),
-        interaction: {
-          selection: { enabled: true },
-          manipulation: {
-            move: {
-              enabled: true,
-              constraints: [
-                {
-                  spec: {
-                    type: "rect.snap",
-                    application: {
-                      preview: "evaluate",
-                      commit: "apply",
-                    },
-                    params: {
-                      id: `image-slot:${draft.objectId}:frame`,
-                      rect: objectSceneBounds,
-                      thresholdPx: 6,
-                    },
-                  },
-                },
-              ],
-              action: createImageSlotPlacementAction(draft.objectId),
-            },
-            resize: {
-              enabled: true,
-              action: createImageSlotPlacementAction(draft.objectId),
-            },
-            rotate: {
-              enabled: true,
-              action: createImageSlotPlacementAction(draft.objectId),
-            },
-          },
-        },
-      });
+    const target = this.resolveDocumentObjectProjection(draft.objectId);
+    if (!context || !target) {
+      scope.replace([]);
+      return;
     }
-    this.renderSessionFrame(scene, draft.objectId, context.surfaceId);
-    for (const contribution of this.decorations.values()) {
-      contribution
+    const contributions: SessionRenderContribution[] = [];
+    const workingProjection = this.createWorkingProjection(
+      draft,
+      context,
+      target,
+    );
+    contributions.push({
+      role: "override",
+      sessionId: session.descriptor.sessionId,
+      subjectId: draft.objectId,
+      surfaceId: context.surfaceId,
+      provenance: `${IMAGE_SLOT_CAPABILITY_ID}:working-image`,
+      priority: 100,
+      replacementTarget: {
+        subjectId: draft.objectId,
+        projectionId: target.id,
+      },
+      projection: workingProjection,
+    });
+    contributions.push(
+      ...this.createSessionFrameContributions(
+        session.descriptor.sessionId,
+        draft.objectId,
+        context.surfaceId,
+        target,
+      ),
+      ...this.createSnapGuideContributions(
+        session.descriptor.sessionId,
+        draft.objectId,
+        context.surfaceId,
+        target,
+      ),
+    );
+    for (const decoration of this.decorations.values()) {
+      decoration
         .provide({ objectId: draft.objectId, surfaceId: context.surfaceId })
-        .forEach((element) =>
-          scene.addElement({
-            ...element,
-            layerId: `image-slot.${contribution.placement}`,
+        .forEach((contribution) =>
+          contributions.push({
+            ...contribution,
+            role: "auxiliary",
+            sessionId: session.descriptor.sessionId,
           }),
         );
     }
+    scope.replace(contributions);
+  }
+
+  private createWorkingProjection(
+    draft: ImageSlotSessionDraft,
+    context: ReturnType<typeof findImageSlotContext> & {},
+    target: RenderGraphNode,
+  ): RenderIntentDraft {
+    const base: RenderIntentDraft = {
+      id: `image-slot:${draft.objectId}:working`,
+      subject: {
+        kind: "object",
+        surfaceId: target.surfaceId,
+        layerId: target.layerId,
+        objectId: draft.objectId,
+        objectType: "image",
+      },
+      placement: clone(target.placement),
+      containerGeometryRef: clone(target.containerGeometryRef),
+      ordering: {
+        layerId: target.layerId,
+        layerOrder: target.sortKey.layerOrder,
+        path: [...target.sortKey.path],
+        channel: target.sortKey.channel,
+        subOrder: target.sortKey.subOrder,
+      },
+    };
+    const resolvedAsset = this.resolveDraftImage(draft);
+    if (!resolvedAsset) return base;
+    const objectPlacement = this.resolveDocumentObjectPlacement(draft.objectId);
+    if (!objectPlacement) return base;
+    const { src, width, height } = resolvedAsset.resolution;
+    const objectSceneBounds = transformCoordinateRect(
+      objectPlacement.localToScene,
+      objectPlacement.localBounds,
+    );
+    const clipFrame = resolveImageSlotClipFrame(
+      this.document!,
+      context,
+      objectPlacement,
+    );
+    const geometry = resolveImageGeometry({
+      source: { src, size: { width, height } },
+      frame: coordinateRect("object-local", {
+        left: context.object.localFrame.x,
+        top: context.object.localFrame.y,
+        width: context.object.localFrame.width,
+        height: context.object.localFrame.height,
+      }),
+      fit: draft.placement.fit,
+      transform: draft.placement,
+      ...(context.object.contentFit.clip === "frame"
+        ? { clip: clipFrame }
+        : {}),
+    });
+    return {
+      ...base,
+      visual: { type: "image", src },
+      placement: createAffinePlacement({
+        localBounds: geometry.imageLocalBounds,
+        localToScene: multiplyCoordinateMatrices(
+          objectPlacement.localToScene,
+          geometry.imageLocalToObjectLocal,
+        ),
+        pivot: {
+          x:
+            geometry.imageLocalBounds.left +
+            geometry.imageLocalBounds.width / 2,
+          y:
+            geometry.imageLocalBounds.top +
+            geometry.imageLocalBounds.height / 2,
+        },
+      }),
+      data: { autoFocus: true, imageSlotObjectId: draft.objectId },
+      props: { opacity: context.object.opacity ?? 1 },
+      ...(geometry.clip
+        ? {
+            effects: [
+              createImageSlotClipEffect(
+                draft.objectId,
+                geometry.clip,
+                objectPlacement,
+              ),
+            ],
+          }
+        : {}),
+      interaction: {
+        selection: { enabled: true },
+        manipulation: {
+          move: {
+            enabled: true,
+            documentMutation: "action-owned",
+            constraints: [
+              {
+                spec: {
+                  type: "rect.snap",
+                  application: { preview: "evaluate", commit: "apply" },
+                  params: {
+                    id: `image-slot:${draft.objectId}:frame`,
+                    rect: objectSceneBounds,
+                    thresholdPx: 6,
+                  },
+                },
+              },
+            ],
+            action: createImageSlotPlacementAction(draft.objectId),
+          },
+          resize: {
+            enabled: true,
+            documentMutation: "action-owned",
+            action: createImageSlotPlacementAction(draft.objectId),
+          },
+          rotate: {
+            enabled: true,
+            documentMutation: "action-owned",
+            action: createImageSlotPlacementAction(draft.objectId),
+          },
+        },
+      },
+    };
+  }
+
+  private async resolveAsset(
+    assetId: string,
+  ): Promise<ImageResourceResolution> {
+    const asset = this.document?.assets.find(
+      (candidate) => candidate.id === assetId && candidate.type === "image",
+    );
+    if (!asset) return { ok: false, reason: "unsupported" };
+    return this.resolveImageAsset(asset);
+  }
+
+  private async resolveImageAsset(
+    asset: EditorImageAsset,
+  ): Promise<ImageResourceResolution> {
+    const assetId = asset.id;
+    const descriptor: ImageResourceDescriptor = {
+      ...asset.source,
+      assetId,
+      ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
+      ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
+    };
+    const service = this.getImageResourceService?.();
+    const resolution = service
+      ? (service.read(descriptor) ?? (await service.ensure(descriptor)))
+      : asset.intrinsicSize
+        ? {
+            ok: true as const,
+            src: resourceLocation(descriptor),
+            ...asset.intrinsicSize,
+          }
+        : { ok: false as const, reason: "unsupported" as const };
+    if (resolution.ok) this.resolvedAsset = { assetId, resolution };
+    return resolution;
+  }
+
+  private resolveDraftImage(draft: ImageSlotSessionDraft) {
+    return draft.assetId && this.resolvedAsset?.assetId === draft.assetId
+      ? this.resolvedAsset
+      : null;
   }
 
   private resolveDocumentObjectPlacement(
     objectId: string,
   ): AffinePlacement | undefined {
-    for (const layer of this.renderIntentService?.getGraph().layers ?? []) {
-      const node = layer.nodes.find(
-        (candidate) => candidate.subjectId === objectId,
-      );
-      const placement = node?.data.documentObjectPlacement as
-        | AffinePlacement
-        | undefined;
-      if (placement?.localBounds?.space === "object-local") return placement;
-    }
-    return undefined;
+    const node = this.resolveDocumentObjectProjection(objectId);
+    if (!node) return undefined;
+    const snapshot = this.geometrySource?.getSnapshot(
+      node.containerGeometryRef,
+    ).value;
+    if (!snapshot || snapshot.space !== "object-local") return undefined;
+    return createAffinePlacement({
+      localBounds: coordinateRect("object-local", snapshot.bounds),
+      localToScene: coordinateMatrix(
+        "object-local",
+        "scene",
+        snapshot.localToScene.values,
+      ),
+      pivot: {
+        x: snapshot.bounds.left + snapshot.bounds.width / 2,
+        y: snapshot.bounds.top + snapshot.bounds.height / 2,
+      },
+    });
   }
 
-  private renderSessionFrame(
-    scene: SceneHandle,
+  private resolveDocumentObjectProjection(
+    objectId: string,
+  ): RenderGraphNode | undefined {
+    return this.renderIntentService
+      ?.getDocumentGraph()
+      .layers.flatMap((layer) => layer.nodes)
+      .find(
+        (candidate) =>
+          candidate.subjectId === objectId && candidate.type === "image",
+      );
+  }
+
+  private createSessionFrameContributions(
+    sessionId: string,
     objectId: string,
     surfaceId: string,
-  ): void {
-    const viewport = this.canvasService?.getScreenViewportRect();
-    const cutRect = this.sceneLayoutService?.getLayout(surfaceId)?.cutRect;
-    if (!viewport || !cutRect) return;
-
-    scene.addElement({
-      id: `image-slot:${objectId}:crop-mask`,
-      layerId: "image-slot.controls",
-      type: "path",
-      path: buildViewportMaskPath(viewport, cutRect),
-      data: {
-        imageSlotObjectId: objectId,
-        renderSpace: "screen",
-        type: "image-slot-crop-mask",
-      },
-      transform: {
-        left: viewport.left,
-        top: viewport.top,
-        originX: "left",
-        originY: "top",
-      },
-      style: {
-        excludeFromExport: true,
-        fill: "rgba(245, 245, 245, 0.72)",
-        fillRule: "evenodd",
-        objectCaching: false,
-        stroke: null,
-      },
+    target: RenderGraphNode,
+  ): SessionRenderContribution[] {
+    const canvas = this.canvasService;
+    const viewport = canvas?.getScreenViewportRect();
+    const objectPlacement = this.resolveDocumentObjectPlacement(objectId);
+    if (!canvas || !viewport || !objectPlacement) return [];
+    const viewportRect = canvas.toSceneRect(viewport);
+    const cutRect = transformCoordinateRect(
+      objectPlacement.localToScene,
+      objectPlacement.localBounds,
+    );
+    const controlsLayerId = `session:${sessionId}:controls`;
+    const controlsLayerOrder = target.sortKey.layerOrder + 1_000_000;
+    const contribution = (
+      projection: RenderIntentDraft,
+      provenance: string,
+    ): SessionRenderContribution => ({
+      role: "auxiliary",
+      sessionId,
+      subjectId: objectId,
+      surfaceId,
+      provenance,
+      priority: 100,
+      projection,
     });
-    scene.addElement({
-      id: `image-slot:${objectId}:crop-frame`,
-      layerId: "image-slot.controls",
-      type: "rect",
-      width: cutRect.width,
-      height: cutRect.height,
-      data: {
-        imageSlotObjectId: objectId,
-        renderSpace: "screen",
-        type: "image-slot-crop-frame",
-      },
-      transform: {
-        left: cutRect.left,
-        top: cutRect.top,
-        originX: "left",
-        originY: "top",
-      },
-      style: {
-        excludeFromExport: true,
-        fill: "rgba(0, 0, 0, 0)",
-        stroke: "rgba(80, 80, 80, 0.9)",
-        strokeDashArray: [8, 8],
-        strokeUniform: true,
-        strokeWidth: 1,
-      },
-    });
+    return [
+      contribution(
+        {
+          id: `image-slot:${objectId}:crop-mask`,
+          subject: {
+            kind: "object",
+            surfaceId,
+            layerId: controlsLayerId,
+            objectId,
+          },
+          visual: { type: "path" },
+          placement: createSceneRectPlacement(viewportRect),
+          props: {
+            pathData: buildViewportMaskPath(viewportRect, cutRect),
+            fill: "rgba(245, 245, 245, 0.72)",
+            fillRule: "evenodd",
+            objectCaching: false,
+            stroke: null,
+          },
+          data: { imageSlotObjectId: objectId, type: "image-slot-crop-mask" },
+          ordering: {
+            layerId: controlsLayerId,
+            layerOrder: controlsLayerOrder,
+            path: [0],
+          },
+        },
+        `${IMAGE_SLOT_CAPABILITY_ID}:crop-mask`,
+      ),
+      contribution(
+        {
+          id: `image-slot:${objectId}:crop-frame`,
+          subject: {
+            kind: "object",
+            surfaceId,
+            layerId: controlsLayerId,
+            objectId,
+          },
+          visual: { type: "rect" },
+          placement: createSceneRectPlacement(cutRect),
+          props: {
+            width: cutRect.width,
+            height: cutRect.height,
+            fill: "rgba(0, 0, 0, 0)",
+            stroke: "rgba(80, 80, 80, 0.9)",
+            strokeDashArray: [8, 8],
+            strokeUniform: true,
+            strokeWidth: 1,
+          },
+          data: { imageSlotObjectId: objectId, type: "image-slot-crop-frame" },
+          ordering: {
+            layerId: controlsLayerId,
+            layerOrder: controlsLayerOrder,
+            path: [1],
+          },
+        },
+        `${IMAGE_SLOT_CAPABILITY_ID}:crop-frame`,
+      ),
+    ];
   }
 
-  private renderSnapGuides(
-    snap: ImageSlotRectSnapFeedback | undefined,
+  private createSnapGuideContributions(
+    sessionId: string,
     objectId: string,
-    frame: { x: number; y: number; width: number; height: number },
-  ): void {
-    const scene = this.sceneHandle;
-    if (!scene) return;
-    scene
-      .selectElements({ layerIds: ["image-slot.controls"] })
-      .filter((element) => element.data?.type === "image-slot-snap-guide")
-      .forEach((element) => scene.removeElement(element.id));
-
-    const guides = Array.isArray(snap?.guides) ? snap.guides : [];
+    surfaceId: string,
+    target: RenderGraphNode,
+  ): SessionRenderContribution[] {
+    const placement = this.resolveDocumentObjectPlacement(objectId);
+    if (!placement) return [];
+    const frame = transformCoordinateRect(
+      placement.localToScene,
+      placement.localBounds,
+    );
+    const guides = Array.isArray(this.snapFeedback?.guides)
+      ? this.snapFeedback.guides
+      : [];
     const vertical = guides.find(
       (guide) => guide.axis === "x" && Number.isFinite(guide.position),
     );
     const horizontal = guides.find(
       (guide) => guide.axis === "y" && Number.isFinite(guide.position),
     );
-    const addGuide = (axis: "x" | "y", position: number) => {
-      const vertical = axis === "x";
-      scene.addElement({
-        id: `image-slot:${objectId}:snap-guide:${axis}`,
-        layerId: "image-slot.controls",
-        type: "path",
-        path: vertical
-          ? `M 0 0 L 0 ${frame.height}`
-          : `M 0 0 L ${frame.width} 0`,
-        data: {
-          type: "image-slot-snap-guide",
-          imageSlotObjectId: objectId,
+    const controlsLayerId = `session:${sessionId}:controls`;
+    const createGuide = (
+      axis: "x" | "y",
+      position: number,
+    ): SessionRenderContribution => {
+      const isVertical = axis === "x";
+      const guideRect = {
+        left: isVertical ? position : frame.left,
+        top: isVertical ? frame.top : position,
+        width: isVertical ? 0 : frame.width,
+        height: isVertical ? frame.height : 0,
+      };
+      return {
+        role: "auxiliary",
+        sessionId,
+        subjectId: objectId,
+        surfaceId,
+        provenance: `${IMAGE_SLOT_CAPABILITY_ID}:snap-guide`,
+        priority: 110,
+        projection: {
+          id: `image-slot:${objectId}:snap-guide:${axis}`,
+          subject: {
+            kind: "object",
+            surfaceId,
+            layerId: controlsLayerId,
+            objectId,
+          },
+          visual: { type: "path" },
+          placement: createSceneRectPlacement(guideRect),
+          props: {
+            pathData: isVertical
+              ? `M 0 0 L 0 ${frame.height}`
+              : `M 0 0 L ${frame.width} 0`,
+            fill: null,
+            objectCaching: false,
+            stroke: "#1677ff",
+            strokeUniform: true,
+            strokeWidth: 1,
+          },
+          data: {
+            type: "image-slot-snap-guide",
+            imageSlotObjectId: objectId,
+          },
+          ordering: {
+            layerId: controlsLayerId,
+            layerOrder: target.sortKey.layerOrder + 1_000_000,
+            path: [10],
+            subOrder: axis === "x" ? 0 : 1,
+          },
         },
-        transform: {
-          left: vertical ? position : frame.x,
-          top: vertical ? frame.y : position,
-          originX: "left",
-          originY: "top",
-        },
-        style: {
-          excludeFromExport: true,
-          fill: null,
-          objectCaching: false,
-          stroke: "#1677ff",
-          strokeUniform: true,
-          strokeWidth: 1,
-        },
-      });
+      };
     };
-    if (vertical) addGuide("x", Number(vertical.position));
-    if (horizontal) addGuide("y", Number(horizontal.position));
+    return [
+      ...(vertical ? [createGuide("x", Number(vertical.position))] : []),
+      ...(horizontal ? [createGuide("y", Number(horizontal.position))] : []),
+    ];
   }
 
-  private disposeScene(): void {
+  private disposeSessionRender(): void {
     this.sceneLayoutSubscription?.dispose();
     this.sceneLayoutSubscription = null;
-    this.sceneHandle?.dispose();
-    this.sceneHandle = null;
+    this.snapFeedback = undefined;
+    this.sessionRenderScope?.dispose();
+    this.sessionRenderScope = null;
   }
+
+  private finalizeTerminatedSession(): void {
+    this.disposeSessionRender();
+    this.sessionHandle = null;
+    this.resolvedAsset = null;
+    this.stagedAsset = null;
+    this.state = { phase: "idle", draft: null };
+    this.listeners.forEach((listener) => listener(clone(this.state)));
+  }
+}
+
+function createSceneRectPlacement(rect: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}): AffinePlacement {
+  return createAffinePlacement({
+    localBounds: coordinateRect("object-local", {
+      left: 0,
+      top: 0,
+      width: rect.width,
+      height: rect.height,
+    }),
+    localToScene: coordinateMatrix("object-local", "scene", [
+      1,
+      0,
+      0,
+      1,
+      rect.left,
+      rect.top,
+    ]),
+    pivot: { x: rect.width / 2, y: rect.height / 2 },
+  });
 }
 
 function buildViewportMaskPath(
@@ -965,15 +1227,15 @@ function resolveImageSlotClipFrame(
   const objectFrame = objectPlacement.localBounds;
   const production = document.surfaces.find(
     (surface) => surface.id === context.surfaceId,
-  )?.frames.productionFrame;
+  )?.geometry.productionBounds;
   if (!production) return objectFrame;
   const productionInObject = transformCoordinateRect(
     invertCoordinateMatrix(objectPlacement.localToScene),
     coordinateRect("scene", {
-      left: production.xMm,
-      top: production.yMm,
-      width: production.widthMm,
-      height: production.heightMm,
+      left: production.x,
+      top: production.y,
+      width: production.width,
+      height: production.height,
     }),
   );
   const left = Math.max(objectFrame.left, productionInObject.left);
@@ -996,72 +1258,64 @@ function resolveImageSlotClipFrame(
     : objectFrame;
 }
 
-function createFallbackObjectPlacement(
-  object: EditorImageObject,
-): AffinePlacement {
-  const localBounds = coordinateRect("object-local", {
-    left: 0,
-    top: 0,
-    width: object.frame.width,
-    height: object.frame.height,
-  });
-  return createAffinePlacement({
-    localBounds,
-    localToScene: createLocalToSceneMatrix({
-      position: { x: object.frame.x, y: object.frame.y },
-      pivot: { x: 0, y: 0 },
-    }),
-    pivot: { x: localBounds.width / 2, y: localBounds.height / 2 },
-  });
-}
-
 function findImageSlot(
   document: EditorDocument,
   objectId: string,
 ): EditorImageObject | null {
-  for (const surface of document.surfaces)
-    for (const layer of surface.layers)
-      for (const object of layer.objects ?? []) {
-        if (
-          object.id === objectId &&
-          object.source.kind === "image" &&
-          "placement" in object &&
-          object.slot
-        )
-          return object as EditorImageObject;
-      }
-  return null;
+  let match: EditorImageObject | null = null;
+  visitEditorDocumentObjects(document, ({ object }) => {
+    if (
+      !match &&
+      object.id === objectId &&
+      object.type === "image" &&
+      hasImageSlotBehavior(object)
+    )
+      match = object as EditorImageObject;
+  });
+  return match;
 }
 
 function findImageSlotContext(
   document: EditorDocument,
   objectId: string,
 ): { object: EditorImageObject; surfaceId: string } | null {
-  for (const surface of document.surfaces)
-    for (const layer of surface.layers)
-      for (const object of layer.objects ?? []) {
-        if (
-          object.id === objectId &&
-          object.source.kind === "image" &&
-          "placement" in object &&
-          object.slot
-        )
-          return { object: object as EditorImageObject, surfaceId: surface.id };
-      }
-  return null;
+  let match: { object: EditorImageObject; surfaceId: string } | null = null;
+  visitEditorDocumentObjects(document, ({ object, surface }) => {
+    if (
+      !match &&
+      object.id === objectId &&
+      object.type === "image" &&
+      hasImageSlotBehavior(object)
+    )
+      match = { object: object as EditorImageObject, surfaceId: surface.id };
+  });
+  return match;
 }
 
-function toDraft(object: EditorImageObject): ImageSlotSessionDraft {
+function hasImageSlotBehavior(object: EditorObject): boolean {
+  return (
+    object.behaviors?.some(
+      (behavior) => behavior.type === IMAGE_SLOT_BEHAVIOR_TYPE,
+    ) === true
+  );
+}
+
+function toDraft(
+  object: EditorImageObject,
+  _document: EditorDocument,
+): ImageSlotSessionDraft {
   return {
     objectId: object.id,
-    ...(object.source.resource
-      ? { resource: clone(object.source.resource) }
+    ...(object.source?.kind === "asset"
+      ? { assetId: object.source.assetId }
       : {}),
-    placement: clone(object.placement),
+    placement: clone(object.contentFit),
   };
 }
 
-function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {
+function normalizePlacement(
+  value: EditorImageContentFit,
+): EditorImageContentFit {
   return {
     fit:
       value.fit === "contain" || value.fit === "stretch" ? value.fit : "cover",
@@ -1075,10 +1329,7 @@ function normalizePlacement(value: EditorImagePlacement): EditorImagePlacement {
     ),
     zoom: Number.isFinite(value.zoom) && value.zoom > 0 ? value.zoom : 1,
     rotation: Number.isFinite(value.rotation) ? value.rotation : 0,
-    opacity: Number.isFinite(value.opacity)
-      ? Math.max(0, Math.min(1, value.opacity))
-      : 1,
-    clip: value.clip === "none" ? "none" : "frame",
+    clip: value.clip === "frame" ? "frame" : "none",
   };
 }
 
@@ -1086,23 +1337,9 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function releaseUncommittedResource(
-  resource: EditorImageResource | undefined,
-  committed: EditorImageResource | undefined,
-  replacement?: EditorImageResource,
-): void {
-  if (
-    resource?.kind !== "blob-url" ||
-    resource.url === resourceLocation(replacement)
-  )
-    return;
-  if (committed?.kind === "blob-url" && committed.url === resource.url) return;
-  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
-    URL.revokeObjectURL(resource.url);
-  }
-}
-
-function resourceLocation(resource: EditorImageResource | undefined): string {
+function resourceLocation(
+  resource: ImageResourceDescriptor | undefined,
+): string {
   return resource
     ? resource.kind === "data-url"
       ? resource.dataUrl
@@ -1110,34 +1347,55 @@ function resourceLocation(resource: EditorImageResource | undefined): string {
     : "";
 }
 
-function isDraftOutsideFrame(
+function doesDraftLeaveFrameUncovered(
   document: EditorDocument,
   draft: ImageSlotSessionDraft,
+  resolution?: Extract<ImageResourceResolution, { ok: true }>,
 ): boolean {
   const context = findImageSlotContext(document, draft.objectId);
-  const size = draft.resource?.intrinsicSize;
+  const size = resolution
+    ? { width: resolution.width, height: resolution.height }
+    : undefined;
   if (!context || !size) return false;
   const object = context.object;
   const geometry = resolveImageGeometry({
-    source: { src: resourceLocation(draft.resource), size },
+    source: { src: resolution!.src, size },
     frame: coordinateRect("object-local", {
       left: 0,
       top: 0,
-      width: object.frame.width,
-      height: object.frame.height,
+      width: object.localFrame.width,
+      height: object.localFrame.height,
     }),
     fit: draft.placement.fit,
     transform: draft.placement,
   });
-  const imageBounds = transformCoordinateRect(
+  const objectLocalToImageLocal = invertCoordinateMatrix(
     geometry.imageLocalToObjectLocal,
-    geometry.imageLocalBounds,
   );
+  const frameWidth = object.localFrame.width;
+  const frameHeight = object.localFrame.height;
+  const frameCorners = [
+    { space: "object-local" as const, x: 0, y: 0 },
+    { space: "object-local" as const, x: frameWidth, y: 0 },
+    { space: "object-local" as const, x: 0, y: frameHeight },
+    {
+      space: "object-local" as const,
+      x: frameWidth,
+      y: frameHeight,
+    },
+  ];
+  const imageBounds = geometry.imageLocalBounds;
   const epsilon = 1e-6;
-  return (
-    imageBounds.left < -epsilon ||
-    imageBounds.top < -epsilon ||
-    imageBounds.left + imageBounds.width > object.frame.width + epsilon ||
-    imageBounds.top + imageBounds.height > object.frame.height + epsilon
-  );
+  return frameCorners.some((corner) => {
+    const imagePoint = transformCoordinatePoint(
+      objectLocalToImageLocal,
+      corner,
+    );
+    return (
+      imagePoint.x < imageBounds.left - epsilon ||
+      imagePoint.y < imageBounds.top - epsilon ||
+      imagePoint.x > imageBounds.left + imageBounds.width + epsilon ||
+      imagePoint.y > imageBounds.top + imageBounds.height + epsilon
+    );
+  });
 }

@@ -14,7 +14,6 @@ export interface ImageGeometryTransform {
   anchorY?: number;
   zoom?: number;
   rotation?: number;
-  opacity?: number;
 }
 
 export interface ImageGeometryDescriptor {
@@ -33,7 +32,6 @@ export interface ResolvedImageGeometry {
   imageLocalBounds: CoordinateRect<"object-local">;
   /** Maps bitmap-local geometry into the containing document object's local space. */
   imageLocalToObjectLocal: Matrix2D<"object-local", "object-local">;
-  opacity: number;
   /** Crop geometry remains in the containing object-local coordinate space. */
   clip?: CoordinateRect<"object-local">;
 }
@@ -90,7 +88,6 @@ export function normalizeImageGeometryDescriptor(
       anchorY: finiteNumber(transform.anchorY, 0.5),
       zoom: Math.max(0.05, finiteNumber(transform.zoom, 1)),
       rotation: finiteNumber(transform.rotation, 0),
-      opacity: finiteNumber(transform.opacity, 1),
     },
     ...(clip
       ? {
@@ -172,7 +169,6 @@ export function resolveImageGeometry(
       "object-local",
       localMatrix.values,
     ),
-    opacity: finiteNumber(transform.opacity, 1),
     ...(descriptor.clip ? { clip: { ...descriptor.clip } } : {}),
   };
 }

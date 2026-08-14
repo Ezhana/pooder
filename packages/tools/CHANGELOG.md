@@ -109,9 +109,7 @@
   contributing product tools and instead expose optional capabilities such as
   image placement, edge detection, dieline geometry, mirror transforms, and
   export helpers. See
-  `../../docs/architecture-migration-plan.md`.
 - Published the current kit tool coupling inventory for migration slice P0.S2.
-  See `../../docs/kit-tool-coupling-inventory.md`.
 - Published naming and contribution policy for capability-first kit APIs and
   legacy `*Tool` compatibility wrappers. See
   `../../docs/naming-and-contribution-policy.md`.

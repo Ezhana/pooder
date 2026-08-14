@@ -1,6 +1,8 @@
 import {
   RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
   RENDER_INTENT_SERVICE,
+  GEOMETRY_SOURCE_SERVICE,
+  CONSTRAINT_RESOLVER_SERVICE,
   SURFACE_FRAME_SERVICE,
   SESSION_SERVICE,
   INTERACTION_SERVICE,
@@ -9,7 +11,6 @@ import {
   coordinateMatrix,
   coordinateRect,
   createAffinePlacement,
-  createLocalToSceneMatrix,
   invertCoordinateMatrix,
   multiplyCoordinateMatrices,
   resolveImageGeometry,
@@ -18,11 +19,18 @@ import {
   createServiceToken,
   type GeometryPoint,
   type GeometryRect,
+  type GeometryRef,
+  type GeometrySnapshot,
+  type GeometrySource,
+  type GeometrySourceService,
+  type ConstraintResolverService,
   type AffinePlacement,
   type Disposable,
   type ImageResourceResolution,
+  type ImageResourceDescriptor,
   type ImageResourceService,
   type InteractionManipulationCommitEvent,
+  type InteractionSpec,
   type InteractionService,
   type RenderIntentCompilerRegistryService,
   type RenderIntentDiagnostic,
@@ -30,6 +38,8 @@ import {
   type RenderIntentPatch,
   type RenderIntentPatchEntry,
   type RenderIntentService,
+  type PreparedRenderIntentDocumentPublication,
+  type PreparedSurfaceFramePublication,
   type Service,
   type ServiceContext,
   type ServiceIdentifier,
@@ -42,28 +52,52 @@ import {
 } from "@pooder/core";
 import {
   EffectSchemaRegistry,
+  DocumentExtensionRegistry,
   cloneEditorDocument,
+  createEditorDocumentAssetId,
+  reclaimOrphanedEditorDocumentAssets,
+  resolveEditorDocumentAsset,
+  setEditorImageObjectSource,
+  upsertEditorDocumentAsset,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
-  isGenericEditorEffect,
-  normalizeEditorDocument,
+  isEditorBuiltinObjectEffect,
+  isEditorGroupObject,
+  isEditorLeafObject,
+  isEditorExtensionObjectEffect,
+  parseEditorDocument,
+  selectEditorDocumentObjects,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
+  validateEditorDocumentExtensions,
+  validateEditorDocumentObjectSchemas,
+  validateEditorDocumentAssetReferences,
   type EditorDocument,
+  type AffineMatrix,
   type EditorDocumentCapabilityCollectionOptions,
   type EditorDocumentDiagnostic,
   type EditorDocumentEffectCapabilityResolver,
   type EditorDocumentValidationOptions,
   type DocumentInteractionSpec,
-  type EditorEffect,
-  type EditorLayer,
+  type EditorExtensionObjectEffect,
+  type EditorGroupObject,
   type EditorImageObject,
-  type EditorImageResource,
+  type EditorImageSlotBehaviorConfig,
+  type EditorImageAsset,
+  type EditorAssetDataSource,
   type EditorObject,
   type EditorObjectEffect,
+  type EditorObjectTrait,
   type EditorSurface,
-  type EditorTransform,
+  type DocumentExtensionContribution,
+  type ObjectSchemaContext,
+  type ObjectSchemaRegistry,
   type ObjectSource,
+  type EditorLeafObject,
+  type EditorPathObject,
+  type EditorShapeObject,
+  type EditorShapeContent,
+  type ObjectSelector,
 } from "@pooder/document";
 
 export interface ObjectSize {
@@ -82,7 +116,6 @@ export interface ResolvedVisual {
   source: ObjectSource;
   pathData?: string;
   imageUrl?: string;
-  text?: string;
   bounds?: GeometryRect;
   contentBounds?: GeometryRect;
   intrinsicSize?: ObjectSize;
@@ -90,37 +123,45 @@ export interface ResolvedVisual {
 }
 
 export interface GeometryResolver {
-  resolve(source: ObjectSource): ResolvedVisual | null;
-  hitTest(source: ObjectSource, point: GeometryPoint): boolean;
+  resolve(object: EditorPathObject | EditorShapeObject): ResolvedVisual | null;
+  hitTest(
+    object: EditorPathObject | EditorShapeObject,
+    point: GeometryPoint,
+  ): boolean;
 }
 
 export class DefaultGeometryResolver implements GeometryResolver {
-  resolve(source: ObjectSource): ResolvedVisual | null {
-    if (source.kind === "path") {
-      const pathData = source.pathData.trim();
+  resolve(object: EditorPathObject | EditorShapeObject): ResolvedVisual | null {
+    if (object.type === "path") {
+      const source = object.source;
+      const pathData = source.content.pathData.trim();
       if (!pathData) return null;
       const contentBounds =
-        rectToBounds(source.sourceBounds) ??
+        rectToBounds(source.content.sourceBounds) ??
         inferPathBounds(pathData) ??
         undefined;
       return {
         source,
         pathData,
-        bounds: source.sourceSize
-          ? sizeToBounds(source.sourceSize)
+        bounds: source.content.sourceSize
+          ? sizeToBounds(source.content.sourceSize)
           : contentBounds,
         contentBounds,
-        intrinsicSize: source.sourceSize,
+        intrinsicSize: source.content.sourceSize,
       };
     }
 
-    if (source.kind !== "shape") return null;
-    const resolved = resolveShapeSource(source);
+    if (object.type !== "shape") return null;
+    const source = object.source;
+    const resolved = resolveShapeSource(source.content);
     return resolved ? { source, ...resolved } : null;
   }
 
-  hitTest(source: ObjectSource, point: GeometryPoint): boolean {
-    const visual = this.resolve(source);
+  hitTest(
+    object: EditorPathObject | EditorShapeObject,
+    point: GeometryPoint,
+  ): boolean {
+    const visual = this.resolve(object);
     if (!visual?.bounds) return false;
     return containsPoint(visual.bounds, point);
   }
@@ -131,30 +172,13 @@ export class SourceResolver {
     private readonly geometryResolver: GeometryResolver = new DefaultGeometryResolver(),
   ) {}
 
-  resolve(source: ObjectSource): ResolvedVisual | null {
-    switch (source.kind) {
-      case "image": {
-        const resource = source.resource;
-        if (!resource?.intrinsicSize) return null;
-        const imageUrl =
-          resource.kind === "data-url" ? resource.dataUrl : resource.url;
-        return {
-          source,
-          imageUrl,
-          mimeType:
-            resource.kind === "blob-url" ? undefined : resource.mimeType,
-          intrinsicSize: resource.intrinsicSize,
-          bounds: sizeToBounds(resource.intrinsicSize),
-        };
-      }
+  resolve(object: EditorLeafObject): ResolvedVisual | null {
+    switch (object.type) {
+      case "image":
+        return null;
       case "path":
       case "shape":
-        return this.geometryResolver.resolve(source);
-      case "text":
-        return {
-          source,
-          text: source.text,
-        };
+        return this.geometryResolver.resolve(object);
       default:
         return null;
     }
@@ -162,17 +186,14 @@ export class SourceResolver {
 }
 
 export function resolveObjectSource(
-  source: ObjectSource,
+  object: EditorLeafObject,
 ): ResolvedVisual | null {
-  return new SourceResolver().resolve(source);
+  return new SourceResolver().resolve(object);
 }
 
 export interface EditorDocumentRuntime {
-  readonly config?: {
-    export(): Record<string, unknown>;
-    get<T = unknown>(key: string, defaultValue?: T): T;
-    import(data: Record<string, unknown>): void;
-    update(key: string, value: unknown): void;
+  readonly extensions?: {
+    listDocumentContributions(): unknown[];
   };
   readonly services: {
     register?<T extends Service>(
@@ -191,11 +212,27 @@ export interface EditorDocumentRuntime {
   };
 }
 
+export interface EditorDocumentPublication {
+  /** Must be synchronous and non-throwing. All fallible work belongs in prepare. */
+  publish(): void;
+}
+
+export interface EditorDocumentPublicationParticipant {
+  prepare(context: {
+    runtime: EditorDocumentRuntime;
+    document: EditorDocument;
+  }):
+    | EditorDocumentPublication
+    | void
+    | Promise<EditorDocumentPublication | void>;
+}
+
 export interface ApplyEditorDocumentOptions {
   effectSchemaRegistry?: EffectSchemaRegistry;
   resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
   validators?: EditorDocumentValidationOptions["validators"];
-  afterApply?: (
+  publicationParticipants?: readonly EditorDocumentPublicationParticipant[];
+  afterPublish?: (
     runtime: EditorDocumentRuntime,
     document: EditorDocument,
   ) => Promise<void> | void;
@@ -205,7 +242,7 @@ export interface ApplyEditorDocumentResult {
   ok: boolean;
   document: EditorDocument;
   diagnostics: EditorDocumentDiagnostic[];
-  views: NonNullable<EditorDocument["views"]>;
+  surfaces: EditorSurface[];
   appliedSurfaceIds: string[];
 }
 
@@ -218,8 +255,10 @@ export type EditorDocumentMutationCallback = (
 export type EditorDocumentMutationFailureReason =
   | "document-not-found"
   | "draft-inactive"
-  | "layer-not-found"
+  | "parent-not-found"
   | "object-not-found"
+  | "selector-count-mismatch"
+  | "object-type-mismatch"
   | "mutation-failed"
   | "validation-failed";
 
@@ -294,6 +333,17 @@ export interface EditorDocumentObjectInsertOptions {
   index?: number;
 }
 
+export interface EditorDocumentSelectorMutationOptions {
+  expectedCount?: number;
+}
+
+export interface EditorDocumentImageResourceUpdate {
+  source?: EditorAssetDataSource | null;
+  mimeType?: string;
+  intrinsicSize?: EditorImageAsset["intrinsicSize"];
+  visible?: boolean;
+}
+
 export interface EditorDocumentManipulationCommit {
   subjectId: string;
   sceneTransformPatch: SceneTransformPatch;
@@ -328,7 +378,7 @@ export interface EditorDocumentService extends Service {
   onDidChange(listener: (event: EditorDocumentChangeEvent) => void): Disposable;
   insertObject(
     surfaceId: string,
-    layerId: string,
+    parentId: string | null,
     object: EditorObject,
     options?: EditorDocumentObjectInsertOptions,
   ): Promise<EditorDocumentMutationResult>;
@@ -337,6 +387,28 @@ export interface EditorDocumentService extends Service {
     update: (current: Readonly<EditorObject>) => EditorObject,
   ): Promise<EditorDocumentMutationResult>;
   removeObject(objectId: string): Promise<EditorDocumentMutationResult>;
+  selectObjects(
+    selector: ObjectSelector,
+    source?: EditorDocumentSource,
+  ): EditorObject[];
+  selectOneObject(
+    selector: ObjectSelector,
+    source?: EditorDocumentSource,
+  ): EditorObject | undefined;
+  updateObjects(
+    selector: ObjectSelector,
+    update: (current: Readonly<EditorObject>) => EditorObject,
+    options?: EditorDocumentSelectorMutationOptions,
+  ): Promise<EditorDocumentMutationResult>;
+  updateImageResources(
+    selector: ObjectSelector,
+    update: EditorDocumentImageResourceUpdate,
+    options?: EditorDocumentSelectorMutationOptions,
+  ): Promise<EditorDocumentMutationResult>;
+  validateObjectConstraints(
+    objectId: string,
+    source?: EditorDocumentSource,
+  ): SessionValidationResult;
   commitManipulation(
     manipulation: EditorDocumentManipulationCommit,
   ): Promise<EditorDocumentMutationResult>;
@@ -345,23 +417,13 @@ export interface EditorDocumentService extends Service {
 export const EDITOR_DOCUMENT_SERVICE =
   createServiceToken<EditorDocumentService>("EditorDocumentService");
 
-/** @deprecated Use EditorDocumentService. */
-export type EditorDocumentController = Pick<
-  EditorDocumentService,
-  "apply" | "export" | "updateObject"
->;
-
-/** @deprecated Use EditorDocumentMutationResult. */
-export type DocumentUpdateResult = EditorDocumentMutationResult;
-
 interface EffectContext {
   surface: EditorSurface;
-  layer?: EditorLayer;
   object?: EditorObject;
 }
 
 interface EffectEntry {
-  effect: EditorEffect;
+  effect: EditorExtensionObjectEffect;
   context: EffectContext;
   path: string;
 }
@@ -382,31 +444,124 @@ export async function applyEditorDocument(
   return applyEditorDocumentInternal(runtime, value, options, "replace");
 }
 
+interface PreparedEditorDocumentApplication {
+  result: ApplyEditorDocumentResult;
+  surfaceFramePublication: PreparedSurfaceFramePublication;
+  renderIntentPublication: PreparedRenderIntentDocumentPublication;
+  participantPublications: EditorDocumentPublication[];
+  renderIntentService: RenderIntentService;
+  surfaceFrameService: SurfaceFrameService;
+}
+
+interface EditorDocumentPublicationBoundary {
+  publishDocumentState?(document: EditorDocument): void;
+  notifyDocumentPublished?(): void;
+}
+
 async function applyEditorDocumentInternal(
   runtime: EditorDocumentRuntime,
   value: unknown,
   options: ApplyEditorDocumentOptions,
   renderIntentMode: "replace" | "update",
+  boundary: EditorDocumentPublicationBoundary = {},
 ): Promise<ApplyEditorDocumentResult> {
+  let prepared: PreparedEditorDocumentApplication | ApplyEditorDocumentResult;
+  try {
+    prepared = await prepareEditorDocumentApplication(
+      runtime,
+      value,
+      options,
+      renderIntentMode,
+    );
+  } catch (error) {
+    return createResult(
+      false,
+      createRejectedDocumentSnapshot(),
+      [createPublicationDiagnostic("document-prepare-failed", error)],
+      [],
+    );
+  }
+  if (!("renderIntentPublication" in prepared)) return prepared;
+
+  try {
+    publishEditorDocumentApplication(runtime, prepared, boundary);
+  } catch (error) {
+    return createResult(
+      false,
+      prepared.result.document,
+      [
+        ...prepared.result.diagnostics,
+        createPublicationDiagnostic("document-publication-rejected", error),
+      ],
+      [],
+    );
+  }
+
+  try {
+    await options.afterPublish?.(runtime, prepared.result.document);
+  } catch (error) {
+    console.error("EditorDocument afterPublish notification failed.", error);
+  }
+  return prepared.result;
+}
+
+async function prepareEditorDocumentApplication(
+  runtime: EditorDocumentRuntime,
+  value: unknown,
+  options: ApplyEditorDocumentOptions,
+  renderIntentMode: "replace" | "update",
+): Promise<PreparedEditorDocumentApplication | ApplyEditorDocumentResult> {
   const validationOptions = toValidationOptions(options);
-  const collectionOptions = toCollectionOptions(options);
-  const document = normalizeEditorDocument(value);
   const documentSchemaDiagnostics = validateEditorDocument(
     value,
     validationOptions,
   );
   if (hasErrors(documentSchemaDiagnostics)) {
-    return createResult(false, document, documentSchemaDiagnostics, []);
+    return createResult(
+      false,
+      createRejectedDocumentSnapshot(),
+      documentSchemaDiagnostics,
+      [],
+    );
+  }
+  const document = parseEditorDocument(value);
+  const extensionRegistry = createRuntimeDocumentExtensionRegistry(runtime);
+  const effectSchemaRegistry = mergeEffectSchemaRegistries(
+    extensionRegistry.createEffectSchemaRegistry(),
+    options.effectSchemaRegistry,
+  );
+  const collectionOptions = toCollectionOptions(options, effectSchemaRegistry);
+  const extensionDiagnostics = validateEditorDocumentExtensions(
+    value,
+    extensionRegistry,
+  );
+  if (hasErrors(extensionDiagnostics)) {
+    return createResult(false, document, extensionDiagnostics, []);
+  }
+  const objectSchemaRegistry = extensionRegistry.createObjectSchemaRegistry();
+  const objectSchemaDiagnostics = validateEditorDocumentObjectSchemas(
+    document,
+    objectSchemaRegistry,
+  );
+  if (hasErrors(objectSchemaDiagnostics)) {
+    return createResult(false, document, objectSchemaDiagnostics, []);
   }
   const effectSchemaDiagnostics = validateEditorDocumentEffectSchemas(
     value,
-    options.effectSchemaRegistry ?? new EffectSchemaRegistry(),
+    effectSchemaRegistry,
+  );
+  const assetReferenceDiagnostics = validateEditorDocumentAssetReferences(
+    document,
+    { extensionRegistry },
   );
   const diagnostics = [
     ...documentSchemaDiagnostics,
+    ...extensionDiagnostics,
+    ...objectSchemaDiagnostics,
     ...effectSchemaDiagnostics,
+    ...assetReferenceDiagnostics,
   ];
-  if (hasErrors(effectSchemaDiagnostics)) {
+  if (hasErrors([...effectSchemaDiagnostics, ...assetReferenceDiagnostics])) {
     return createResult(false, document, diagnostics, []);
   }
 
@@ -426,35 +581,10 @@ async function applyEditorDocumentInternal(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  if (!runtime.config) {
-    return createResult(
-      false,
-      document,
-      [
-        ...allDiagnostics,
-        {
-          severity: "error",
-          stage: "runtime-capability",
-          code: "runtime-config-required",
-          message:
-            "ConfigurationService runtime facade is required to apply an EditorDocument.",
-          path: "config",
-        },
-      ],
-      [],
-    );
-  }
-  runtime.config.import(document.config);
-  runtime.services
-    .getOrThrow<SurfaceFrameService>(
-      SURFACE_FRAME_SERVICE,
-      "SurfaceFrameService is required to apply an EditorDocument.",
-    )
-    .importFrames(
-      Object.fromEntries(
-        document.surfaces.map((surface) => [surface.id, surface.frames]),
-      ),
-    );
+  const surfaceFrameService = runtime.services.getOrThrow<SurfaceFrameService>(
+    SURFACE_FRAME_SERVICE,
+    "SurfaceFrameService is required to apply an EditorDocument.",
+  );
 
   const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
     RENDER_INTENT_SERVICE,
@@ -466,15 +596,21 @@ async function applyEditorDocumentInternal(
       "RenderIntentCompilerRegistryService is required to apply an EditorDocument.",
     );
   const resolvedImages = await resolveDocumentImageResources(runtime, document);
-  const intentDrafts = createBaseRenderIntentDrafts(document, resolvedImages);
-  const effectEntries =
-    collectEffectEntries(document).sort(compareEffectEntries);
+  const intentDrafts = createBaseRenderIntentDrafts(
+    document,
+    resolvedImages,
+    objectSchemaRegistry,
+  );
+  const effectEntries = collectEffectEntries(document);
   const patchEntries: RenderIntentPatchEntry[] = [];
   let patchSequence = 0;
 
   for (const entry of effectEntries) {
-    if (entry.effect.require === "ignore") continue;
-    const capabilityId = resolveEffectCapabilityId(entry.effect, options);
+    const capabilityId = resolveEffectCapabilityId(
+      entry.effect,
+      options,
+      effectSchemaRegistry,
+    );
     if (!capabilityId || !runtime.capabilities.has(capabilityId)) continue;
 
     const patches = await compileRenderIntentPatches(
@@ -490,7 +626,7 @@ async function applyEditorDocumentInternal(
         sourceId: `capability:${capabilityId}`,
         patch,
         priority: 0,
-        phase: entry.effect.phase ?? "layout",
+        phase: effectSchemaRegistry.resolvePhase(entry.effect.type),
         sequence: patchSequence++,
         reason: entry.effect.type,
         debugLabel: entry.path,
@@ -507,19 +643,125 @@ async function applyEditorDocumentInternal(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  if (renderIntentMode === "update") {
-    renderIntentService.updateDocumentIntents(mergeResult.drafts);
-  } else {
-    renderIntentService.setDocumentIntents(mergeResult.drafts);
-  }
-  await options.afterApply?.(runtime, document);
-
-  return createResult(
+  const result = createResult(
     true,
     document,
     allDiagnostics,
     collectAppliedSurfaceIds(mergeResult.drafts),
   );
+  const surfaceFramePublication = surfaceFrameService.prepareImportFrames(
+    Object.fromEntries(
+      document.surfaces.map((surface) => [
+        surface.id,
+        surfaceGeometryToRuntimeFrames(surface),
+      ]),
+    ),
+  );
+  const renderIntentPublication = renderIntentService.prepareDocumentIntents(
+    mergeResult.drafts,
+    renderIntentMode,
+  );
+  const participantPublications: EditorDocumentPublication[] = [];
+  for (const contribution of extensionRegistry.list()) {
+    const state = document.extensions[contribution.id];
+    if (state === undefined || !contribution.preparePublication) continue;
+    try {
+      const publication = await contribution.preparePublication(state, {
+        document,
+        extensionId: contribution.id,
+      });
+      if (publication) participantPublications.push(publication);
+    } catch (error) {
+      return createResult(
+        false,
+        document,
+        [
+          ...allDiagnostics,
+          createPublicationDiagnostic(
+            "document-extension-publication-prepare-failed",
+            error,
+          ),
+        ],
+        [],
+      );
+    }
+  }
+  for (const participant of options.publicationParticipants ?? []) {
+    try {
+      const publication = await participant.prepare({ runtime, document });
+      if (publication) participantPublications.push(publication);
+    } catch (error) {
+      return createResult(
+        false,
+        document,
+        [
+          ...allDiagnostics,
+          createPublicationDiagnostic(
+            "publication-participant-prepare-failed",
+            error,
+          ),
+        ],
+        [],
+      );
+    }
+  }
+
+  return {
+    result,
+    surfaceFramePublication,
+    renderIntentPublication,
+    participantPublications,
+    renderIntentService,
+    surfaceFrameService,
+  };
+}
+
+function publishEditorDocumentApplication(
+  _runtime: EditorDocumentRuntime,
+  prepared: PreparedEditorDocumentApplication,
+  boundary: EditorDocumentPublicationBoundary,
+): void {
+  prepared.surfaceFrameService.assertImportFramesPublicationCurrent(
+    prepared.surfaceFramePublication,
+  );
+  prepared.renderIntentService.assertDocumentIntentsPublicationCurrent(
+    prepared.renderIntentPublication,
+  );
+  boundary.publishDocumentState?.(prepared.result.document);
+  prepared.surfaceFrameService.publishImportFrames(
+    prepared.surfaceFramePublication,
+    { notify: false },
+  );
+  prepared.renderIntentService.publishDocumentIntents(
+    prepared.renderIntentPublication,
+    { notify: false },
+  );
+  prepared.participantPublications.forEach((publication) => {
+    try {
+      publication.publish();
+    } catch (error) {
+      console.error("EditorDocument publication participant failed.", error);
+    }
+  });
+  notifyPublication("surface frames", () =>
+    prepared.surfaceFrameService.notifyImportFramesPublished(
+      prepared.surfaceFramePublication,
+    ),
+  );
+  notifyPublication("render intents", () =>
+    prepared.renderIntentService.notifyDocumentIntentsPublished(
+      prepared.renderIntentPublication,
+    ),
+  );
+  boundary.notifyDocumentPublished?.();
+}
+
+function notifyPublication(label: string, notify: () => void): void {
+  try {
+    notify();
+  } catch (error) {
+    console.error(`EditorDocument ${label} notification failed.`, error);
+  }
 }
 
 export class DefaultEditorDocumentService implements EditorDocumentService {
@@ -534,6 +776,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private operationQueue: Promise<void> = Promise.resolve();
   private manipulationSubscription?: { dispose(): void };
   private sessionSubscription?: { dispose(): void };
+  private documentGeometrySubscription?: { dispose(): void };
   private readonly documentSessions = new Map<
     string,
     EditorDocumentSession<unknown>
@@ -546,6 +789,15 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   ) {}
 
   init(context: ServiceContext): void {
+    const geometrySource = context.get<GeometrySourceService>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    this.documentGeometrySubscription = geometrySource?.registerSource(
+      createDocumentObjectGeometrySource(
+        () => this.workingDocument ?? this.committedDocument,
+        geometrySource,
+      ),
+    );
     const interactionService =
       context.get<InteractionService>(INTERACTION_SERVICE);
     this.manipulationSubscription = interactionService?.onDidCommitManipulation(
@@ -561,6 +813,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   }
 
   dispose(): void {
+    this.documentGeometrySubscription?.dispose();
+    this.documentGeometrySubscription = undefined;
     this.manipulationSubscription?.dispose();
     this.manipulationSubscription = undefined;
     this.sessionSubscription?.dispose();
@@ -571,19 +825,15 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   async apply(value: unknown): Promise<ApplyEditorDocumentResult> {
     return this.enqueue(async () => {
-      const result = await applyEditorDocument(
-        this.runtime,
-        value,
-        this.options,
-      );
-      if (result.ok) {
-        this.committedDocument = cloneEditorDocument(result.document);
-        this.workingDocument = cloneEditorDocument(result.document);
-        this.activeDraftId = null;
-        this.activeDraftSnapshot = null;
-        this.emit("replace");
-      }
-      return result;
+      return this.applyDocumentToRuntime(value, "replace", {
+        publishDocumentState: (document) => {
+          this.committedDocument = cloneEditorDocument(document);
+          this.workingDocument = cloneEditorDocument(document);
+          this.activeDraftId = null;
+          this.activeDraftSnapshot = null;
+        },
+        notifyDocumentPublished: () => this.emit("replace"),
+      });
     });
   }
 
@@ -641,7 +891,9 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     );
     const sessionSnapshot = this.export("committed");
     if (!sessionSnapshot) {
-      throw new Error("Cannot open an editor document session without a document.");
+      throw new Error(
+        "Cannot open an editor document session without a document.",
+      );
     }
     const scope: SessionScope = {
       surfaceId: input.scope?.surfaceId ?? null,
@@ -652,7 +904,10 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     let documentDraft: DocumentDraft | undefined;
     let rollbackResult: EditorDocumentMutationResult | undefined;
 
-    const handle = await sessionService.open<TDraft, EditorDocumentMutationResult>({
+    const handle = await sessionService.open<
+      TDraft,
+      EditorDocumentMutationResult
+    >({
       descriptor: {
         sessionId,
         ownerId: "editor-document-service",
@@ -709,7 +964,10 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       () => requireDocumentDraft(documentDraft),
       () => rollbackResult,
     );
-    this.documentSessions.set(sessionId, session as EditorDocumentSession<unknown>);
+    this.documentSessions.set(
+      sessionId,
+      session as EditorDocumentSession<unknown>,
+    );
     return session;
   }
 
@@ -730,7 +988,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   insertObject(
     surfaceId: string,
-    layerId: string,
+    parentId: string | null,
     object: EditorObject,
     options: EditorDocumentObjectInsertOptions = {},
   ): Promise<EditorDocumentMutationResult> {
@@ -738,9 +996,11 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     return this.mutate((document) => {
       for (const surface of document.surfaces) {
         if (surface.id !== surfaceId) continue;
-        const layer = surface.layers.find((item) => item.id === layerId);
-        if (!layer) break;
-        const objects = layer.objects ?? (layer.objects = []);
+        const parent = parentId
+          ? findGroupObject(surface.objects, parentId)
+          : undefined;
+        if (parentId && !parent) break;
+        const objects = parent ? parent.children : surface.objects;
         const index = Number.isInteger(options.index)
           ? Math.max(0, Math.min(options.index as number, objects.length))
           : objects.length;
@@ -748,7 +1008,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         found = true;
         return;
       }
-      if (!found) throw new DocumentMutationError("layer-not-found");
+      if (!found) throw new DocumentMutationError("parent-not-found");
     });
   }
 
@@ -776,6 +1036,141 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     });
   }
 
+  selectObjects(
+    selector: ObjectSelector,
+    source: EditorDocumentSource = "working",
+  ): EditorObject[] {
+    const document = this.export(source);
+    return document ? selectEditorDocumentObjects(document, selector) : [];
+  }
+
+  selectOneObject(
+    selector: ObjectSelector,
+    source: EditorDocumentSource = "working",
+  ): EditorObject | undefined {
+    const objects = this.selectObjects(selector, source);
+    if (objects.length > 1)
+      throw new Error("document-object-selector-ambiguous");
+    return objects[0];
+  }
+
+  updateObjects(
+    selector: ObjectSelector,
+    update: (current: Readonly<EditorObject>) => EditorObject,
+    options: EditorDocumentSelectorMutationOptions = {},
+  ): Promise<EditorDocumentMutationResult> {
+    if (!selector.ids?.length && !selector.tags?.length) {
+      return Promise.resolve(mutationFailure("object-not-found"));
+    }
+    return this.mutate((document) => {
+      const objects = selectEditorDocumentObjects(document, selector);
+      assertSelectorCount(objects.length, options.expectedCount);
+      if (!objects.length) throw new DocumentMutationError("object-not-found");
+      objects.forEach((object) =>
+        replaceSourceObject(
+          document,
+          object.id,
+          cloneDocumentObject(update(cloneDocumentObject(object))),
+        ),
+      );
+    });
+  }
+
+  updateImageResources(
+    selector: ObjectSelector,
+    update: EditorDocumentImageResourceUpdate,
+    options: EditorDocumentSelectorMutationOptions = {},
+  ): Promise<EditorDocumentMutationResult> {
+    if (!selector.ids?.length && !selector.tags?.length) {
+      return Promise.resolve(mutationFailure("object-not-found"));
+    }
+    return this.mutate((document) => {
+      const objects = selectEditorDocumentObjects(document, selector);
+      assertSelectorCount(objects.length, options.expectedCount);
+      if (!objects.length) throw new DocumentMutationError("object-not-found");
+      if (objects.some((object) => object.type !== "image")) {
+        throw new DocumentMutationError("object-type-mismatch");
+      }
+      objects.forEach((object) => {
+        if (object.type !== "image") return;
+        if (update.visible !== undefined) object.visible = update.visible;
+        if (update.source === undefined) return;
+        if (update.source === null) {
+          setEditorImageObjectSource(document, object.id, null);
+          return;
+        }
+        const assetId = createEditorDocumentAssetId(
+          document,
+          `asset:${object.id}`,
+        );
+        setEditorImageObjectSource(document, object.id, {
+          kind: "asset",
+          assetId,
+        });
+        const asset: EditorImageAsset = {
+          id: assetId,
+          type: "image",
+          source: { ...update.source },
+          ...(update.mimeType ? { mimeType: update.mimeType } : {}),
+          ...(update.intrinsicSize
+            ? { intrinsicSize: { ...update.intrinsicSize } }
+            : {}),
+        };
+        upsertEditorDocumentAsset(document, asset);
+      });
+    });
+  }
+
+  validateObjectConstraints(
+    objectId: string,
+    source: EditorDocumentSource = "working",
+  ): SessionValidationResult {
+    const document = this.export(source);
+    const object = document
+      ? findEditorDocumentObject(document, normalizeObjectId(objectId))
+      : undefined;
+    if (!object) return { ok: false, detail: "object-not-found" };
+    const constraints =
+      object.interaction?.manipulation?.move?.constraints?.map(
+        (constraint) => constraint.spec,
+      ) ?? [];
+    if (!constraints.length) return { ok: true };
+    const geometrySource = this.runtime.services.get?.<GeometrySourceService>(
+      GEOMETRY_SOURCE_SERVICE,
+    );
+    const resolver = this.runtime.services.get?.<ConstraintResolverService>(
+      CONSTRAINT_RESOLVER_SERVICE,
+    );
+    const bounds = geometrySource?.getBounds(
+      {
+        sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+        geometryId: object.id,
+        purpose: "preview",
+      },
+      "scene",
+    ).value;
+    if (!resolver || !bounds) {
+      return { ok: false, detail: "constraint-runtime-unavailable" };
+    }
+    const resolved = resolver.resolve({
+      transform: { frame: bounds },
+      constraints,
+      coordinateSpace: "scene",
+      geometrySource,
+      phase: "commit",
+    });
+    return resolved.result.changed
+      ? {
+          ok: false,
+          detail: {
+            code: "object-constraints-unsatisfied",
+            objectId: object.id,
+            diagnostics: resolved.result.diagnostics,
+          },
+        }
+      : { ok: true };
+  }
+
   commitManipulation(
     manipulation: EditorDocumentManipulationCommit,
   ): Promise<EditorDocumentMutationResult> {
@@ -791,27 +1186,20 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     const localFrame = manipulation.frame
       ? sceneFrameToLocalFrame(manipulation.frame, manipulation.parentMatrix)
       : undefined;
-    return this.updateObject(manipulation.subjectId, (object) => ({
-      ...object,
-      ...(localFrame
-        ? {
-            frame: {
-              x: localFrame.left,
-              y: localFrame.top,
-              width: localFrame.width,
-              height: localFrame.height,
-            },
-          }
-        : {}),
-      ...(manipulation.rotation === undefined
-        ? {}
+    return this.updateObject(manipulation.subjectId, (object) => {
+      const resized = localFrame
+        ? resizeDocumentObject(object, localFrame)
+        : object;
+      return manipulation.rotation === undefined
+        ? resized
         : {
-            transform: {
-              ...(object.transform ?? {}),
-              angle: manipulation.rotation,
-            },
-          }),
-    }));
+            ...resized,
+            localToParent: rotateObjectLocalToParent(
+              resized.localToParent,
+              manipulation.rotation,
+            ),
+          };
+    });
   }
 
   private async mutateDraft(
@@ -829,7 +1217,6 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   ): Promise<EditorDocumentMutationResult> {
     if (!this.workingDocument) return mutationFailure("document-not-found");
     const candidate = cloneEditorDocument(this.workingDocument);
-    candidate.config = this.runtime.config?.export() ?? candidate.config;
     let returned: EditorDocument | void;
     try {
       returned = await callback(candidate);
@@ -839,27 +1226,21 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         : mutationFailure("mutation-failed");
     }
     const next = returned ? cloneEditorDocument(returned) : candidate;
-    const result = await applyEditorDocumentInternal(
-      this.runtime,
-      next,
-      this.options,
-      "update",
-    );
+    reclaimOrphanedEditorDocumentAssets(next, {
+      extensionRegistry: createRuntimeDocumentExtensionRegistry(this.runtime),
+    });
+    const result = await this.applyDocumentToRuntime(next, "update", {
+      publishDocumentState: (document) => {
+        this.workingDocument = cloneEditorDocument(document);
+        if (!draftId) {
+          this.committedDocument = cloneEditorDocument(document);
+        }
+      },
+      notifyDocumentPublished: () =>
+        draftId ? this.emit("mutate", draftId) : this.emit("commit"),
+    });
     if (!result.ok) {
-      await applyEditorDocumentInternal(
-        this.runtime,
-        this.workingDocument,
-        this.options,
-        "update",
-      );
       return mutationFailure("validation-failed", result.diagnostics);
-    }
-    this.workingDocument = cloneEditorDocument(result.document);
-    if (draftId) {
-      this.emit("mutate", draftId);
-    } else {
-      this.committedDocument = cloneEditorDocument(result.document);
-      this.emit("commit");
     }
     return { ok: true, document: cloneEditorDocument(result.document) };
   }
@@ -884,25 +1265,25 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       return mutationFailure("draft-inactive");
     }
     const snapshot = cloneEditorDocument(this.activeDraftSnapshot);
-    const result = await applyEditorDocumentInternal(
-      this.runtime,
-      snapshot,
-      this.options,
-      "update",
-    );
+    const result = await this.applyDocumentToRuntime(snapshot, "update", {
+      publishDocumentState: (document) => {
+        this.workingDocument = cloneEditorDocument(document);
+        this.activeDraftId = null;
+        this.activeDraftSnapshot = null;
+      },
+      notifyDocumentPublished: () => this.emit("rollback", draftId),
+    });
     if (!result.ok) {
       return mutationFailure("validation-failed", result.diagnostics);
     }
-    this.workingDocument = cloneEditorDocument(snapshot);
-    this.activeDraftId = null;
-    this.activeDraftSnapshot = null;
-    this.emit("rollback", draftId);
     return { ok: true, document: cloneEditorDocument(snapshot) };
   }
 
   private async writeManipulationToDocument(
     event: InteractionManipulationCommitEvent,
   ): Promise<void> {
+    const operation = event.input.spec.manipulation?.[event.kind];
+    if (operation?.documentMutation === "action-owned") return;
     const subjectId = normalizeObjectId(event.subject.subjectId);
     const sceneTransformPatch = event.result.documentPatch;
     if (!subjectId || !sceneTransformPatch) return;
@@ -968,9 +1349,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       async rollback() {
         await handle.rollback();
         service.documentSessions.delete(handle.descriptor.sessionId);
-        return (
-          getRollbackResult() ?? mutationFailure("draft-inactive")
-        );
+        return getRollbackResult() ?? mutationFailure("draft-inactive");
       },
     };
   }
@@ -991,6 +1370,20 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     });
   }
 
+  private async applyDocumentToRuntime(
+    value: unknown,
+    mode: "replace" | "update",
+    boundary: EditorDocumentPublicationBoundary,
+  ): Promise<ApplyEditorDocumentResult> {
+    return applyEditorDocumentInternal(
+      this.runtime,
+      value,
+      this.options,
+      mode,
+      boundary,
+    );
+  }
+
   private enqueue<TResult>(
     operation: () => Promise<TResult>,
   ): Promise<TResult> {
@@ -1007,25 +1400,59 @@ function translateDocumentObject(
   object: EditorObject,
   delta: { x: number; y: number },
 ): EditorObject {
-  const frame = object.frame;
-  if (!frame) return object;
-  const transform = object.transform;
+  const [a, b, c, d, e, f] = object.localToParent;
   return {
     ...object,
-    frame: { ...frame, x: frame.x + delta.x, y: frame.y + delta.y },
-    ...(Number.isFinite(transform?.left) || Number.isFinite(transform?.top)
-      ? {
-          transform: {
-            ...(transform ?? {}),
-            ...(Number.isFinite(transform?.left)
-              ? { left: Number(transform?.left) + delta.x }
-              : {}),
-            ...(Number.isFinite(transform?.top)
-              ? { top: Number(transform?.top) + delta.y }
-              : {}),
-          },
-        }
-      : {}),
+    localToParent: [a, b, c, d, e + delta.x, f + delta.y],
+  };
+}
+
+function resizeDocumentObject(
+  object: EditorObject,
+  frame: GeometryRect,
+): EditorObject {
+  if (isEditorLeafObject(object)) {
+    const [a, b, c, d] = object.localToParent;
+    return {
+      ...object,
+      localFrame: {
+        ...object.localFrame,
+        width: frame.width,
+        height: frame.height,
+      },
+      localToParent: [a, b, c, d, frame.left, frame.top],
+    };
+  }
+  const bounds = deriveGroupLocalBounds(object);
+  if (bounds.width <= 0 || bounds.height <= 0) return object;
+  const currentBounds = transformCoordinateRect(
+    coordinateMatrix("object-local", "parent-local", object.localToParent),
+    bounds,
+  );
+  const scaleX =
+    currentBounds.width > 0 ? frame.width / currentBounds.width : 1;
+  const scaleY =
+    currentBounds.height > 0 ? frame.height / currentBounds.height : 1;
+  const [a, b, c, d] = object.localToParent;
+  const linear = coordinateMatrix("object-local", "parent-local", [
+    a * scaleX,
+    b * scaleY,
+    c * scaleX,
+    d * scaleY,
+    0,
+    0,
+  ]);
+  const linearBounds = transformCoordinateRect(linear, bounds);
+  return {
+    ...object,
+    localToParent: [
+      linear.values[0],
+      linear.values[1],
+      linear.values[2],
+      linear.values[3],
+      frame.left - linearBounds.left,
+      frame.top - linearBounds.top,
+    ],
   };
 }
 
@@ -1060,14 +1487,6 @@ export function registerEditorDocumentService(
   return service;
 }
 
-/** @deprecated Use registerEditorDocumentService and EDITOR_DOCUMENT_SERVICE. */
-export function createEditorDocumentController(
-  runtime: EditorDocumentRuntime,
-  options: ApplyEditorDocumentOptions = {},
-): EditorDocumentService {
-  return registerEditorDocumentService(runtime, options);
-}
-
 function toValidationOptions(
   options: ApplyEditorDocumentOptions,
 ): EditorDocumentValidationOptions {
@@ -1078,23 +1497,54 @@ function toValidationOptions(
 
 function toCollectionOptions(
   options: ApplyEditorDocumentOptions,
+  effectSchemaRegistry: EffectSchemaRegistry,
 ): EditorDocumentCapabilityCollectionOptions {
   return {
     resolveEffectCapabilityId: (effect) =>
       options.resolveEffectCapabilityId?.(effect) ||
-      options.effectSchemaRegistry?.resolveCapabilityId(effect.type),
+      effectSchemaRegistry.resolveCapabilityId(effect.type),
   };
 }
 
 function resolveEffectCapabilityId(
-  effect: EditorEffect,
+  effect: EditorExtensionObjectEffect,
   options: ApplyEditorDocumentOptions,
+  effectSchemaRegistry: EffectSchemaRegistry,
 ): string | undefined {
   return (
-    effect.capabilityId ||
     options.resolveEffectCapabilityId?.(effect) ||
-    options.effectSchemaRegistry?.resolveCapabilityId(effect.type)
+    effectSchemaRegistry.resolveCapabilityId(effect.type)
   );
+}
+
+function createRuntimeDocumentExtensionRegistry(
+  runtime: EditorDocumentRuntime,
+): DocumentExtensionRegistry {
+  const contributions = runtime.extensions?.listDocumentContributions() ?? [];
+  return new DocumentExtensionRegistry(
+    contributions.filter(isDocumentExtensionContribution),
+  );
+}
+
+function isDocumentExtensionContribution(
+  value: unknown,
+): value is DocumentExtensionContribution {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { id?: unknown }).id === "string"
+  );
+}
+
+function mergeEffectSchemaRegistries(
+  primary: EffectSchemaRegistry,
+  fallback?: EffectSchemaRegistry,
+): EffectSchemaRegistry {
+  const merged = new EffectSchemaRegistry(primary.list());
+  for (const schema of fallback?.list() ?? []) {
+    if (!merged.get(schema.effectType)) merged.register(schema);
+  }
+  return merged;
 }
 
 function normalizeObjectId(value: unknown): string {
@@ -1105,20 +1555,41 @@ function cloneDocumentObject(object: EditorObject): EditorObject {
   return JSON.parse(JSON.stringify(object)) as EditorObject;
 }
 
+function findGroupObject(
+  objects: readonly EditorObject[],
+  objectId: string,
+): EditorGroupObject | undefined {
+  for (const object of objects) {
+    if (isEditorGroupObject(object)) {
+      if (object.id === objectId) return object;
+      const nested = findGroupObject(object.children, objectId);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
 function replaceSourceObject(
   document: EditorDocument,
   objectId: string,
   next: EditorObject,
 ): void {
-  for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      const index =
-        layer.objects?.findIndex((object) => object.id === objectId) ?? -1;
-      if (index >= 0 && layer.objects) {
-        layer.objects[index] = next;
-        return;
+  const replaceIn = (objects: EditorObject[] | undefined): boolean => {
+    if (!objects) return false;
+    for (let index = 0; index < objects.length; index += 1) {
+      const object = objects[index]!;
+      if (object.id === objectId) {
+        objects[index] = next;
+        return true;
+      }
+      if (isEditorGroupObject(object) && replaceIn(object.children)) {
+        return true;
       }
     }
+    return false;
+  };
+  for (const surface of document.surfaces) {
+    if (replaceIn(surface.objects)) return;
   }
 }
 
@@ -1126,15 +1597,23 @@ function removeSourceObject(
   document: EditorDocument,
   objectId: string,
 ): boolean {
-  for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      const index =
-        layer.objects?.findIndex((object) => object.id === objectId) ?? -1;
-      if (index >= 0 && layer.objects) {
-        layer.objects.splice(index, 1);
-        if (!layer.objects.length) delete layer.objects;
+  const removeFrom = (objects: EditorObject[] | undefined): boolean => {
+    if (!objects) return false;
+    for (let index = 0; index < objects.length; index += 1) {
+      const object = objects[index]!;
+      if (object.id === objectId) {
+        objects.splice(index, 1);
         return true;
       }
+      if (isEditorGroupObject(object) && removeFrom(object.children)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const surface of document.surfaces) {
+    if (removeFrom(surface.objects)) {
+      return true;
     }
   }
   return false;
@@ -1143,6 +1622,15 @@ function removeSourceObject(
 class DocumentMutationError extends Error {
   constructor(readonly reason: EditorDocumentMutationFailureReason) {
     super(reason);
+  }
+}
+
+function assertSelectorCount(
+  actual: number,
+  expected: number | undefined,
+): void {
+  if (expected !== undefined && actual !== expected) {
+    throw new DocumentMutationError("selector-count-mismatch");
   }
 }
 
@@ -1310,53 +1798,319 @@ function createFrameAffinePlacement(
     [1, 0, 0, 1, 0, 0],
   ),
 ): AffinePlacement {
-  const frame = object.frame ?? { x: 0, y: 0, width: 0, height: 0 };
-  const transform = object.transform ?? {};
-  const pivot = {
-    x: frame.width * originFactorX(transform.originX),
-    y: frame.height * originFactorY(transform.originY),
+  const localBounds = isEditorGroupObject(object)
+    ? deriveGroupLocalBounds(object)
+    : coordinateRect("object-local", {
+        left: object.localFrame.x,
+        top: object.localFrame.y,
+        width: object.localFrame.width,
+        height: object.localFrame.height,
+      });
+  const pivot = (isEditorLeafObject(object)
+    ? object.localPivot
+    : undefined) ?? {
+    x: localBounds.left + localBounds.width / 2,
+    y: localBounds.top + localBounds.height / 2,
   };
   return createAffinePlacement({
-    localBounds: {
-      left: 0,
-      top: 0,
-      width: frame.width,
-      height: frame.height,
-    },
+    localBounds,
     pivot,
     localToScene: multiplyCoordinateMatrices(
       parentLocalToScene,
-      coordinateMatrix(
-        "object-local",
-        "parent-local",
-        createLocalToSceneMatrix({
-          position: {
-            x: finiteOr(transform.left, frame.x + pivot.x),
-            y: finiteOr(transform.top, frame.y + pivot.y),
-          },
-          pivot,
-          scaleX: finiteOr(transform.scaleX, 1),
-          scaleY: finiteOr(transform.scaleY, 1),
-          rotation: finiteOr(transform.angle, 0),
-          skewX: finiteOr(transform.skewX, 0),
-          skewY: finiteOr(transform.skewY, 0),
-        }).values,
-      ),
+      coordinateMatrix("object-local", "parent-local", object.localToParent),
     ),
   });
 }
 
-function originFactorX(value: EditorTransform["originX"]): number {
-  return value === "right" ? 1 : value === "center" ? 0.5 : 0;
+function deriveGroupLocalBounds(
+  group: EditorGroupObject,
+): import("@pooder/core").CoordinateRect<"object-local"> {
+  let bounds: import("@pooder/core").CoordinateRect<"object-local"> | undefined;
+  for (const child of group.children) {
+    const childBounds = isEditorGroupObject(child)
+      ? deriveGroupLocalBounds(child)
+      : coordinateRect("object-local", {
+          left: child.localFrame.x,
+          top: child.localFrame.y,
+          width: child.localFrame.width,
+          height: child.localFrame.height,
+        });
+    const transformed = transformCoordinateRect(
+      coordinateMatrix("object-local", "object-local", child.localToParent),
+      childBounds,
+    );
+    if (!bounds) {
+      bounds = transformed;
+      continue;
+    }
+    const left = Math.min(bounds.left, transformed.left);
+    const top = Math.min(bounds.top, transformed.top);
+    const right = Math.max(
+      bounds.left + bounds.width,
+      transformed.left + transformed.width,
+    );
+    const bottom = Math.max(
+      bounds.top + bounds.height,
+      transformed.top + transformed.height,
+    );
+    bounds = coordinateRect("object-local", {
+      left,
+      top,
+      width: right - left,
+      height: bottom - top,
+    });
+  }
+  return (
+    bounds ??
+    coordinateRect("object-local", { left: 0, top: 0, width: 0, height: 0 })
+  );
 }
 
-function originFactorY(value: EditorTransform["originY"]): number {
-  return value === "bottom" ? 1 : value === "center" ? 0.5 : 0;
+export const DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID = "document-object";
+
+export function createDocumentObjectGeometrySource(
+  getDocument: () => EditorDocument | null,
+  geometryService: GeometrySourceService,
+): GeometrySource {
+  const findPlacement = (
+    objectId: string,
+  ): { object: EditorObject; placement: AffinePlacement } | undefined => {
+    const document = getDocument();
+    if (!document) return undefined;
+    let match: { object: EditorObject; placement: AffinePlacement } | undefined;
+    const visit = (
+      objects: EditorObject[] | undefined,
+      parentLocalToScene = coordinateMatrix(
+        "parent-local",
+        "scene",
+        [1, 0, 0, 1, 0, 0],
+      ),
+    ) => {
+      objects?.some((object) => {
+        const placement = createFrameAffinePlacement(
+          object,
+          parentLocalToScene,
+        );
+        if (object.id === objectId) {
+          match = { object, placement };
+          return true;
+        }
+        if (isEditorGroupObject(object)) {
+          visit(
+            object.children,
+            coordinateMatrix(
+              "parent-local",
+              "scene",
+              placement.localToScene.values,
+            ),
+          );
+        }
+        return Boolean(match);
+      });
+    };
+    document.surfaces.some((surface) => {
+      visit(
+        surface.objects,
+        coordinateMatrix("parent-local", "scene", [
+          1,
+          0,
+          0,
+          1,
+          surface.geometry.canvasBounds.x,
+          surface.geometry.canvasBounds.y,
+        ]),
+      );
+      return Boolean(match);
+    });
+    return match;
+  };
+
+  const rawSnapshot = (ref: GeometryRef): GeometrySnapshot | null => {
+    const resolved = findPlacement(ref.geometryId);
+    if (!resolved) return null;
+    const { object, placement } = resolved;
+    if (isEditorGroupObject(object)) {
+      const bounds = transformCoordinateRect(
+        placement.localToScene,
+        placement.localBounds,
+      );
+      return {
+        kind: "compound",
+        ref,
+        space: "scene",
+        bounds,
+        localToScene: coordinateMatrix("scene", "scene", [1, 0, 0, 1, 0, 0]),
+        children: object.children.map((child) => ({
+          sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+          geometryId: child.id,
+          ...(ref.purpose ? { purpose: ref.purpose } : {}),
+        })),
+        metadata: { objectId: object.id, group: true },
+      };
+    }
+    const usesFrameGeometry = object.type === "image";
+    const visual = usesFrameGeometry
+      ? ({ source: object.source } satisfies ResolvedVisual)
+      : resolveObjectSource(object);
+    if (!visual) return null;
+    const visualPlacement = visual.pathData
+      ? createPathAffinePlacement(
+          placement,
+          visual.bounds,
+          visual.contentBounds,
+        )
+      : placement;
+    const bounds = visualPlacement.localBounds;
+    if (visual.pathData) {
+      return {
+        kind: "path",
+        ref,
+        format: "svg-path",
+        pathData: visual.pathData,
+        space: "object-local",
+        bounds,
+        localToScene: visualPlacement.localToScene,
+        metadata: { objectId: object.id, objectType: object.type },
+      };
+    }
+    return {
+      kind: "rect",
+      ref,
+      space: "object-local",
+      bounds,
+      rect: bounds,
+      localToScene: visualPlacement.localToScene,
+      metadata: { objectId: object.id, objectType: object.type },
+    };
+  };
+
+  const booleanOperands = (targetId: string, purpose: "preview" | "export") => {
+    const document = getDocument();
+    if (!document) return [];
+    const operands: Array<{
+      objectId: string;
+      operation: "add" | "subtract" | "intersect" | "exclude";
+      sequence: number;
+    }> = [];
+    let sequence = 0;
+    visitDocumentVisualObjects(document, (object) => {
+      if (object.id !== targetId) return;
+      object.effects?.forEach((effect) => {
+        if (
+          !isEditorBuiltinObjectEffect(effect) ||
+          effect.type !== "core.geometry.boolean"
+        )
+          return;
+        const participation = effect.participation ?? "both";
+        if (participation !== "both" && participation !== purpose) return;
+        operands.push({
+          objectId: effect.operandObjectId,
+          operation: effect.operation,
+          sequence: sequence++,
+        });
+      });
+    });
+    return operands.sort((left, right) => left.sequence - right.sequence);
+  };
+
+  return {
+    sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+    getSnapshot(ref) {
+      const purpose = ref.purpose ?? "preview";
+      if (ref.variant === "base") return rawSnapshot(ref);
+      const operands = booleanOperands(ref.geometryId, purpose);
+      const explicitStep = /^boolean:(\d+)$/.exec(ref.variant ?? "");
+      const step = explicitStep ? Number(explicitStep[1]) : operands.length;
+      if (step <= 0) return rawSnapshot({ ...ref, variant: "base" });
+      const operand = operands[step - 1];
+      if (!operand) return null;
+      const result = geometryService.boolean({
+        refs: [
+          {
+            sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+            geometryId: ref.geometryId,
+            purpose,
+            variant: step === 1 ? "base" : `boolean:${step - 1}`,
+          },
+          {
+            sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+            geometryId: operand.objectId,
+            purpose,
+          },
+        ],
+        operator: operand.operation === "add" ? "union" : operand.operation,
+        resultRef: {
+          sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+          geometryId: ref.geometryId,
+          purpose,
+          variant: `boolean:${step}`,
+        },
+      });
+      return result.value;
+    },
+    listGeometries() {
+      const document = getDocument();
+      if (!document) return [];
+      return getDocumentObjectDescriptors(document);
+    },
+  };
 }
 
-function finiteOr(value: unknown, fallback: number): number {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
+function getDocumentObjectDescriptors(document: EditorDocument) {
+  const descriptors: Array<{
+    ref: GeometryRef;
+    kind: GeometrySnapshot["kind"];
+    space: "object-local" | "scene";
+    metadata: Record<string, unknown>;
+  }> = [];
+  document.surfaces.forEach((surface) => {
+    const visit = (objects: EditorObject[] | undefined) =>
+      objects?.forEach((object) => {
+        descriptors.push({
+          ref: {
+            sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+            geometryId: object.id,
+          },
+          kind: isEditorGroupObject(object)
+            ? "compound"
+            : object.type === "image"
+              ? "rect"
+              : "path",
+          space: isEditorGroupObject(object) ? "scene" : "object-local",
+          metadata: {
+            objectId: object.id,
+            surfaceId: surface.id,
+          },
+        });
+        if (isEditorGroupObject(object)) visit(object.children);
+      });
+    visit(surface.objects);
+  });
+  return descriptors;
+}
+
+function rotateObjectLocalToParent(
+  localToParent: EditorDocumentMatrix,
+  rotationDegrees: number,
+): AffineMatrix {
+  const [a, b, c, d, e, f] = localToParent;
+  const currentRotation = Math.atan2(b, a);
+  const targetRotation = (rotationDegrees * Math.PI) / 180;
+  const radians = targetRotation - currentRotation;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  return [
+    cosine * a - sine * b,
+    sine * a + cosine * b,
+    cosine * c - sine * d,
+    sine * c + cosine * d,
+    e,
+    f,
+  ];
+}
+
+function createRejectedDocumentSnapshot(): EditorDocument {
+  return { version: 8, assets: [], extensions: {}, surfaces: [] };
 }
 
 function createResult(
@@ -1369,8 +2123,43 @@ function createResult(
     ok,
     document,
     diagnostics,
-    views: document.views ?? [],
+    surfaces: document.surfaces,
     appliedSurfaceIds,
+  };
+}
+
+function surfaceGeometryToRuntimeFrames(surface: EditorSurface) {
+  const toFrame = (bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => ({
+    xMm: bounds.x,
+    yMm: bounds.y,
+    widthMm: bounds.width,
+    heightMm: bounds.height,
+  });
+  return {
+    previewBounds: toFrame(surface.geometry.canvasBounds),
+    productionFrame: toFrame(surface.geometry.productionBounds),
+    ...(surface.geometry.exportBounds
+      ? { exportFrame: toFrame(surface.geometry.exportBounds) }
+      : {}),
+    viewportFocusFrame: toFrame(surface.geometry.canvasBounds),
+  };
+}
+
+function createPublicationDiagnostic(
+  code: string,
+  error: unknown,
+): EditorDocumentDiagnostic {
+  return {
+    severity: "error",
+    stage: "runtime-capability",
+    code,
+    message: error instanceof Error ? error.message : String(error),
+    path: "runtime.publication",
   };
 }
 
@@ -1396,121 +2185,295 @@ function collectAvailableCapabilityIds(
 function createBaseRenderIntentDrafts(
   document: EditorDocument,
   resolvedImages: ReadonlyMap<string, ImageResourceResolution>,
+  objectSchemaRegistry: ObjectSchemaRegistry,
 ): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
-  document.surfaces.forEach((surface) => {
-    surface.layers.forEach((layer) => {
-      const objects = layer.objects ?? [];
-      const objectsById = new Map(objects.map((object) => [object.id, object]));
-      const placementsById = new Map<string, AffinePlacement>();
-      const resolving = new Set<string>();
-      const resolveFramePlacement = (object: EditorObject): AffinePlacement => {
-        const cached = placementsById.get(object.id);
-        if (cached) return cached;
-        let parentLocalToScene = coordinateMatrix(
-          "parent-local",
-          "scene",
-          [1, 0, 0, 1, 0, 0],
-        );
-        const parent = object.parentObjectId
-          ? objectsById.get(object.parentObjectId)
-          : undefined;
-        if (parent && !resolving.has(parent.id)) {
-          resolving.add(object.id);
-          const parentPlacement = resolveFramePlacement(parent);
-          resolving.delete(object.id);
-          parentLocalToScene = coordinateMatrix(
-            "parent-local",
-            "scene",
-            parentPlacement.localToScene.values,
-          );
-        }
-        const placement = createFrameAffinePlacement(
+  document.surfaces.forEach((surface, surfaceIndex) => {
+    const visit = (
+      objects: EditorObject[] | undefined,
+      parentLocalToScene = coordinateMatrix("parent-local", "scene", [
+        1,
+        0,
+        0,
+        1,
+        surface.geometry.canvasBounds.x,
+        surface.geometry.canvasBounds.y,
+      ]),
+      ancestorVisible = true,
+      groupId?: string,
+      objectsPath = `/surfaces/${surfaceIndex}/objects`,
+      pathPrefix: readonly number[] = [],
+    ) => {
+      objects?.forEach((object, index) => {
+        const objectPath = `${objectsPath}/${index}`;
+        const orderingPath = [...pathPrefix, index];
+        const visible = ancestorVisible && object.visible;
+        const framePlacement = createFrameAffinePlacement(
           object,
           parentLocalToScene,
         );
-        placementsById.set(object.id, placement);
-        return placement;
-      };
-      layer.objects?.forEach((object, index) => {
-        const framePlacement = resolveFramePlacement(object);
+        const interaction = createObjectInteractionAspect(
+          object,
+          objectSchemaRegistry,
+          { document, objectId: object.id, path: objectPath },
+        );
+        if (isEditorGroupObject(object)) {
+          if (interaction) {
+            drafts.push(
+              createGroupInteractionProxyDraft(
+                surface,
+                object,
+                surfaceIndex,
+                orderingPath,
+                visible,
+                framePlacement,
+                interaction,
+              ),
+            );
+          }
+          visit(
+            object.children,
+            coordinateMatrix(
+              "parent-local",
+              "scene",
+              framePlacement.localToScene.values,
+            ),
+            visible,
+            object.id,
+            `${objectPath}/children`,
+            orderingPath,
+          );
+          return;
+        }
         const draft = createObjectRenderIntentDraft(
           surface,
-          layer,
           object,
-          index,
+          surfaceIndex,
+          orderingPath,
+          visible,
           resolvedImages.get(object.id),
+          object.type === "image"
+            ? resolveImageVisualAsset(document, object)
+            : undefined,
           framePlacement,
+          groupId,
+          interaction,
+          object.type === "image" && isImageSlotPlaceholderFallback(object),
         );
         if (draft) drafts.push(draft);
       });
+    };
+    visit(surface.objects);
+  });
+  const draftsById = new Map(drafts.map((draft) => [draft.id, draft]));
+  visitDocumentVisualObjects(document, (object) => {
+    object.effects?.forEach((effect, effectIndex) => {
+      if (
+        !isEditorBuiltinObjectEffect(effect) ||
+        effect.type !== "core.geometry.clip"
+      )
+        return;
+      const target = draftsById.get(object.id);
+      if (!target) return;
+      const participation = effect.participation ?? "both";
+      target.effects = [
+        ...(target.effects ?? []),
+        {
+          type: "clipPath",
+          id: `document-object:${object.id}:clip:${effectIndex}`,
+          coordinateMode: "absolute",
+          ...(participation !== "export"
+            ? {
+                previewGeometryRef: {
+                  sourceId: "document-object",
+                  geometryId: effect.sourceObjectId,
+                  purpose: "preview",
+                },
+              }
+            : {}),
+          ...(participation !== "preview"
+            ? {
+                exportGeometryRef: {
+                  sourceId: "document-object",
+                  geometryId: effect.sourceObjectId,
+                  purpose: "export",
+                },
+              }
+            : {}),
+          source: {
+            id: `document-object:${effect.sourceObjectId}:clip-placeholder`,
+            type: "path",
+            space: "scene",
+            props: {},
+          },
+        },
+      ];
     });
   });
   return drafts;
 }
 
+function visitDocumentVisualObjects(
+  document: EditorDocument,
+  visitor: (object: EditorLeafObject) => void,
+): void {
+  const visit = (objects: EditorObject[] | undefined) =>
+    objects?.forEach((object) => {
+      if (isEditorGroupObject(object)) visit(object.children);
+      else visitor(object);
+    });
+  document.surfaces.forEach((surface) => visit(surface.objects));
+}
+
+function createGroupInteractionProxyDraft(
+  surface: EditorSurface,
+  object: EditorGroupObject,
+  layerOrder: number,
+  path: readonly number[],
+  visible: boolean,
+  placement: AffinePlacement,
+  interaction: InteractionSpec,
+): RenderIntentDraft {
+  const memberNodeIds: string[] = [];
+  const collectMembers = (children: EditorObject[]) =>
+    children.forEach((child) => {
+      if (isEditorGroupObject(child)) collectMembers(child.children);
+      else memberNodeIds.push(child.id);
+    });
+  collectMembers(object.children);
+  return {
+    id: `${object.id}:interaction-proxy`,
+    subject: {
+      kind: "object",
+      surfaceId: surface.id,
+      layerId: surface.id,
+      objectId: object.id,
+      objectType: "group",
+    },
+    visual: { type: "rect" },
+    containerGeometryRef: {
+      sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+      geometryId: object.id,
+      variant: "base",
+    },
+    placement,
+    interaction,
+    export: { visible, tags: [...object.tags] },
+    ordering: {
+      layerId: surface.id,
+      layerOrder,
+      path,
+      channel: "overlay",
+      subOrder: 1,
+    },
+    props: {
+      fill: "rgba(0,0,0,0)",
+      stroke: null,
+      excludeFromExport: true,
+    },
+    data: {
+      id: object.id,
+      groupProxy: true,
+      groupMemberNodeIds: memberNodeIds,
+      documentSurfaceId: surface.id,
+      layerId: surface.id,
+    },
+  };
+}
+
 function createObjectRenderIntentDraft(
   surface: EditorSurface,
-  layer: EditorLayer,
-  object: EditorObject,
-  index: number,
+  object: EditorLeafObject,
+  layerOrder: number,
+  path: readonly number[],
+  visible: boolean,
   imageResolution?: ImageResourceResolution,
+  imageAsset?: EditorImageAsset,
   framePlacement: AffinePlacement = createFrameAffinePlacement(object),
+  groupId?: string,
+  interaction?: InteractionSpec,
+  placeholderFallback = false,
 ): RenderIntentDraft | null {
-  if (!object.frame) return null;
-  const objectOrder = object.order ?? index;
-  const layerOrder = layer.order ?? 0;
-  const locked = object.locked === true || layer.locked === true;
-  const interaction = createObjectInteractionAspect(object);
+  const locked = object.locked === true;
   const objectEffects = cloneObjectEffects(object.effects);
-  const outputMaskKeys = normalizeOutputMaskKeys(
-    object.metadata?.outputMaskKeys ?? object.metadata?.outputMaskKey,
+  const isGuide =
+    object.traits?.some((trait) => trait.type === "core.guide") ?? false;
+  const outputMaskKeys = Array.from(
+    new Set(
+      object.traits
+        ?.filter(
+          (
+            trait,
+          ): trait is Extract<
+            EditorObjectTrait,
+            { type: "core.output-mask" }
+          > => trait.type === "core.output-mask",
+        )
+        .flatMap((trait) => trait.keys) ?? [],
+    ),
   );
-  const tags = normalizeTags(layer.tags, object.tags);
+  const tags = [...object.tags];
   const base = {
     id: object.id,
     subject: {
       kind: "object" as const,
       surfaceId: surface.id,
-      layerId: layer.id,
+      layerId: surface.id,
       objectId: object.id,
-      objectType: object.source.kind,
+      objectType: object.type,
     },
     placement: framePlacement,
+    containerGeometryRef: {
+      sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
+      geometryId: object.id,
+      variant: "base",
+    },
+    previewGeometryRef: {
+      sourceId: "document-object",
+      geometryId: object.id,
+      purpose: "preview" as const,
+    },
+    exportGeometryRef: {
+      sourceId: "document-object",
+      geometryId: object.id,
+      purpose: "export" as const,
+    },
     ordering: {
-      layerId: layer.id,
+      layerId: surface.id,
       layerOrder,
-      objectOrder,
+      path,
       channel: "normal" as const,
       subOrder: 0,
-      stack: resolveLayerStack(layer),
     },
     export: {
-      visible: (layer.visible ?? true) && (object.visible ?? true),
+      visible,
       tags,
     },
     ...(interaction ? { interaction } : {}),
     props: {
-      ...(object.style ?? {}),
+      ...(object.type === "image" ? {} : (object.paint ?? {})),
+      opacity: object.opacity ?? 1,
+      ...(isGuide || placeholderFallback ? { excludeFromExport: true } : {}),
     },
     data: {
       id: object.id,
-      layerId: layer.id,
+      layerId: surface.id,
       documentSurfaceId: surface.id,
-      documentObjectSourceKind: object.source.kind,
-      documentLayerRole: layer.role,
-      documentObjectPlacement: framePlacement,
+      documentObjectType: object.type,
+      ...(groupId ? { groupId } : {}),
       ...(objectEffects ? { documentObjectEffects: objectEffects } : {}),
       ...(typeof locked === "boolean" ? { locked } : {}),
       ...(outputMaskKeys.length ? { outputMaskKeys } : {}),
     },
   } satisfies Omit<RenderIntentDraft, "visual">;
 
-  if (object.source.kind === "image") {
+  if (object.type === "image") {
     return createImageRenderIntentDraft(
       base,
       object as EditorImageObject,
       imageResolution,
+      imageAsset,
+      placeholderFallback,
       resolveEditorImageClipFrame(
         surface,
         object as EditorImageObject,
@@ -1518,7 +2481,7 @@ function createObjectRenderIntentDraft(
       ),
     );
   }
-  const visual = resolveObjectSource(object.source);
+  const visual = resolveObjectSource(object);
   if (!visual) return null;
   if (visual.imageUrl) {
     return {
@@ -1550,13 +2513,6 @@ function createObjectRenderIntentDraft(
       },
     };
   }
-  if (visual.text !== undefined) {
-    return {
-      ...base,
-      visual: { type: "text" },
-      props: { ...base.props, text: visual.text, source: object.source },
-    };
-  }
   return null;
 }
 
@@ -1564,36 +2520,38 @@ function createImageRenderIntentDraft(
   base: Omit<RenderIntentDraft, "visual">,
   object: EditorImageObject,
   resolution?: ImageResourceResolution,
+  resource?: EditorImageAsset,
+  placeholderFallback = false,
   clipFrame?: import("@pooder/core").CoordinateRect<"object-local">,
 ): RenderIntentDraft {
-  const resource = object.source.resource;
   const resolved = resolution?.ok
     ? resolution
-    : resource?.intrinsicSize
+    : resolution === undefined && resource?.intrinsicSize
       ? {
           ok: true as const,
-          src: resource.kind === "data-url" ? resource.dataUrl : resource.url,
+          src:
+            resource.source.kind === "data-url"
+              ? resource.source.dataUrl
+              : resource.source.url,
           width: resource.intrinsicSize.width,
           height: resource.intrinsicSize.height,
         }
       : undefined;
-  const presentationResource = object.slot?.emptyPresentation?.resource;
-  const presentation =
-    !resource && presentationResource?.intrinsicSize
-      ? {
-          src:
-            presentationResource.kind === "data-url"
-              ? presentationResource.dataUrl
-              : presentationResource.url,
-          width: presentationResource.intrinsicSize.width,
-          height: presentationResource.intrinsicSize.height,
-          fit: object.slot?.emptyPresentation?.fit ?? "cover",
-        }
-      : undefined;
-  const image = resolved ?? presentation;
-  const fit = resolved
-    ? object.placement.fit
-    : (presentation?.fit ?? object.placement.fit);
+  const image = resolved;
+  const contentFit = placeholderFallback
+    ? {
+        ...object.contentFit,
+        fit: "stretch" as const,
+        anchorX: 0.5,
+        anchorY: 0.5,
+        zoom: 1,
+        rotation: 0,
+      }
+    : object.contentFit;
+  // Render props carry the fit transform only; clip is a document enum, while
+  // the props of the same name hold a resolved rect.
+  const { clip: contentClip, ...contentFitTransform } = contentFit;
+  const fit = contentFitTransform.fit;
   const geometryDescriptor = image
     ? {
         source: {
@@ -1601,16 +2559,14 @@ function createImageRenderIntentDraft(
           size: { width: image.width, height: image.height },
         },
         frame: coordinateRect("object-local", {
-          left: 0,
-          top: 0,
-          width: object.frame.width,
-          height: object.frame.height,
+          left: object.localFrame.x,
+          top: object.localFrame.y,
+          width: object.localFrame.width,
+          height: object.localFrame.height,
         }),
         fit,
-        transform: object.placement,
-        ...(object.placement.clip === "frame" && clipFrame
-          ? { clip: clipFrame }
-          : {}),
+        transform: contentFitTransform,
+        ...(contentClip === "frame" && clipFrame ? { clip: clipFrame } : {}),
       }
     : undefined;
   const geometry = geometryDescriptor
@@ -1619,6 +2575,16 @@ function createImageRenderIntentDraft(
   return {
     ...base,
     visual: { type: "image", ...(image ? { src: image.src } : {}) },
+    previewGeometryRef: {
+      sourceId: "render-intent",
+      geometryId: object.id,
+      purpose: "preview",
+    },
+    exportGeometryRef: {
+      sourceId: "render-intent",
+      geometryId: object.id,
+      purpose: "export",
+    },
     export: { ...base.export },
     effects: geometry?.clip
       ? [
@@ -1649,15 +2615,15 @@ function createImageRenderIntentDraft(
       : base.placement,
     props: {
       ...base.props,
+      ...contentFitTransform,
       source: object.source,
-      opacity: geometry?.opacity ?? object.placement.opacity,
+      opacity: object.opacity ?? 1,
       ...(geometry?.clip ? { clip: geometry.clip } : {}),
-      ...(presentation ? { excludeFromExport: true } : {}),
     },
     data: {
       ...base.data,
-      emptyImageSlot: !resource,
-      presentationOnly: Boolean(presentation),
+      emptyImageSlot: placeholderFallback,
+      ...(placeholderFallback ? { imageSlotVisualFallback: true } : {}),
       ...(resolved && geometryDescriptor
         ? { [IMAGE_GEOMETRY_DATA_KEY]: geometryDescriptor }
         : {}),
@@ -1671,15 +2637,15 @@ function resolveEditorImageClipFrame(
   objectPlacement: AffinePlacement,
 ) {
   const objectFrame = objectPlacement.localBounds;
-  const production = surface.frames.productionFrame;
-  if (!object.slot) return objectFrame;
+  const production = surface.geometry.productionBounds;
+  if (!getImageSlotBehaviorConfig(object)) return objectFrame;
   const productionInObject = transformCoordinateRect(
     invertCoordinateMatrix(objectPlacement.localToScene),
     coordinateRect("scene", {
-      left: production.xMm,
-      top: production.yMm,
-      width: production.widthMm,
-      height: production.heightMm,
+      left: production.x,
+      top: production.y,
+      width: production.width,
+      height: production.height,
     }),
   );
   const left = Math.max(objectFrame.left, productionInObject.left);
@@ -1700,6 +2666,34 @@ function resolveEditorImageClipFrame(
         height: bottom - top,
       })
     : objectFrame;
+}
+
+function getImageSlotBehaviorConfig(
+  object: EditorImageObject,
+): EditorImageSlotBehaviorConfig | undefined {
+  const behavior = object.behaviors?.find(
+    (candidate) => candidate.type === "pooder.image-slot",
+  );
+  return behavior?.config && typeof behavior.config === "object"
+    ? (behavior.config as unknown as EditorImageSlotBehaviorConfig)
+    : undefined;
+}
+
+function resolveImageVisualAsset(
+  document: EditorDocument,
+  object: EditorImageObject,
+): EditorImageAsset | undefined {
+  const source =
+    object.source ?? getImageSlotBehaviorConfig(object)?.placeholderSource;
+  return resolveEditorDocumentAsset<EditorImageAsset>(
+    document,
+    source,
+    "image",
+  );
+}
+
+function isImageSlotPlaceholderFallback(object: EditorImageObject): boolean {
+  return object.source === null && Boolean(getImageSlotBehaviorConfig(object));
 }
 
 function createEditorImageClipEffect(
@@ -1732,6 +2726,22 @@ function createEditorImageClipEffect(
   };
 }
 
+function imageResourceDescriptor(
+  asset: EditorImageAsset,
+): ImageResourceDescriptor {
+  return {
+    ...asset.source,
+    assetId: asset.id,
+    ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
+    ...(asset.intrinsicSize ? { intrinsicSize: asset.intrinsicSize } : {}),
+  };
+}
+
+/**
+ * Read every image resolution the document needs. Resources whose bytes are already
+ * established resolve synchronously, so a mutation only awaits genuinely new bytes
+ * instead of re-deriving the whole document's resources on every apply.
+ */
 async function resolveDocumentImageResources(
   runtime: EditorDocumentRuntime,
   document: EditorDocument,
@@ -1739,31 +2749,80 @@ async function resolveDocumentImageResources(
   const service = runtime.services.get?.<ImageResourceService>(
     IMAGE_RESOURCE_SERVICE,
   );
-  const entries: Array<Promise<readonly [string, ImageResourceResolution]>> =
-    [];
-  document.surfaces.forEach((surface) =>
-    surface.layers.forEach((layer) =>
-      layer.objects?.forEach((object) => {
-        if (
-          object.source.kind !== "image" ||
-          !object.source.resource ||
-          !service
-        )
-          return;
-        entries.push(
-          service
-            .resolve(object.source.resource)
-            .then((result) => [object.id, result] as const),
-        );
-      }),
-    ),
-  );
-  return new Map(await Promise.all(entries));
+  const resolutions = new Map<string, ImageResourceResolution>();
+  const pending: Array<Promise<void>> = [];
+  const collect = (objects: EditorObject[] | undefined) =>
+    objects?.forEach((object) => {
+      if (isEditorGroupObject(object)) {
+        collect(object.children);
+        return;
+      }
+      if (object.type !== "image" || !service) return;
+      const asset = resolveImageVisualAsset(document, object);
+      if (!asset) return;
+      const resource = imageResourceDescriptor(asset);
+      const established = service.read(resource);
+      if (established) {
+        resolutions.set(object.id, established);
+        return;
+      }
+      pending.push(
+        service.ensure(resource).then((resolution) => {
+          resolutions.set(object.id, resolution);
+        }),
+      );
+    });
+  document.surfaces.forEach((surface) => collect(surface.objects));
+  if (pending.length) await Promise.all(pending);
+  return resolutions;
 }
 
-function resolveLayerStack(layer: EditorLayer): number {
-  if (layer.role === "guide") return 900;
-  return layer.role === "overlay" ? 780 : 0;
+/**
+ * Ids of the image objects whose bytes cannot be resolved. Such an object compiles to
+ * an image visual with no source and therefore draws nothing, so an export taken now
+ * would silently omit it — which is why callers that produce artwork must ask first
+ * rather than trusting the rendered canvas.
+ *
+ * Hidden objects and image-slot placeholders are excluded because they never reach the
+ * exported pixels. Resources are converged before being judged, so the answer does not
+ * depend on whether the document has been applied yet; established ones cost no I/O.
+ */
+export async function collectUnresolvableImageObjectIds(
+  document: EditorDocument,
+  service: Pick<ImageResourceService, "read" | "ensure"> | undefined,
+): Promise<string[]> {
+  if (!service) return [];
+  const unresolvable: string[] = [];
+  const pending: Array<Promise<void>> = [];
+  const judge = (objectId: string, resolution: ImageResourceResolution) => {
+    if (!resolution.ok) unresolvable.push(objectId);
+  };
+  const collect = (objects: EditorObject[] | undefined, visible: boolean) =>
+    objects?.forEach((object) => {
+      const objectVisible = visible && (object.visible ?? true);
+      if (isEditorGroupObject(object)) {
+        collect(object.children, objectVisible);
+        return;
+      }
+      if (object.type !== "image" || !objectVisible) return;
+      if (isImageSlotPlaceholderFallback(object)) return;
+      const asset = resolveImageVisualAsset(document, object);
+      if (!asset) return;
+      const resource = imageResourceDescriptor(asset);
+      const established = service.read(resource);
+      if (established) {
+        judge(object.id, established);
+        return;
+      }
+      pending.push(
+        service.ensure(resource).then((resolution) => {
+          judge(object.id, resolution);
+        }),
+      );
+    });
+  document.surfaces.forEach((surface) => collect(surface.objects, true));
+  if (pending.length) await Promise.all(pending);
+  return unresolvable;
 }
 
 async function compileRenderIntentPatches(
@@ -1844,130 +2903,85 @@ function normalizeRenderIntentPatches(
 function collectEffectEntries(document: EditorDocument): EffectEntry[] {
   const entries: EffectEntry[] = [];
   document.surfaces.forEach((surface, surfaceIndex) => {
-    surface.effects?.forEach((effect, effectIndex) =>
-      entries.push({
-        effect,
-        context: { surface },
-        path: `/surfaces/${surfaceIndex}/effects/${effectIndex}`,
-      }),
-    );
-    surface.layers.forEach((layer, layerIndex) => {
-      layer.effects?.forEach((effect, effectIndex) =>
-        entries.push({
-          effect,
-          context: { surface, layer },
-          path: `/surfaces/${surfaceIndex}/layers/${layerIndex}/effects/${effectIndex}`,
-        }),
-      );
-      layer.objects?.forEach((object, objectIndex) => {
-        object.effects?.forEach((effect, effectIndex) => {
-          if (isGenericEditorEffect(effect)) {
-            entries.push({
-              effect,
-              context: { surface, layer, object },
-              path:
-                `/surfaces/${surfaceIndex}/layers/${layerIndex}` +
-                `/objects/${objectIndex}/effects/${effectIndex}`,
-            });
-          }
-        });
+    const collectObjectEntries = (
+      objects: EditorObject[] | undefined,
+      objectsPath: string,
+    ) =>
+      objects?.forEach((object, objectIndex) => {
+        const objectPath = `${objectsPath}/${objectIndex}`;
+        if (isEditorLeafObject(object)) {
+          object.effects?.forEach((effect, effectIndex) => {
+            if (isEditorExtensionObjectEffect(effect)) {
+              entries.push({
+                effect,
+                context: { surface, object },
+                path: `${objectPath}/effects/${effectIndex}`,
+              });
+            }
+          });
+        }
+        if (isEditorGroupObject(object)) {
+          collectObjectEntries(object.children, `${objectPath}/children`);
+        }
       });
-    });
+    collectObjectEntries(surface.objects, `/surfaces/${surfaceIndex}/objects`);
   });
   return entries;
 }
 
 function createObjectInteractionAspect(
   object: EditorObject,
-): DocumentInteractionSpec | undefined {
-  return object.interaction;
-}
-
-function compareEffectEntries(a: EffectEntry, b: EffectEntry) {
-  const phaseDelta =
-    (EFFECT_PHASE_ORDER[a.effect.phase ?? "layout"] ?? 1) -
-    (EFFECT_PHASE_ORDER[b.effect.phase ?? "layout"] ?? 1);
-  return phaseDelta || (a.effect.order ?? 0) - (b.effect.order ?? 0);
+  registry: ObjectSchemaRegistry,
+  context: ObjectSchemaContext,
+): InteractionSpec | undefined {
+  const behaviorInteraction = object.behaviors?.reduce<InteractionSpec>(
+    (compiled, behavior) => {
+      const interaction = registry
+        .getBehavior(behavior.type)
+        ?.compileInteraction?.(behavior, context);
+      return interaction ? { ...compiled, ...interaction } : compiled;
+    },
+    {},
+  );
+  if (!object.interaction && !Object.keys(behaviorInteraction ?? {}).length) {
+    return undefined;
+  }
+  return {
+    ...(behaviorInteraction ?? {}),
+    ...(object.interaction as DocumentInteractionSpec | undefined),
+  };
 }
 
 function resolveRenderIntentTarget(
-  effect: EditorEffect,
+  _effect: EditorExtensionObjectEffect,
   context: EffectContext,
-  document: EditorDocument,
+  _document: EditorDocument,
 ): RenderIntentDraft["subject"] | null {
-  const target = effect.target ?? "self";
-  if (target === "self") {
-    if (context.object && context.layer) {
-      return {
-        kind: "object",
-        surfaceId: context.surface.id,
-        layerId: context.layer.id,
-        objectId: context.object.id,
-        objectType: context.object.source.kind,
-      };
-    }
-    if (context.layer) {
-      return {
-        kind: "layer",
-        surfaceId: context.surface.id,
-        layerId: context.layer.id,
-      };
-    }
-    return { kind: "surface", surfaceId: context.surface.id };
-  }
-
-  if ("objectId" in target) {
-    const resolved = findObjectContext(document, target.objectId);
-    return resolved
-      ? {
-          kind: "object",
-          surfaceId: resolved.surface.id,
-          layerId: resolved.layer.id,
-          objectId: resolved.object.id,
-          objectType: resolved.object.source.kind,
-        }
-      : null;
-  }
-  if ("layerId" in target) {
-    const resolved = findLayerContext(document, target.layerId);
-    return resolved
-      ? {
-          kind: "layer",
-          surfaceId: resolved.surface.id,
-          layerId: resolved.layer.id,
-        }
-      : null;
-  }
-  if ("surfaceId" in target) {
-    return document.surfaces.some((surface) => surface.id === target.surfaceId)
-      ? { kind: "surface", surfaceId: target.surfaceId }
-      : null;
-  }
-  return null;
-}
-
-function findLayerContext(document: EditorDocument, layerId: string) {
-  for (const surface of document.surfaces) {
-    const layer = surface.layers.find((item) => item.id === layerId);
-    if (layer) return { surface, layer };
-  }
-  return null;
+  if (!context.object) return null;
+  return {
+    kind: "object",
+    surfaceId: context.surface.id,
+    layerId: context.surface.id,
+    objectId: context.object.id,
+    objectType: context.object.type,
+  };
 }
 
 function findObjectContext(document: EditorDocument, objectId: string) {
   for (const surface of document.surfaces) {
-    for (const layer of surface.layers) {
-      const object = layer.objects?.find((item) => item.id === objectId);
-      if (object) return { surface, layer, object };
-    }
+    const object = findEditorDocumentObject(
+      { ...document, surfaces: [surface] },
+      objectId,
+    );
+    if (object) return { surface, object };
   }
   return null;
 }
 
 function severityForEffect(
-  effect: EditorEffect,
+  _effect: EditorExtensionObjectEffect,
 ): EditorDocumentDiagnostic["severity"] {
-  return effect.require === "warn" ? "warning" : "error";
+  return "error";
 }
 
 function createDiagnostic(
@@ -2029,19 +3043,8 @@ function normalizeOutputMaskKeys(value: unknown): string[] {
   );
 }
 
-function normalizeTags(...values: unknown[]): string[] {
-  return Array.from(
-    new Set(
-      values
-        .flatMap((value) => (Array.isArray(value) ? value : []))
-        .map((item) => String(item || "").trim())
-        .filter((item) => item.length > 0),
-    ),
-  );
-}
-
 function resolveShapeSource(
-  source: Extract<ObjectSource, { kind: "shape" }>,
+  source: EditorShapeContent,
 ): Omit<ResolvedVisual, "source"> | null {
   switch (source.shape) {
     case "rect": {

@@ -44,12 +44,12 @@ function isValidSceneRect(
 ): rect is CoordinateRect<"scene"> {
   return Boolean(
     rect &&
-      Number.isFinite(rect.left) &&
-      Number.isFinite(rect.top) &&
-      Number.isFinite(rect.width) &&
-      Number.isFinite(rect.height) &&
-      rect.width > 0 &&
-      rect.height > 0,
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width > 0 &&
+    rect.height > 0,
   );
 }
 
@@ -190,7 +190,9 @@ export class BrowserObjectImageResolverService
   }
 
   private resolveNode(objectId: string): RenderGraphNode {
-    const graph = this.renderIntentService?.getGraph();
+    const graph =
+      this.renderIntentService?.getDocumentGraph?.() ??
+      this.renderIntentService?.getGraph();
     const node = graph?.layers
       .flatMap((layer) => layer.nodes)
       .find(

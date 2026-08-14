@@ -16,7 +16,10 @@ export class SubscriptionBag {
     return disposable;
   }
 
-  onConfigChange(configService: ConfigLike, handler: (event: any) => void): void {
+  onConfigChange(
+    configService: ConfigLike,
+    handler: (event: any) => void,
+  ): void {
     this.add(configService.onAnyChange(handler));
   }
 

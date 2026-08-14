@@ -14,14 +14,7 @@ export interface CommandContribution {
 
 export interface ConfigurationContribution {
   id: string;
-  type:
-    | "string"
-    | "number"
-    | "boolean"
-    | "color"
-    | "select"
-    | "json"
-    | "array";
+  type: "string" | "number" | "boolean" | "color" | "select" | "json" | "array";
   label: string;
   default?: any;
   description?: string;
@@ -38,4 +31,5 @@ export interface ExtensionContributions {
   renderEffectDefinitions?: RenderEffectDefinition[];
   renderEffectRenderers?: RenderEffectRendererContribution[];
   renderIntentCompilers?: RenderIntentCompilerContribution[];
+  documentExtensions?: unknown[];
 }

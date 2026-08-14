@@ -81,28 +81,40 @@ const contracts = [
       const runtime = vueRoot.createPooderRuntime();
       const documentService = vueRoot.installPooderDocument(runtime);
       const result = await documentService.apply({
-        version: 7,
-        config: {},
+        version: 8,
+        assets: [],
+        extensions: {},
         surfaces: [
           {
             id: "front",
-            size: { width: 100, height: 100, unit: "mm" },
-            frames: {
-              previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-              productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-              viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+            geometry: {
+              canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+              productionBounds: { x: 0, y: 0, width: 100, height: 100 },
             },
-            layers: [
+            objects: [
               {
+                type: "group",
                 id: "artwork",
-                objects: [
+                tags: [],
+                visible: true,
+                locked: false,
+                localToParent: [1, 0, 0, 1, 0, 0],
+                children: [
                   {
+                    type: "shape",
                     id: "shape",
-                    frame: { x: 10, y: 20, width: 30, height: 40 },
+                    tags: [],
+                    visible: true,
+                    locked: false,
+                    localFrame: { x: 0, y: 0, width: 30, height: 40 },
+                    localToParent: [1, 0, 0, 1, 10, 20],
+                    localPivot: { x: 0, y: 0 },
                     source: {
-                      kind: "shape",
-                      shape: "rect",
-                      params: { width: 30, height: 40 },
+                      kind: "inline",
+                      content: {
+                        shape: "rect",
+                        params: { width: 30, height: 40 },
+                      },
                     },
                   },
                 ],

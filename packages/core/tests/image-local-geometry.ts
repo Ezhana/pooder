@@ -51,7 +51,9 @@ if (cover.clip?.space !== "object-local") {
   throw new Error("clip must remain object-local");
 }
 if ("originX" in cover || "left" in cover || "scaleX" in cover) {
-  throw new Error("resolved image geometry must not expose Fabric placement fields");
+  throw new Error(
+    "resolved image geometry must not expose Fabric placement fields",
+  );
 }
 
 const contain = resolveImageGeometry({
@@ -107,10 +109,8 @@ const objectToScene = {
   values: [2, 0, 0, 3, 500, 700] as const,
 };
 assertMatrixEqual(
-  multiplyCoordinateMatrices(
-    objectToScene,
-    replacement.imageLocalToObjectLocal,
-  ).values,
+  multiplyCoordinateMatrices(objectToScene, replacement.imageLocalToObjectLocal)
+    .values,
   multiplyCoordinateMatrices(objectToScene, cover.imageLocalToObjectLocal)
     .values,
   "replacement preserves object and scene placement",

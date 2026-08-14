@@ -12,6 +12,7 @@ import {
   type BrowserHostAttachment,
   type BrowserHostRuntime,
 } from "@pooder/platform-browser";
+import type { ImageResourceService } from "@pooder/core";
 import {
   getPooderRuntimeCore,
   usePooderRuntime,
@@ -24,6 +25,7 @@ import type {
 
 const props = defineProps<{
   runtime?: PooderRuntime;
+  createImageResourceService?: () => ImageResourceService;
 }>();
 
 const emit = defineEmits<{
@@ -87,6 +89,9 @@ onMounted(async () => {
     {
       canvas: canvas.value,
       container: container.value,
+      ...(props.createImageResourceService
+        ? { createImageResourceService: props.createImageResourceService }
+        : {}),
     },
   );
 

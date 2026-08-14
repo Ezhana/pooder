@@ -65,6 +65,7 @@ interface NormalizedExtensionContributions {
   renderIntentCompilers: NonNullable<
     ExtensionContributions["renderIntentCompilers"]
   >;
+  documentExtensions: NonNullable<ExtensionContributions["documentExtensions"]>;
 }
 
 interface ExtensionRecord {
@@ -128,6 +129,7 @@ class ExtensionManager {
         renderEffectDefinitions: [],
         renderEffectRenderers: [],
         renderIntentCompilers: [],
+        documentExtensions: [],
       });
       this.records.set(extension.id, record);
       this.applyState(record, "failed", {
@@ -141,10 +143,11 @@ class ExtensionManager {
     this.records.set(extension.id, record);
 
     try {
-      record.staticConfigDisposable = this.configurationService.registerDefinitions(
-        extension.id,
-        contributions.configurations,
-      );
+      record.staticConfigDisposable =
+        this.configurationService.registerDefinitions(
+          extension.id,
+          contributions.configurations,
+        );
       this.applyState(record, "registered");
     } catch (error) {
       this.applyState(record, "failed", {
@@ -156,7 +159,9 @@ class ExtensionManager {
     return this.toSnapshot(record);
   }
 
-  registerMany(extensions: Iterable<ExtensionDefinition>): ExtensionStateSnapshot[] {
+  registerMany(
+    extensions: Iterable<ExtensionDefinition>,
+  ): ExtensionStateSnapshot[] {
     const snapshots: ExtensionStateSnapshot[] = [];
     for (const extension of extensions) {
       snapshots.push(this.register(extension));
@@ -210,6 +215,12 @@ class ExtensionManager {
     return this.listRecords().map((record) => this.toSnapshot(record));
   }
 
+  listDocumentContributions(): unknown[] {
+    return this.listRecords()
+      .filter((record) => record.state === "active")
+      .flatMap((record) => record.contributions.documentExtensions);
+  }
+
   on<TKey extends keyof ExtensionManagerEventMap>(
     type: TKey,
     listener: (event: ExtensionManagerEventMap[TKey]) => void,
@@ -217,7 +228,9 @@ class ExtensionManager {
     return this.events.on(type, listener);
   }
 
-  onDidChange(listener: (event: ExtensionStateChangeEvent) => void): Disposable {
+  onDidChange(
+    listener: (event: ExtensionStateChangeEvent) => void,
+  ): Disposable {
     return this.events.on("stateChange", listener);
   }
 
@@ -270,12 +283,9 @@ class ExtensionManager {
       renderEffectDefinitions: [
         ...(contributions?.renderEffectDefinitions ?? []),
       ],
-      renderEffectRenderers: [
-        ...(contributions?.renderEffectRenderers ?? []),
-      ],
-      renderIntentCompilers: [
-        ...(contributions?.renderIntentCompilers ?? []),
-      ],
+      renderEffectRenderers: [...(contributions?.renderEffectRenderers ?? [])],
+      renderIntentCompilers: [...(contributions?.renderIntentCompilers ?? [])],
+      documentExtensions: [...(contributions?.documentExtensions ?? [])],
     };
   }
 
@@ -545,7 +555,6 @@ class ExtensionManager {
     } satisfies ExtensionStateChangeEvent;
 
     this.events.emit("stateChange", event);
-
   }
 
   private toSnapshot(record: ExtensionRecord): ExtensionStateSnapshot {

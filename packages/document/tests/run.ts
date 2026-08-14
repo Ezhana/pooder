@@ -1,28 +1,35 @@
 import {
-  EDITOR_DOCUMENT_VERSION,
   EffectSchemaRegistry,
+  DocumentExtensionRegistry,
+  ObjectSchemaRegistry,
   cloneEditorDocument,
+  collectEditorDocumentAssetReferences,
+  createAssetReferenceBinding,
   collectEditorDocumentCapabilityRequirements,
   findEditorDocumentObject,
   getEditorDocumentObjects,
-  isGenericEditorEffect,
-  normalizeEditorDocument,
+  isAssetSource,
+  parseEditorDocument,
+  reclaimOrphanedEditorDocumentAssets,
+  replaceEditorDocumentAssetReferences,
+  resolveEditorDocumentAsset,
+  selectEditorDocumentObjects,
+  selectOneEditorDocumentObject,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
+  validateEditorDocumentObjectSchemas,
   visitEditorDocumentObjects,
   type EditorDocument,
-  type EditorEffect,
 } from "../src";
+import { REPRESENTATIVE_V8_DOCUMENT_INPUT } from "./fixtures/representative-v8-document";
 
-declare const process: {
-  exit(code: number): never;
-};
+declare const process: { exit(code: number): never };
 
-function assert(condition: unknown, message: string) {
+function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-function assertEqual<T>(actual: T, expected: T, message: string) {
+function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(
       `${message} (expected ${String(expected)}, got ${String(actual)})`,
@@ -30,7 +37,11 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
   }
 }
 
-function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
+function assertDeepEqual(
+  actual: unknown,
+  expected: unknown,
+  message: string,
+): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
   if (actualJson !== expectedJson) {
@@ -38,1151 +49,518 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
-const TEST_DOCUMENT_CONFIG = {};
-const TEST_EFFECT_CAPABILITY_IDS: Record<string, string> = {
-  dieline: "test.dieline",
-  feature: "test.feature",
-  "configurable-visual": "test.configurable-visual",
-  "image-placement": "test.image-placement",
-  constraint: "test.constraint",
-};
-const TEST_SURFACE_FRAMES = {
-  previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-};
-
-function resolveTestEffectCapabilityId(
-  effect: EditorEffect,
-): string | undefined {
-  return effect.capabilityId || TEST_EFFECT_CAPABILITY_IDS[effect.type];
+function representativeDocument(): EditorDocument {
+  return parseEditorDocument(REPRESENTATIVE_V8_DOCUMENT_INPUT);
 }
 
-function testNormalizeDefaults() {
-  const doc = normalizeEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        title: "Front",
-        size: { width: 100, height: 120, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "artwork",
-            exportable: false,
-            tags: [" layer-tag ", "", "layer-tag"],
-            objects: [
-              {
-                id: "image-1",
-                exportable: false,
-                tags: [" mockup ", "", "mockup"],
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: { kind: "url", url: "/image.png" },
-                effects: [
-                  {
-                    type: "image-placement",
-                    target: { objectId: " image-1 " },
-                    order: "20",
-                    phase: "interaction",
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  assertEqual(doc.version, EDITOR_DOCUMENT_VERSION, "version should normalize");
-  assertDeepEqual(doc.config, TEST_DOCUMENT_CONFIG, "config should normalize");
-  assertEqual(
-    doc.views?.[0]?.id,
-    "front",
-    "default view should use surface id",
-  );
-  assertEqual(
-    doc.surfaces[0].layers[0].visible,
-    true,
-    "layer visibility should default",
+function testStrictRoundTrip(): void {
+  const document = representativeDocument();
+  const restored = parseEditorDocument(JSON.parse(JSON.stringify(document)));
+  assertDeepEqual(restored, document, "strict v8 should round-trip exactly");
+  assertDeepEqual(
+    document.surfaces.map((surface) => surface.id),
+    ["front", "back"],
+    "surface order should be preserved",
   );
   assertDeepEqual(
-    doc.surfaces[0].layers[0].tags,
-    ["layer-tag"],
-    "layer tags should normalize",
+    document.surfaces[0]?.objects.map((object) => object.id),
+    ["front.content", "front.production"],
+    "root group order should be preserved from bottom to top",
   );
   assertEqual(
-    "exportable" in
-      (doc.surfaces[0].layers[0] as unknown as Record<string, unknown>),
-    false,
-    "layer exportable should be ignored",
-  );
-  assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.visible,
-    true,
-    "object visibility should default",
-  );
-  assertDeepEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.tags,
-    ["mockup"],
-    "object tags should normalize",
-  );
-  assertEqual(
-    "exportable" in
-      (doc.surfaces[0].layers[0].objects?.[0] as unknown as Record<
-        string,
-        unknown
-      >),
-    false,
-    "object exportable should be ignored",
-  );
-  assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.require,
-    "strict",
-    "effect require should default",
-  );
-  assertDeepEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.target,
-    { objectId: "image-1" },
-    "effect target should normalize",
-  );
-  assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.order,
-    20,
-    "effect order should normalize",
-  );
-  assertEqual(
-    doc.surfaces[0].layers[0].objects?.[0]?.effects?.[0]?.phase,
-    "interaction",
-    "effect phase should normalize",
-  );
-  assert(
-    !("interaction" in (doc.surfaces[0].layers[0].objects?.[0] ?? {})),
-    "objects should not expose absent interaction fields",
+    findEditorDocumentObject(document, "front.feature.hole")?.id,
+    "front.feature.hole",
+    "nested object lookup should work",
   );
 }
 
-function testObjectInteractionNormalizesSupportedFields() {
-  const doc = normalizeEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "artwork",
-            objects: [
-              {
-                id: "valid",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 20, height: 20 },
-                },
-                interaction: {
-                  selection: { enabled: false },
-                  manipulation: {
-                    move: {
-                      enabled: true,
-                      constraints: [
-                        {
-                          activeWhen: { op: "const", value: true },
-                          spec: {
-                            type: "grid.snap",
-                            application: {
-                              preview: "evaluate",
-                              commit: "apply",
-                            },
-                            params: { size: 5 },
-                          },
-                        },
-                      ],
-                    },
-                    resize: { enabled: true },
-                    rotate: { enabled: true },
-                  },
-                  enabledWhen: {
-                    op: "truthy",
-                    ref: { source: "context", key: "can.interact" },
-                  },
-                },
-              },
-              {
-                id: "invalid",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 20, height: 20 },
-                },
-                interaction: {
-                  selectable: "true",
-                  evented: 1,
-                  locked: null,
-                },
-              },
-              {
-                id: "empty",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 20, height: 20 },
-                },
-                interaction: {},
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
+function testUnknownAndLegacyFieldsAreRejected(): void {
+  const v7 = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  v7.version = 7;
+  assertEqual(
+    validateEditorDocument(v7)[0]?.code,
+    "document-version-invalid",
+    "v7 documents should be rejected without a runtime migrator",
+  );
 
-  const objects = doc.surfaces[0].layers[0].objects;
-  assertDeepEqual(
-    objects?.[0]?.interaction,
-    {
-      enabledWhen: {
-        op: "truthy",
-        ref: { source: "context", key: "can.interact" },
-      },
-      selection: { enabled: false },
-      manipulation: {
-        move: {
-          enabled: true,
-          constraints: [
-            {
-              activeWhen: { op: "const", value: true },
-              spec: {
-                type: "grid.snap",
-                application: {
-                  preview: "evaluate",
-                  commit: "apply",
-                },
-                params: { size: 5 },
-              },
-            },
-          ],
-        },
-        resize: { enabled: true },
-        rotate: { enabled: true },
-      },
-    },
-    "supported interaction fields should normalize",
+  for (const [field, value] of [
+    ["config", {}],
+    ["views", []],
+    ["metadata", {}],
+  ] as const) {
+    const input = JSON.parse(
+      JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+    ) as Record<string, unknown>;
+    input[field] = value;
+    const diagnostic = validateEditorDocument(input)[0];
+    assertEqual(
+      diagnostic?.code,
+      "unknown-field",
+      `${field} should be rejected`,
+    );
+    assertEqual(
+      diagnostic?.path,
+      `document.${field}`,
+      `${field} path should be stable`,
+    );
+  }
+
+  const input = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const surface = (input.surfaces as Array<Record<string, unknown>>)[0]!;
+  const group = (surface.objects as Array<Record<string, unknown>>)[0]!;
+  const object = (group.children as Array<Record<string, unknown>>)[0]!;
+  object.frame = { x: 0, y: 0, width: 1, height: 1 };
+  assertEqual(
+    validateEditorDocument(input)[0]?.path,
+    "surfaces[0].objects[0].children[0].frame",
+    "legacy object frame should be rejected at its exact path",
   );
-  assert(
-    !("interaction" in (objects?.[1] ?? {})),
-    "unsupported renderer interaction fields should not be part of normalized document objects",
+
+  const groupRole = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const legacyGroup = (
+    (groupRole.surfaces as Array<Record<string, unknown>>)[0]!.objects as Array<
+      Record<string, unknown>
+    >
+  )[0]!;
+  legacyGroup.role = "content";
+  assertEqual(
+    validateEditorDocument(groupRole)[0]?.path,
+    "surfaces[0].objects[0].role",
+    "legacy group role should be rejected at its exact path",
   );
-  assert(
-    !("interaction" in (objects?.[2] ?? {})),
-    "empty legacy interaction fields should not be part of normalized document objects",
+
+  const guideRole = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const guideGroups = (guideRole.surfaces as Array<Record<string, unknown>>)[0]!
+    .objects as Array<Record<string, unknown>>;
+  const guide = (
+    (
+      guideGroups[guideGroups.length - 1]!.children as Array<
+        Record<string, unknown>
+      >
+    )[0]!.traits as Array<Record<string, unknown>>
+  )[0]!;
+  guide.role = "cut";
+  assertEqual(
+    validateEditorDocument(guideRole)[0]?.code,
+    "unknown-field",
+    "guide role should be rejected",
+  );
+
+  const exportScope = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const exportObject = (
+    (
+      (exportScope.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
+  )[0]!;
+  exportObject.traits = [{ type: "core.export", scopes: ["design"] }];
+  assertEqual(
+    validateEditorDocument(exportScope)[0]?.code,
+    "unknown-field",
+    "core.export scopes should be rejected",
+  );
+
+  const unnamespacedTag = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const taggedObject = (
+    (
+      (unnamespacedTag.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
+  )[0]!;
+  taggedObject.tags = ["cut"];
+  assertEqual(
+    validateEditorDocument(unnamespacedTag)[0]?.code,
+    "object-tag-namespace-required",
+    "object tags should require namespaces",
+  );
+
+  const legacyObjectSource = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const legacyObject = (
+    (
+      (legacyObjectSource.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
+  )[0]!;
+  delete legacyObject.type;
+  legacyObject.source = { kind: "image", assetId: "front-artwork" };
+  assertEqual(
+    validateEditorDocument(legacyObjectSource)[0]?.code,
+    "object-type-invalid",
+    "legacy image-kind sources should be rejected without compatibility",
   );
 }
 
-function testConstraintApplicationValidation() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "artwork",
-            objects: [
-              {
-                id: "invalid-application",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 20, height: 20 },
-                },
-                interaction: {
-                  manipulation: {
-                    move: {
-                      enabled: true,
-                      constraints: [
-                        {
-                          spec: {
-                            type: "grid.snap",
-                            application: {
-                              preview: "render-guide",
-                              release: "apply",
-                            },
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
+function testInvalidNumbersAndUnionsAreRejected(): void {
+  const nonFinite = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const geometry = (
+    (nonFinite.surfaces as Array<Record<string, unknown>>)[0]!
+      .geometry as Record<string, unknown>
+  ).canvasBounds as Record<string, unknown>;
+  geometry.width = Number.POSITIVE_INFINITY;
+  assertEqual(
+    validateEditorDocument(nonFinite)[0]?.code,
+    "finite-number-required",
+    "non-finite geometry should be rejected",
+  );
 
+  const invalidUnion = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const object = (
+    (
+      (invalidUnion.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
+  )[0]!;
+  object.children = [];
+  assertEqual(
+    validateEditorDocument(invalidUnion)[0]?.code,
+    "unknown-field",
+    "visual objects should reject children",
+  );
+
+  for (const [field, value] of [
+    ["opacity", 0.5],
+    ["effects", []],
+    ["localFrame", { x: 0, y: 0, width: 1, height: 1 }],
+    ["source", null],
+    ["paint", {}],
+    [
+      "contentFit",
+      { fit: "cover", anchorX: 0.5, anchorY: 0.5, zoom: 1, rotation: 0 },
+    ],
+  ] as const) {
+    const invalidGroup = JSON.parse(
+      JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+    ) as Record<string, unknown>;
+    const group = (
+      (invalidGroup.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!;
+    group[field] = value;
+    const diagnostic = validateEditorDocument(invalidGroup)[0];
+    assertEqual(
+      diagnostic?.code,
+      "unknown-field",
+      `group ${field} should be rejected`,
+    );
+    assertEqual(
+      diagnostic?.path,
+      `surfaces[0].objects[0].${field}`,
+      `group ${field} rejection path should be stable`,
+    );
+  }
+
+  const leafClip = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const clippedLeaf = (
+    (
+      (leafClip.surfaces as Array<Record<string, unknown>>)[0]!
+        .objects as Array<Record<string, unknown>>
+    )[0]!.children as Array<Record<string, unknown>>
+  )[0]!;
+  clippedLeaf.clip = "frame";
+  assertEqual(
+    validateEditorDocument(leafClip)[0]?.code,
+    "unknown-field",
+    "leaf clip outside contentFit should be rejected",
+  );
+
+  for (const [path, value, expectedCode] of [
+    ["opacity", -0.01, "unit-interval-required"],
+    ["opacity", 1.01, "unit-interval-required"],
+    ["contentFit.anchorX", -0.01, "unit-interval-required"],
+    ["contentFit.anchorY", 1.01, "unit-interval-required"],
+    ["contentFit.zoom", 0, "positive-number-required"],
+    ["contentFit.clip", "outside", "image-clip-invalid"],
+  ] as const) {
+    const invalidNumber = JSON.parse(
+      JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+    ) as Record<string, unknown>;
+    const image = (
+      (
+        (invalidNumber.surfaces as Array<Record<string, unknown>>)[0]!
+          .objects as Array<Record<string, unknown>>
+      )[0]!.children as Array<Record<string, unknown>>
+    )[0]!;
+    if (path === "opacity") image.opacity = value;
+    else {
+      const contentFit = image.contentFit as Record<string, unknown>;
+      contentFit[path.slice("contentFit.".length)] = value;
+    }
+    assertEqual(
+      validateEditorDocument(invalidNumber)[0]?.code,
+      expectedCode,
+      `${path}=${value} should be rejected`,
+    );
+  }
+}
+
+function testGlobalIdsAndReferencesAreStrict(): void {
+  const duplicate = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const surfaces = duplicate.surfaces as Array<Record<string, unknown>>;
+  surfaces[1]!.id = surfaces[0]!.id;
   assert(
-    diagnostics.some(
-      (item) =>
-        item.code === "interaction-constraint-application-mode-invalid",
+    validateEditorDocument(duplicate).some(
+      (item) => item.code === "document-id-duplicate",
     ),
-    "constraint application should reject unsupported modes",
+    "all document ids should be globally unique",
   );
+
+  const missing = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  const missingGroups = (missing.surfaces as Array<Record<string, unknown>>)[0]!
+    .objects as Array<Record<string, unknown>>;
+  const cutline = (
+    (
+      missingGroups[missingGroups.length - 1]!.children as Array<
+        Record<string, unknown>
+      >
+    )[0]!.effects as Array<Record<string, unknown>>
+  )[0]!;
+  cutline.operandObjectId = "missing";
   assert(
-    diagnostics.some(
-      (item) =>
-        item.code === "interaction-constraint-application-phase-invalid",
+    validateEditorDocument(missing).some(
+      (item) => item.code === "object-effect-target-missing",
     ),
-    "constraint application should reject unsupported phases",
+    "missing effect references should be rejected",
   );
 }
 
-function testLegacyObjectConstraintsAreIgnored() {
-  const doc = normalizeEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "artwork",
-            objects: [
-              {
-                id: "valid",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 20, height: 20 },
-                },
-                constraints: {
-                  drag: [
-                    {
-                      type: "rect",
-                      rect: { x: 0, y: 0, width: 100, height: 100 },
-                      mode: "contain",
-                      target: "center",
-                      ignored: true,
-                    },
-                    {
-                      type: "object",
-                      objectId: " frame ",
-                      source: "frame",
-                      mode: "contain",
-                    },
-                    {
-                      type: "rect",
-                      rect: { x: 0, y: 0, width: -1, height: 1 },
-                    },
-                    { type: "object", objectId: "" },
-                    { type: "path", pathId: "future" },
-                  ],
-                  resize: [{ type: "rect" }],
-                },
-              },
-              {
-                id: "empty",
-                frame: { x: 0, y: 0, width: 20, height: 20 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 20, height: 20 },
-                },
-                constraints: { drag: [] },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  const objects = doc.surfaces[0].layers[0].objects;
-  assert(
-    !("constraints" in (objects?.[0] ?? {})),
-    "legacy object constraints should not be part of normalized document objects",
+function testExtensionSchemasAreStrict(): void {
+  const document = representativeDocument();
+  const objectRegistry = new ObjectSchemaRegistry()
+    .registerTrait({ traitType: "popecho.feature-operand" })
+    .registerBehavior({
+      behaviorType: "pooder.image-slot",
+      capabilityId: "pooder.kit.image-slot",
+    });
+  const missing = validateEditorDocumentObjectSchemas(
+    document,
+    new ObjectSchemaRegistry(),
   );
   assert(
-    !("constraints" in (objects?.[1] ?? {})),
-    "empty legacy constraints should not be part of normalized document objects",
-  );
-}
-
-function testImagePlacementObjectDoesNotRequireLegacySrc() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "image.user",
-            objects: [
-              {
-                id: "image-target",
-                frame: { x: 0, y: 0, width: 100, height: 120 },
-                source: { kind: "url", url: "/placeholder.png" },
-                effects: [
-                  {
-                    type: "image-placement",
-                    capabilityId: "test.image-placement",
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  assert(
-    !diagnostics.some((item) => item.code.includes("src")),
-    "image-placement source objects should not require legacy src fields",
-  );
-}
-
-function testObjectWithoutSourceIsDropped() {
-  const doc = normalizeEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "image.user",
-            objects: [
-              {
-                id: "image-target",
-                frame: { x: 0, y: 0, width: 100, height: 120 },
-              },
-              {
-                id: "legacy-image",
-                type: "image",
-                frame: { x: 0, y: 0, width: 100, height: 120 },
-              },
-              {
-                id: "legacy-path",
-                type: "path",
-                path: "M0 0H1V1Z",
-                frame: { x: 0, y: 0, width: 100, height: 120 },
-              },
-              {
-                id: "legacy-rect",
-                type: "rect",
-                width: 100,
-                height: 120,
-                frame: { x: 0, y: 0, width: 100, height: 120 },
-              },
-              {
-                id: "legacy-text",
-                type: "text",
-                text: "Legacy",
-                frame: { x: 0, y: 0, width: 100, height: 120 },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  assertEqual(
-    doc.surfaces[0].layers[0].objects?.length ?? 0,
-    0,
-    "objects without source and legacy type-only objects should be dropped",
-  );
-}
-
-function testSourceObjectNormalizesSource() {
-  const doc = normalizeEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 120, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "production",
-            objects: [
-              {
-                id: "cutline",
-                frame: { x: 0, y: 0, width: 50, height: 50 },
-                source: {
-                  kind: "shape",
-                  shape: "circle",
-                  params: { radius: 25, ignored: true },
-                },
-                effects: [
-                  {
-                    type: "clip",
-                    capabilityId: "pooder.kit.clip",
-                    target: { objectId: " artwork " },
-                  },
-                ],
-              },
-              {
-                id: "artwork",
-                frame: { x: 0, y: 0, width: 50, height: 50 },
-                source: {
-                  kind: "url",
-                  url: " /art.png ",
-                  intrinsicSize: { width: "200", height: "100" },
-                },
-              },
-              {
-                id: "invalid",
-                frame: { x: 0, y: 0, width: 10, height: 10 },
-                source: { kind: "url", url: "" },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  const objects = doc.surfaces[0].layers[0].objects;
-  assertEqual(objects?.length, 2, "invalid source object should be dropped");
-  const cutline = objects?.[0];
-  assertDeepEqual(
-    cutline?.source,
-    {
-      kind: "shape",
-      shape: "circle",
-      params: { radius: 25, ignored: true },
-    },
-    "shape source should normalize",
+    missing.some((item) => item.code === "object-trait-unregistered") &&
+      missing.some((item) => item.code === "object-behavior-unregistered"),
+    "unregistered extension traits and behaviors should be rejected",
   );
   assertDeepEqual(
-    cutline?.effects?.[0],
-    {
-      type: "clip",
-      require: "strict",
-      capabilityId: "pooder.kit.clip",
-      target: { objectId: "artwork" },
-    },
-    "source object should keep existing effects",
-  );
-  assertDeepEqual(
-    objects?.[1]?.source,
-    {
-      kind: "url",
-      url: "/art.png",
-      intrinsicSize: { width: 200, height: 100 },
-    },
-    "url source should trim url and normalize intrinsic size",
-  );
-}
-
-function testV5DocumentIsRejected() {
-  const diagnostics = validateEditorDocument({
-    version: 5,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [],
-      },
-    ],
-  });
-
-  assert(
-    diagnostics.some((item) => item.code === "document-version-invalid"),
-    "v5 document should be rejected",
-  );
-}
-
-function testLegacyInteractionFieldsAreRejected() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "layer",
-            objects: [
-              {
-                id: "image",
-                frame: { x: 0, y: 0, width: 1, height: 1 },
-                source: { kind: "shape", shape: "rect", params: {} },
-                interaction: {
-                  drag: { enabled: true },
-                  transform: { enabled: true },
-                  activation: {
-                    action: { command: "legacy.open" },
-                  },
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-  assert(
-    diagnostics.filter((item) => item.code === "interaction-field-invalid")
-      .length === 2,
-    "legacy drag and transform fields should be rejected",
-  );
-  assert(
-    diagnostics.some(
-      (item) => item.code === "interaction-action-command-legacy",
-    ),
-    "legacy action.command should be rejected",
-  );
-}
-
-function testDocumentConfigIsRequired() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [],
-      },
-    ],
-  });
-
-  assert(
-    diagnostics.some((item) => item.code === "document-config-required"),
-    "missing document config should be rejected",
-  );
-}
-
-function testImageObjectRequiresFrame() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "layer",
-            objects: [
-              {
-                id: "image",
-                src: "/image.png",
-                source: { kind: "url", url: "/image.png" },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  assert(
-    diagnostics.some((item) => item.code === "object-frame-required"),
-    "image object without frame should be invalid",
-  );
-}
-
-function testValidationStructureAndReferences() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 100, height: 100, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "layer",
-            objects: [
-              {
-                id: "img",
-                frame: { x: 0, y: 0, width: 1, height: 1 },
-                source: { kind: "url", url: "/template.png" },
-              },
-            ],
-          },
-          { id: "layer" },
-        ],
-      },
-      {
-        id: "front",
-        size: { width: 100, height: 100, unit: "mm" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [],
-      },
-    ],
-    views: [{ id: "tab", surfaceIds: ["missing-surface"] }],
-  });
-
-  const codes = diagnostics.map((item) => item.code).sort();
-  assert(
-    codes.includes("surface-id-duplicate"),
-    "duplicate surface should be invalid",
-  );
-  assert(
-    codes.includes("layer-id-duplicate"),
-    "duplicate layer should be invalid",
-  );
-  assert(
-    codes.includes("view-surface-missing"),
-    "missing view surface should be invalid",
-  );
-}
-
-function testCustomValidatorDiagnostics() {
-  const diagnostics = validateEditorDocument(
-    {
-      version: EDITOR_DOCUMENT_VERSION,
-      config: TEST_DOCUMENT_CONFIG,
-      surfaces: [
-        {
-          id: "front",
-          size: { width: 1, height: 1, unit: "px" },
-          frames: TEST_SURFACE_FRAMES,
-          layers: [
-            {
-              id: "layer",
-              effects: [{ type: "custom-effect", capabilityId: "custom" }],
-            },
-          ],
-        },
-      ],
-    },
-    {
-      validators: [
-        ({ effect, path, addDiagnostic }) => {
-          if (effect?.type !== "custom-effect") return;
-          addDiagnostic({
-            severity: "error",
-            code: "custom-effect-invalid",
-            message: "Custom effect is invalid.",
-            path,
-          });
-        },
-      ],
-    },
-  );
-
-  assert(
-    diagnostics.some((item) => item.code === "custom-effect-invalid"),
-    "custom validators should append diagnostics",
-  );
-}
-
-function testStructuralValidationDoesNotResolveCapabilities() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [{ id: "layer", effects: [{ type: "custom-effect" }] }],
-      },
-    ],
-  });
-
-  assertDeepEqual(
-    diagnostics,
+    validateEditorDocumentObjectSchemas(document, objectRegistry),
     [],
-    "structural validation should not require runtime capability resolution",
-  );
-}
-
-function testEffectsValidateWithoutCapabilityResolver() {
-  const diagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "layer",
-            effects: [{ type: "dieline" }, { type: "feature" }],
-            objects: [
-              {
-                id: "image",
-                frame: { x: 0, y: 0, width: 1, height: 1 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 1, height: 1 },
-                },
-                effects: [{ type: "constraint" }],
-                interaction: {
-                  manipulation: {
-                    move: {
-                      enabled: true,
-                      constraints: [{ spec: { type: "rect.contain" } }],
-                    },
-                    resize: { enabled: true },
-                    rotate: { enabled: true },
-                  },
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-  assertDeepEqual(
-    diagnostics,
-    [],
-    "effect structure should validate without a capability resolver",
-  );
-}
-
-function testValidationStagesRemainIndependent() {
-  const documentDiagnostics = validateEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [{ id: "layer", effects: [{ payload: {} }] }],
-      },
-    ],
-  });
-  assertEqual(
-    documentDiagnostics[0]?.stage,
-    "document-schema",
-    "invalid effect envelopes should identify the document schema stage",
+    "registered object schemas should validate",
   );
 
-  const invalidPayloadDocument = {
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "layer",
-            effects: [{ type: "custom", payload: { count: "invalid" } }],
-          },
-        ],
-      },
-    ],
-  };
-  const registry = new EffectSchemaRegistry([
+  const effectDocument = cloneEditorDocument(document);
+  const target = findEditorDocumentObject(effectDocument, "back.artwork");
+  assert(target?.type === "shape", "back artwork should be a shape");
+  target.effects = [{ type: "test.effect", payload: { count: 1 } }];
+  const effectRegistry = new EffectSchemaRegistry([
     {
-      effectType: "custom",
-      capabilityId: "test.custom",
+      effectType: "test.effect",
+      capabilityId: "test.capability",
       validate: (payload) =>
-        typeof (payload as Record<string, unknown> | undefined)?.count ===
-        "number"
+        (payload as { count?: unknown }).count === 1
           ? []
-          : [
-              {
-                code: "custom-count-invalid",
-                message: "count must be a number.",
-                path: "count",
-              },
-            ],
+          : [{ code: "count-invalid", message: "count must equal 1" }],
     },
   ]);
-
   assertDeepEqual(
-    validateEditorDocument(invalidPayloadDocument),
+    validateEditorDocumentEffectSchemas(effectDocument, effectRegistry),
     [],
-    "document schema validation should not validate effect payloads",
+    "registered effect schemas should validate",
   );
-  const effectDiagnostics = validateEditorDocumentEffectSchemas(
-    invalidPayloadDocument,
-    registry,
-  );
-  assertEqual(
-    effectDiagnostics[0]?.stage,
-    "effect-schema",
-    "effect payload failures should identify the effect schema stage",
-  );
-
-  const runtimeResult = collectEditorDocumentCapabilityRequirements(
-    normalizeEditorDocument({
-      ...invalidPayloadDocument,
-      surfaces: [
-        {
-          ...invalidPayloadDocument.surfaces[0],
-          layers: [
-            {
-              id: "layer",
-              effects: [{ type: "custom", payload: { count: 1 } }],
-            },
-          ],
-        },
-      ],
-    }),
+  const requirements = collectEditorDocumentCapabilityRequirements(
+    effectDocument,
     {
-      availableCapabilityIds: [],
+      availableCapabilityIds: ["test.capability"],
       resolveEffectCapabilityId: (effect) =>
-        registry.resolveCapabilityId(effect.type),
+        effect.type === "test.effect" ? "test.capability" : undefined,
     },
   );
   assertEqual(
-    runtimeResult.diagnostics[0]?.stage,
-    "runtime-capability",
-    "missing runtime capabilities should identify the runtime stage",
-  );
-}
-
-function testObjectInteractionNormalizesSeparatelyFromGenericEffects() {
-  const doc = normalizeEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "layer",
-            effects: [{ type: "dieline" }, { type: "feature" }],
-            objects: [
-              {
-                id: "image",
-                frame: { x: 0, y: 0, width: 1, height: 1 },
-                source: {
-                  kind: "shape",
-                  shape: "rect",
-                  params: { width: 1, height: 1 },
-                },
-                effects: [{ type: "constraint" }],
-                interaction: {
-                  manipulation: {
-                    move: {
-                      enabled: true,
-                      constraints: [
-                        {
-                          spec: {
-                            type: "rect.contain",
-                            params: { padding: 2 },
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
-  const object = doc.surfaces[0].layers[0].objects?.[0];
-  const effects = object?.effects ?? [];
-  assertEqual(
-    effects.length,
+    requirements.requirements.length,
     1,
-    "generic effects should remain separate from object interaction",
-  );
-  assert(
-    isGenericEditorEffect(effects[0]),
-    "generic constraint should remain a generic editor effect",
+    "effect capability should be collected",
   );
   assertDeepEqual(
-    object?.interaction?.manipulation?.move,
-    {
-      enabled: true,
-      constraints: [
-        {
-          spec: { type: "rect.contain", params: { padding: 2 } },
-        },
-      ],
-    },
-    "object interaction should be the sole object-local interaction declaration",
+    requirements.diagnostics,
+    [],
+    "available capability should satisfy effect",
   );
 }
 
-function testRequirePolicyDiagnostics() {
-  const doc: EditorDocument = {
-    version: EDITOR_DOCUMENT_VERSION,
-    config: TEST_DOCUMENT_CONFIG,
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "layer",
-            effects: [
-              { type: "dieline", require: "strict" },
-              { type: "configurable-visual", require: "warn" },
-              { type: "image-placement", require: "ignore" },
-            ],
-          },
-        ],
-      },
-    ],
-  };
-
-  const result = collectEditorDocumentCapabilityRequirements(doc, {
-    resolveEffectCapabilityId: resolveTestEffectCapabilityId,
-    availableCapabilityIds: [],
-  });
-  assert(
-    result.diagnostics.some(
-      (item) =>
-        item.code === "capability-required" &&
-        item.severity === "error" &&
-        item.capabilityId === "test.dieline",
-    ),
-    "strict missing capability should produce error",
-  );
-  assert(
-    result.diagnostics.some(
-      (item) =>
-        item.code === "capability-optional-missing" &&
-        item.severity === "warning" &&
-        item.capabilityId === "test.configurable-visual",
-    ),
-    "warn missing capability should produce warning",
-  );
-  assert(
-    !result.diagnostics.some(
-      (item) => item.capabilityId === "test.image-placement",
-    ),
-    "ignore missing capability should not produce diagnostic",
-  );
-
-  const generic = collectEditorDocumentCapabilityRequirements(doc, {
-    resolveEffectCapabilityId: resolveTestEffectCapabilityId,
-  });
-  assertEqual(
-    generic.requirements.length,
-    2,
-    "ignored effect should be skipped",
-  );
-}
-
-function testCloneAndRecursiveObjectAccessors() {
-  const document = normalizeEditorDocument({
-    version: EDITOR_DOCUMENT_VERSION,
-    config: { nested: { enabled: true } },
-    metadata: { nested: { label: "original" } },
-    surfaces: [
-      {
-        id: "front",
-        size: { width: 1, height: 1, unit: "px" },
-        frames: TEST_SURFACE_FRAMES,
-        layers: [
-          {
-            id: "first",
-            objects: [
-              {
-                id: "one",
-                frame: { x: 0, y: 0, width: 1, height: 1 },
-                source: { kind: "shape", shape: "rect", params: {} },
-              },
-            ],
-          },
-          {
-            id: "second",
-            objects: [
-              {
-                id: "two",
-                frame: { x: 0, y: 0, width: 1, height: 1 },
-                source: { kind: "text", text: "two" },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-
+function testCloneAndVisitors(): void {
+  const document = representativeDocument();
   const clone = cloneEditorDocument(document);
-  assertDeepEqual(clone, document, "clone should preserve document data");
-  assert(clone !== document, "clone should detach the document root");
-  assert(
-    clone.config !== document.config &&
-      clone.metadata !== document.metadata &&
-      clone.surfaces[0] !== document.surfaces[0],
-    "clone should recursively detach nested values",
-  );
-
   assertDeepEqual(
-    getEditorDocumentObjects(document).map((object) => object.id),
-    ["one", "two"],
-    "object accessor should preserve document order",
+    clone,
+    document,
+    "clone should preserve strict document data",
   );
+  assert(clone !== document, "clone should detach the root");
+  const visited: string[] = [];
+  visitEditorDocumentObjects(document, ({ path }) => visited.push(path));
   assertEqual(
-    findEditorDocumentObject(document, "two")?.id,
-    "two",
-    "object lookup should traverse the hierarchy",
-  );
-  const paths: string[] = [];
-  visitEditorDocumentObjects(document, ({ path }) => paths.push(path));
-  assertDeepEqual(
-    paths,
-    ["surfaces[0].layers[0].objects[0]", "surfaces[0].layers[1].objects[0]"],
-    "visitor should expose stable object paths",
+    visited.length,
+    getEditorDocumentObjects(document).length,
+    "visitor and object accessor should agree",
   );
 }
 
-function main() {
-  testNormalizeDefaults();
-  testObjectInteractionNormalizesSupportedFields();
-  testConstraintApplicationValidation();
-  testLegacyObjectConstraintsAreIgnored();
-  testImagePlacementObjectDoesNotRequireLegacySrc();
-  testObjectWithoutSourceIsDropped();
-  testSourceObjectNormalizesSource();
-  testV5DocumentIsRejected();
-  testLegacyInteractionFieldsAreRejected();
-  testDocumentConfigIsRequired();
-  testImageObjectRequiresFrame();
-  testValidationStructureAndReferences();
-  testCustomValidatorDiagnostics();
-  testStructuralValidationDoesNotResolveCapabilities();
-  testEffectsValidateWithoutCapabilityResolver();
-  testValidationStagesRemainIndependent();
-  testObjectInteractionNormalizesSeparatelyFromGenericEffects();
-  testRequirePolicyDiagnostics();
-  testCloneAndRecursiveObjectAccessors();
+function testObjectSelectors(): void {
+  const document = representativeDocument();
+  assertDeepEqual(
+    selectEditorDocumentObjects(document, { tags: ["slot:front"] }).map(
+      (object) => object.id,
+    ),
+    ["front.image-slot"],
+    "tag selector should match the image slot",
+  );
+  assertEqual(
+    selectOneEditorDocumentObject(document, { ids: ["front.dieline"] })?.id,
+    "front.dieline",
+    "id selector should resolve one exact object",
+  );
+  assertEqual(
+    selectOneEditorDocumentObject(document, { tags: ["slot:front"] })?.id,
+    "front.image-slot",
+    "single-object selector should resolve the image slot",
+  );
+}
+
+function testCentralAssetReferenceLifecycle(): void {
+  const document = representativeDocument();
+  document.extensions = {};
+  const slot = findEditorDocumentObject(document, "front.image-slot");
+  assert(
+    slot?.type === "image",
+    "fixture image slot should be an image object",
+  );
+  slot.behaviors = undefined;
+
+  const references = collectEditorDocumentAssetReferences(document);
+  assertDeepEqual(
+    references.map((reference) => reference.source.assetId),
+    ["front-artwork"],
+    "collector should include declared object asset sources only",
+  );
+  assertEqual(
+    resolveEditorDocumentAsset(document, slot.source, "image")?.id,
+    "front-artwork",
+    "resolver should enforce the expected asset type",
+  );
+  assertEqual(
+    replaceEditorDocumentAssetReferences(document, "front-artwork", {
+      kind: "asset",
+      assetId: "image-slot-placeholder",
+    }),
+    1,
+    "replacement should update every collected reference",
+  );
+  assertEqual(
+    slot.source?.assetId,
+    "image-slot-placeholder",
+    "replacement should mutate the typed source binding",
+  );
+  const removed = reclaimOrphanedEditorDocumentAssets(document, {
+    extensionRegistry: new DocumentExtensionRegistry(),
+  });
+  assert(
+    removed.includes("front-artwork") && removed.includes("front-white-ink"),
+    "orphan reclamation should remove every unreferenced asset",
+  );
+  assertDeepEqual(
+    document.assets.map((asset) => asset.id),
+    ["image-slot-placeholder"],
+    "orphan reclamation should retain referenced assets",
+  );
+}
+
+function testOrphanReclamationUsesRegisteredExtensionReferences(): void {
+  const document = representativeDocument();
+  const extensionRegistry = new DocumentExtensionRegistry().register({
+    id: "pooder.production-mask",
+    behaviors: [
+      {
+        behaviorType: "pooder.image-slot",
+        capabilityId: "pooder.kit.image-slot",
+        collectAssetReferences: (behavior, context) => {
+          const config = behavior.config as Record<string, unknown>;
+          const source = config.placeholderSource;
+          return isAssetSource(source)
+            ? [
+                createAssetReferenceBinding(
+                  source,
+                  "image",
+                  `${context.path}.behaviors[pooder.image-slot].config.placeholderSource`,
+                  (replacement) => {
+                    config.placeholderSource = replacement;
+                  },
+                ),
+              ]
+            : [];
+        },
+      },
+    ],
+    collectAssetReferences: (state) => {
+      const masks = (state as { masks?: Record<string, unknown> }).masks ?? {};
+      return Object.entries(masks).flatMap(([maskId, value]) => {
+        const production = (value as { production?: Record<string, unknown> })
+          .production;
+        const source = production?.source;
+        return production && isAssetSource(source)
+          ? [
+              createAssetReferenceBinding(
+                source,
+                "image",
+                `extensions.pooder.production-mask.masks.${maskId}.production.source`,
+                (replacement) => {
+                  production.source = replacement;
+                },
+              ),
+            ]
+          : [];
+      });
+    },
+  });
+
+  assertDeepEqual(
+    reclaimOrphanedEditorDocumentAssets(document, { extensionRegistry }),
+    [],
+    "orphan reclamation should retain object, behavior, and extension assets",
+  );
+}
+
+function main(): void {
+  testStrictRoundTrip();
+  testUnknownAndLegacyFieldsAreRejected();
+  testInvalidNumbersAndUnionsAreRejected();
+  testGlobalIdsAndReferencesAreStrict();
+  testExtensionSchemasAreStrict();
+  testCloneAndVisitors();
+  testObjectSelectors();
+  testCentralAssetReferenceLifecycle();
+  testOrphanReclamationUsesRegisteredExtensionReferences();
   console.log("ok");
 }
 

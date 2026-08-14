@@ -28,12 +28,16 @@ function assertPoint(
 
 // Three nested objects flatten to one object-local -> scene matrix.
 const root = coordinateMatrix("parent-local", "scene", [1, 0, 0, 1, 100, 50]);
-const middle = coordinateMatrix("parent-local", "parent-local", [
-  2, 0, 0, 2, 10, 5,
-]);
-const leaf = coordinateMatrix("object-local", "parent-local", [
-  1, 0, 0, 1, 3, 4,
-]);
+const middle = coordinateMatrix(
+  "parent-local",
+  "parent-local",
+  [2, 0, 0, 2, 10, 5],
+);
+const leaf = coordinateMatrix(
+  "object-local",
+  "parent-local",
+  [1, 0, 0, 1, 3, 4],
+);
 const nested = multiplyCoordinateMatrices(
   root,
   multiplyCoordinateMatrices(middle, leaf),
@@ -57,11 +61,7 @@ const affineCases = [
 for (const [parentIndex, parentValues] of affineCases.entries()) {
   const parent = coordinateMatrix("parent-local", "scene", parentValues);
   for (const [childIndex, childValues] of affineCases.entries()) {
-    const child = coordinateMatrix(
-      "object-local",
-      "parent-local",
-      childValues,
-    );
+    const child = coordinateMatrix("object-local", "parent-local", childValues);
     const composed = multiplyCoordinateMatrices(parent, child);
     const localPoint = coordinatePoint("object-local", 7, -3);
     const sequential = transformCoordinatePoint(

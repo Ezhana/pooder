@@ -66,6 +66,13 @@ function normalizeMultiplier(value: unknown): number {
   return Number.isFinite(number) ? Math.max(1, number) : 2;
 }
 
+function isInvalidOutputMaskError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "browser-scene-export-output-mask-invalid"
+  );
+}
+
 function isPositiveRect(rect: BrowserSceneExportRect): boolean {
   return (
     Number.isFinite(rect.left) &&
@@ -146,28 +153,33 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
     try {
       for (const entry of entries) {
-        const object = await this.requireCanvasService().createDetachedRenderObject(
-          {
-            ...entry.spec,
-            effects:
-              options.preserveClipPaths === false ? [] : entry.spec.effects,
-          },
-          sceneToTarget,
-        );
+        const object =
+          await this.requireCanvasService().createDetachedRenderObject(
+            {
+              ...entry.spec,
+              effects:
+                options.preserveClipPaths === false ? [] : entry.spec.effects,
+            },
+            sceneToTarget,
+          );
         if (object) exportCanvas.add(object);
       }
       exportCanvas.renderAll();
       const exportedUrl = exportCanvas.toDataURL({ format, multiplier: 1 });
       const url = options.outputMask
-        ? await this.applyOutputMask(exportedUrl, options.outputMask.sourceKey, {
-            crop,
-            height,
-            multiplier,
-            mode: options.outputMask.mode ?? "alpha",
-            sceneToTarget,
-            transparentColor: options.outputMask.transparentColor,
-            width,
-          })
+        ? await this.applyOutputMaskWithFallback(
+            exportedUrl,
+            options.outputMask.sourceKey,
+            {
+              crop,
+              height,
+              multiplier,
+              mode: options.outputMask.mode ?? "alpha",
+              sceneToTarget,
+              transparentColor: options.outputMask.transparentColor,
+              width,
+            },
+          )
         : exportedUrl;
       return {
         url,
@@ -196,11 +208,18 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     const tags = new Set(normalizeIds(selector?.tags));
     const includeHidden = options.includeHidden === true;
     const entries: ExportEntry[] = [];
-    for (const layer of this.requireRenderIntentService().getGraph().layers) {
+    const renderIntents = this.requireRenderIntentService();
+    const graph =
+      renderIntents.getDocumentGraph?.() ?? renderIntents.getGraph();
+    for (const layer of graph.layers) {
       if (layerIds.size && !layerIds.has(layer.id)) continue;
       for (const node of layer.nodes) {
         const authoritativeVisible = layer.visible && node.visible;
-        if (!includeHidden && selector?.visible === undefined && !authoritativeVisible)
+        if (
+          !includeHidden &&
+          selector?.visible === undefined &&
+          !authoritativeVisible
+        )
           continue;
         if (
           selector?.visible !== undefined &&
@@ -214,10 +233,11 @@ export class BrowserSceneExportService implements Service, SceneExportService {
           continue;
         if (tags.size && !node.tags.some((tag) => tags.has(tag))) continue;
         if (node.props.excludeFromExport === true) continue;
-        const spec = this.requireRenderGraphAdapter().createExportRenderObjectSpec(
-          layer,
-          node,
-        );
+        const spec =
+          this.requireRenderGraphAdapter().createExportRenderObjectSpec(
+            layer,
+            node,
+          );
         if (spec) entries.push({ layer, node, spec });
       }
     }
@@ -237,9 +257,12 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       .filter(
         ({ node }) => !ids.size || node.exportKeys.some((key) => ids.has(key)),
       )
-      .map(({ node }) =>
-        this.requireGeometrySource().getBounds(node.exportGeometryRef, "scene")
-          .value,
+      .map(
+        ({ node }) =>
+          this.requireGeometrySource().getBounds(
+            node.exportGeometryRef,
+            "scene",
+          ).value,
       )
       .filter((value): value is BrowserSceneExportRect => Boolean(value));
     if (!bounds.length) {
@@ -252,7 +275,9 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     return { left, top, width: right - left, height: bottom - top };
   }
 
-  private resolveFrameCrop(frame: BrowserSceneExportFrame): BrowserSceneExportRect {
+  private resolveFrameCrop(
+    frame: BrowserSceneExportFrame,
+  ): BrowserSceneExportRect {
     const frames = this.surfaceFrameService?.getFrames();
     if (!frames) throw new Error("browser-scene-export-frame-unavailable");
     const source =
@@ -265,6 +290,31 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       width: source.widthMm,
       height: source.heightMm,
     };
+  }
+
+  private async applyOutputMaskWithFallback(
+    sourceUrl: string,
+    sourceKey: string,
+    options: {
+      crop: BrowserSceneExportRect;
+      height: number;
+      multiplier: number;
+      mode: "alpha" | "outline" | "shape";
+      sceneToTarget: Matrix2D<"scene", "screen">;
+      transparentColor?: SceneExportOutputMaskTransparentColor;
+      width: number;
+    },
+  ): Promise<string> {
+    try {
+      return await this.applyOutputMask(sourceUrl, sourceKey, options);
+    } catch (error) {
+      if (!isInvalidOutputMaskError(error)) throw error;
+      console.warn(
+        "[BrowserSceneExportService] Output mask is invalid; using the unmasked export.",
+        error,
+      );
+      return sourceUrl;
+    }
   }
 
   private async applyOutputMask(
@@ -329,17 +379,23 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
   private requireCanvasService(): DetachedObjectFactory {
     if (!this.canvasService)
-      throw new Error("[BrowserSceneExportService] CanvasService is unavailable.");
+      throw new Error(
+        "[BrowserSceneExportService] CanvasService is unavailable.",
+      );
     return this.canvasService;
   }
   private requireGeometrySource(): GeometrySourceService {
     if (!this.geometrySource)
-      throw new Error("[BrowserSceneExportService] GeometrySourceService is unavailable.");
+      throw new Error(
+        "[BrowserSceneExportService] GeometrySourceService is unavailable.",
+      );
     return this.geometrySource;
   }
   private requireRenderIntentService(): RenderIntentService {
     if (!this.renderIntentService)
-      throw new Error("[BrowserSceneExportService] RenderIntentService is unavailable.");
+      throw new Error(
+        "[BrowserSceneExportService] RenderIntentService is unavailable.",
+      );
     return this.renderIntentService;
   }
   private requireRenderGraphAdapter(): FabricRenderGraphAdapter {
@@ -347,7 +403,9 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       FABRIC_RENDER_GRAPH_ADAPTER,
     );
     if (!this.renderGraphAdapter)
-      throw new Error("[BrowserSceneExportService] RenderGraphAdapter is unavailable.");
+      throw new Error(
+        "[BrowserSceneExportService] RenderGraphAdapter is unavailable.",
+      );
     return this.renderGraphAdapter;
   }
 }

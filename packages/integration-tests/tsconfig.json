@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "lib": ["ESNext", "DOM"],
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "outDir": ".test-dist",
+    "rootDir": "."
+  },
+  "include": ["tests/**/*.ts"]
+}

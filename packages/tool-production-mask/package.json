@@ -10,16 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
-    },
-    "./effect-schema": {
-      "types": "./dist/effect-schema.d.ts",
-      "import": "./dist/effect-schema.mjs",
-      "require": "./dist/effect-schema.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/effect-schema.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts src/effect-schema.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "test": "tsc -p tsconfig.test.json && node .test-dist/tests/run.js"
   },
   "license": "ISC",

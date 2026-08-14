@@ -167,10 +167,14 @@ export function projectRectIntoRect(
 
   const minLeft = normalizedContainer.left;
   const maxLeft =
-    normalizedContainer.left + normalizedContainer.width - normalizedSubject.width;
+    normalizedContainer.left +
+    normalizedContainer.width -
+    normalizedSubject.width;
   const minTop = normalizedContainer.top;
   const maxTop =
-    normalizedContainer.top + normalizedContainer.height - normalizedSubject.height;
+    normalizedContainer.top +
+    normalizedContainer.height -
+    normalizedSubject.height;
 
   return {
     ...normalizedSubject,
@@ -225,7 +229,10 @@ export function computeDragInteraction(
   const constraints = normalizeConstraints(input.constraints);
   const options = input.options ?? {};
   const threshold = resolveThreshold(options);
-  const targetLines = normalizeSnapTargetLines(input.snapTargets ?? [], options);
+  const targetLines = normalizeSnapTargetLines(
+    input.snapTargets ?? [],
+    options,
+  );
   const proposedLines = createRectSnapLines(proposedFrame).filter((line) =>
     shouldIncludeKind(line.kind, options),
   );
@@ -299,9 +306,7 @@ function normalizeSnapTargetLines(
     const lines = explicit
       .map((line) => normalizeInteractionLine(targetId, line))
       .filter((line): line is ResolvedInteractionLine => Boolean(line))
-      .filter(
-        (line) => shouldIncludeKind(line.kind, options),
-      );
+      .filter((line) => shouldIncludeKind(line.kind, options));
     if (target.rect) {
       lines.push(
         ...createRectSnapLines(target.rect)

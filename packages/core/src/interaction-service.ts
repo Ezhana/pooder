@@ -94,6 +94,8 @@ export interface InteractionConstraintSpec {
 export interface InteractionOperationSpec {
   enabled: boolean;
   constraints?: InteractionConstraintSpec[];
+  /** Selects whether the document service or the declared action owns commit. */
+  documentMutation?: "automatic" | "action-owned";
   action?: {
     commandId: string;
     payload?: Record<string, unknown>;
@@ -211,9 +213,6 @@ export type SceneTransformPatch =
       matrix: CoordinateMatrix<"object-local", "scene">;
     };
 
-/** @deprecated Use SceneTransformPatch. */
-export type InteractionCommitTransform = SceneTransformPatch;
-
 export interface InteractionManipulationCommitEvent {
   kind: InteractionManipulationKind;
   subject: InteractionSubject;
@@ -240,6 +239,10 @@ export class InteractionService implements Service {
   private geometrySource?: GeometrySourceService;
   private sessionService?: SessionService;
   private readonly events = new TypedEventEmitter<InteractionServiceEventMap>();
+  private readonly manipulationActionTasks = new WeakMap<
+    InteractionManipulationResult,
+    Promise<unknown>
+  >();
   private selectedSubject: InteractionSubject | null = null;
 
   constructor(
@@ -438,6 +441,7 @@ export class InteractionService implements Service {
           input.sceneMatrix,
         )
       : undefined;
+    const primaryProjectionId = normalizeId(input.projectionId);
     const projectionPatches =
       operation.enabled && documentPatch
         ? createProjectionPatches(
@@ -446,10 +450,10 @@ export class InteractionService implements Service {
             documentPatch,
             input.sourceSceneMatrix,
             input.sceneMatrix,
+            primaryProjectionId,
             this.requireGeometrySource(),
           )
         : [];
-    const primaryProjectionId = normalizeId(input.projectionId);
     const primaryMatrixPatch = projectionPatches.find(
       (patch) =>
         patch.transform.type === "replace-matrix" &&
@@ -476,12 +480,19 @@ export class InteractionService implements Service {
       ...(resultSceneMatrix ? { sceneMatrix: resultSceneMatrix } : {}),
       ...(phase === "commit" && documentPatch ? { documentPatch } : {}),
     };
-    this.dispatchManipulationAction(kind, input, result);
+    const actionTask = this.dispatchManipulationAction(kind, input, result);
+    if (actionTask) this.manipulationActionTasks.set(result, actionTask);
     if (phase === "commit" && result.enabled) {
       const event = { kind, subject: result.subject, input, result };
       this.events.emit("manipulationCommit", event);
     }
     return result;
+  }
+
+  async waitForManipulationAction(
+    result: InteractionManipulationResult,
+  ): Promise<void> {
+    await this.manipulationActionTasks.get(result);
   }
 
   onDidCommitManipulation(
@@ -554,11 +565,11 @@ export class InteractionService implements Service {
     kind: InteractionManipulationKind,
     input: InteractionManipulationInput,
     result: InteractionManipulationResult,
-  ): void {
+  ): Promise<unknown> | undefined {
     const action = input.spec.manipulation?.[kind]?.action;
     const commandId = normalizeId(action?.commandId);
-    if (!result.enabled || !action || !commandId) return;
-    void this.requireCommandService()
+    if (!result.enabled || !action || !commandId) return undefined;
+    return this.requireCommandService()
       .executeCommand(commandId, {
         ...cloneRecord(action.payload),
         coordinateSpace: result.coordinateSpace,
@@ -748,22 +759,31 @@ function createProjectionPatches(
   documentPatch: SceneTransformPatch,
   sourceSceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
   sceneMatrix: Matrix2D<"object-local", "scene"> | undefined,
+  primaryProjectionId: string | undefined,
   geometrySource: GeometrySourceService,
 ): InteractionProjectionPatch[] {
   const projectionTargets =
     normalizeInteractionSubject(subject)?.projectionTargets ?? [];
   if (kind === "move") {
+    const primarySceneMatrix =
+      primaryProjectionId && sourceSceneMatrix
+        ? applySceneTransformPatch(documentPatch, sourceSceneMatrix)
+        : undefined;
     return projectionTargets.map((projectionTarget) => ({
       target: {
         kind: "projection",
         projectionId: projectionTarget.projectionId,
       },
       coordinateSpace: "scene",
-      transform: createProjectionTransformFromDocumentPatch(
-        projectionTarget,
-        documentPatch,
-        geometrySource,
-      ),
+      transform:
+        primarySceneMatrix &&
+        projectionTarget.projectionId === primaryProjectionId
+          ? {
+              type: "replace-matrix" as const,
+              coordinateSpace: "scene" as const,
+              matrix: primarySceneMatrix,
+            }
+          : documentPatch,
     }));
   }
 
@@ -804,16 +824,21 @@ function createProjectionPatches(
       ...projectionTarget.geometryRef,
       purpose: "preview",
     }).value;
-    const matrix = snapshot
-      ? multiplyCoordinateMatrices(
-          sceneDelta,
-          coordinateMatrix(
-            "object-local",
-            "scene",
-            snapshot.localToScene.values,
-          ),
-        )
-      : sceneMatrix;
+    const matrix =
+      sceneMatrix && projectionTarget.projectionId === primaryProjectionId
+        ? // The hit projection already reports an absolute matrix. Reapplying the
+          // delta to its live preview would accumulate earlier preview updates.
+          sceneMatrix
+        : snapshot
+          ? multiplyCoordinateMatrices(
+              sceneDelta,
+              coordinateMatrix(
+                "object-local",
+                "scene",
+                snapshot.localToScene.values,
+              ),
+            )
+          : sceneMatrix;
     return {
       target: {
         kind: "projection",
@@ -827,6 +852,24 @@ function createProjectionPatches(
       },
     };
   });
+}
+
+function applySceneTransformPatch(
+  patch: SceneTransformPatch,
+  sourceSceneMatrix: Matrix2D<"object-local", "scene">,
+): Matrix2D<"object-local", "scene"> {
+  if (patch.type === "replace-matrix") return patch.matrix;
+  return multiplyCoordinateMatrices(
+    coordinateMatrix("scene", "scene", [
+      1,
+      0,
+      0,
+      1,
+      patch.delta.x,
+      patch.delta.y,
+    ]),
+    sourceSceneMatrix,
+  );
 }
 
 function createProjectionTransformFromDocumentPatch(
@@ -936,9 +979,7 @@ function createSessionScope(
 function cloneConstraintSpec(spec: ConstraintSpec): ConstraintSpec {
   return {
     ...spec,
-    ...(spec.application
-      ? { application: { ...spec.application } }
-      : {}),
+    ...(spec.application ? { application: { ...spec.application } } : {}),
     ...(spec.params ? { params: cloneRecord(spec.params) } : {}),
   };
 }
