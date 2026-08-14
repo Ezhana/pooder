@@ -257,6 +257,7 @@ export type EditorDocumentMutationFailureReason =
   | "draft-inactive"
   | "parent-not-found"
   | "object-not-found"
+  | "surface-not-found"
   | "selector-count-mismatch"
   | "object-type-mismatch"
   | "mutation-failed"
@@ -362,9 +363,24 @@ export type EditorDocumentMatrix = readonly [
   number,
 ];
 
+export type ActivateEditorSurfaceResult =
+  | { ok: true; surfaceId: string }
+  | {
+      ok: false;
+      reason: Extract<
+        EditorDocumentMutationFailureReason,
+        "document-not-found" | "surface-not-found"
+      >;
+    };
+
 export interface EditorDocumentService extends Service {
   apply(document: unknown): Promise<ApplyEditorDocumentResult>;
   export(source?: EditorDocumentSource): EditorDocument | null;
+  activateSurface(surfaceId: string): Promise<ActivateEditorSurfaceResult>;
+  getActiveSurfaceId(): string | null;
+  onActiveSurfaceChange(
+    listener: (event: { surfaceId: string | null }) => void,
+  ): Disposable;
   mutate(
     callback: EditorDocumentMutationCallback,
   ): Promise<EditorDocumentMutationResult>;
@@ -663,7 +679,7 @@ async function prepareEditorDocumentApplication(
   );
   const participantPublications: EditorDocumentPublication[] = [];
   for (const contribution of extensionRegistry.list()) {
-    const state = document.extensions[contribution.id];
+  const state = document.extension.states[contribution.id];
     if (state === undefined || !contribution.preparePublication) continue;
     try {
       const publication = await contribution.preparePublication(state, {
@@ -841,6 +857,26 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     const document =
       source === "working" ? this.workingDocument : this.committedDocument;
     return document ? cloneEditorDocument(document) : null;
+  }
+
+  async activateSurface(
+    surfaceId: string,
+  ): Promise<ActivateEditorSurfaceResult> {
+    return this.enqueue(async () => this.activateSurfaceSync(surfaceId));
+  }
+
+  getActiveSurfaceId(): string | null {
+    return this.getSurfaceFrameService()?.getActiveSurfaceId() ?? null;
+  }
+
+  onActiveSurfaceChange(
+    listener: (event: { surfaceId: string | null }) => void,
+  ): Disposable {
+    const service = this.getSurfaceFrameService();
+    if (!service) {
+      return { dispose() {} };
+    }
+    return service.onActiveSurfaceChange(listener);
   }
 
   async mutate(
@@ -1382,6 +1418,23 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       mode,
       boundary,
     );
+  }
+
+  private activateSurfaceSync(
+    surfaceId: string,
+  ): ActivateEditorSurfaceResult {
+    const document = this.workingDocument ?? this.committedDocument;
+    if (!document) return { ok: false, reason: "document-not-found" };
+    const normalized = String(surfaceId || "").trim();
+    if (!document.surfaces.some((surface) => surface.id === normalized)) {
+      return { ok: false, reason: "surface-not-found" };
+    }
+    this.getSurfaceFrameService()?.activateSurface(normalized);
+    return { ok: true, surfaceId: normalized };
+  }
+
+  private getSurfaceFrameService(): SurfaceFrameService | undefined {
+    return this.runtime.services.get?.(SURFACE_FRAME_SERVICE);
   }
 
   private enqueue<TResult>(
@@ -2110,7 +2163,7 @@ function rotateObjectLocalToParent(
 }
 
 function createRejectedDocumentSnapshot(): EditorDocument {
-  return { version: 8, assets: [], extensions: {}, surfaces: [] };
+  return { version: 8, assets: [], extension: { required: [], states: {} }, surfaces: [] };
 }
 
 function createResult(

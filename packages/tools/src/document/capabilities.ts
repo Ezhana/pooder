@@ -41,16 +41,18 @@ export function createOfficialToolCapabilitiesForDocument(
       : OFFICIAL_TOOL_EFFECT_FACTORIES[id](),
   );
   const document = parseEditorDocument(value);
-  const behaviorCapabilityIds = new Set<string>();
+  const requiredCapabilityIds = new Set(document.extension.required);
   visitEditorDocumentObjects(document, ({ object }) => {
     object.behaviors?.forEach((behavior) => {
       if (behavior.type === IMAGE_SLOT_BEHAVIOR_TYPE) {
-        behaviorCapabilityIds.add(IMAGE_SLOT_CAPABILITY_ID);
+        requiredCapabilityIds.add(IMAGE_SLOT_CAPABILITY_ID);
       }
     });
   });
-  const hasImageSlots = behaviorCapabilityIds.has(IMAGE_SLOT_CAPABILITY_ID);
-  if (hasImageSlots && !capabilityIds.includes(IMAGE_SLOT_CAPABILITY_ID)) {
+  if (
+    requiredCapabilityIds.has(IMAGE_SLOT_CAPABILITY_ID) &&
+    !capabilityIds.includes(IMAGE_SLOT_CAPABILITY_ID)
+  ) {
     capabilities.push(createImageSlotCapability(options.imageSlot));
   }
   return capabilities;

@@ -2,6 +2,7 @@ import { inject, type InjectionKey } from "vue";
 import { Pooder } from "@pooder/core";
 import {
   registerEditorDocumentService,
+  type ActivateEditorSurfaceResult,
   type ApplyEditorDocumentOptions,
   type EditorDocumentPublication,
   type EditorDocumentSession,
@@ -61,6 +62,8 @@ export interface PooderRuntime {
   readonly config: PooderConfigurationApi;
   readonly document: EditorDocumentService | null;
   readonly sessions: PooderSessionApi;
+  activateSurface(surfaceId: string): Promise<ActivateEditorSurfaceResult>;
+  getActiveSurfaceId(): string | null;
   dispose(): Promise<void>;
 }
 
@@ -125,6 +128,10 @@ export function createPooderRuntime(): PooderRuntime {
           }),
         ),
     },
+    activateSurface: (surfaceId) =>
+      getPooderDocument(runtime).activateSurface(surfaceId),
+    getActiveSurfaceId: () =>
+      runtimeDocuments.get(runtime)?.getActiveSurfaceId() ?? null,
     dispose: () => core.dispose(),
   };
   runtimeCores.set(runtime, core);

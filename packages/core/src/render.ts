@@ -567,6 +567,7 @@ export interface SceneExportSourceSelector {
   elementIds?: readonly string[];
   tags?: readonly string[];
   visible?: boolean;
+  surfaceId?: string;
 }
 
 export interface SceneExportSourceResult {
@@ -583,6 +584,7 @@ export interface SceneExportOptions {
   includeHidden?: boolean;
   preserveClipPaths?: boolean;
   outputMask?: SceneExportOutputMask;
+  surfaceId?: string;
 }
 
 export interface SceneExportResult {
@@ -593,10 +595,12 @@ export interface SceneExportResult {
   multiplier: number;
   source: SceneExportSourceResult;
   crop: CoordinateRect<"scene">;
+  surfaceId: string;
 }
 
 export interface SceneExportService extends Service {
   exportImage(options?: SceneExportOptions): Promise<SceneExportResult>;
+  exportImages(options?: SceneExportOptions): Promise<SceneExportResult[]>;
 }
 
 export type SizeConstraintMode = "free" | "lockAspect" | "equal";

@@ -60,8 +60,11 @@ const createDocument = (): EditorDocument => ({
       source: { kind: "url", url: "https://example.com/reverse.png" },
     },
   ],
-  extensions: {
-    [POODER_PRODUCTION_MASK_CAPABILITY_ID]: createState() as unknown as never,
+  extension: {
+    required: [],
+    states: {
+      [POODER_PRODUCTION_MASK_CAPABILITY_ID]: createState() as unknown as never,
+    },
   },
   surfaces: [
     {
@@ -150,7 +153,7 @@ async function main() {
     assetId: "missing-asset",
   };
   const missingDocument = createDocument();
-  missingDocument.extensions[POODER_PRODUCTION_MASK_CAPABILITY_ID] =
+  missingDocument.extension.states[POODER_PRODUCTION_MASK_CAPABILITY_ID] =
     missingReferences as unknown as never;
   const referenceDiagnostics = [
     ...(contribution.validateReferences?.(missingReferences, missingDocument) ??
@@ -196,7 +199,7 @@ async function main() {
     createState().masks["front.reverse"].production,
   );
   const updated = await facade.updatePreview({ currentMaskVisible: false });
-  const persistedState = persisted.extensions[
+  const persistedState = persisted.extension.states[
     POODER_PRODUCTION_MASK_CAPABILITY_ID
   ] as unknown as ProductionMaskDocumentState;
   assert(

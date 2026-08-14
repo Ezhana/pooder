@@ -170,7 +170,7 @@ const listDescriptors = (
   document: EditorDocument | null,
 ): ProductionMaskDescriptor[] => {
   if (!document) return [];
-  const state = document.extensions[
+  const state = document.extension.states[
     POODER_PRODUCTION_MASK_CAPABILITY_ID
   ] as unknown as ProductionMaskDocumentState | undefined;
   return Object.entries(state?.masks ?? {}).map(([maskId, mask]) => ({
@@ -200,7 +200,7 @@ const replaceMaskProduction = (
   maskId: string,
   settings: ProductionMaskSettings,
 ): boolean => {
-  const state = document.extensions[
+  const state = document.extension.states[
     POODER_PRODUCTION_MASK_CAPABILITY_ID
   ] as unknown as ProductionMaskDocumentState | undefined;
   const mask = state?.masks[maskId];
@@ -615,7 +615,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
           : descriptor.presentation.currentMaskVisible,
     };
     const result = await controller.mutate((document) => {
-      const state = document.extensions[
+      const state = document.extension.states[
         POODER_PRODUCTION_MASK_CAPABILITY_ID
       ] as unknown as ProductionMaskDocumentState | undefined;
       const mask = state?.masks[descriptor.maskId];

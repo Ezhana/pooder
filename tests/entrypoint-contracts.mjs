@@ -83,7 +83,7 @@ const contracts = [
       const result = await documentService.apply({
         version: 8,
         assets: [],
-        extensions: {},
+        extension: { required: [], states: {} },
         surfaces: [
           {
             id: "front",

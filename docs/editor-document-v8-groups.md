@@ -3,6 +3,13 @@
 `EditorDocument` version 8 is the only public document model. It is parsed
 strictly and has no aliases, migration wrapper, or runtime v7 migrator.
 
+The document's `extension` facet is not a state map. `extension.required` is
+the BFF-authored list of real extension/capability ids the runtime must load;
+`extension.states` is persisted extension-owned state keyed by those ids. The
+list is document-scoped and is not inferred from objects, behaviors, or
+effects. Product toolbars are a separate catalog; several tools may share one
+required extension.
+
 ## Object tree
 
 Each surface owns one `objects` array. Draw order is array order plus

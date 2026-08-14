@@ -56,7 +56,7 @@ const document: EditorDocument = {
       intrinsicSize: { width: 1200, height: 1200 },
     },
   ],
-  extensions: {},
+  extension: { required: [], states: {} },
   surfaces: [
     {
       id: "front",

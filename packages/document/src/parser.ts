@@ -9,6 +9,7 @@ import type {
   EditorAssetDataSource,
   EditorDocument,
   EditorDocumentDiagnostic,
+  EditorDocumentExtension,
   EditorDocumentValidationOptions,
   EditorGroupObject,
   EditorImageContentFit,
@@ -50,7 +51,7 @@ class ParseFailure extends Error {
 export function parseEditorDocument(value: unknown): EditorDocument {
   try {
     const input = record(value, "document");
-    exact(input, ["version", "assets", "extensions", "surfaces"], "document");
+    exact(input, ["version", "assets", "extension", "surfaces"], "document");
     if (input.version !== 8) {
       fail(
         "document-version-invalid",
@@ -61,7 +62,7 @@ export function parseEditorDocument(value: unknown): EditorDocument {
     const document: EditorDocument = {
       version: 8,
       assets: array(input.assets, "assets").map(parseAsset),
-      extensions: parseExtensions(input.extensions),
+      extension: parseDocumentExtension(input.extension),
       surfaces: array(input.surfaces, "surfaces").map(parseSurface),
     };
     const diagnostics = validateDocumentReferences(document);
@@ -177,12 +178,21 @@ function parseAssetSource(value: unknown, path: string): EditorAssetDataSource {
   );
 }
 
-function parseExtensions(value: unknown): Record<string, JsonValue> {
-  const input = record(value, "extensions");
+function parseDocumentExtension(value: unknown): EditorDocumentExtension {
+  const input = record(value, "extension");
+  exact(input, ["required", "states"], "extension");
+  return {
+    required: uniqueIdentifiers(input.required, "extension.required"),
+    states: parseExtensionStates(input.states),
+  };
+}
+
+function parseExtensionStates(value: unknown): Record<string, JsonValue> {
+  const input = record(value, "extension.states");
   return Object.fromEntries(
     Object.entries(input).map(([id, state]) => [
-      identifier(id, `extensions.${id}`),
-      json(state, `extensions.${id}`),
+      identifier(id, `extension.states.${id}`),
+      json(state, `extension.states.${id}`),
     ]),
   );
 }
@@ -868,6 +878,10 @@ function identifiers(value: unknown, path: string): string[] {
   return array(value, path).map((entry, index) =>
     identifier(entry, `${path}[${index}]`),
   );
+}
+
+function uniqueIdentifiers(value: unknown, path: string): string[] {
+  return Array.from(new Set(identifiers(value, path)));
 }
 
 function parseTags(value: unknown, path: string): string[] {

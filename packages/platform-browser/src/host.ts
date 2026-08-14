@@ -240,7 +240,9 @@ export function attachBrowserHost(
     canvasService.requestRenderAll();
   };
   const getActiveSurfaceId = () =>
-    surfaceFrameService?.listSurfaceIds()[0] ?? "";
+    surfaceFrameService?.getActiveSurfaceId() ||
+    surfaceFrameService?.listSurfaceIds()[0] ||
+    "";
   const observeSurface = (surfaceId: string) => {
     if (!surfaceId || observedSurfaceIds.has(surfaceId)) return;
     observedSurfaceIds.add(surfaceId);
@@ -264,6 +266,17 @@ export function attachBrowserHost(
   );
   if (surfaceFramesDisposable) {
     viewportDisposables.push(surfaceFramesDisposable);
+  }
+  const activeSurfaceDisposable = surfaceFrameService?.onActiveSurfaceChange(
+    (event) => {
+      if (event.surfaceId) {
+        observeSurface(event.surfaceId);
+        applyViewportLayout(event.surfaceId);
+      }
+    },
+  );
+  if (activeSurfaceDisposable) {
+    viewportDisposables.push(activeSurfaceDisposable);
   }
 
   return {

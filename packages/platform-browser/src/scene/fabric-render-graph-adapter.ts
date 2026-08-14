@@ -105,6 +105,7 @@ export type FabricRenderGraphSyncCause =
     }
   | { type: "canvas-resize" }
   | { type: "layout-change"; surfaceId: string }
+  | { type: "active-surface-change"; surfaceId: string | null }
   | { type: "explicit-refresh" };
 
 export interface FabricRenderGraphSyncState {
@@ -590,6 +591,7 @@ export class FabricRenderGraphAdapter implements Service {
       observed.add(surfaceId);
       this.layoutDisposables.push(
         layoutService.onLayoutChange(surfaceId, () => {
+          if (surfaceId !== surfaceFrameService.getActiveSurfaceId()) return;
           this.resetInteractionPreview();
           this.requestSync(
             { type: "layout-change", surfaceId },
@@ -603,6 +605,15 @@ export class FabricRenderGraphAdapter implements Service {
       surfaceFrameService.onAnyFramesChange((event) =>
         observe(event.surfaceId),
       ),
+    );
+    this.layoutDisposables.push(
+      surfaceFrameService.onActiveSurfaceChange((event) => {
+        this.resetInteractionPreview();
+        this.requestSync(
+          { type: "active-surface-change", surfaceId: event.surfaceId },
+          { type: "full" },
+        );
+      }),
     );
   }
 
@@ -757,6 +768,8 @@ export class FabricRenderGraphAdapter implements Service {
     >,
   ): void {
     graph.layers.forEach((layer, layerIndex) => {
+      const activeSurfaceId = this.surfaceFrameService?.getActiveSurfaceId();
+      if (activeSurfaceId && layer.surfaceId !== activeSurfaceId) return;
       const layerEffects = this.normalizeActiveEffects(
         layer.effects,
         conditionContext,
