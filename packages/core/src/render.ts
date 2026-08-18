@@ -1,6 +1,5 @@
 import type Disposable from "./disposable";
 import type { Service } from "./service";
-import type { Unit } from "./coordinate";
 import type {
   AffinePlacement,
   CoordinatePoint,
@@ -8,7 +7,6 @@ import type {
   CoordinateSpace,
   Matrix2D,
 } from "./coordinate";
-import type { DielineShape, DielineShapeStyle } from "./dieline-shape";
 import type { SessionScope } from "./workflow-session";
 import type { GeometryRef } from "./geometry-source";
 
@@ -537,141 +535,4 @@ export interface CanvasService extends Service {
   getSceneViewportRect(): CoordinateRect<"scene">;
   getScreenViewportRect(): CoordinateRect<"screen">;
   loadImageSize(src: string): Promise<CanvasSize | null>;
-}
-
-export type SceneExportFormat = "png" | "jpeg";
-export type SceneExportFrame = "cut" | "trim" | "bleed";
-
-export type SceneExportCrop =
-  | { type: "sceneRect"; rect: CoordinateRect<"scene"> }
-  | { type: "elementBounds"; elementIds?: readonly string[] }
-  | { type: "frame"; frame: SceneExportFrame };
-
-export type SceneExportOutputMaskMode = "alpha" | "outline" | "shape";
-
-export interface SceneExportOutputMaskTransparentColor {
-  red: number;
-  green: number;
-  blue: number;
-  tolerance?: number;
-}
-
-export interface SceneExportOutputMask {
-  sourceKey: string;
-  mode?: SceneExportOutputMaskMode;
-  transparentColor?: SceneExportOutputMaskTransparentColor;
-}
-
-export interface SceneExportSourceSelector {
-  layerIds?: readonly string[];
-  elementIds?: readonly string[];
-  tags?: readonly string[];
-  visible?: boolean;
-  surfaceId?: string;
-}
-
-export interface SceneExportSourceResult {
-  layerIds: string[];
-  elementIds: string[];
-  tags: string[];
-}
-
-export interface SceneExportOptions {
-  format?: SceneExportFormat;
-  multiplier?: number;
-  source?: SceneExportSourceSelector;
-  crop?: SceneExportCrop;
-  includeHidden?: boolean;
-  preserveClipPaths?: boolean;
-  outputMask?: SceneExportOutputMask;
-  surfaceId?: string;
-}
-
-export interface SceneExportResult {
-  url: string;
-  width: number;
-  height: number;
-  format: SceneExportFormat;
-  multiplier: number;
-  source: SceneExportSourceResult;
-  crop: CoordinateRect<"scene">;
-  surfaceId: string;
-}
-
-export interface SceneExportService extends Service {
-  exportImage(options?: SceneExportOptions): Promise<SceneExportResult>;
-  exportImages(options?: SceneExportOptions): Promise<SceneExportResult[]>;
-}
-
-export type SizeConstraintMode = "free" | "lockAspect" | "equal";
-export type CutMode = "trim" | "outset" | "inset";
-
-export interface SceneFrameMm {
-  xMm: number;
-  yMm: number;
-  widthMm: number;
-  heightMm: number;
-}
-
-export interface SurfaceSceneFrames {
-  previewBounds: SceneFrameMm;
-  productionFrame: SceneFrameMm;
-  exportFrame?: SceneFrameMm;
-  viewportFocusFrame?: SceneFrameMm;
-}
-
-export interface SizeState {
-  unit: Unit;
-  sceneFrames: SurfaceSceneFrames;
-  constraintMode: SizeConstraintMode;
-  aspectRatio: number;
-  minMm: number;
-  maxMm: number;
-  stepMm: number;
-}
-
-export interface SceneRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  centerX: number;
-  centerY: number;
-}
-
-export interface SceneLayoutSnapshot {
-  surfaceId: string;
-  revision: number;
-  scale: number;
-  offsetX: number;
-  offsetY: number;
-  trimRect: SceneRect;
-  cutRect: SceneRect;
-  bleedRect: SceneRect;
-}
-
-export interface SceneGeometrySnapshot {
-  shape: DielineShape;
-  shapeStyle: DielineShapeStyle;
-  unit: "px";
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  radius: number;
-  offset: number;
-  scale: number;
-  pathData?: string;
-  customSourceWidthPx?: number;
-  customSourceHeightPx?: number;
-}
-
-export interface SceneLayoutService extends Service {
-  getLayout(surfaceId?: string): SceneLayoutSnapshot | null;
-  recomputeLayout(surfaceId?: string): SceneLayoutSnapshot | null;
-  invalidateLayout(surfaceId?: string): void;
-  onLayoutChange(
-    surfaceId: string,
-    listener: (layout: SceneLayoutSnapshot | null) => void,
-  ): Disposable;
 }

@@ -57,7 +57,7 @@ export class SceneExportCapabilityExtension implements ExtensionDefinition {
   }
 
   async exportImage(
-    options: SceneExportOptions = {},
+    options: SceneExportOptions,
   ): Promise<SceneExportCapabilityResult> {
     if (!this.exportService) {
       throw new Error("scene-export-not-initialized");
@@ -66,7 +66,6 @@ export class SceneExportCapabilityExtension implements ExtensionDefinition {
     try {
       const result = await this.exportService.exportImage({
         ...options,
-        crop: options.crop ?? { type: "frame", frame: "cut" },
         preserveClipPaths: options.preserveClipPaths ?? true,
         ...(options.outputMask ? { format: "png" as const } : {}),
       });
@@ -79,7 +78,7 @@ export class SceneExportCapabilityExtension implements ExtensionDefinition {
         multiplier: result.multiplier,
         source: result.source,
         crop: result.crop,
-        surfaceId: result.surfaceId,
+        sceneId: result.sceneId,
       };
     } catch (error) {
       if (error instanceof Error) {
@@ -89,11 +88,8 @@ export class SceneExportCapabilityExtension implements ExtensionDefinition {
         if (error.message === "browser-scene-export-browser-required") {
           throw new Error("scene-export-browser-required");
         }
-        if (
-          error.message === "browser-scene-export-frame-unavailable" ||
-          error.message === "browser-scene-export-crop-unavailable"
-        ) {
-          throw new Error("scene-export-frame-unavailable");
+        if (error.message === "browser-scene-export-crop-unavailable") {
+          throw new Error("scene-export-crop-unavailable");
         }
         if (error.message === "browser-scene-export-failed") {
           throw new Error("scene-export-failed");

@@ -147,6 +147,7 @@ export default class SceneService implements Service {
   private sessionSubscription?: { dispose(): void };
   private sessionTerminalSubscription?: { dispose(): void };
   private activeRootId: SceneId | null = null;
+  private activeDocumentRootId: SceneId | null = null;
   private transactionDepth = 0;
   private pendingChange: SceneChangeSet | null = null;
   private readonly transactionCauses: SceneChangeCause[] = [];
@@ -179,6 +180,9 @@ export default class SceneService implements Service {
 
   createScene(input: CreateSceneInput): SceneHandle {
     const id = this.normalizeId(input.id, "Scene.id");
+    if (input.owner.type !== "session") {
+      throw new Error("createScene only accepts session-owned scenes.");
+    }
     const sessionId = this.normalizeId(
       input.owner.sessionId,
       "Scene.owner.sessionId",
@@ -190,7 +194,8 @@ export default class SceneService implements Service {
       throw new Error(`Scene "${id}" is already registered.`);
     }
     const duplicate = [...this.handlesById.values()].find(
-      (handle) => handle.owner.sessionId === sessionId,
+      (handle) =>
+        handle.owner.type === "session" && handle.owner.sessionId === sessionId,
     );
     if (duplicate) {
       throw new Error(
@@ -219,11 +224,69 @@ export default class SceneService implements Service {
     return handle;
   }
 
+  registerDocumentScene(id: SceneId): void {
+    const sceneId = this.normalizeId(id, "Document scene id");
+    if (this.handlesById.has(sceneId) || this.scenesById.has(sceneId)) {
+      throw new Error(`Scene "${sceneId}" is already registered.`);
+    }
+    const snapshot: SceneSnapshot = {
+      id: sceneId,
+      owner: { type: "document", documentSceneId: sceneId },
+      composition: {
+        entries: [{ source: "document-graph", sceneId }],
+      },
+    };
+    this.scenesById.set(
+      sceneId,
+      this.createSceneStore({
+        id: sceneId,
+        order: this.scenesById.size,
+        visible: true,
+        renderable: false,
+        transient: false,
+      }),
+    );
+    this.handlesById.set(sceneId, new SceneHandleImpl(this, snapshot));
+    this.recordSceneChange("added", sceneId);
+  }
+
+  unregisterDocumentScene(id: SceneId): void {
+    const sceneId = this.normalizeId(id, "Document scene id");
+    const handle = this.handlesById.get(sceneId);
+    if (!handle || handle.owner.type !== "document") return;
+    this.handlesById.delete(sceneId);
+    this.removeScene(sceneId);
+    if (this.activeDocumentRootId === sceneId) {
+      this.activeDocumentRootId = this.listDocumentSceneIds()[0] ?? null;
+    }
+    this.refreshActiveRoot();
+  }
+
+  listDocumentSceneIds(): SceneId[] {
+    return [...this.handlesById.values()]
+      .filter((handle) => handle.owner.type === "document")
+      .map((handle) => handle.id);
+  }
+
+  setActiveRoot(sceneId: SceneId): void {
+    const normalized = this.normalizeId(sceneId, "Active scene id");
+    const handle = this.handlesById.get(normalized);
+    if (!handle || handle.owner.type !== "document") {
+      throw new Error(`Unknown document scene "${normalized}".`);
+    }
+    this.activeDocumentRootId = normalized;
+    this.refreshActiveRoot();
+  }
+
   getActiveRoot(): SceneSnapshot | null {
     const handle = this.activeRootId
       ? this.handlesById.get(this.activeRootId)
       : undefined;
     return handle?.getSnapshot() ?? null;
+  }
+
+  onRootChange(listener: (event: SceneServiceEventMap["rootChange"]) => void) {
+    return this.events.on("rootChange", listener);
   }
 
   getSceneHandle(id: SceneId): SceneHandle | undefined {
@@ -596,6 +659,7 @@ export default class SceneService implements Service {
     this.sessionService = undefined;
     this.handlesById.clear();
     this.activeRootId = null;
+    this.activeDocumentRootId = null;
     this.scenesById.clear();
     this.scenesById.set(
       DEFAULT_SCENE_ID,
@@ -751,9 +815,11 @@ export default class SceneService implements Service {
     const focusedSessionId = this.sessionService?.getFocusedSessionId();
     const next = focusedSessionId
       ? ([...this.handlesById.values()].find(
-          (handle) => handle.owner.sessionId === focusedSessionId,
-        )?.id ?? null)
-      : null;
+          (handle) =>
+            handle.owner.type === "session" &&
+            handle.owner.sessionId === focusedSessionId,
+        )?.id ?? this.activeDocumentRootId)
+      : this.activeDocumentRootId;
     if (this.activeRootId === next) return;
     this.activeRootId = next;
     this.events.emit("rootChange", { activeRoot: this.getActiveRoot() });
@@ -1014,6 +1080,13 @@ function normalizeComposition(
   }
   return {
     entries: composition.entries.map((entry) => {
+      if (entry.source === "document-graph") {
+        const sceneId = String(entry.sceneId ?? "").trim();
+        if (!sceneId) {
+          throw new Error("Document graph scene id is required.");
+        }
+        return { source: "document-graph" as const, sceneId };
+      }
       if (entry.source === "local") {
         return {
           source: "local" as const,
@@ -1034,10 +1107,11 @@ function cloneComposition(
   composition: SceneSnapshot["composition"],
 ): SceneSnapshot["composition"] {
   return {
-    entries: composition.entries.map((entry) => ({
-      ...entry,
-      layerIds: [...entry.layerIds],
-    })),
+    entries: composition.entries.map((entry) =>
+      entry.source === "document-graph"
+        ? { source: "document-graph", sceneId: entry.sceneId }
+        : { source: "local", layerIds: [...entry.layerIds] },
+    ),
   };
 }
 

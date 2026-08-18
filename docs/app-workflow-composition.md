@@ -8,6 +8,24 @@ platform services, and the remaining focused Tool capabilities. Dieline and
 Feature have no capability, tool, command, configuration state, or renderer
 group.
 
+## Document surfaces and runtime scenes
+
+`EditorDocument.surfaces` remains the persisted product model. During apply,
+document-core registers one document scene for each surface, publishes its
+neutral scene frames, and selects the first scene as the active root. A later
+`activateSurface(surfaceId)` call only maps the id to
+`SceneService.setActiveRoot(sceneId)`.
+
+RenderGraph layers are partitioned by `sceneId`. Browser projection and
+viewport layout follow `SceneService.onRootChange()` and never infer the active
+scene from frame insertion order. Session overlays declare the document-graph
+scene they compose with; they do not copy the document object tree into
+SceneService elements.
+
+Raster export consumes exactly one `sceneId` and one explicit scene-space crop.
+Design export enumerates document scenes itself and converts each surface's
+production/export bounds before calling the browser export service.
+
 ## Document-owned dieline and feature
 
 - A cutline is a normal leaf Object with a path/shape `source`, a

@@ -163,7 +163,16 @@ async function testStrictApplyAndGeometry(): Promise<void> {
   const runtime = new Pooder();
   const controller = registerEditorDocumentService(runtime);
   try {
-    const result = await controller.apply(createDocument());
+    const document = createDocument();
+    document.surfaces.push({
+      id: "back",
+      geometry: {
+        canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
+        productionBounds: { x: 5, y: 5, width: 90, height: 90 },
+      },
+      objects: [],
+    });
+    const result = await controller.apply(document);
     assert(
       result.ok,
       `strict document should apply (${JSON.stringify(result.diagnostics)})`,
@@ -199,6 +208,8 @@ async function testStrictApplyAndGeometry(): Promise<void> {
     );
     const missing = await controller.activateSurface("missing");
     assertEqual(missing.ok, false, "unknown surfaces should fail");
+    const back = await controller.activateSurface("back");
+    assertEqual(back.ok, true, "second document surface should activate");
 
     const beforeRevision = renderIntents.getGraph().revision;
     const mutation = await controller.updateObject("artwork", (object) => ({
@@ -209,6 +220,11 @@ async function testStrictApplyAndGeometry(): Promise<void> {
     assert(
       renderIntents.getGraph().revision > beforeRevision,
       "committed mutation should republish render intent",
+    );
+    assertEqual(
+      controller.getActiveSurfaceId(),
+      "back",
+      "document mutations should preserve the active document scene",
     );
   } finally {
     await runtime.dispose();

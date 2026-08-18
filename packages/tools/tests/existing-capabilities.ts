@@ -3,10 +3,14 @@ import {
   OBJECT_IMAGE_RESOLVER_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_EXPORT_SERVICE,
+  SCENE_FRAME_SERVICE,
+  SCENE_SERVICE,
   Pooder,
   evaluateRuntimeCondition,
   type CommandService,
   type RenderIntentService,
+  type SceneFrameService,
+  type SceneService,
 } from "@pooder/core";
 import type {
   EditorDocument,
@@ -74,23 +78,12 @@ class FakeSceneExportService {
     if (this.error) throw this.error;
     return this.response;
   }
-
-  async exportImages(options: Record<string, unknown>) {
-    const result = await this.exportImage(options);
-    const surfaceId =
-      typeof options.surfaceId === "string" && options.surfaceId.trim()
-        ? options.surfaceId
-        : typeof result.surfaceId === "string"
-          ? result.surfaceId
-          : "front";
-    return [{ ...result, surfaceId }];
-  }
 }
 
 const FRAMES = {
-  previewBounds: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
-  productionFrame: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
-  viewportFocusFrame: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
+  preview: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
+  production: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
+  viewportFocus: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
 };
 
 async function testSharedCurrentCapabilityUtilities(): Promise<void> {
@@ -299,12 +292,18 @@ async function testDesignExportCapability(): Promise<void> {
       elementIds: ["visual"],
       tags: ["design"],
     },
-    surfaceId: "front",
+    sceneId: "front",
     url: "data:image/png;base64,design",
     width: 90,
   };
   runtime.extensions.register(new DesignExportCapabilityExtension());
   runtime.services.register(service as never, SCENE_EXPORT_SERVICE);
+  runtime.services
+    .getOrThrow<SceneService>(SCENE_SERVICE)
+    .registerDocumentScene("front");
+  runtime.services
+    .getOrThrow<SceneFrameService>(SCENE_FRAME_SERVICE)
+    .setFrames("front", FRAMES);
   await runtime.extensions.flushActivation();
   try {
     assertEqual(
@@ -324,10 +323,6 @@ async function testDesignExportCapability(): Promise<void> {
     );
     assert(facade, "design export facade should be registered");
     const result = await facade.exportImage({
-      crop: {
-        type: "sceneRect",
-        rect: { space: "scene", left: 1, top: 2, width: 30, height: 20 },
-      },
       multiplier: 3,
       source: { elementIds: ["visual"], layerIds: ["artwork"] },
     });
@@ -342,9 +337,9 @@ async function testDesignExportCapability(): Promise<void> {
       "design export url",
     );
     assertEqual(
-      result[0]?.surfaceId,
+      result[0]?.sceneId,
       "front",
-      "design export should include the surface id",
+      "design export should include the scene id",
     );
     assertDeepEqual(
       result[0]?.source,
@@ -363,8 +358,11 @@ async function testDesignExportCapability(): Promise<void> {
     await facade.exportImage();
     assertDeepEqual(
       service.calls.at(-1)?.crop,
-      { type: "frame", frame: "cut" },
-      "design export should default to cut frame",
+      {
+        type: "sceneRect",
+        rect: { left: 0, top: 0, width: 200, height: 100, space: "scene" },
+      },
+      "design export should convert document frames to a scene rectangle",
     );
     assertDeepEqual(
       service.calls.at(-1)?.source,
@@ -387,6 +385,7 @@ async function testSceneExportCapability(): Promise<void> {
     source: { layerIds: ["base", "artwork"], elementIds: [], tags: [] },
     url: "data:image/png;base64,scene",
     width: 120,
+    sceneId: "front",
   };
   runtime.extensions.register(new SceneExportCapabilityExtension());
   runtime.services.register(service as never, SCENE_EXPORT_SERVICE);
@@ -402,6 +401,7 @@ async function testSceneExportCapability(): Promise<void> {
         rect: { space: "scene", left: 4, top: 5, width: 120, height: 90 },
       },
       includeHidden: true,
+      sceneId: "front",
       source: { layerIds: ["base", "artwork"] },
     });
     assertEqual(service.calls.at(-1)?.includeHidden, true, "includeHidden");
@@ -421,15 +421,21 @@ async function testSceneExportCapability(): Promise<void> {
       { left: 4, top: 5, width: 120, height: 90 },
       "scene export should map the platform crop",
     );
-    await facade.exportImage({ preserveClipPaths: false });
+    await facade.exportImage({
+      crop: { type: "elementBounds" },
+      sceneId: "front",
+      preserveClipPaths: false,
+    });
     assertEqual(
       service.calls.at(-1)?.preserveClipPaths,
       false,
       "scene export should accept preserveClipPaths=false",
     );
     await facade.exportImage({
+      crop: { type: "elementBounds" },
       format: "jpeg",
       outputMask: { mode: "outline", sourceKey: "frame" },
+      sceneId: "front",
     });
     assertEqual(
       service.calls.at(-1)?.format,
@@ -450,18 +456,23 @@ async function testSceneExportCapability(): Promise<void> {
       ],
     ] as const) {
       service.error = new Error(platformError);
-      await facade.exportImage().then(
-        () => {
-          throw new Error(`${platformError} should be mapped`);
-        },
-        (error: unknown) => {
-          assertEqual(
-            error instanceof Error ? error.message : "",
-            capabilityError,
-            `${platformError} mapping`,
-          );
-        },
-      );
+      await facade
+        .exportImage({
+          crop: { type: "elementBounds" },
+          sceneId: "front",
+        })
+        .then(
+          () => {
+            throw new Error(`${platformError} should be mapped`);
+          },
+          (error: unknown) => {
+            assertEqual(
+              error instanceof Error ? error.message : "",
+              capabilityError,
+              `${platformError} mapping`,
+            );
+          },
+        );
     }
   } finally {
     await runtime.dispose();

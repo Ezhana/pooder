@@ -45,7 +45,7 @@ export type InteractionOperationPhase = ConstraintResolvePhase;
 
 export interface InteractionSubject {
   readonly subjectId: string;
-  readonly surfaceId?: string;
+  readonly sceneId?: string;
   readonly projectionTargets: readonly InteractionProjectionTarget[];
 }
 
@@ -59,7 +59,7 @@ export interface InteractionSessionIntent {
   groupId: string;
   sessionId?: string;
   mode: SessionInteractionMode;
-  scope: "subject" | "surface" | "editor";
+  scope: "subject" | "scene" | "editor";
   leavePolicy?: SessionLeavePolicy;
 }
 
@@ -81,7 +81,7 @@ export interface InteractionActivationCommandInput {
   readonly session?: InteractionActivationSessionContext;
   readonly sessionId?: string;
   readonly subjectId?: string;
-  readonly surfaceId?: string;
+  readonly sceneId?: string;
   readonly targetData?: Record<string, unknown>;
   readonly trigger: InteractionActivationTrigger;
 }
@@ -149,7 +149,7 @@ export interface InteractionActivationInput {
   renderIntentId?: string;
   subjectId?: string;
   subject?: InteractionSubject;
-  surfaceId?: string;
+  sceneId?: string;
   targetData?: Record<string, unknown>;
 }
 
@@ -345,7 +345,7 @@ export class InteractionService implements Service {
         scope: createSessionScope(activation.session, {
           channel,
           subjectId,
-          surfaceId: normalizeId(input.subject?.surfaceId ?? input.surfaceId),
+          sceneId: normalizeId(input.subject?.sceneId ?? input.sceneId),
         }),
         interactionMode: activation.session.mode,
         leavePolicy: activation.session.leavePolicy ?? "block",
@@ -362,9 +362,8 @@ export class InteractionService implements Service {
           session: sessionContext,
           sessionId,
           subjectId: subjectId || undefined,
-          surfaceId:
-            normalizeId(input.subject?.surfaceId ?? input.surfaceId) ||
-            undefined,
+          sceneId:
+            normalizeId(input.subject?.sceneId ?? input.sceneId) || undefined,
           targetData: cloneRecord(input.targetData),
           trigger: input.trigger,
         });
@@ -582,7 +581,7 @@ export class InteractionService implements Service {
         sceneTransformPatch: result.documentPatch,
         subject: result.subject,
         subjectId: result.subject.subjectId,
-        surfaceId: result.subject.surfaceId,
+        sceneId: result.subject.sceneId,
         transform: result.result,
       })
       .catch((error) => {
@@ -922,8 +921,8 @@ function normalizeInteractionSubject(
   );
   return {
     subjectId,
-    ...(normalizeId(subject?.surfaceId ?? metadata?.surfaceId)
-      ? { surfaceId: normalizeId(subject?.surfaceId ?? metadata?.surfaceId) }
+    ...(normalizeId(subject?.sceneId ?? metadata?.sceneId)
+      ? { sceneId: normalizeId(subject?.sceneId ?? metadata?.sceneId) }
       : {}),
     projectionTargets,
   };
@@ -966,12 +965,12 @@ function sameInteractionSubject(
 
 function createSessionScope(
   session: InteractionSessionIntent,
-  context: { channel: string; subjectId: string; surfaceId: string },
+  context: { channel: string; subjectId: string; sceneId: string },
 ): SessionScope {
   return {
     channel: context.channel,
     groupId: normalizeId(session.groupId) || null,
-    surfaceId: session.scope === "editor" ? null : context.surfaceId || null,
+    sceneId: session.scope === "editor" ? null : context.sceneId || null,
     subjectId: session.scope === "subject" ? context.subjectId || null : null,
   };
 }

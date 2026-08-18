@@ -19,12 +19,12 @@ export interface SceneExportCapabilityResult {
   multiplier: number;
   source: SceneExportSourceResult;
   crop: CoordinateRect<"scene">;
-  surfaceId: string;
+  sceneId: string;
 }
 
 export interface SceneExportCapabilityApi {
   exportImage(
-    options?: SceneExportOptions,
+    options: SceneExportOptions,
   ): Promise<SceneExportCapabilityResult>;
 }
 

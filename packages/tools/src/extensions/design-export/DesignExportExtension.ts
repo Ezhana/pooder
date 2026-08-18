@@ -5,7 +5,12 @@ import {
 } from "@pooder/core";
 import {
   SCENE_EXPORT_SERVICE,
+  SCENE_FRAME_SERVICE,
+  SCENE_SERVICE,
+  SceneFrameService,
+  SceneService,
   SceneExportService,
+  type SceneExportResult,
   type SceneExportSourceSelector,
 } from "@pooder/core";
 import {
@@ -37,10 +42,16 @@ export class DesignExportExtension implements ExtensionDefinition {
     name: "DesignExportExtension",
   };
   activation = {
-    requiresServices: [SCENE_EXPORT_SERVICE],
+    requiresServices: [
+      SCENE_EXPORT_SERVICE,
+      SCENE_FRAME_SERVICE,
+      SCENE_SERVICE,
+    ],
   };
 
   private exportService?: SceneExportService;
+  private sceneFrameService?: SceneFrameService;
+  private sceneService?: SceneService;
   private readonly capabilityId: string;
   private readonly configuredSource?: SceneExportSourceSelector;
   private readonly contributeLegacyCommands: boolean;
@@ -57,6 +68,10 @@ export class DesignExportExtension implements ExtensionDefinition {
   activate(context: ExtensionContext) {
     this.exportService =
       context.services.getOrThrow<SceneExportService>(SCENE_EXPORT_SERVICE);
+    this.sceneFrameService =
+      context.services.getOrThrow<SceneFrameService>(SCENE_FRAME_SERVICE);
+    this.sceneService =
+      context.services.getOrThrow<SceneService>(SCENE_SERVICE);
   }
 
   contribute(): ExtensionContributions {
@@ -86,17 +101,35 @@ export class DesignExportExtension implements ExtensionDefinition {
   async exportImage(
     options: ExportImageOptions = {},
   ): Promise<ExportImageResult[]> {
-    if (!this.exportService) {
+    if (!this.exportService || !this.sceneFrameService || !this.sceneService) {
       throw new Error("design-export-not-initialized");
     }
 
     try {
-      const results = await this.exportService.exportImages({
-        ...options,
-        crop: options.crop ?? { type: "frame", frame: "cut" },
-        includeHidden: options.includeHidden ?? true,
-        source: options.source ?? this.resolveDefaultSource(),
-      });
+      const results: SceneExportResult[] = [];
+      for (const sceneId of this.sceneService.listDocumentSceneIds()) {
+        const frames = this.sceneFrameService.getFrames(sceneId);
+        if (!frames) throw new Error("design-export-frame-unavailable");
+        const frame = frames.export ?? frames.production;
+        results.push(
+          await this.exportService.exportImage({
+            ...options,
+            sceneId,
+            crop: {
+              type: "sceneRect",
+              rect: {
+                left: frame.xMm,
+                top: frame.yMm,
+                width: frame.widthMm,
+                height: frame.heightMm,
+                space: "scene",
+              },
+            },
+            includeHidden: options.includeHidden ?? true,
+            source: options.source ?? this.resolveDefaultSource(),
+          }),
+        );
+      }
 
       return results.map((result) => ({
         url: result.url,
@@ -106,7 +139,7 @@ export class DesignExportExtension implements ExtensionDefinition {
         multiplier: result.multiplier,
         source: result.source,
         crop: result.crop,
-        surfaceId: result.surfaceId,
+        sceneId: result.sceneId,
       }));
     } catch (error) {
       if (error instanceof Error) {
@@ -116,10 +149,7 @@ export class DesignExportExtension implements ExtensionDefinition {
         if (error.message === "browser-scene-export-browser-required") {
           throw new Error("design-export-browser-required");
         }
-        if (
-          error.message === "browser-scene-export-frame-unavailable" ||
-          error.message === "browser-scene-export-crop-unavailable"
-        ) {
+        if (error.message === "browser-scene-export-crop-unavailable") {
           throw new Error("design-export-frame-unavailable");
         }
         if (error.message === "browser-scene-export-failed") {

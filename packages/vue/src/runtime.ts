@@ -63,7 +63,6 @@ export interface PooderRuntime {
   readonly document: EditorDocumentService | null;
   readonly sessions: PooderSessionApi;
   activateSurface(surfaceId: string): Promise<ActivateEditorSurfaceResult>;
-  getActiveSurfaceId(): string | null;
   dispose(): Promise<void>;
 }
 
@@ -130,8 +129,6 @@ export function createPooderRuntime(): PooderRuntime {
     },
     activateSurface: (surfaceId) =>
       getPooderDocument(runtime).activateSurface(surfaceId),
-    getActiveSurfaceId: () =>
-      runtimeDocuments.get(runtime)?.getActiveSurfaceId() ?? null,
     dispose: () => core.dispose(),
   };
   runtimeCores.set(runtime, core);

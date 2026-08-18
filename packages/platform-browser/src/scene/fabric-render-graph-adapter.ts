@@ -6,7 +6,7 @@ import {
   SCENE_SERVICE,
   SESSION_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  SURFACE_FRAME_SERVICE,
+  SCENE_FRAME_SERVICE,
   evaluateRuntimeCondition,
   coordinateMatrix,
   multiplyCoordinateMatrices,
@@ -45,7 +45,7 @@ import {
   type SessionService,
   type RenderIntentService,
   type SceneLayoutService,
-  type SurfaceFrameService,
+  type SceneFrameService,
 } from "@pooder/core";
 import type {
   FabricRenderGraphReconcileOptions,
@@ -104,8 +104,8 @@ export type FabricRenderGraphSyncCause =
       reason: "opened" | "focus" | "phase" | "terminal";
     }
   | { type: "canvas-resize" }
-  | { type: "layout-change"; surfaceId: string }
-  | { type: "active-surface-change"; surfaceId: string | null }
+  | { type: "layout-change"; sceneId: string }
+  | { type: "active-root-change"; sceneId: string | null }
   | { type: "explicit-refresh" };
 
 export interface FabricRenderGraphSyncState {
@@ -115,6 +115,17 @@ export interface FabricRenderGraphSyncState {
   invalidations: RenderInvalidation[];
   pending: number;
   syncing: boolean;
+}
+
+function resolveDocumentGraphSceneId(
+  root: SceneSnapshot | null,
+): string | null {
+  if (!root) return null;
+  if (root.owner.type === "document") return root.owner.documentSceneId;
+  return (
+    root.composition.entries.find((entry) => entry.source === "document-graph")
+      ?.sceneId ?? null
+  );
 }
 
 export type FabricRenderGraphSyncStateListener = (
@@ -135,10 +146,11 @@ export class FabricRenderGraphAdapter implements Service {
   private interactionService?: InteractionService;
   private canvasService?: FabricRenderTargetCanvasService;
   private sceneLayoutService?: SceneLayoutService;
-  private surfaceFrameService?: SurfaceFrameService;
+  private sceneFrameService?: SceneFrameService;
   private sessionService?: SessionService;
   private graphSubscription?: { dispose(): void };
   private sceneSubscription?: { dispose(): void };
+  private rootSubscription?: { dispose(): void };
   private canvasEventDisposables: Array<{ dispose(): void }> = [];
   private runtimeConditionDisposables: Array<{ dispose(): void }> = [];
   private geometrySourceDisposable?: { dispose(): void };
@@ -169,6 +181,7 @@ export class FabricRenderGraphAdapter implements Service {
   init(context: ServiceContext) {
     this.graphSubscription?.dispose();
     this.sceneSubscription?.dispose();
+    this.rootSubscription?.dispose();
     this.renderIntentService = context.get(RENDER_INTENT_SERVICE);
     this.sceneService = context.get(SCENE_SERVICE);
     this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
@@ -177,7 +190,7 @@ export class FabricRenderGraphAdapter implements Service {
       | FabricRenderTargetCanvasService
       | undefined;
     this.sceneLayoutService = context.get(SCENE_LAYOUT_SERVICE);
-    this.surfaceFrameService = context.get(SURFACE_FRAME_SERVICE);
+    this.sceneFrameService = context.get(SCENE_FRAME_SERVICE);
     this.sessionService = context.get(SESSION_SERVICE);
 
     if (!this.renderIntentService || !this.canvasService) {
@@ -204,6 +217,14 @@ export class FabricRenderGraphAdapter implements Service {
       this.requestSync(
         event.causes.map((cause) => this.toSceneSyncCause(cause)),
         this.toSceneInvalidations(event),
+      );
+    });
+    this.rootSubscription = this.sceneService?.onRootChange((event) => {
+      const sceneId = resolveDocumentGraphSceneId(event.activeRoot);
+      this.resetInteractionPreview();
+      this.requestSync(
+        { type: "active-root-change", sceneId },
+        { type: "full" },
       );
     });
     this.canvasEventDisposables.forEach((disposable) => disposable.dispose());
@@ -251,8 +272,10 @@ export class FabricRenderGraphAdapter implements Service {
     this.geometrySourceDisposable?.dispose();
     this.graphSubscription?.dispose();
     this.sceneSubscription?.dispose();
+    this.rootSubscription?.dispose();
     this.graphSubscription = undefined;
     this.sceneSubscription = undefined;
+    this.rootSubscription = undefined;
     this.geometrySourceDisposable = undefined;
     this.renderIntentService = undefined;
     this.sceneService = undefined;
@@ -260,7 +283,7 @@ export class FabricRenderGraphAdapter implements Service {
     this.interactionService = undefined;
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
-    this.surfaceFrameService = undefined;
+    this.sceneFrameService = undefined;
     this.sessionService = undefined;
     this.syncRequested = false;
     this.syncPromise = null;
@@ -583,37 +606,32 @@ export class FabricRenderGraphAdapter implements Service {
 
   private attachLayoutChangeEvents() {
     const layoutService = this.sceneLayoutService;
-    const surfaceFrameService = this.surfaceFrameService;
-    if (!layoutService || !surfaceFrameService) return;
+    const sceneFrameService = this.sceneFrameService;
+    if (!layoutService || !sceneFrameService) return;
     const observed = new Set<string>();
-    const observe = (surfaceId: string) => {
-      if (!surfaceId || observed.has(surfaceId)) return;
-      observed.add(surfaceId);
+    const observe = (sceneId: string) => {
+      if (!sceneId || observed.has(sceneId)) return;
+      observed.add(sceneId);
       this.layoutDisposables.push(
-        layoutService.onLayoutChange(surfaceId, () => {
-          if (surfaceId !== surfaceFrameService.getActiveSurfaceId()) return;
+        layoutService.onLayoutChange(sceneId, () => {
+          if (
+            sceneId !==
+            resolveDocumentGraphSceneId(
+              this.sceneService?.getActiveRoot() ?? null,
+            )
+          )
+            return;
           this.resetInteractionPreview();
           this.requestSync(
-            { type: "layout-change", surfaceId },
+            { type: "layout-change", sceneId },
             { type: "full" },
           );
         }),
       );
     };
-    surfaceFrameService.listSurfaceIds().forEach(observe);
+    sceneFrameService.listSceneIds().forEach(observe);
     this.layoutDisposables.push(
-      surfaceFrameService.onAnyFramesChange((event) =>
-        observe(event.surfaceId),
-      ),
-    );
-    this.layoutDisposables.push(
-      surfaceFrameService.onActiveSurfaceChange((event) => {
-        this.resetInteractionPreview();
-        this.requestSync(
-          { type: "active-surface-change", surfaceId: event.surfaceId },
-          { type: "full" },
-        );
-      }),
+      sceneFrameService.onAnyFramesChange((event) => observe(event.sceneId)),
     );
   }
 
@@ -650,7 +668,12 @@ export class FabricRenderGraphAdapter implements Service {
 
     const activeRoot = this.sceneService?.getActiveRoot() ?? null;
     if (activeRoot) {
-      this.appendRootCompositionItems(items, activeRoot, conditionContext);
+      this.appendRootCompositionItems(
+        items,
+        graph,
+        activeRoot,
+        conditionContext,
+      );
     } else {
       this.appendRenderGraphItems(items, graph, conditionContext);
     }
@@ -711,6 +734,7 @@ export class FabricRenderGraphAdapter implements Service {
 
   private appendRootCompositionItems(
     items: FabricRenderTargetItem[],
+    graph: RenderGraph,
     root: SceneSnapshot,
     conditionContext: ReturnType<
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
@@ -718,6 +742,16 @@ export class FabricRenderGraphAdapter implements Service {
   ): void {
     root.composition.entries.forEach((entry, entryIndex) => {
       const orderBase = entryIndex * 1_000_000_000;
+      if (entry.source === "document-graph") {
+        this.appendRenderGraphSceneItems(
+          items,
+          graph,
+          entry.sceneId,
+          conditionContext,
+          orderBase,
+        );
+        return;
+      }
       entry.layerIds.forEach((layerId, groupLayerIndex) => {
         const layer = this.sceneService?.selectOneLayer({
           sceneId: root.id,
@@ -767,9 +801,20 @@ export class FabricRenderGraphAdapter implements Service {
       FabricRenderGraphAdapter["buildRuntimeConditionContext"]
     >,
   ): void {
+    const activeSceneId = resolveDocumentGraphSceneId(
+      this.sceneService?.getActiveRoot() ?? null,
+    );
+    if (activeSceneId) {
+      this.appendRenderGraphSceneItems(
+        items,
+        graph,
+        activeSceneId,
+        conditionContext,
+        0,
+      );
+      return;
+    }
     graph.layers.forEach((layer, layerIndex) => {
-      const activeSurfaceId = this.surfaceFrameService?.getActiveSurfaceId();
-      if (activeSurfaceId && layer.surfaceId !== activeSurfaceId) return;
       const layerEffects = this.normalizeActiveEffects(
         layer.effects,
         conditionContext,
@@ -817,6 +862,69 @@ export class FabricRenderGraphAdapter implements Service {
     });
   }
 
+  private appendRenderGraphSceneItems(
+    items: FabricRenderTargetItem[],
+    graph: RenderGraph,
+    sceneId: string,
+    conditionContext: ReturnType<
+      FabricRenderGraphAdapter["buildRuntimeConditionContext"]
+    >,
+    orderBase: number,
+  ): void {
+    graph.layers
+      .filter((layer) => layer.sceneId === sceneId)
+      .forEach((layer, layerIndex) => {
+        const layerEffects = this.normalizeActiveEffects(
+          layer.effects,
+          conditionContext,
+        );
+        layer.nodes.forEach((node, nodeIndex) => {
+          if (!evaluateRuntimeCondition(node.visibleWhen, conditionContext))
+            return;
+          const frameHitTarget = this.toFrameHitTargetSpec(
+            layer,
+            node,
+            conditionContext,
+          );
+          if (frameHitTarget) {
+            items.push({
+              key: `${node.id}:frame-hit-target`,
+              layerId: layer.id,
+              origin: {
+                type: "render-intent",
+                intentId: String(node.data.renderIntentId || node.id),
+              },
+              order:
+                orderBase +
+                this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex) -
+                0.001,
+              spec: frameHitTarget,
+            });
+          }
+          const spec = this.toRenderObjectSpec(
+            layer,
+            node,
+            conditionContext,
+            layerEffects,
+            false,
+          );
+          if (!spec) return;
+          items.push({
+            key: node.id,
+            layerId: layer.id,
+            origin: {
+              type: "render-intent",
+              intentId: String(node.data.renderIntentId || node.id),
+            },
+            order:
+              orderBase +
+              this.resolveGraphNodeRenderOrder(layerIndex, nodeIndex),
+            spec,
+          });
+        });
+      });
+  }
+
   private toFrameHitTargetSpec(
     layer: RenderGraphLayer,
     node: RenderGraphNode,
@@ -846,7 +954,7 @@ export class FabricRenderGraphAdapter implements Service {
         renderLayerId: layer.id,
         renderNodeId: node.id,
         subjectId: node.subjectId,
-        surfaceId: node.surfaceId,
+        sceneId: node.sceneId,
       },
       props: {
         width: geometry.placement.localBounds.width,
@@ -929,8 +1037,8 @@ export class FabricRenderGraphAdapter implements Service {
     }
     return {
       subjectId,
-      ...(String(target.data?.surfaceId || "").trim()
-        ? { surfaceId: String(target.data.surfaceId).trim() }
+      ...(String(target.data?.sceneId || "").trim()
+        ? { sceneId: String(target.data.sceneId).trim() }
         : {}),
       projectionTargets,
     };
@@ -1146,7 +1254,7 @@ export class FabricRenderGraphAdapter implements Service {
         ...this.resolveParentSceneMatrix(target),
         renderIntentId: target.data?.renderIntentId,
         subjectId: target.data?.subjectId,
-        surfaceId: target.data?.surfaceId,
+        sceneId: target.data?.sceneId,
         viewportScale: canvas.getSceneScale(),
       },
     };
@@ -1308,7 +1416,7 @@ export class FabricRenderGraphAdapter implements Service {
       layerId: target.data?.layerId,
       renderIntentId: target.data?.renderIntentId ?? target.data?.renderNodeId,
       subject: this.resolveInteractionSubject(target) ?? undefined,
-      surfaceId: target.data?.surfaceId ?? target.data?.subject?.surfaceId,
+      sceneId: target.data?.sceneId ?? target.data?.subject?.sceneId,
       targetData: cloneRecord(target.data ?? {}),
       trigger,
     });
@@ -1533,7 +1641,7 @@ export class FabricRenderGraphAdapter implements Service {
       renderLayerId: layer.id,
       renderNodeId: node.id,
       subjectId: node.subjectId,
-      surfaceId: node.surfaceId,
+      sceneId: node.sceneId,
       exportKeys: node.exportKeys,
       tags: node.tags,
       ...(!readOnly && node.interaction

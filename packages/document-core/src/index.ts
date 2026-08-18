@@ -3,7 +3,8 @@ import {
   RENDER_INTENT_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
-  SURFACE_FRAME_SERVICE,
+  SCENE_FRAME_SERVICE,
+  SCENE_SERVICE,
   SESSION_SERVICE,
   INTERACTION_SERVICE,
   IMAGE_RESOURCE_SERVICE,
@@ -39,7 +40,7 @@ import {
   type RenderIntentPatchEntry,
   type RenderIntentService,
   type PreparedRenderIntentDocumentPublication,
-  type PreparedSurfaceFramePublication,
+  type PreparedSceneFramePublication,
   type Service,
   type ServiceContext,
   type ServiceIdentifier,
@@ -48,7 +49,9 @@ import {
   type SessionScope,
   type SessionValidationResult,
   type SessionService,
-  type SurfaceFrameService,
+  type SceneFrameService,
+  type SceneService,
+  type SceneSnapshot,
 } from "@pooder/core";
 import {
   EffectSchemaRegistry,
@@ -92,6 +95,7 @@ import {
   type DocumentExtensionContribution,
   type ObjectSchemaContext,
   type ObjectSchemaRegistry,
+  type ObjectBehaviorInteractionSpec,
   type ObjectSource,
   type EditorLeafObject,
   type EditorPathObject,
@@ -462,11 +466,12 @@ export async function applyEditorDocument(
 
 interface PreparedEditorDocumentApplication {
   result: ApplyEditorDocumentResult;
-  surfaceFramePublication: PreparedSurfaceFramePublication;
+  sceneFramePublication: PreparedSceneFramePublication;
   renderIntentPublication: PreparedRenderIntentDocumentPublication;
   participantPublications: EditorDocumentPublication[];
   renderIntentService: RenderIntentService;
-  surfaceFrameService: SurfaceFrameService;
+  sceneFrameService: SceneFrameService;
+  sceneService: SceneService;
 }
 
 interface EditorDocumentPublicationBoundary {
@@ -597,9 +602,13 @@ async function prepareEditorDocumentApplication(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  const surfaceFrameService = runtime.services.getOrThrow<SurfaceFrameService>(
-    SURFACE_FRAME_SERVICE,
-    "SurfaceFrameService is required to apply an EditorDocument.",
+  const sceneFrameService = runtime.services.getOrThrow<SceneFrameService>(
+    SCENE_FRAME_SERVICE,
+    "SceneFrameService is required to apply an EditorDocument.",
+  );
+  const sceneService = runtime.services.getOrThrow<SceneService>(
+    SCENE_SERVICE,
+    "SceneService is required to apply an EditorDocument.",
   );
 
   const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
@@ -665,7 +674,7 @@ async function prepareEditorDocumentApplication(
     allDiagnostics,
     collectAppliedSurfaceIds(mergeResult.drafts),
   );
-  const surfaceFramePublication = surfaceFrameService.prepareImportFrames(
+  const sceneFramePublication = sceneFrameService.prepareImportFrames(
     Object.fromEntries(
       document.surfaces.map((surface) => [
         surface.id,
@@ -679,7 +688,7 @@ async function prepareEditorDocumentApplication(
   );
   const participantPublications: EditorDocumentPublication[] = [];
   for (const contribution of extensionRegistry.list()) {
-  const state = document.extension.states[contribution.id];
+    const state = document.extension.states[contribution.id];
     if (state === undefined || !contribution.preparePublication) continue;
     try {
       const publication = await contribution.preparePublication(state, {
@@ -724,11 +733,12 @@ async function prepareEditorDocumentApplication(
 
   return {
     result,
-    surfaceFramePublication,
+    sceneFramePublication,
     renderIntentPublication,
     participantPublications,
     renderIntentService,
-    surfaceFrameService,
+    sceneFrameService,
+    sceneService,
   };
 }
 
@@ -737,15 +747,19 @@ function publishEditorDocumentApplication(
   prepared: PreparedEditorDocumentApplication,
   boundary: EditorDocumentPublicationBoundary,
 ): void {
-  prepared.surfaceFrameService.assertImportFramesPublicationCurrent(
-    prepared.surfaceFramePublication,
+  prepared.sceneFrameService.assertImportFramesPublicationCurrent(
+    prepared.sceneFramePublication,
   );
   prepared.renderIntentService.assertDocumentIntentsPublicationCurrent(
     prepared.renderIntentPublication,
   );
+  reconcileDocumentScenes(
+    prepared.sceneService,
+    prepared.result.document.surfaces.map((surface) => surface.id),
+  );
   boundary.publishDocumentState?.(prepared.result.document);
-  prepared.surfaceFrameService.publishImportFrames(
-    prepared.surfaceFramePublication,
+  prepared.sceneFrameService.publishImportFrames(
+    prepared.sceneFramePublication,
     { notify: false },
   );
   prepared.renderIntentService.publishDocumentIntents(
@@ -759,9 +773,9 @@ function publishEditorDocumentApplication(
       console.error("EditorDocument publication participant failed.", error);
     }
   });
-  notifyPublication("surface frames", () =>
-    prepared.surfaceFrameService.notifyImportFramesPublished(
-      prepared.surfaceFramePublication,
+  notifyPublication("scene frames", () =>
+    prepared.sceneFrameService.notifyImportFramesPublished(
+      prepared.sceneFramePublication,
     ),
   );
   notifyPublication("render intents", () =>
@@ -770,6 +784,29 @@ function publishEditorDocumentApplication(
     ),
   );
   boundary.notifyDocumentPublished?.();
+}
+
+function reconcileDocumentScenes(
+  sceneService: SceneService,
+  nextSceneIds: readonly string[],
+): void {
+  const activeDocumentSceneId = resolveDocumentSceneId(
+    sceneService.getActiveRoot(),
+  );
+  const next = new Set(nextSceneIds);
+  sceneService
+    .listDocumentSceneIds()
+    .filter((sceneId) => !next.has(sceneId))
+    .forEach((sceneId) => sceneService.unregisterDocumentScene(sceneId));
+  const registered = new Set(sceneService.listDocumentSceneIds());
+  nextSceneIds.forEach((sceneId) => {
+    if (!registered.has(sceneId)) sceneService.registerDocumentScene(sceneId);
+  });
+  const nextActiveSceneId =
+    (activeDocumentSceneId && next.has(activeDocumentSceneId)
+      ? activeDocumentSceneId
+      : nextSceneIds[0]) ?? null;
+  if (nextActiveSceneId) sceneService.setActiveRoot(nextActiveSceneId);
 }
 
 function notifyPublication(label: string, notify: () => void): void {
@@ -866,17 +903,21 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   }
 
   getActiveSurfaceId(): string | null {
-    return this.getSurfaceFrameService()?.getActiveSurfaceId() ?? null;
+    return resolveDocumentSceneId(
+      this.getSceneService()?.getActiveRoot() ?? null,
+    );
   }
 
   onActiveSurfaceChange(
     listener: (event: { surfaceId: string | null }) => void,
   ): Disposable {
-    const service = this.getSurfaceFrameService();
+    const service = this.getSceneService();
     if (!service) {
       return { dispose() {} };
     }
-    return service.onActiveSurfaceChange(listener);
+    return service.onRootChange((event) =>
+      listener({ surfaceId: resolveDocumentSceneId(event.activeRoot) }),
+    );
   }
 
   async mutate(
@@ -932,7 +973,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       );
     }
     const scope: SessionScope = {
-      surfaceId: input.scope?.surfaceId ?? null,
+      sceneId: input.scope?.sceneId ?? null,
       subjectId: input.scope?.subjectId ?? null,
       channel: input.scope?.channel ?? "document",
       groupId: "editor-document",
@@ -1420,21 +1461,19 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     );
   }
 
-  private activateSurfaceSync(
-    surfaceId: string,
-  ): ActivateEditorSurfaceResult {
+  private activateSurfaceSync(surfaceId: string): ActivateEditorSurfaceResult {
     const document = this.workingDocument ?? this.committedDocument;
     if (!document) return { ok: false, reason: "document-not-found" };
     const normalized = String(surfaceId || "").trim();
     if (!document.surfaces.some((surface) => surface.id === normalized)) {
       return { ok: false, reason: "surface-not-found" };
     }
-    this.getSurfaceFrameService()?.activateSurface(normalized);
+    this.getSceneService()?.setActiveRoot(normalized);
     return { ok: true, surfaceId: normalized };
   }
 
-  private getSurfaceFrameService(): SurfaceFrameService | undefined {
-    return this.runtime.services.get?.(SURFACE_FRAME_SERVICE);
+  private getSceneService(): SceneService | undefined {
+    return this.runtime.services.get?.(SCENE_SERVICE);
   }
 
   private enqueue<TResult>(
@@ -1447,6 +1486,15 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     );
     return result;
   }
+}
+
+function resolveDocumentSceneId(root: SceneSnapshot | null): string | null {
+  if (!root) return null;
+  if (root.owner.type === "document") return root.owner.documentSceneId;
+  return (
+    root.composition.entries.find((entry) => entry.source === "document-graph")
+      ?.sceneId ?? null
+  );
 }
 
 function translateDocumentObject(
@@ -2132,7 +2180,7 @@ function getDocumentObjectDescriptors(document: EditorDocument) {
           space: isEditorGroupObject(object) ? "scene" : "object-local",
           metadata: {
             objectId: object.id,
-            surfaceId: surface.id,
+            sceneId: surface.id,
           },
         });
         if (isEditorGroupObject(object)) visit(object.children);
@@ -2163,7 +2211,12 @@ function rotateObjectLocalToParent(
 }
 
 function createRejectedDocumentSnapshot(): EditorDocument {
-  return { version: 8, assets: [], extension: { required: [], states: {} }, surfaces: [] };
+  return {
+    version: 8,
+    assets: [],
+    extension: { required: [], states: {} },
+    surfaces: [],
+  };
 }
 
 function createResult(
@@ -2194,12 +2247,12 @@ function surfaceGeometryToRuntimeFrames(surface: EditorSurface) {
     heightMm: bounds.height,
   });
   return {
-    previewBounds: toFrame(surface.geometry.canvasBounds),
-    productionFrame: toFrame(surface.geometry.productionBounds),
+    preview: toFrame(surface.geometry.canvasBounds),
+    production: toFrame(surface.geometry.productionBounds),
     ...(surface.geometry.exportBounds
-      ? { exportFrame: toFrame(surface.geometry.exportBounds) }
+      ? { export: toFrame(surface.geometry.exportBounds) }
       : {}),
-    viewportFocusFrame: toFrame(surface.geometry.canvasBounds),
+    viewportFocus: toFrame(surface.geometry.canvasBounds),
   };
 }
 
@@ -2398,7 +2451,7 @@ function createGroupInteractionProxyDraft(
     id: `${object.id}:interaction-proxy`,
     subject: {
       kind: "object",
-      surfaceId: surface.id,
+      sceneId: surface.id,
       layerId: surface.id,
       objectId: object.id,
       objectType: "group",
@@ -2470,7 +2523,7 @@ function createObjectRenderIntentDraft(
     id: object.id,
     subject: {
       kind: "object" as const,
-      surfaceId: surface.id,
+      sceneId: surface.id,
       layerId: surface.id,
       objectId: object.id,
       objectType: object.type,
@@ -2992,7 +3045,9 @@ function createObjectInteractionAspect(
       const interaction = registry
         .getBehavior(behavior.type)
         ?.compileInteraction?.(behavior, context);
-      return interaction ? { ...compiled, ...interaction } : compiled;
+      return interaction
+        ? { ...compiled, ...normalizeBehaviorInteraction(interaction) }
+        : compiled;
     },
     {},
   );
@@ -3005,6 +3060,28 @@ function createObjectInteractionAspect(
   };
 }
 
+function normalizeBehaviorInteraction(
+  interaction: ObjectBehaviorInteractionSpec,
+): InteractionSpec {
+  const { activation, ...rest } = interaction;
+  if (!activation) return rest;
+  const { session, ...activationRest } = activation;
+  return {
+    ...rest,
+    activation: {
+      ...activationRest,
+      ...(session
+        ? {
+            session: {
+              ...session,
+              scope: session.scope === "surface" ? "scene" : session.scope,
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 function resolveRenderIntentTarget(
   _effect: EditorExtensionObjectEffect,
   context: EffectContext,
@@ -3013,7 +3090,7 @@ function resolveRenderIntentTarget(
   if (!context.object) return null;
   return {
     kind: "object",
-    surfaceId: context.surface.id,
+    sceneId: context.surface.id,
     layerId: context.surface.id,
     objectId: context.object.id,
     objectType: context.object.type,
@@ -3075,8 +3152,8 @@ function collectAppliedSurfaceIds(
   return Array.from(
     new Set(
       drafts
-        .map((draft) => draft.subject.surfaceId)
-        .filter((surfaceId) => surfaceId.length > 0),
+        .map((draft) => draft.subject.sceneId)
+        .filter((sceneId) => sceneId.length > 0),
     ),
   );
 }

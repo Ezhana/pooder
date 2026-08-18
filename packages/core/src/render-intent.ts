@@ -24,7 +24,7 @@ import type {
   GeometrySnapshot,
 } from "./geometry-source";
 
-export type RenderIntentSubjectKind = "surface" | "layer" | "object";
+export type RenderIntentSubjectKind = "scene" | "layer" | "object";
 export type RenderIntentChannel =
   | "background"
   | "normal"
@@ -35,7 +35,7 @@ export type RenderIntentChannel =
 
 export interface RenderIntentSubject {
   kind: RenderIntentSubjectKind;
-  surfaceId: string;
+  sceneId: string;
   layerId?: string;
   objectId?: string;
   objectType?: string;
@@ -136,7 +136,7 @@ export interface RenderGraphNode {
   id: string;
   subjectId: string;
   layerId: string;
-  surfaceId: string;
+  sceneId: string;
   type: RenderObjectSpec["type"];
   visual?: RenderIntentSource;
   containerGeometryRef: GeometryRef;
@@ -178,7 +178,7 @@ export interface SessionRenderReplacementTarget {
 interface SessionRenderContributionBase {
   readonly sessionId: string;
   readonly subjectId: string;
-  readonly surfaceId: string;
+  readonly sceneId: string;
   readonly provenance: string;
   readonly priority: number;
   /** Must use an id independent from the persistent document projection. */
@@ -217,7 +217,7 @@ export interface RenderGraphProjectionMembership {
 
 export interface RenderGraphLayer {
   id: string;
-  surfaceId: string;
+  sceneId: string;
   order: number;
   visible: boolean;
   nodes: RenderGraphNode[];
@@ -227,7 +227,7 @@ export interface RenderGraphLayer {
 
 export interface RenderGraph {
   revision: number;
-  surfaceIds: string[];
+  sceneIds: string[];
   layers: RenderGraphLayer[];
   projectionMemberships: RenderGraphProjectionMembership[];
   diagnostics: RenderIntentDiagnostic[];
@@ -1012,7 +1012,7 @@ function collectRenderIntentSnapshots(graph: RenderGraph) {
           effects: layer.effects,
           id: layer.id,
           order: layer.order,
-          surfaceId: layer.surfaceId,
+          sceneId: layer.sceneId,
           visible: layer.visible,
         },
         node,
@@ -1084,9 +1084,9 @@ export function mergeRenderIntentPatchEntries(
 
     const subject = patch.subject;
     const ordering = patch.ordering;
-    const surfaceId = subject?.surfaceId;
+    const sceneId = subject?.sceneId;
     const layerId = ordering?.layerId;
-    if (!surfaceId || !layerId) {
+    if (!sceneId || !layerId) {
       diagnostics.push({
         code: "render-intent-patch-base-missing",
         severity: "error",
@@ -1096,14 +1096,14 @@ export function mergeRenderIntentPatchEntries(
         debugLabel: entry.debugLabel,
         message:
           `RenderIntentPatch "${patch.id}" has no base intent and must ` +
-          "provide subject.surfaceId and ordering.layerId.",
+          "provide subject.sceneId and ordering.layerId.",
       });
       return;
     }
 
     const draft = createDraftFromPatch(
       patch,
-      { ...subject, surfaceId },
+      { ...subject, sceneId },
       { ...ordering, layerId },
     );
     const mergeResult = applyPatchClear(draft, patch, entry);
@@ -1234,7 +1234,7 @@ export function createRenderGraph(
 ): RenderGraph {
   const diagnostics: RenderIntentDiagnostic[] = [...inputDiagnostics];
   const layerMap = new Map<string, RenderGraphLayer>();
-  const surfaceIds = new Set<string>();
+  const sceneIds = new Set<string>();
   const reducedDrafts = reduceRenderIntentDrafts(drafts);
 
   reducedDrafts.forEach((draft) => {
@@ -1249,7 +1249,7 @@ export function createRenderGraph(
       });
       return;
     }
-    surfaceIds.add(draft.subject.surfaceId);
+    sceneIds.add(draft.subject.sceneId);
     const layer = getOrCreateGraphLayer(layerMap, draft);
     if (draft.coordinateSpace && draft.coordinateSpace !== "scene") {
       diagnostics.push({
@@ -1289,7 +1289,7 @@ export function createRenderGraph(
 
   return {
     revision,
-    surfaceIds: Array.from(surfaceIds.values()),
+    sceneIds: Array.from(sceneIds.values()),
     layers,
     projectionMemberships,
     diagnostics,
@@ -1318,7 +1318,7 @@ function createComposedRenderGraph(
   documentNodes.forEach((node) => {
     const winner = overrides.find(
       (override) =>
-        override.surfaceId === node.surfaceId &&
+        override.sceneId === node.sceneId &&
         override.replacementTarget.subjectId === node.subjectId &&
         (!override.replacementTarget.projectionId ||
           override.replacementTarget.projectionId === node.id),
@@ -1402,8 +1402,8 @@ function createComposedRenderGraph(
     .sort(compareGraphLayers);
   return {
     revision,
-    surfaceIds: Array.from(
-      new Set([...documentGraph.surfaceIds, ...sessionGraph.surfaceIds]),
+    sceneIds: Array.from(
+      new Set([...documentGraph.sceneIds, ...sessionGraph.sceneIds]),
     ),
     layers,
     projectionMemberships: collectProjectionMemberships(layers),
@@ -1433,9 +1433,9 @@ function normalizeSessionRenderContributions(
       input.subjectId,
       "SessionRenderContribution.subjectId",
     );
-    const surfaceId = normalizeId(
-      input.surfaceId,
-      "SessionRenderContribution.surfaceId",
+    const sceneId = normalizeId(
+      input.sceneId,
+      "SessionRenderContribution.sceneId",
     );
     const provenance = normalizeId(
       input.provenance,
@@ -1457,7 +1457,7 @@ function normalizeSessionRenderContributions(
     projection.subject = {
       ...projection.subject,
       kind: "object",
-      surfaceId,
+      sceneId,
       layerId: projection.ordering.layerId,
       objectId: subjectId,
     };
@@ -1470,7 +1470,7 @@ function normalizeSessionRenderContributions(
         role: "auxiliary",
         sessionId,
         subjectId,
-        surfaceId,
+        sceneId,
         provenance,
         priority,
         projection,
@@ -1490,7 +1490,7 @@ function normalizeSessionRenderContributions(
       role: "override",
       sessionId,
       subjectId,
-      surfaceId,
+      sceneId,
       provenance,
       priority,
       projection,
@@ -1549,14 +1549,14 @@ function normalizeIdList(values: readonly string[] | undefined): string[] {
 
 function createDraftFromPatch(
   patch: RenderIntentPatch,
-  subject: Partial<RenderIntentSubject> & { surfaceId: string },
+  subject: Partial<RenderIntentSubject> & { sceneId: string },
   ordering: Partial<RenderIntentOrderingAspect> & { layerId: string },
 ): RenderIntentDraft {
   return {
     id: patch.id,
     subject: {
       kind: subject.kind ?? "object",
-      surfaceId: subject.surfaceId,
+      sceneId: subject.sceneId,
       layerId: subject.layerId,
       objectId: subject.objectId,
       objectType: subject.objectType,
@@ -1596,7 +1596,7 @@ function getOrCreateGraphLayer(
 
   const layer: RenderGraphLayer = {
     id: draft.ordering.layerId,
-    surfaceId: draft.subject.surfaceId,
+    sceneId: draft.subject.sceneId,
     order: draft.ordering.layerOrder ?? 0,
     visible: draft.export?.visible !== false,
     nodes: [],
@@ -1620,13 +1620,13 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
         : "normal");
   const id = source.kind === "replacement" ? `image:${draft.id}` : draft.id;
   const subjectId =
-    draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.surfaceId;
+    draft.subject.objectId ?? draft.subject.layerId ?? draft.subject.sceneId;
   const defaultGeometryId = draft.id;
   return {
     id,
     subjectId,
     layerId: draft.ordering.layerId,
-    surfaceId: draft.subject.surfaceId,
+    sceneId: draft.subject.sceneId,
     type,
     visual: source.source,
     containerGeometryRef: cloneRecord(

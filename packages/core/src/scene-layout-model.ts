@@ -1,21 +1,26 @@
 import type { ConfigurationService } from "./services";
 import { Coordinate, type Unit } from "./coordinate";
-import type {
-  CanvasSize,
-  SceneFrameMm,
-  SceneLayoutSnapshot,
-  SceneRect,
-  SurfaceSceneFrames,
-  SizeConstraintMode,
-  SizeState,
-  CutMode,
-} from "./render";
+import type { CanvasSize } from "./render";
+import type { SceneFrameMm, SceneFrames } from "./scene-frames";
+import type { SceneLayoutSnapshot, SceneRect } from "./scene-layout";
+
+export type SizeConstraintMode = "free" | "lockAspect" | "equal";
+
+export interface SizeState {
+  unit: Unit;
+  sceneFrames: SceneFrames;
+  constraintMode: SizeConstraintMode;
+  aspectRatio: number;
+  minMm: number;
+  maxMm: number;
+  stepMm: number;
+}
 
 export const DEFAULT_SIZE_STATE: SizeState = {
   unit: "mm",
   sceneFrames: {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
-    productionFrame: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
+    preview: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
+    production: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
   },
   constraintMode: "free",
   aspectRatio: 1,
@@ -29,10 +34,10 @@ export interface SceneLayoutFitOptions {
 }
 
 export interface SceneLayoutInput {
-  frames: SurfaceSceneFrames;
+  frames: SceneFrames;
   viewportSize: CanvasSize;
   fitOptions?: SceneLayoutFitOptions;
-  surfaceId?: string;
+  sceneId: string;
   revision?: number;
 }
 
@@ -65,11 +70,6 @@ export function normalizeUnit(value: unknown): Unit {
 export function normalizeConstraintMode(value: unknown): SizeConstraintMode {
   if (value === "lockAspect" || value === "equal") return value;
   return "free";
-}
-
-export function normalizeCutMode(value: unknown): CutMode {
-  if (value === "outset" || value === "inset") return value;
-  return "trim";
 }
 
 export function toMm(value: number, fromUnit: Unit): number {
@@ -163,22 +163,16 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   const defaultPreviewBounds = {
     xMm: 0,
     yMm: 0,
-    widthMm: sanitizeMmValue(
-      DEFAULT_SIZE_STATE.sceneFrames.previewBounds.widthMm,
-      {
-        minMm,
-        maxMm,
-        stepMm,
-      },
-    ),
-    heightMm: sanitizeMmValue(
-      DEFAULT_SIZE_STATE.sceneFrames.previewBounds.heightMm,
-      {
-        minMm,
-        maxMm,
-        stepMm,
-      },
-    ),
+    widthMm: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneFrames.preview.widthMm, {
+      minMm,
+      maxMm,
+      stepMm,
+    }),
+    heightMm: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneFrames.preview.heightMm, {
+      minMm,
+      maxMm,
+      stepMm,
+    }),
   };
   const previewBounds = defaultPreviewBounds;
   const aspectRaw = Number(
@@ -193,8 +187,8 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   return {
     unit,
     sceneFrames: {
-      previewBounds,
-      productionFrame,
+      preview: previewBounds,
+      production: productionFrame,
     },
     constraintMode: normalizeConstraintMode(
       configService.get(
@@ -229,37 +223,18 @@ function rectByFrame(
   };
 }
 
-function boundingRect(left: SceneRect, right: SceneRect): SceneRect {
-  const minLeft = Math.min(left.left, right.left);
-  const minTop = Math.min(left.top, right.top);
-  const maxRight = Math.max(left.left + left.width, right.left + right.width);
-  const maxBottom = Math.max(left.top + left.height, right.top + right.height);
-  const width = maxRight - minLeft;
-  const height = maxBottom - minTop;
-  return {
-    left: minLeft,
-    top: minTop,
-    width,
-    height,
-    centerX: minLeft + width / 2,
-    centerY: minTop + height / 2,
-  };
-}
-
-type ResolvedSurfaceSceneFrames = SurfaceSceneFrames & {
-  exportFrame: SceneFrameMm;
-  viewportFocusFrame: SceneFrameMm;
+type ResolvedSceneFrames = SceneFrames & {
+  export: SceneFrameMm;
+  viewportFocus: SceneFrameMm;
 };
 
-function deriveSceneFrames(
-  frames: SurfaceSceneFrames,
-): ResolvedSurfaceSceneFrames {
-  const { previewBounds, productionFrame, viewportFocusFrame } = frames;
+function deriveSceneFrames(frames: SceneFrames): ResolvedSceneFrames {
+  const { preview, production, viewportFocus } = frames;
   return {
-    previewBounds,
-    productionFrame,
-    exportFrame: frames.exportFrame ?? productionFrame,
-    viewportFocusFrame: viewportFocusFrame ?? productionFrame,
+    preview,
+    production,
+    export: frames.export ?? production,
+    viewportFocus: viewportFocus ?? production,
   };
 }
 
@@ -307,10 +282,9 @@ export function computeSceneLayout(
   if (canvasWidth <= 0 || canvasHeight <= 0) return null;
 
   const sceneFrames = deriveSceneFrames(input.frames);
-  const { previewBounds, productionFrame, exportFrame, viewportFocusFrame } =
-    sceneFrames;
-  const viewWidthMm = previewBounds.widthMm;
-  const viewHeightMm = previewBounds.heightMm;
+  const { preview, viewportFocus } = sceneFrames;
+  const viewWidthMm = preview.widthMm;
+  const viewHeightMm = preview.heightMm;
   if (
     !Number.isFinite(viewWidthMm) ||
     !Number.isFinite(viewHeightMm) ||
@@ -331,8 +305,8 @@ export function computeSceneLayout(
     viewPaddingPx,
   );
   const { offsetX, offsetY } = resolveFrameOffset(
-    previewBounds,
-    viewportFocusFrame,
+    preview,
+    viewportFocus,
     baseLayout.scale,
     canvasWidth,
     canvasHeight,
@@ -348,28 +322,17 @@ export function computeSceneLayout(
     return null;
   }
 
-  const trimRect = rectByFrame(
-    productionFrame,
-    layout.scale,
-    layout.offsetX,
-    layout.offsetY,
-  );
-  const cutRect = rectByFrame(
-    exportFrame,
-    layout.scale,
-    layout.offsetX,
-    layout.offsetY,
-  );
-  const bleedRect = boundingRect(trimRect, cutRect);
-
   return {
-    surfaceId: input.surfaceId ?? "",
+    sceneId: input.sceneId,
     revision: input.revision ?? 0,
     scale: layout.scale,
     offsetX: layout.offsetX,
     offsetY: layout.offsetY,
-    trimRect,
-    cutRect,
-    bleedRect,
+    contentRect: rectByFrame(
+      preview,
+      layout.scale,
+      layout.offsetX,
+      layout.offsetY,
+    ),
   };
 }

@@ -18,7 +18,7 @@ import {
   createAffinePlacement,
   createStaticGeometrySource,
   ConstraintResolverService,
-  DefaultSurfaceFrameService,
+  DefaultSceneFrameService,
   GeometrySourceService,
   createRectSnapLines,
   intersectRects,
@@ -233,6 +233,7 @@ function computeTestSceneLayout(canvas: FakeLayoutCanvasService, state: any) {
   return computeSceneLayout({
     frames: state.sceneFrames,
     fitOptions: { viewPadding: state.viewPadding ?? "16%" },
+    sceneId: "test",
     viewportSize: canvas.getViewportSize(),
   });
 }
@@ -1328,7 +1329,7 @@ async function testSessionsWithoutTools() {
     sessions.createSession({
       sessionId: "session.image-placement.front.slot",
       scope: {
-        surfaceId: "front",
+        sceneId: "front",
         subjectId: "slot",
         channel: "image-placement",
       },
@@ -1366,7 +1367,7 @@ async function testSessionsWithoutTools() {
     );
     assertEqual(
       sessions.hasActiveSession({
-        scope: { surfaceId: "front", subjectId: "slot" },
+        scope: { sceneId: "front", subjectId: "slot" },
       }),
       false,
     );
@@ -1395,12 +1396,12 @@ async function testSessionLifecycleEvents() {
 
     sessions.createSession({
       sessionId: "image:front:slot",
-      scope: { surfaceId: "front", subjectId: "slot", channel: "image" },
+      scope: { sceneId: "front", subjectId: "slot", channel: "image" },
       draft: { scale: 1 },
     });
     sessions.createSession({
       sessionId: "image:front:slot-2",
-      scope: { surfaceId: "front", subjectId: "slot-2", channel: "image" },
+      scope: { sceneId: "front", subjectId: "slot-2", channel: "image" },
     });
     sessions.updateSession("image:front:slot", { draft: { scale: 1.2 } });
     sessions.focusSession("image:front:slot");
@@ -1603,6 +1604,8 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
     const sessions =
       runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    scenes.registerDocumentScene("front");
+    scenes.setActiveRoot("front");
     const session = await sessions.open({
       descriptor: {
         sessionId: "scene-session",
@@ -1618,6 +1621,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       owner: { type: "session", sessionId: session.descriptor.sessionId },
       composition: {
         entries: [
+          { source: "document-graph", sceneId: "front" },
           { source: "local", layerIds: ["underlay"] },
           { source: "local", layerIds: ["controls"] },
         ],
@@ -1636,7 +1640,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
     });
     assertDeepEqual(
       scenes.getActiveRoot()?.composition.entries.map((entry) => entry.source),
-      ["local", "local"],
+      ["document-graph", "local", "local"],
     );
 
     const other = await sessions.open({
@@ -1649,13 +1653,14 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       },
       initialDraft: {},
     });
-    assertEqual(scenes.getActiveRoot(), null);
+    assertEqual(scenes.getActiveRoot()?.id, "front");
     await sessions.open({ descriptor: session.descriptor, initialDraft: {} });
     assertEqual(scenes.getActiveRoot()?.id, "session-root");
     await session.cancel();
     assertEqual(scenes.getSceneHandle("session-root"), undefined);
-    assertEqual(scenes.getActiveRoot(), null);
+    assertEqual(scenes.getActiveRoot()?.id, "front");
     await other.cancel();
+    scenes.unregisterDocumentScene("front");
   });
 }
 
@@ -2537,7 +2542,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "logical-object",
       },
@@ -2613,7 +2618,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
     interaction.onDidChangeSelection((event) => selections.push(event.subject));
     interaction.selectSubject({
       subjectId: "logical-object",
-      surfaceId: "front",
+      sceneId: "front",
       projectionTargets: graph.layers.flatMap((layer) =>
         layer.nodes.map((node) => ({
           projectionId: node.id,
@@ -2626,7 +2631,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
       [
         {
           subjectId: "logical-object",
-          surfaceId: "front",
+          sceneId: "front",
           projectionTargets: [
             {
               projectionId: "logical-object:fill",
@@ -2685,7 +2690,7 @@ async function testRenderGraphSeparatesLayerOrderFromNodePath() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId,
         objectId: id,
       },
@@ -2717,7 +2722,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "logical-image",
       },
@@ -2736,7 +2741,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
       descriptor: {
         sessionId: "session:image-slot",
         ownerId: "test",
-        scope: { subjectId: "logical-image", surfaceId: "front" },
+        scope: { subjectId: "logical-image", sceneId: "front" },
         interactionMode: "exclusive",
         leavePolicy: "block",
       },
@@ -2750,7 +2755,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
         role: "override",
         sessionId: session.descriptor.sessionId,
         subjectId: "logical-image",
-        surfaceId: "front",
+        sceneId: "front",
         provenance: "test:image-slot-working",
         priority: 100,
         replacementTarget: {
@@ -2761,7 +2766,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
           ...createProjection("session:working-image", 0),
           subject: {
             kind: "object",
-            surfaceId: "wrong-input-is-normalized",
+            sceneId: "wrong-input-is-normalized",
             layerId: "art",
             objectId: "wrong-input-is-normalized",
           },
@@ -2772,14 +2777,14 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
         role: "auxiliary",
         sessionId: session.descriptor.sessionId,
         subjectId: "logical-image",
-        surfaceId: "front",
+        sceneId: "front",
         provenance: "test:snap-guide",
         priority: 110,
         projection: {
           id: "session:snap-guide",
           subject: {
             kind: "object",
-            surfaceId: "front",
+            sceneId: "front",
             layerId: "controls",
             objectId: "logical-image",
           },
@@ -2849,7 +2854,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
         role: "override",
         sessionId: "session:priority-winner",
         subjectId: "logical-image",
-        surfaceId: "front",
+        sceneId: "front",
         provenance: "test:priority-winner",
         priority: 200,
         replacementTarget: {
@@ -2913,7 +2918,7 @@ async function testRenderIntentGeometryRolesRemainIndependent() {
         id: "default-geometry",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "art",
           objectId: "default-geometry",
         },
@@ -2948,7 +2953,7 @@ async function testRenderIntentGeometryRolesRemainIndependent() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "art",
           objectId: "image",
         },
@@ -3034,7 +3039,7 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
           objectType: "image",
@@ -3151,7 +3156,7 @@ async function testRenderIntentDocumentUpdatesAreScoped() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: id,
       },
@@ -3198,7 +3203,7 @@ async function testPreparedRenderIntentPublicationRejectsStaleRuntimePatches() {
       id: "image",
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "artwork",
         objectId: "image",
       },
@@ -3262,22 +3267,22 @@ async function testPreparedConfigurationPublicationRejectsConcurrentUpdates() {
   );
 }
 
-async function testPreparedSurfaceFramePublicationRejectsConcurrentUpdates() {
-  const frames = new DefaultSurfaceFrameService();
+async function testPreparedSceneFramePublicationRejectsConcurrentUpdates() {
+  const frames = new DefaultSceneFrameService();
   const stable = {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
+    production: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
   };
   frames.importFrames({ front: stable });
   const prepared = frames.prepareImportFrames({
     front: {
       ...stable,
-      productionFrame: { ...stable.productionFrame, widthMm: 85 },
+      production: { ...stable.production, widthMm: 85 },
     },
   });
   const concurrent = {
     ...stable,
-    productionFrame: { ...stable.productionFrame, widthMm: 88 },
+    production: { ...stable.production, widthMm: 88 },
   };
   frames.setFrames("front", concurrent);
 
@@ -3287,72 +3292,57 @@ async function testPreparedSurfaceFramePublicationRejectsConcurrentUpdates() {
   } catch (error) {
     rejected = String(error).includes("frames changed");
   }
-  assertEqual(rejected, true, "stale surface frame publication should reject");
+  assertEqual(rejected, true, "stale scene frame publication should reject");
   assertDeepEqual(
     frames.getFrames("front"),
     concurrent,
-    "stale surface frame publication must preserve concurrent updates",
+    "stale scene frame publication must preserve concurrent updates",
   );
 }
 
-async function testSurfaceFrameActivateSurfaceKeepsInsertionOrder(): Promise<void> {
-  const frames = new DefaultSurfaceFrameService();
-  const changes: Array<string | null> = [];
-  frames.onActiveSurfaceChange((event) => changes.push(event.surfaceId));
+async function testSceneFramesRequireExplicitSceneAndKeepInsertionOrder(): Promise<void> {
+  const frames = new DefaultSceneFrameService();
   const front = {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
+    production: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
   };
   const back = {
-    previewBounds: { xMm: 120, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 125, yMm: 5, widthMm: 90, heightMm: 70 },
+    preview: { xMm: 120, yMm: 0, widthMm: 100, heightMm: 80 },
+    production: { xMm: 125, yMm: 5, widthMm: 90, heightMm: 70 },
   };
   frames.importFrames({ front, back });
   assertDeepEqual(
-    frames.listSurfaceIds(),
+    frames.listSceneIds(),
     ["front", "back"],
-    "surface ids should keep document insertion order",
-  );
-  assertEqual(
-    frames.getActiveSurfaceId(),
-    "front",
-    "import should activate the first surface",
+    "scene ids should keep document insertion order",
   );
   assertDeepEqual(
-    frames.getFrames()?.previewBounds,
-    front.previewBounds,
-    "omitted getFrames should use the active surface",
-  );
-
-  frames.activateSurface("back");
-  assertEqual(frames.getActiveSurfaceId(), "back", "activateSurface should switch");
-  assertDeepEqual(
-    frames.getFrames()?.previewBounds,
-    back.previewBounds,
-    "active surface frames should follow activateSurface",
+    frames.getFrames("front")?.preview,
+    front.preview,
+    "frame lookup should use the explicit scene id",
   );
   assertDeepEqual(
-    changes,
-    ["front", "back"],
-    "active surface listeners should see import then switch",
+    frames.getFrames("back")?.preview,
+    back.preview,
+    "each scene should retain independent frames",
   );
 
   let rejected = false;
   try {
-    frames.activateSurface("missing");
+    frames.getFrames("");
   } catch {
     rejected = true;
   }
-  assertEqual(rejected, true, "unknown surfaces should reject activateSurface");
+  assertEqual(rejected, true, "implicit scene lookup should reject");
 }
 
-async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
-  const frames = new DefaultSurfaceFrameService();
+async function testSceneFrameImportsOnlyEmitSemanticChanges() {
+  const frames = new DefaultSceneFrameService();
   const changes: string[] = [];
-  frames.onAnyFramesChange((event) => changes.push(event.surfaceId));
+  frames.onAnyFramesChange((event) => changes.push(event.sceneId));
   const front = {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
+    production: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
   };
   frames.importFrames({ front });
   assertDeepEqual(changes, ["front"], "initial frame import should emit once");
@@ -3368,7 +3358,7 @@ async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
   frames.importFrames({
     front: {
       ...front,
-      productionFrame: { ...front.productionFrame, widthMm: 88 },
+      production: { ...front.production, widthMm: 88 },
     },
   });
   assertDeepEqual(
@@ -3388,7 +3378,7 @@ async function testRenderIntentPatchEntriesAreSortedDeterministically() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
         },
@@ -3432,7 +3422,7 @@ async function testRenderIntentPatchClearRemovesOnlyTargetField() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
         },
@@ -3468,7 +3458,7 @@ async function testRenderIntentPatchDiagnosticsAreTyped() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
         },
@@ -3524,7 +3514,7 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
           objectType: "image",
@@ -3706,7 +3696,7 @@ async function testRenderIntentObjectLocalEffects() {
         id: "clip-target",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "target",
         },
@@ -3764,7 +3754,7 @@ async function testRenderIntentPatchMergeHelper() {
     id: "object",
     subject: {
       kind: "object" as const,
-      surfaceId: "front",
+      sceneId: "front",
       layerId: "artwork",
       objectId: "object",
     },
@@ -3791,7 +3781,7 @@ async function testRenderIntentPatchMergeHelper() {
     id: "overlay",
     subject: {
       kind: "object",
-      surfaceId: "front",
+      sceneId: "front",
       layerId: "overlay-layer",
       objectId: "overlay",
     },
@@ -3799,7 +3789,7 @@ async function testRenderIntentPatchMergeHelper() {
     visual: { type: "rect" },
   });
   assertEqual(newIntentPatch.diagnostics.length, 0);
-  assertEqual(newIntentPatch.draft?.subject.surfaceId, "front");
+  assertEqual(newIntentPatch.draft?.subject.sceneId, "front");
   assertEqual(newIntentPatch.draft?.ordering.layerId, "overlay-layer");
 
   const missingBasePatch = mergeRenderIntentPatchDraft([], {
@@ -3842,7 +3832,7 @@ async function testSceneLayoutModelDefaultsAndPadding() {
   );
 }
 
-async function testSceneLayoutModelUsesExportFrames() {
+async function testSceneLayoutModelKeepsContentRectOnPreview() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
@@ -3850,9 +3840,9 @@ async function testSceneLayoutModelUsesExportFrames() {
     maxMm: 2000,
     minMm: 10,
     sceneFrames: {
-      exportFrame: { xMm: -10, yMm: -10, widthMm: 120, heightMm: 120 },
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      export: { xMm: -10, yMm: -10, widthMm: 120, heightMm: 120 },
+      preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      production: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
     },
     stepMm: 0.1,
     unit: "mm",
@@ -3861,10 +3851,8 @@ async function testSceneLayoutModelUsesExportFrames() {
 
   assert(layout, "outset layout should resolve");
   assertClose(layout.scale, 4.08);
-  assertClose(layout.trimRect.left, 196);
-  assertClose(layout.trimRect.width, 408);
-  assertClose(layout.cutRect.left, 155.2);
-  assertClose(layout.cutRect.width, 489.6);
+  assertClose(layout.contentRect.left, 196);
+  assertClose(layout.contentRect.width, 408);
 
   const insetLayout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
@@ -3872,9 +3860,9 @@ async function testSceneLayoutModelUsesExportFrames() {
     maxMm: 2000,
     minMm: 10,
     sceneFrames: {
-      exportFrame: { xMm: 10, yMm: 10, widthMm: 80, heightMm: 80 },
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      export: { xMm: 10, yMm: 10, widthMm: 80, heightMm: 80 },
+      preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      production: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
     },
     stepMm: 0.1,
     unit: "mm",
@@ -3882,11 +3870,10 @@ async function testSceneLayoutModelUsesExportFrames() {
   });
 
   assert(insetLayout, "inset layout should resolve");
-  assertClose(insetLayout.trimRect.width, 408);
-  assertClose(insetLayout.cutRect.width, 326.4);
+  assertClose(insetLayout.contentRect.width, 408);
 }
 
-async function testSceneLayoutModelPositionsProductionFrame() {
+async function testSceneLayoutModelUsesProductionAsDefaultViewportFocus() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1299 / 709,
@@ -3894,8 +3881,8 @@ async function testSceneLayoutModelPositionsProductionFrame() {
     maxMm: 2000,
     minMm: 0.1,
     sceneFrames: {
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 1299, heightMm: 709 },
-      productionFrame: { xMm: 265, yMm: 319, widthMm: 770, heightMm: 300 },
+      preview: { xMm: 0, yMm: 0, widthMm: 1299, heightMm: 709 },
+      production: { xMm: 265, yMm: 319, widthMm: 770, heightMm: 300 },
     },
     stepMm: 0.001,
     unit: "mm",
@@ -3904,13 +3891,9 @@ async function testSceneLayoutModelPositionsProductionFrame() {
 
   assert(layout, "production frame layout should resolve");
   assertClose(layout.scale, 800 / 1299);
-  assertClose(layout.trimRect.centerX, 650 * layout.scale);
-  assertClose(layout.trimRect.left, 265 * layout.scale);
-  assertClose(layout.trimRect.top, 300 - 150 * layout.scale);
-  assertClose(layout.trimRect.width, 770 * layout.scale);
-  assertClose(layout.trimRect.height, 300 * layout.scale);
-  assertClose(layout.cutRect.left, layout.trimRect.left);
-  assertClose(layout.cutRect.width, layout.trimRect.width);
+  assertClose(layout.contentRect.centerX, (1299 / 2) * layout.scale);
+  assertClose(layout.contentRect.width, 800);
+  assertClose(layout.contentRect.height, 709 * layout.scale);
 }
 
 async function testSceneLayoutModelClampsFocusedProductionFrame() {
@@ -3921,8 +3904,8 @@ async function testSceneLayoutModelClampsFocusedProductionFrame() {
     maxMm: 2000,
     minMm: 0.1,
     sceneFrames: {
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
-      productionFrame: { xMm: 0, yMm: 0, widthMm: 120, heightMm: 120 },
+      preview: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
+      production: { xMm: 0, yMm: 0, widthMm: 120, heightMm: 120 },
     },
     stepMm: 0.001,
     unit: "mm",
@@ -3931,11 +3914,11 @@ async function testSceneLayoutModelClampsFocusedProductionFrame() {
 
   assert(layout, "edge production frame layout should resolve");
   assertClose(layout.scale, 600 / 500);
-  assertClose(layout.trimRect.left, 200);
-  assertClose(layout.trimRect.top, 0);
+  assertClose(layout.contentRect.left, 200);
+  assertClose(layout.contentRect.top, 0);
 }
 
-async function testSceneLayoutModelUsesExplicitExportFrame() {
+async function testSceneLayoutModelIgnoresExportFrameForLayout() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
@@ -3943,9 +3926,9 @@ async function testSceneLayoutModelUsesExplicitExportFrame() {
     maxMm: 2000,
     minMm: 0.1,
     sceneFrames: {
-      exportFrame: { xMm: 10, yMm: 15, widthMm: 80, heightMm: 70 },
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      productionFrame: { xMm: 20, yMm: 20, widthMm: 50, heightMm: 40 },
+      export: { xMm: 10, yMm: 15, widthMm: 80, heightMm: 70 },
+      preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+      production: { xMm: 20, yMm: 20, widthMm: 50, heightMm: 40 },
     },
     stepMm: 0.001,
     unit: "mm",
@@ -3953,8 +3936,8 @@ async function testSceneLayoutModelUsesExplicitExportFrame() {
   });
 
   assert(layout, "explicit export frame layout should resolve");
-  assertClose(layout.cutRect.left, 190);
-  assertClose(layout.cutRect.width, 80 * layout.scale);
+  assertClose(layout.contentRect.left, 130);
+  assertClose(layout.contentRect.width, 100 * layout.scale);
 }
 
 async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
@@ -4117,8 +4100,8 @@ async function main() {
       testRenderIntentDocumentUpdatesAreScoped,
     ],
     [
-      "emits surface frame changes only for semantic updates",
-      testSurfaceFrameImportsOnlyEmitSemanticChanges,
+      "emits scene frame changes only for semantic updates",
+      testSceneFrameImportsOnlyEmitSemanticChanges,
     ],
     [
       "rejects prepared render intents after concurrent runtime patches",
@@ -4129,12 +4112,12 @@ async function main() {
       testPreparedConfigurationPublicationRejectsConcurrentUpdates,
     ],
     [
-      "rejects prepared surface frames after concurrent updates",
-      testPreparedSurfaceFramePublicationRejectsConcurrentUpdates,
+      "rejects prepared scene frames after concurrent updates",
+      testPreparedSceneFramePublicationRejectsConcurrentUpdates,
     ],
     [
-      "activates surfaces without rebuilding frames",
-      testSurfaceFrameActivateSurfaceKeepsInsertionOrder,
+      "requires explicit scene frame lookup without an active pointer",
+      testSceneFramesRequireExplicitSceneAndKeepInsertionOrder,
     ],
     [
       "sorts render intent patch entries deterministically",
@@ -4165,20 +4148,20 @@ async function main() {
       testSceneLayoutModelDefaultsAndPadding,
     ],
     [
-      "computes scene export frame layouts",
-      testSceneLayoutModelUsesExportFrames,
+      "keeps layout content on preview bounds",
+      testSceneLayoutModelKeepsContentRectOnPreview,
     ],
     [
-      "positions trim and cut rectangles from production frame",
-      testSceneLayoutModelPositionsProductionFrame,
+      "uses production as the default viewport focus",
+      testSceneLayoutModelUsesProductionAsDefaultViewportFocus,
     ],
     [
       "clamps focused production frame to keep preview visible",
       testSceneLayoutModelClampsFocusedProductionFrame,
     ],
     [
-      "uses explicit export frame instead of derived cut frame",
-      testSceneLayoutModelUsesExplicitExportFrame,
+      "keeps export frames out of layout snapshots",
+      testSceneLayoutModelIgnoresExportFrameForLayout,
     ],
   ];
 

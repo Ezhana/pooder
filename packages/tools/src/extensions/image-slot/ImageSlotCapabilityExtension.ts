@@ -348,7 +348,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
               channel: "image-slot",
               groupId: IMAGE_SLOT_CAPABILITY_ID,
               subjectId: objectId,
-              surfaceId: context.surfaceId,
+              sceneId: context.surfaceId,
             },
             interactionMode: "exclusive",
             leavePolicy: "block",
@@ -682,7 +682,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     this.listeners.forEach((listener) => listener(clone(this.state)));
   }
 
-  private startSessionRender(surfaceId: string): void {
+  private startSessionRender(sceneId: string): void {
     this.disposeSessionRender();
     if (!this.sessionHandle || !this.renderIntentService) return;
     const scope = this.renderIntentService.createSessionRenderScope(
@@ -690,7 +690,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     );
     this.sessionRenderScope = this.sessionHandle.own(scope);
     this.sceneLayoutSubscription =
-      this.sceneLayoutService?.onLayoutChange(surfaceId, () =>
+      this.sceneLayoutService?.onLayoutChange(sceneId, () =>
         this.publishSessionRenderContributions(),
       ) ?? null;
     this.publishSessionRenderContributions();
@@ -717,7 +717,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       role: "override",
       sessionId: session.descriptor.sessionId,
       subjectId: draft.objectId,
-      surfaceId: context.surfaceId,
+      sceneId: context.surfaceId,
       provenance: `${IMAGE_SLOT_CAPABILITY_ID}:working-image`,
       priority: 100,
       replacementTarget: {
@@ -763,7 +763,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       id: `image-slot:${draft.objectId}:working`,
       subject: {
         kind: "object",
-        surfaceId: target.surfaceId,
+        sceneId: target.sceneId,
         layerId: target.layerId,
         objectId: draft.objectId,
         objectType: "image",
@@ -951,7 +951,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private createSessionFrameContributions(
     sessionId: string,
     objectId: string,
-    surfaceId: string,
+    sceneId: string,
     target: RenderGraphNode,
   ): SessionRenderContribution[] {
     const canvas = this.canvasService;
@@ -972,7 +972,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       role: "auxiliary",
       sessionId,
       subjectId: objectId,
-      surfaceId,
+      sceneId,
       provenance,
       priority: 100,
       projection,
@@ -983,7 +983,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           id: `image-slot:${objectId}:crop-mask`,
           subject: {
             kind: "object",
-            surfaceId,
+            sceneId,
             layerId: controlsLayerId,
             objectId,
           },
@@ -1010,7 +1010,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
           id: `image-slot:${objectId}:crop-frame`,
           subject: {
             kind: "object",
-            surfaceId,
+            sceneId,
             layerId: controlsLayerId,
             objectId,
           },
@@ -1040,7 +1040,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   private createSnapGuideContributions(
     sessionId: string,
     objectId: string,
-    surfaceId: string,
+    sceneId: string,
     target: RenderGraphNode,
   ): SessionRenderContribution[] {
     const placement = this.resolveDocumentObjectPlacement(objectId);
@@ -1074,14 +1074,14 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
         role: "auxiliary",
         sessionId,
         subjectId: objectId,
-        surfaceId,
+        sceneId,
         provenance: `${IMAGE_SLOT_CAPABILITY_ID}:snap-guide`,
         priority: 110,
         projection: {
           id: `image-slot:${objectId}:snap-guide:${axis}`,
           subject: {
             kind: "object",
-            surfaceId,
+            sceneId,
             layerId: controlsLayerId,
             objectId,
           },

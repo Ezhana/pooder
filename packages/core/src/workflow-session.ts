@@ -15,7 +15,7 @@ export type SessionPhase =
   | "closed";
 
 export interface SessionScope {
-  surfaceId?: string | null;
+  sceneId?: string | null;
   subjectId?: string | null;
   channel?: string | null;
   groupId?: string | null;

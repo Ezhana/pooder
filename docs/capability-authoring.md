@@ -126,6 +126,25 @@ createCropPreviewCapability({
 });
 ```
 
+Document surfaces are translated at the document-core boundary. A capability
+that talks to core services uses `sceneId`, including `SessionScope`,
+`SessionRenderContribution`, RenderIntent subjects, and RenderGraph layers.
+Document-aware code may retain `surfaceId` only while reading or mutating the
+EditorDocument.
+
+Scene export is deliberately one-scene-per-call:
+
+```ts
+await sceneExport.exportImage({
+  sceneId,
+  crop: { type: "sceneRect", rect },
+});
+```
+
+The caller must provide both the scene and a scene-space crop. Multi-scene
+export and document roles such as production/export bounds belong in a
+document-aware capability, not `SceneExportService`.
+
 ## Commands
 
 Prefer typed facade methods for new behavior. Add command contributions only

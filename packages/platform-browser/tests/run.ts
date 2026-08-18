@@ -12,14 +12,14 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  SURFACE_FRAME_SERVICE,
+  SCENE_FRAME_SERVICE,
   type RenderIntentService,
   type GeometrySourceService,
   type InteractionService,
   type SceneService,
   type SessionService,
 } from "@pooder/core";
-import type { SurfaceSceneFrames } from "@pooder/core";
+import type { SceneFrames } from "@pooder/core";
 import {
   attachBrowserHost,
   BrowserObjectImageResolverService,
@@ -277,11 +277,11 @@ class FakeSceneLayoutService {
     return this.layout;
   }
 
-  onLayoutChange(surfaceId: string, listener: (layout: any) => void) {
+  onLayoutChange(sceneId: string, listener: (layout: any) => void) {
     const listeners =
-      this.listeners.get(surfaceId) ?? new Set<(layout: any) => void>();
+      this.listeners.get(sceneId) ?? new Set<(layout: any) => void>();
     listeners.add(listener);
-    this.listeners.set(surfaceId, listeners);
+    this.listeners.set(sceneId, listeners);
     return {
       dispose: () => {
         listeners.delete(listener);
@@ -290,36 +290,36 @@ class FakeSceneLayoutService {
   }
 }
 
-class FakeSurfaceFrameService {
-  private listeners = new Set<(event: { surfaceId: string }) => void>();
-  private activeSurfaceId: string | null;
+class FakeSceneFrameService {
+  private listeners = new Set<(event: { sceneId: string }) => void>();
+  private activeSceneId: string | null;
 
-  constructor(private framesBySurfaceId: Record<string, SurfaceSceneFrames>) {
-    this.activeSurfaceId = Object.keys(framesBySurfaceId)[0] ?? null;
+  constructor(private framesBySceneId: Record<string, SceneFrames>) {
+    this.activeSceneId = Object.keys(framesBySceneId)[0] ?? null;
   }
 
-  activateSurface(surfaceId: string) {
-    this.activeSurfaceId = surfaceId;
+  activateSurface(sceneId: string) {
+    this.activeSceneId = sceneId;
   }
 
-  getActiveSurfaceId() {
-    return this.activeSurfaceId;
+  getActiveSceneId() {
+    return this.activeSceneId;
   }
 
-  listSurfaceIds() {
-    return Object.keys(this.framesBySurfaceId);
+  listSceneIds() {
+    return Object.keys(this.framesBySceneId);
   }
 
-  getFrames(surfaceId?: string) {
-    const key = surfaceId || this.activeSurfaceId || this.listSurfaceIds()[0];
-    return key ? (this.framesBySurfaceId[key] ?? null) : null;
+  getFrames(sceneId?: string) {
+    const key = sceneId || this.activeSceneId || this.listSceneIds()[0];
+    return key ? (this.framesBySceneId[key] ?? null) : null;
   }
 
   onActiveSurfaceChange() {
     return { dispose() {} };
   }
 
-  onAnyFramesChange(listener: (event: { surfaceId: string }) => void) {
+  onAnyFramesChange(listener: (event: { sceneId: string }) => void) {
     this.listeners.add(listener);
     return {
       dispose: () => {
@@ -332,11 +332,11 @@ class FakeSurfaceFrameService {
 class FakeBrowserSceneExportService {}
 class FakeFabricRenderGraphAdapter {}
 
-const TEST_SURFACE_FRAMES: SurfaceSceneFrames = {
-  previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  productionFrame: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
-  exportFrame: { xMm: 5, yMm: 15, widthMm: 90, heightMm: 85 },
-  viewportFocusFrame: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
+const TEST_SURFACE_FRAMES: SceneFrames = {
+  preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
+  production: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
+  export: { xMm: 5, yMm: 15, widthMm: 90, heightMm: 85 },
+  viewportFocus: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
 };
 
 function createMutableConfig(initial: Record<string, unknown> = {}) {
@@ -368,26 +368,24 @@ function createMutableConfig(initial: Record<string, unknown> = {}) {
   };
 }
 
-function createMutableSurfaceFrames(
-  initial: Record<string, SurfaceSceneFrames> = {},
-) {
-  const frameMap = new Map<string, SurfaceSceneFrames>(Object.entries(initial));
+function createMutableSurfaceFrames(initial: Record<string, SceneFrames> = {}) {
+  const frameMap = new Map<string, SceneFrames>(Object.entries(initial));
   const frameListeners = new Set<(event: any) => void>();
   return {
-    getFrames: (surfaceId?: string) => {
-      const key = surfaceId || Array.from(frameMap.keys())[0];
+    getFrames: (sceneId?: string) => {
+      const key = sceneId || Array.from(frameMap.keys())[0];
       return key ? (frameMap.get(key) ?? null) : null;
     },
-    getActiveSurfaceId: () => Array.from(frameMap.keys())[0] ?? null,
-    listSurfaceIds: () => Array.from(frameMap.keys()),
+    getActiveSceneId: () => Array.from(frameMap.keys())[0] ?? null,
+    listSceneIds: () => Array.from(frameMap.keys()),
     onActiveSurfaceChange: () => ({ dispose() {} }),
     onAnyFramesChange: (listener: (event: any) => void) => {
       frameListeners.add(listener);
       return { dispose: () => frameListeners.delete(listener) };
     },
-    setFrames: (surfaceId: string, frames: SurfaceSceneFrames) => {
-      frameMap.set(surfaceId, frames);
-      frameListeners.forEach((listener) => listener({ surfaceId, frames }));
+    setFrames: (sceneId: string, frames: SceneFrames) => {
+      frameMap.set(sceneId, frames);
+      frameListeners.forEach((listener) => listener({ sceneId, frames }));
     },
   };
 }
@@ -621,15 +619,7 @@ function testAttachRegistersRenderGraphAdapter() {
   const { registered, runtime } = createRuntime();
   const canvasService = new FakeCanvasService();
   const sceneLayoutService = new FakeSceneLayoutService({
-    bleedRect: {
-      centerX: 110,
-      centerY: 120,
-      height: 140,
-      left: 10,
-      top: 20,
-      width: 200,
-    },
-    cutRect: {
+    contentRect: {
       centerX: 110,
       centerY: 120,
       height: 140,
@@ -641,24 +631,26 @@ function testAttachRegistersRenderGraphAdapter() {
     offsetY: 36,
     revision: 0,
     scale: 2,
-    surfaceId: "front",
-    trimRect: {
-      centerX: 110,
-      centerY: 120,
-      height: 140,
-      left: 10,
-      top: 20,
-      width: 200,
-    },
+    sceneId: "front",
   });
-  const surfaceFrameService = new FakeSurfaceFrameService({
+  const sceneFrameService = new FakeSceneFrameService({
     front: TEST_SURFACE_FRAMES,
   });
   const browserSceneExportService = new FakeBrowserSceneExportService();
   const graphAdapter = new FakeFabricRenderGraphAdapter();
   let observerCallback: ResizeObserverCallback | null = null;
   let disconnected = false;
-  registered.set(SURFACE_FRAME_SERVICE, surfaceFrameService as any);
+  registered.set(SCENE_FRAME_SERVICE, sceneFrameService as any);
+  registered.set(SCENE_SERVICE, {
+    getActiveRoot: () => ({
+      id: "front",
+      owner: { type: "document", documentSceneId: "front" },
+      composition: {
+        entries: [{ source: "document-graph", sceneId: "front" }],
+      },
+    }),
+    onRootChange: () => ({ dispose() {} }),
+  } as any);
 
   const attachment = attachBrowserHost(runtime, {
     container: {
@@ -697,8 +689,8 @@ function testAttachRegistersRenderGraphAdapter() {
       scale: 2,
       offsetX: 24,
       offsetY: 36,
-      width: TEST_SURFACE_FRAMES.previewBounds.widthMm * 2,
-      height: TEST_SURFACE_FRAMES.previewBounds.heightMm * 2,
+      width: TEST_SURFACE_FRAMES.preview.widthMm * 2,
+      height: TEST_SURFACE_FRAMES.preview.heightMm * 2,
     },
     "host should apply existing scene layout to the canvas viewport on attach",
   );
@@ -747,7 +739,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       id: "background",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "bg",
         objectId: "bg",
       },
@@ -760,7 +752,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       id: "art",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "art",
       },
@@ -786,7 +778,7 @@ async function testFabricRenderGraphAdapterBuildsDrawList() {
       id: "hidden-export",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "hidden-export",
       },
@@ -847,7 +839,7 @@ async function testSessionRootCompositionIsLocalOnly() {
       id: "document-node",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "document",
         objectId: "document-node",
       },
@@ -987,7 +979,7 @@ async function testSessionRenderOverrideUsesIndependentProjectionId() {
       id: "user-image",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "user-image",
       },
@@ -1014,7 +1006,7 @@ async function testSessionRenderOverrideUsesIndependentProjectionId() {
       role: "override",
       sessionId: session.descriptor.sessionId,
       subjectId: "user-image",
-      surfaceId: "front",
+      sceneId: "front",
       provenance: "platform-test:working-image",
       priority: 100,
       replacementTarget: {
@@ -1025,7 +1017,7 @@ async function testSessionRenderOverrideUsesIndependentProjectionId() {
         id: "working-user-image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "art",
           objectId: "user-image",
         },
@@ -1120,7 +1112,7 @@ async function testSceneExportReadsOnlyDocumentProjections() {
       id: "document-export-node",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "export-subject",
       },
@@ -1135,7 +1127,7 @@ async function testSceneExportReadsOnlyDocumentProjections() {
       role: "override",
       sessionId: scope.sessionId,
       subjectId: "export-subject",
-      surfaceId: "front",
+      sceneId: "front",
       provenance: "test:working",
       priority: 100,
       replacementTarget: {
@@ -1146,7 +1138,7 @@ async function testSceneExportReadsOnlyDocumentProjections() {
         id: "session-export-node",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "art",
           objectId: "export-subject",
         },
@@ -1251,7 +1243,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
       id: "slot",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "slot",
         objectType: "image",
@@ -1275,7 +1267,7 @@ async function testFabricRenderGraphAdapterStretchesImageToDocumentFrame() {
       id: "resolved-slot",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "resolved-slot",
         objectType: "image",
@@ -1394,7 +1386,7 @@ async function testFabricRenderGraphAdapterResyncsOnViewportChange() {
       id: "art",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "art",
       },
@@ -1422,30 +1414,30 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   const viewportSize = { width: 800, height: 600 };
   const canvas = createLayoutCanvas(() => ({ ...viewportSize }));
   const layoutService = new SceneLayoutService();
-  const frameMap = new Map<string, SurfaceSceneFrames>();
+  const frameMap = new Map<string, SceneFrames>();
   const frameListeners = new Set<(event: any) => void>();
-  const surfaceFrames = {
-    getFrames: (surfaceId?: string) => {
-      const key = surfaceId || Array.from(frameMap.keys())[0];
+  const sceneFrames = {
+    getFrames: (sceneId?: string) => {
+      const key = sceneId || Array.from(frameMap.keys())[0];
       return key ? (frameMap.get(key) ?? null) : null;
     },
-    getActiveSurfaceId: () => Array.from(frameMap.keys())[0] ?? null,
-    listSurfaceIds: () => Array.from(frameMap.keys()),
+    getActiveSceneId: () => Array.from(frameMap.keys())[0] ?? null,
+    listSceneIds: () => Array.from(frameMap.keys()),
     onActiveSurfaceChange: () => ({ dispose() {} }),
     onAnyFramesChange: (listener: (event: any) => void) => {
       frameListeners.add(listener);
       return { dispose: () => frameListeners.delete(listener) };
     },
-    setFrames: (surfaceId: string, frames: SurfaceSceneFrames) => {
-      frameMap.set(surfaceId, frames);
-      frameListeners.forEach((listener) => listener({ surfaceId, frames }));
+    setFrames: (sceneId: string, frames: SceneFrames) => {
+      frameMap.set(sceneId, frames);
+      frameListeners.forEach((listener) => listener({ sceneId, frames }));
     },
   };
   layoutService.init({
     eventBus: runtime.eventBus,
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
-      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,
@@ -1464,10 +1456,10 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   );
   assertEqual(changes.length, 0, "pure reads should not emit layout changes");
 
-  surfaceFrames.setFrames("front", TEST_SURFACE_FRAMES);
+  sceneFrames.setFrames("front", TEST_SURFACE_FRAMES);
   const first = layoutService.getLayout("front");
   assert(first, "frame invalidation should produce a layout snapshot");
-  assertEqual(first.surfaceId, "front", "snapshot should carry its surface id");
+  assertEqual(first.sceneId, "front", "snapshot should carry its surface id");
   assertEqual(
     first.revision,
     1,
@@ -1507,39 +1499,39 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const layoutService = new SceneLayoutService();
-  const frameMap = new Map<string, SurfaceSceneFrames>();
+  const frameMap = new Map<string, SceneFrames>();
   const frameListeners = new Set<(event: any) => void>();
-  const surfaceFrames = {
+  const sceneFrames = {
     clear: () => {
       const previous = Array.from(frameMap.keys());
       frameMap.clear();
-      previous.forEach((surfaceId) => {
+      previous.forEach((sceneId) => {
         frameListeners.forEach((listener) =>
-          listener({ surfaceId, frames: null }),
+          listener({ sceneId, frames: null }),
         );
       });
     },
-    getFrames: (surfaceId?: string) => {
-      const key = surfaceId || Array.from(frameMap.keys())[0];
+    getFrames: (sceneId?: string) => {
+      const key = sceneId || Array.from(frameMap.keys())[0];
       return key ? (frameMap.get(key) ?? null) : null;
     },
-    getActiveSurfaceId: () => Array.from(frameMap.keys())[0] ?? null,
-    listSurfaceIds: () => Array.from(frameMap.keys()),
+    getActiveSceneId: () => Array.from(frameMap.keys())[0] ?? null,
+    listSceneIds: () => Array.from(frameMap.keys()),
     onActiveSurfaceChange: () => ({ dispose() {} }),
     onAnyFramesChange: (listener: (event: any) => void) => {
       frameListeners.add(listener);
       return { dispose: () => frameListeners.delete(listener) };
     },
-    setFrames: (surfaceId: string, frames: SurfaceSceneFrames) => {
-      frameMap.set(surfaceId, frames);
-      frameListeners.forEach((listener) => listener({ surfaceId, frames }));
+    setFrames: (sceneId: string, frames: SceneFrames) => {
+      frameMap.set(sceneId, frames);
+      frameListeners.forEach((listener) => listener({ sceneId, frames }));
     },
   };
   layoutService.init({
     eventBus: runtime.eventBus,
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
-      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,
@@ -1551,13 +1543,13 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
     changes.push(layout);
   });
 
-  surfaceFrames.setFrames("front", TEST_SURFACE_FRAMES);
+  sceneFrames.setFrames("front", TEST_SURFACE_FRAMES);
   assert(
     layoutService.getLayout("front"),
     "snapshot should exist before clear",
   );
 
-  surfaceFrames.clear();
+  sceneFrames.clear();
   assertEqual(
     layoutService.getLayout("front"),
     null,
@@ -1574,7 +1566,7 @@ async function testSceneLayoutServiceUsesConfiguredViewPadding() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "10%" });
-  const surfaceFrames = createMutableSurfaceFrames({
+  const sceneFrames = createMutableSurfaceFrames({
     front: TEST_SURFACE_FRAMES,
   });
   const layoutService = new SceneLayoutService();
@@ -1584,7 +1576,7 @@ async function testSceneLayoutServiceUsesConfiguredViewPadding() {
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
       if (identifier === CONFIGURATION_SERVICE) return config;
-      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,
@@ -1607,7 +1599,7 @@ async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "16%" });
-  const surfaceFrames = createMutableSurfaceFrames({
+  const sceneFrames = createMutableSurfaceFrames({
     front: TEST_SURFACE_FRAMES,
   });
   const layoutService = new SceneLayoutService();
@@ -1617,7 +1609,7 @@ async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
       if (identifier === CONFIGURATION_SERVICE) return config;
-      if (identifier === SURFACE_FRAME_SERVICE) return surfaceFrames;
+      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,
@@ -1662,7 +1654,7 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
       id: "background",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "bg",
         objectId: "bg",
       },
@@ -1802,7 +1794,7 @@ async function testFabricRenderGraphAdapterConsumesSceneSpace() {
       id: "screen-overlay",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "overlay",
         objectId: "screen-overlay",
       },
@@ -1838,7 +1830,7 @@ async function testFabricRenderGraphAdapterDoesNotSizePathFromFrame() {
       id: "cutline",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "front.dieline-overlay",
         objectId: "cutline",
       },
@@ -1895,7 +1887,7 @@ async function testFabricRenderGraphAdapterDefaultsPathTransformOriginToTopLeft(
       id: "detected-cutline",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "front.dieline-overlay",
         objectId: "detected-cutline",
       },
@@ -1948,7 +1940,7 @@ async function testFabricRenderGraphAdapterRespectsLayerArrayOrder() {
       id: "front.dieline.cutline",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "front.dieline-overlay",
         objectId: "front.dieline.cutline",
         objectType: "object",
@@ -1971,7 +1963,7 @@ async function testFabricRenderGraphAdapterRespectsLayerArrayOrder() {
     id: "upload:front.image.user",
     subject: {
       kind: "object",
-      surfaceId: "front",
+      sceneId: "front",
       layerId: "image.overlay",
       objectId: "front.image.user",
       objectType: "rect",
@@ -2063,7 +2055,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "interactive",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "interactive",
       },
@@ -2077,7 +2069,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "constraint-only",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "constraint-only",
       },
@@ -2107,7 +2099,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "conditional",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "conditional",
       },
@@ -2137,7 +2129,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "runtime-evented",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "runtime-evented",
       },
@@ -2155,7 +2147,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "transform-only",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "transform-only",
       },
@@ -2174,7 +2166,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "activation-only",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "activation-only",
       },
@@ -2193,7 +2185,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "empty-slot",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "empty-slot",
       },
@@ -2209,7 +2201,7 @@ async function testFabricRenderGraphAdapterMapsDeclarativeInteraction() {
       id: "placed-slot",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "placed-slot",
       },
@@ -2469,7 +2461,7 @@ async function testFabricRenderGraphAdapterConstrainsDragging() {
       id: "constrained",
       subject: {
         kind: "object",
-        surfaceId: "s1",
+        sceneId: "s1",
         layerId: "art",
         objectId: "constrained",
       },
@@ -2658,7 +2650,7 @@ async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
       id: "subject:fill",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "subject",
       },
@@ -2671,7 +2663,7 @@ async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
       id: "subject:outline",
       subject: {
         kind: "object",
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "subject",
       },
@@ -2701,7 +2693,7 @@ async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
       renderNodeId,
       renderTarget: "render-graph",
       subjectId: "subject",
-      surfaceId: "front",
+      sceneId: "front",
     },
     getBoundingRect() {
       return {
@@ -2746,7 +2738,7 @@ async function testFabricRenderGraphAdapterMovesLogicalSubjectProjections() {
     interaction.getSelectedSubject(),
     {
       subjectId: "subject",
-      surfaceId: "front",
+      sceneId: "front",
       projectionTargets: [
         {
           projectionId: "subject:fill",
@@ -3453,6 +3445,7 @@ async function testSceneExportUsesThePreviewClipContract() {
       layers: [
         {
           id: "artwork",
+          sceneId: "front",
           visible: true,
           nodes: [
             {
@@ -3479,6 +3472,7 @@ async function testSceneExportUsesThePreviewClipContract() {
   service.createExportCanvas = createExportCanvas;
 
   await service.exportImage({
+    sceneId: "front",
     crop: {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
@@ -3491,6 +3485,7 @@ async function testSceneExportUsesThePreviewClipContract() {
   );
 
   await service.exportImage({
+    sceneId: "front",
     crop: {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
@@ -3504,7 +3499,7 @@ async function testSceneExportUsesThePreviewClipContract() {
   );
 }
 
-async function testSceneExportImagesExportsEachSurface() {
+async function testSceneExportRequiresOneExplicitScenePerCall() {
   const createExportCanvas = () => ({
     add() {},
     dispose() {},
@@ -3519,17 +3514,12 @@ async function testSceneExportImagesExportsEachSurface() {
       return {};
     },
   };
-  service.surfaceFrameService = {
-    getActiveSurfaceId: () => "front",
-    listSurfaceIds: () => ["front", "back"],
-    getFrames: () => null,
-  };
   service.renderIntentService = {
     getGraph: () => ({
       layers: [
         {
           id: "art-front",
-          surfaceId: "front",
+          sceneId: "front",
           visible: true,
           nodes: [
             {
@@ -3544,7 +3534,7 @@ async function testSceneExportImagesExportsEachSurface() {
         },
         {
           id: "art-back",
-          surfaceId: "back",
+          sceneId: "back",
           visible: true,
           nodes: [
             {
@@ -3561,10 +3551,7 @@ async function testSceneExportImagesExportsEachSurface() {
     }),
   };
   service.renderGraphAdapter = {
-    createExportRenderObjectSpec: (
-      _layer: unknown,
-      node: { id: string },
-    ) => ({
+    createExportRenderObjectSpec: (_layer: unknown, node: { id: string }) => ({
       id: node.id,
       type: "rect",
       props: { width: 10, height: 10 },
@@ -3577,25 +3564,26 @@ async function testSceneExportImagesExportsEachSurface() {
     type: "sceneRect" as const,
     rect: { left: 0, top: 0, width: 10, height: 10 },
   };
-  const results = await service.exportImages({ crop, includeHidden: true });
-  assertEqual(results.length, 2, "exportImages should emit one result per surface");
-  assertEqual(results[0]?.surfaceId, "front", "first export should keep document order");
-  assertEqual(results[1]?.surfaceId, "back", "second export should keep document order");
-
-  const active = await service.exportImage({ crop, includeHidden: true });
-  assertEqual(
-    active.surfaceId,
-    "front",
-    "exportImage should target the active surface",
-  );
-
-  const requested = await service.exportImages({
+  const front = await service.exportImage({
     crop,
     includeHidden: true,
-    surfaceId: "back",
+    sceneId: "front",
   });
-  assertEqual(requested.length, 1, "exportImages should honor an explicit surfaceId");
-  assertEqual(requested[0]?.surfaceId, "back", "explicit surfaceId should select that surface");
+  const back = await service.exportImage({
+    crop,
+    includeHidden: true,
+    sceneId: "back",
+  });
+  assertEqual(
+    front.sceneId,
+    "front",
+    "first call should export only the requested scene",
+  );
+  assertEqual(
+    back.sceneId,
+    "back",
+    "second call should export only the requested scene",
+  );
 }
 
 async function testSceneExportMatchesRenderGraphNodeIds() {
@@ -3815,7 +3803,7 @@ async function testSceneExportUsesCutFrameCrop() {
   };
   service.sceneLayoutService = {
     recomputeLayout: () => ({
-      surfaceId: "legacy",
+      sceneId: "legacy",
       revision: 1,
       offsetX: 0,
       offsetY: 0,
@@ -4124,6 +4112,7 @@ async function testSceneExportFallsBackToTheUnmaskedImage() {
       layers: [
         {
           id: "artwork",
+          sceneId: "front",
           visible: true,
           nodes: [
             {
@@ -4162,6 +4151,7 @@ async function testSceneExportFallsBackToTheUnmaskedImage() {
 
   try {
     const result = await service.exportImage({
+      sceneId: "front",
       crop: {
         type: "sceneRect",
         rect: { left: 0, top: 0, width: 100, height: 80 },
@@ -4792,8 +4782,8 @@ async function main() {
       testSceneExportUsesThePreviewClipContract,
     ],
     [
-      "exports each surface without switching the active tab",
-      testSceneExportImagesExportsEachSurface,
+      "requires one explicit scene per export call",
+      testSceneExportRequiresOneExplicitScenePerCall,
     ],
   ];
 

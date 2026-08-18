@@ -243,14 +243,26 @@ export interface SessionSceneOwner {
   readonly sessionId: string;
 }
 
-export type SceneOwner = SessionSceneOwner;
+export interface DocumentSceneOwner {
+  readonly type: "document";
+  readonly documentSceneId: SceneId;
+}
+
+export type SceneOwner = DocumentSceneOwner | SessionSceneOwner;
+
+export interface DocumentGraphSceneCompositionEntry {
+  readonly source: "document-graph";
+  readonly sceneId: SceneId;
+}
 
 export interface LocalSceneCompositionEntry {
   readonly source: "local";
   readonly layerIds: readonly LayerId[];
 }
 
-export type SceneCompositionEntry = LocalSceneCompositionEntry;
+export type SceneCompositionEntry =
+  | DocumentGraphSceneCompositionEntry
+  | LocalSceneCompositionEntry;
 
 export interface SceneComposition {
   readonly entries: readonly SceneCompositionEntry[];
