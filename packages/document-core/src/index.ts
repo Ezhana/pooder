@@ -2442,7 +2442,7 @@ function createGroupInteractionProxyDraft(
       objectId: object.id,
       objectType: "group",
     },
-    visual: { type: "rect" },
+    visual: { type: "rect", visible },
     containerGeometryRef: {
       sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
       geometryId: object.id,
@@ -2450,7 +2450,7 @@ function createGroupInteractionProxyDraft(
     },
     placement,
     interaction,
-    export: { visible, tags: [...object.tags] },
+    export: { tags: [...object.tags] },
     ordering: {
       layerId: surface.id,
       layerOrder,
@@ -2538,7 +2538,6 @@ function createObjectRenderIntentDraft(
       subOrder: 0,
     },
     export: {
-      visible,
       tags,
     },
     ...(interaction ? { interaction } : {}),
@@ -2563,6 +2562,7 @@ function createObjectRenderIntentDraft(
     return createImageRenderIntentDraft(
       base,
       object as EditorImageObject,
+      visible,
       imageResolution,
       imageAsset,
       placeholderFallback,
@@ -2581,6 +2581,7 @@ function createObjectRenderIntentDraft(
       visual: {
         type: "image",
         src: visual.imageUrl,
+        visible,
       },
       props: {
         ...base.props,
@@ -2596,7 +2597,7 @@ function createObjectRenderIntentDraft(
         visual.bounds,
         visual.contentBounds,
       ),
-      visual: { type: "path" },
+      visual: { type: "path", visible },
       props: {
         ...base.props,
         path: visual.pathData,
@@ -2611,6 +2612,7 @@ function createObjectRenderIntentDraft(
 function createImageRenderIntentDraft(
   base: Omit<RenderIntentDraft, "visual">,
   object: EditorImageObject,
+  visible: boolean,
   resolution?: ImageResourceResolution,
   resource?: EditorImageAsset,
   placeholderFallback = false,
@@ -2666,7 +2668,7 @@ function createImageRenderIntentDraft(
     : undefined;
   return {
     ...base,
-    visual: { type: "image", ...(image ? { src: image.src } : {}) },
+    visual: { type: "image", visible, ...(image ? { src: image.src } : {}) },
     previewGeometryRef: {
       sourceId: "render-intent",
       geometryId: object.id,
@@ -2875,9 +2877,11 @@ async function resolveDocumentImageResources(
  * would silently omit it — which is why callers that produce artwork must ask first
  * rather than trusting the rendered canvas.
  *
- * Hidden objects and image-slot placeholders are excluded because they never reach the
- * exported pixels. Resources are converged before being judged, so the answer does not
- * depend on whether the document has been applied yet; established ones cost no I/O.
+ * Hidden objects still export when tagged, so missing bytes there would also
+ * silently omit artwork. Image-slot placeholders are excluded because they never
+ * reach the exported pixels. Resources are converged before being judged, so the
+ * answer does not depend on whether the document has been applied yet; established
+ * ones cost no I/O.
  */
 export async function collectUnresolvableImageObjectIds(
   document: EditorDocument,
@@ -2889,14 +2893,13 @@ export async function collectUnresolvableImageObjectIds(
   const judge = (objectId: string, resolution: ImageResourceResolution) => {
     if (!resolution.ok) unresolvable.push(objectId);
   };
-  const collect = (objects: EditorObject[] | undefined, visible: boolean) =>
+  const collect = (objects: EditorObject[] | undefined) =>
     objects?.forEach((object) => {
-      const objectVisible = visible && (object.visible ?? true);
       if (isEditorGroupObject(object)) {
-        collect(object.children, objectVisible);
+        collect(object.children);
         return;
       }
-      if (object.type !== "image" || !objectVisible) return;
+      if (object.type !== "image") return;
       if (isImageSlotPlaceholderFallback(object)) return;
       const asset = resolveImageVisualAsset(document, object);
       if (!asset) return;
@@ -2912,7 +2915,7 @@ export async function collectUnresolvableImageObjectIds(
         }),
       );
     });
-  document.surfaces.forEach((surface) => collect(surface.objects, true));
+  document.surfaces.forEach((surface) => collect(surface.objects));
   if (pending.length) await Promise.all(pending);
   return unresolvable;
 }

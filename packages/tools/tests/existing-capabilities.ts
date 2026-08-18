@@ -288,7 +288,6 @@ async function testDesignExportCapability(): Promise<void> {
     height: 60,
     multiplier: 3,
     source: {
-      layerIds: ["artwork"],
       elementIds: ["visual"],
       tags: ["design"],
     },
@@ -324,38 +323,38 @@ async function testDesignExportCapability(): Promise<void> {
     assert(facade, "design export facade should be registered");
     const result = await facade.exportImage({
       multiplier: 3,
-      source: { elementIds: ["visual"], layerIds: ["artwork"] },
+      sceneId: "front",
+      source: { elementIds: ["visual"] },
     });
     assertDeepEqual(
       service.calls.at(-1)?.source,
-      { elementIds: ["visual"], layerIds: ["artwork"] },
+      { elementIds: ["visual"] },
       "design export should delegate the explicit source",
     );
     assertEqual(
-      result[0]?.url,
+      result.url,
       "data:image/png;base64,design",
       "design export url",
     );
     assertEqual(
-      result[0]?.sceneId,
+      result.sceneId,
       "front",
       "design export should include the scene id",
     );
     assertDeepEqual(
-      result[0]?.source,
+      result.source,
       {
-        layerIds: ["artwork"],
         elementIds: ["visual"],
         tags: ["design"],
       },
       "design export should map the platform source result",
     );
     assertDeepEqual(
-      result[0]?.crop,
+      result.crop,
       { left: 1, top: 2, width: 30, height: 20 },
       "design export should map the platform crop",
     );
-    await facade.exportImage();
+    await facade.exportImage({ sceneId: "front" });
     assertDeepEqual(
       service.calls.at(-1)?.crop,
       {
@@ -369,7 +368,16 @@ async function testDesignExportCapability(): Promise<void> {
       { tags: ["export:design"] },
       "design export should use the canonical design export tag by default",
     );
+    assertEqual(
+      Object.prototype.hasOwnProperty.call(
+        service.calls.at(-1) ?? {},
+        "includeHidden",
+      ),
+      false,
+      "design export must not rewrite membership with includeHidden",
+    );
     await facade.exportImage({
+      sceneId: "front",
       crop: {
         left: 0,
         top: 0,
@@ -389,7 +397,7 @@ async function testDesignExportCapability(): Promise<void> {
 
     runtime.config.update("size.cutMode", "outset");
     runtime.config.update("size.cutMarginMm", 4);
-    await facade.exportImage();
+    await facade.exportImage({ sceneId: "front" });
     assertDeepEqual(
       service.calls.at(-1)?.crop,
       {
@@ -409,6 +417,7 @@ async function testDesignExportCapability(): Promise<void> {
       .setBounds("back", SCENE_BOUNDS);
     const explicitCallCount = service.calls.length;
     await facade.exportImage({
+      sceneId: "back",
       crop: {
         left: 1,
         top: 2,
@@ -418,72 +427,31 @@ async function testDesignExportCapability(): Promise<void> {
       },
     });
     const explicitCalls = service.calls.slice(explicitCallCount);
-    assertEqual(
-      explicitCalls.length,
-      1,
-      "explicit crop should export only the current scene",
-    );
+    assertEqual(explicitCalls.length, 1, "one call exports one scene");
     assertEqual(
       explicitCalls[0]?.sceneId,
-      "front",
-      "explicit crop should target the active document scene",
-    );
-    assertDeepEqual(
-      explicitCalls[0]?.crop,
-      {
-        type: "sceneRect",
-        rect: { left: 1, top: 2, width: 3, height: 4, space: "scene" },
-      },
-      "explicit crop should not be reused as a sibling scene crop",
-    );
-    runtime.services
-      .getOrThrow<SceneService>(SCENE_SERVICE)
-      .setActiveRoot("back");
-    await facade.exportImage({
-      crop: {
-        left: 9,
-        top: 8,
-        width: 7,
-        height: 6,
-        space: "scene",
-      },
-    });
-    assertEqual(
-      service.calls.at(-1)?.sceneId,
       "back",
-      "explicit crop should follow the active document scene",
+      "export should use the requested sceneId",
     );
-    runtime.services
-      .getOrThrow<SceneService>(SCENE_SERVICE)
-      .setActiveRoot("front");
-    service.errorsBySceneId.set(
-      "back",
-      new Error("browser-scene-export-empty"),
-    );
-    const partial = await facade.exportImage();
-    assertEqual(
-      partial.length,
-      1,
-      "design export should skip empty scenes instead of failing the batch",
-    );
-    assertEqual(
-      partial[0]?.sceneId,
-      "front",
-      "design export should keep populated scenes when a sibling is empty",
-    );
-    service.errorsBySceneId.set(
-      "front",
-      new Error("browser-scene-export-empty"),
-    );
-    await facade.exportImage().then(
+    await facade.exportImage({ sceneId: "front" }).then(
+      () => undefined,
       () => {
-        throw new Error("all-empty design export should fail");
+        throw new Error("front should still export independently");
+      },
+    );
+    service.errorsBySceneId.set(
+      "front",
+      new Error("browser-scene-export-empty"),
+    );
+    await facade.exportImage({ sceneId: "front" }).then(
+      () => {
+        throw new Error("empty design export should fail");
       },
       (error: unknown) => {
         assertEqual(
           error instanceof Error ? error.message : "",
           "no-design-objects-to-export",
-          "design export should fail only when every scene is empty",
+          "design export should fail when the requested scene is empty",
         );
       },
     );
@@ -500,7 +468,7 @@ async function testSceneExportCapability(): Promise<void> {
     format: "png",
     height: 90,
     multiplier: 1,
-    source: { layerIds: ["base", "artwork"], elementIds: [], tags: [] },
+    source: { elementIds: [], tags: [] },
     url: "data:image/png;base64,scene",
     width: 120,
     sceneId: "front",
@@ -518,11 +486,17 @@ async function testSceneExportCapability(): Promise<void> {
         type: "sceneRect",
         rect: { space: "scene", left: 4, top: 5, width: 120, height: 90 },
       },
-      includeHidden: true,
       sceneId: "front",
-      source: { layerIds: ["base", "artwork"] },
+      source: { tags: ["export:mockup"] },
     });
-    assertEqual(service.calls.at(-1)?.includeHidden, true, "includeHidden");
+    assertEqual(
+      Object.prototype.hasOwnProperty.call(
+        service.calls.at(-1) ?? {},
+        "includeHidden",
+      ),
+      false,
+      "scene export must not accept includeHidden",
+    );
     assertEqual(
       service.calls.at(-1)?.preserveClipPaths,
       true,
@@ -531,7 +505,7 @@ async function testSceneExportCapability(): Promise<void> {
     assertEqual(result.url, "data:image/png;base64,scene", "scene export url");
     assertDeepEqual(
       result.source,
-      { layerIds: ["base", "artwork"], elementIds: [], tags: [] },
+      { elementIds: [], tags: [] },
       "scene export should map the platform source result",
     );
     assertDeepEqual(

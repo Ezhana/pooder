@@ -3569,12 +3569,10 @@ async function testSceneExportRequiresOneExplicitScenePerCall() {
   };
   const front = await service.exportImage({
     crop,
-    includeHidden: true,
     sceneId: "front",
   });
   const back = await service.exportImage({
     crop,
-    includeHidden: true,
     sceneId: "back",
   });
   assertEqual(
@@ -3646,27 +3644,20 @@ async function testSceneExportCombinesSourceSelectorDimensions() {
             effects: [],
           },
           {
+            id: "hidden-tagged",
+            visible: false,
+            exportKeys: ["hidden-tagged"],
+            tags: ["mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+          {
             id: "excluded",
             visible: true,
             exportKeys: ["excluded"],
             tags: ["mockup"],
             props: { excludeFromExport: true },
-            data: {},
-            effects: [],
-          },
-        ],
-      },
-      {
-        id: "image.overlay",
-        sceneId: "front",
-        visible: true,
-        nodes: [
-          {
-            id: "wrong-layer",
-            visible: true,
-            exportKeys: ["wrong-layer"],
-            tags: ["mockup"],
-            props: {},
             data: {},
             effects: [],
           },
@@ -3682,7 +3673,7 @@ async function testSceneExportCombinesSourceSelectorDimensions() {
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
     source: {
-      layerIds: ["image.user"],
+      elementIds: ["match"],
       tags: ["mockup"],
     },
   });
@@ -3696,6 +3687,140 @@ async function testSceneExportCombinesSourceSelectorDimensions() {
     result.source.tags,
     ["mockup"],
     "export result should report matched export tags",
+  );
+}
+
+async function testSceneExportIncludesHiddenTaggedNodes() {
+  const { service } = createGraphExportService({
+    layers: [
+      {
+        id: "image.user",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "hidden-tagged",
+            visible: false,
+            exportKeys: ["hidden-tagged"],
+            tags: ["export:mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+          {
+            id: "visible-tagged",
+            visible: true,
+            exportKeys: ["visible-tagged"],
+            tags: ["export:mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = await service.exportImage({
+    sceneId: "front",
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+    source: { tags: ["export:mockup"] },
+  });
+
+  assertDeepEqual(
+    result.source.elementIds.sort(),
+    ["hidden-tagged", "visible-tagged"],
+    "tagged objects must export even when the canvas hides them",
+  );
+}
+
+async function testSceneExportExcludesVetoEvenWhenTagged() {
+  const { service } = createGraphExportService({
+    layers: [
+      {
+        id: "guides",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "guide",
+            visible: true,
+            exportKeys: ["guide"],
+            tags: ["export:design"],
+            props: { excludeFromExport: true },
+            data: {},
+            effects: [],
+          },
+        ],
+      },
+    ],
+  });
+
+  try {
+    await service.exportImage({
+      sceneId: "front",
+      crop: {
+        type: "sceneRect",
+        rect: { left: 0, top: 0, width: 100, height: 80 },
+      },
+      source: { tags: ["export:design"] },
+    });
+    throw new Error("vetoed tagged objects should not export");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "browser-scene-export-empty",
+      "excludeFromExport must veto tagged objects",
+    );
+  }
+}
+
+async function testSceneExportWithoutSelectorExportsSceneMinusVeto() {
+  const { service } = createGraphExportService({
+    layers: [
+      {
+        id: "image.user",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "hidden-member",
+            visible: false,
+            exportKeys: ["hidden-member"],
+            tags: [],
+            props: {},
+            data: {},
+            effects: [],
+          },
+          {
+            id: "guide",
+            visible: true,
+            exportKeys: ["guide"],
+            tags: ["guide:cut"],
+            props: { excludeFromExport: true },
+            data: {},
+            effects: [],
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = await service.exportImage({
+    sceneId: "front",
+    crop: {
+      type: "sceneRect",
+      rect: { left: 0, top: 0, width: 100, height: 80 },
+    },
+  });
+
+  assertDeepEqual(
+    result.source.elementIds,
+    ["hidden-member"],
+    "no selector should export the scene minus excludeFromExport",
   );
 }
 
@@ -4050,7 +4175,6 @@ async function testSceneExportAllowsHiddenOutputMaskSource() {
     const entry = service
       .selectEntries({
         crop: { type: "elementBounds" },
-        includeHidden: true,
         sceneId: options.sceneId,
       })
       .find((item: { node: { data: { outputMaskKeys?: unknown } } }) =>
@@ -4072,7 +4196,7 @@ async function testSceneExportAllowsHiddenOutputMaskSource() {
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
     outputMask: { sourceKey: "templateFrame" },
-    source: { layerIds: ["image.user"] },
+    source: { tags: ["mockup"] },
   });
 
   assertEqual(
@@ -4484,6 +4608,18 @@ async function main() {
     [
       "combines source selector dimensions during export",
       testSceneExportCombinesSourceSelectorDimensions,
+    ],
+    [
+      "exports hidden tagged objects",
+      testSceneExportIncludesHiddenTaggedNodes,
+    ],
+    [
+      "vetoes tagged excludeFromExport objects",
+      testSceneExportExcludesVetoEvenWhenTagged,
+    ],
+    [
+      "exports the scene minus veto without a selector",
+      testSceneExportWithoutSelectorExportsSceneMinusVeto,
     ],
     [
       "applies an output mask to the exported image",

@@ -50,6 +50,8 @@ export interface RenderIntentVisualAspect extends RenderIntentSource {
   type?: RenderObjectSpec["type"];
   fallback?: RenderIntentSource;
   replacement?: RenderIntentSource;
+  /** Live-canvas visibility. Export membership does not read this field. */
+  visible?: boolean;
 }
 
 export type RenderIntentPlacementAspect = AffinePlacement;
@@ -57,6 +59,10 @@ export type RenderIntentPlacementAspect = AffinePlacement;
 export interface RenderIntentExportAspect {
   keys?: readonly string[];
   tags?: readonly string[];
+  /**
+   * @deprecated Live-canvas visibility belongs on `visual.visible`.
+   * Export membership is tags / keys / `excludeFromExport`, not this field.
+   */
   visible?: boolean;
   visibleWhen?: RuntimeConditionExpr;
 }
@@ -1583,6 +1589,12 @@ function createDraftFromPatch(
   };
 }
 
+function isDraftLiveVisible(draft: RenderIntentDraft): boolean {
+  if (typeof draft.visual?.visible === "boolean") return draft.visual.visible;
+  if (typeof draft.export?.visible === "boolean") return draft.export.visible;
+  return true;
+}
+
 function getOrCreateGraphLayer(
   layerMap: Map<string, RenderGraphLayer>,
   draft: RenderIntentDraft,
@@ -1590,7 +1602,7 @@ function getOrCreateGraphLayer(
   const existing = layerMap.get(draft.ordering.layerId);
   if (existing) {
     existing.order = Math.min(existing.order, draft.ordering.layerOrder ?? 0);
-    existing.visible = existing.visible || draft.export?.visible !== false;
+    existing.visible = existing.visible || isDraftLiveVisible(draft);
     return existing;
   }
 
@@ -1598,7 +1610,7 @@ function getOrCreateGraphLayer(
     id: draft.ordering.layerId,
     sceneId: draft.subject.sceneId,
     order: draft.ordering.layerOrder ?? 0,
-    visible: draft.export?.visible !== false,
+    visible: isDraftLiveVisible(draft),
     nodes: [],
     effects: [],
   };
@@ -1667,7 +1679,7 @@ function createGraphNode(draft: RenderIntentDraft): RenderGraphNode | null {
     effects: draft.effects?.map(cloneRecord) ?? [],
     interaction: cloneRecord(draft.interaction),
     visibleWhen: cloneRecord(draft.export?.visibleWhen),
-    visible: draft.export?.visible !== false,
+    visible: isDraftLiveVisible(draft),
     sortKey: {
       layerOrder: draft.ordering.layerOrder ?? 0,
       path: [...(draft.ordering.path ?? [])],

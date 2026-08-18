@@ -23,14 +23,11 @@ export interface SceneExportOutputMask {
 }
 
 export interface SceneExportSourceSelector {
-  layerIds?: readonly string[];
   elementIds?: readonly string[];
   tags?: readonly string[];
-  visible?: boolean;
 }
 
 export interface SceneExportSourceResult {
-  layerIds: string[];
   elementIds: string[];
   tags: string[];
 }
@@ -41,7 +38,6 @@ export interface SceneExportOptions {
   source?: SceneExportSourceSelector;
   format?: SceneExportFormat;
   multiplier?: number;
-  includeHidden?: boolean;
   preserveClipPaths?: boolean;
   outputMask?: SceneExportOutputMask;
 }

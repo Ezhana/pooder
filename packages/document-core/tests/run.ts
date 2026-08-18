@@ -606,15 +606,13 @@ async function testUnresolvableImageDetection(): Promise<void> {
 
   assertDeepEqual(
     await collectUnresolvableImageObjectIds(document, service),
-    ["missing"],
-    "only drawable images with unavailable bytes should be reported",
+    ["missing", "missing-hidden", "missing-in-hidden-layer"],
+    "canvas-hidden images still export when tagged, so missing bytes must be reported",
   );
-  // Skipped objects must not even be asked for: a hidden image or an empty slot's
-  // placeholder never reaches the exported pixels, so blocking on them would be wrong.
   assertDeepEqual(
     ensured,
-    ["/missing.png"],
-    "established resources should not be re-fetched and skipped ones not fetched at all",
+    ["/missing.png", "/missing.png", "/missing.png"],
+    "established resources should not be re-fetched and placeholders not fetched at all",
   );
 }
 

@@ -1725,7 +1725,7 @@ export class FabricRenderGraphAdapter implements Service {
     const conditionContext = this.buildRuntimeConditionContext(
       this.requireRenderIntentService().getDocumentGraph(),
     );
-    return this.toRenderObjectSpec(
+    const spec = this.toRenderObjectSpec(
       layer,
       node,
       conditionContext,
@@ -1733,6 +1733,14 @@ export class FabricRenderGraphAdapter implements Service {
       true,
       node.exportGeometryRef,
     );
+    if (!spec) return null;
+    return {
+      ...spec,
+      props: {
+        ...spec.props,
+        visible: true,
+      },
+    };
   }
 
   private resolveGeometryProjection(ref: GeometryRef): {

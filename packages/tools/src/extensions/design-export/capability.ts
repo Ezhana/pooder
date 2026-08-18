@@ -2,7 +2,7 @@ import type { CapabilityDefinition } from "@pooder/core";
 import type {
   CoordinateRect,
   RectMm,
-  SceneExportOptions,
+  SceneExportCrop,
   SceneExportSourceResult,
   SceneExportSourceSelector,
 } from "@pooder/core";
@@ -13,22 +13,29 @@ export type ExportImageFormat = "png" | "jpeg";
 
 export type CutMode = "trim" | "outset" | "inset";
 
+export type ExportPurpose = "design" | "mockup";
+
+export type NamedExportCropFrame = "cut" | "trim" | "bleed";
+
 export interface DesignExportCapabilityOptions {
   capabilityId?: string;
   source?: SceneExportSourceSelector;
 }
 
-export interface ExportImageOptions extends Omit<
-  SceneExportOptions,
-  "sceneId" | "crop"
-> {
+export type ExportCropInput =
+  | SceneExportCrop
+  | CoordinateRect<"scene">
+  | NamedExportCropFrame;
+
+export interface ExportImageOptions {
+  sceneId: string;
   format?: ExportImageFormat;
   multiplier?: number;
+  source?: SceneExportSourceSelector;
   /**
-   * Explicit millimetre crop for the current document scene only.
-   * Defaults to each scene's content rect, then `size.cutMode`.
+   * Explicit crop for this scene. Defaults to the content rect after `size.cutMode`.
    */
-  crop?: CoordinateRect<"scene">;
+  crop?: ExportCropInput;
 }
 
 export interface ExportImageResult {
@@ -43,7 +50,7 @@ export interface ExportImageResult {
 }
 
 export interface DesignExportCapabilityApi {
-  exportImage(options?: ExportImageOptions): Promise<ExportImageResult[]>;
+  exportImage(options: ExportImageOptions): Promise<ExportImageResult>;
 }
 
 export function normalizeCutMode(value: unknown): CutMode {
@@ -83,6 +90,52 @@ export function sceneCropFromRectMm(rect: RectMm): CoordinateRect<"scene"> {
     height: rect.height,
     space: "scene",
   };
+}
+
+export interface ResolveExportCropInput {
+  purpose: ExportPurpose;
+  content: RectMm;
+  crop?: ExportCropInput;
+  cutMode?: unknown;
+  cutMarginMm?: unknown;
+  minMm?: unknown;
+}
+
+export function resolveExportCrop(input: ResolveExportCropInput): SceneExportCrop {
+  const crop = input.crop;
+  if (isSceneExportCrop(crop)) return crop;
+  if (isSceneCoordinateRect(crop)) {
+    return { type: "sceneRect", rect: crop };
+  }
+  const namedFrame = crop === "cut" || crop === "trim" || crop === "bleed" ? crop : undefined;
+  const applyCutMargin = input.purpose === "design" || namedFrame === "bleed";
+  const rect = applyCutMargin
+    ? applyCutMarginToRect(
+        input.content,
+        normalizeCutMode(input.cutMode),
+        Math.max(0, Number(input.cutMarginMm) || 0),
+        Math.max(0.1, Number(input.minMm) || 0.1),
+      )
+    : input.content;
+  return { type: "sceneRect", rect: sceneCropFromRectMm(rect) };
+}
+
+function isSceneExportCrop(value: unknown): value is SceneExportCrop {
+  if (!value || typeof value !== "object") return false;
+  const type = (value as { type?: unknown }).type;
+  return type === "sceneRect" || type === "elementBounds";
+}
+
+function isSceneCoordinateRect(value: unknown): value is CoordinateRect<"scene"> {
+  if (!value || typeof value !== "object") return false;
+  const rect = value as Partial<CoordinateRect<"scene">>;
+  return (
+    rect.space === "scene" &&
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height)
+  );
 }
 
 export function createDesignExportCapabilityDefinition(

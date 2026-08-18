@@ -186,7 +186,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         format,
         multiplier,
         source: {
-          layerIds: Array.from(new Set(entries.map(({ layer }) => layer.id))),
           elementIds: Array.from(
             new Set(entries.flatMap(({ node }) => node.exportKeys)),
           ),
@@ -202,10 +201,8 @@ export class BrowserSceneExportService implements Service, SceneExportService {
 
   private selectEntries(options: BrowserSceneExportOptions): ExportEntry[] {
     const selector = options.source;
-    const layerIds = new Set(normalizeIds(selector?.layerIds));
     const elementIds = new Set(normalizeIds(selector?.elementIds));
     const tags = new Set(normalizeIds(selector?.tags));
-    const includeHidden = options.includeHidden === true;
     const sceneId = String(options.sceneId || "").trim();
     const entries: ExportEntry[] = [];
     const renderIntents = this.requireRenderIntentService();
@@ -213,20 +210,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       renderIntents.getDocumentGraph?.() ?? renderIntents.getGraph();
     for (const layer of graph.layers) {
       if (sceneId && layer.sceneId !== sceneId) continue;
-      if (layerIds.size && !layerIds.has(layer.id)) continue;
       for (const node of layer.nodes) {
-        const authoritativeVisible = layer.visible && node.visible;
-        if (
-          !includeHidden &&
-          selector?.visible === undefined &&
-          !authoritativeVisible
-        )
-          continue;
-        if (
-          selector?.visible !== undefined &&
-          authoritativeVisible !== selector.visible
-        )
-          continue;
         if (
           elementIds.size &&
           !node.exportKeys.some((key) => elementIds.has(key))
@@ -317,7 +301,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     if (!key)
       throw new Error("browser-scene-export-output-mask-source-key-required");
     const entry = this.selectEntries({
-      includeHidden: true,
       sceneId: options.sceneId,
       crop: { type: "elementBounds" },
     }).find(({ node }) => normalizeIds(node.data.outputMaskKeys).includes(key));
