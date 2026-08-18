@@ -12,14 +12,14 @@ import {
   RENDER_INTENT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   type RenderIntentService,
   type GeometrySourceService,
   type InteractionService,
   type SceneService,
   type SessionService,
 } from "@pooder/core";
-import type { SceneFrames } from "@pooder/core";
+import type { SceneBounds } from "@pooder/core";
 import {
   attachBrowserHost,
   BrowserObjectImageResolverService,
@@ -290,12 +290,12 @@ class FakeSceneLayoutService {
   }
 }
 
-class FakeSceneFrameService {
+class FakeSceneBoundsService {
   private listeners = new Set<(event: { sceneId: string }) => void>();
   private activeSceneId: string | null;
 
-  constructor(private framesBySceneId: Record<string, SceneFrames>) {
-    this.activeSceneId = Object.keys(framesBySceneId)[0] ?? null;
+  constructor(private boundsBySceneId: Record<string, SceneBounds>) {
+    this.activeSceneId = Object.keys(boundsBySceneId)[0] ?? null;
   }
 
   activateSurface(sceneId: string) {
@@ -307,19 +307,19 @@ class FakeSceneFrameService {
   }
 
   listSceneIds() {
-    return Object.keys(this.framesBySceneId);
+    return Object.keys(this.boundsBySceneId);
   }
 
-  getFrames(sceneId?: string) {
+  getBounds(sceneId?: string) {
     const key = sceneId || this.activeSceneId || this.listSceneIds()[0];
-    return key ? (this.framesBySceneId[key] ?? null) : null;
+    return key ? (this.boundsBySceneId[key] ?? null) : null;
   }
 
   onActiveSurfaceChange() {
     return { dispose() {} };
   }
 
-  onAnyFramesChange(listener: (event: { sceneId: string }) => void) {
+  onAnyBoundsChange(listener: (event: { sceneId: string }) => void) {
     this.listeners.add(listener);
     return {
       dispose: () => {
@@ -332,11 +332,9 @@ class FakeSceneFrameService {
 class FakeBrowserSceneExportService {}
 class FakeFabricRenderGraphAdapter {}
 
-const TEST_SURFACE_FRAMES: SceneFrames = {
-  preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 120 },
-  production: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
-  export: { xMm: 5, yMm: 15, widthMm: 90, heightMm: 85 },
-  viewportFocus: { xMm: 10, yMm: 20, widthMm: 80, heightMm: 70 },
+const TEST_SURFACE_BOUNDS: SceneBounds = {
+  bounds: { x: 0, y: 0, width: 100, height: 120 },
+  insets: { top: 20, right: 10, bottom: 30, left: 10 },
 };
 
 function createMutableConfig(initial: Record<string, unknown> = {}) {
@@ -368,24 +366,27 @@ function createMutableConfig(initial: Record<string, unknown> = {}) {
   };
 }
 
-function createMutableSceneFrames(initial: Record<string, SceneFrames> = {}) {
-  const frameMap = new Map<string, SceneFrames>(Object.entries(initial));
-  const frameListeners = new Set<(event: any) => void>();
+function createMutableSceneBounds(initial: Record<string, SceneBounds> = {}) {
+  const boundsMap = new Map<string, SceneBounds>(Object.entries(initial));
+  const boundsListeners = new Set<(event: any) => void>();
   return {
-    getFrames: (sceneId?: string) => {
-      const key = sceneId || Array.from(frameMap.keys())[0];
-      return key ? (frameMap.get(key) ?? null) : null;
+    getBounds: (sceneId?: string) => {
+      const key = sceneId || Array.from(boundsMap.keys())[0];
+      return key ? (boundsMap.get(key) ?? null) : null;
     },
-    getActiveSceneId: () => Array.from(frameMap.keys())[0] ?? null,
-    listSceneIds: () => Array.from(frameMap.keys()),
+    getActiveSceneId: () => Array.from(boundsMap.keys())[0] ?? null,
+    listSceneIds: () => Array.from(boundsMap.keys()),
     onActiveSurfaceChange: () => ({ dispose() {} }),
-    onAnyFramesChange: (listener: (event: any) => void) => {
-      frameListeners.add(listener);
-      return { dispose: () => frameListeners.delete(listener) };
+    onAnyBoundsChange: (listener: (event: any) => void) => {
+      boundsListeners.add(listener);
+      return { dispose: () => boundsListeners.delete(listener) };
     },
-    setFrames: (sceneId: string, frames: SceneFrames) => {
-      frameMap.set(sceneId, frames);
-      frameListeners.forEach((listener) => listener({ sceneId, frames }));
+    setBounds: (sceneId: string, bounds: SceneBounds) => {
+      boundsMap.set(sceneId, bounds);
+      boundsListeners.forEach((listener) => listener({ sceneId, bounds }));
+    },
+    clear: () => {
+      boundsMap.clear();
     },
   };
 }
@@ -619,7 +620,7 @@ function testAttachRegistersRenderGraphAdapter() {
   const { registered, runtime } = createRuntime();
   const canvasService = new FakeCanvasService();
   const sceneLayoutService = new FakeSceneLayoutService({
-    contentRect: {
+    viewRect: {
       centerX: 110,
       centerY: 120,
       height: 140,
@@ -633,14 +634,14 @@ function testAttachRegistersRenderGraphAdapter() {
     scale: 2,
     sceneId: "front",
   });
-  const sceneFrameService = new FakeSceneFrameService({
-    front: TEST_SURFACE_FRAMES,
+  const sceneBoundsService = new FakeSceneBoundsService({
+    front: TEST_SURFACE_BOUNDS,
   });
   const browserSceneExportService = new FakeBrowserSceneExportService();
   const graphAdapter = new FakeFabricRenderGraphAdapter();
   let observerCallback: ResizeObserverCallback | null = null;
   let disconnected = false;
-  registered.set(SCENE_FRAME_SERVICE, sceneFrameService as any);
+  registered.set(SCENE_BOUNDS_SERVICE, sceneBoundsService as any);
   registered.set(SCENE_SERVICE, {
     getActiveRoot: () => ({
       id: "front",
@@ -689,8 +690,8 @@ function testAttachRegistersRenderGraphAdapter() {
       scale: 2,
       offsetX: 24,
       offsetY: 36,
-      width: TEST_SURFACE_FRAMES.preview.widthMm * 2,
-      height: TEST_SURFACE_FRAMES.preview.heightMm * 2,
+      width: TEST_SURFACE_BOUNDS.bounds.width * 2,
+      height: TEST_SURFACE_BOUNDS.bounds.height * 2,
     },
     "host should apply existing scene layout to the canvas viewport on attach",
   );
@@ -1415,30 +1416,30 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   const viewportSize = { width: 800, height: 600 };
   const canvas = createLayoutCanvas(() => ({ ...viewportSize }));
   const layoutService = new SceneLayoutService();
-  const frameMap = new Map<string, SceneFrames>();
-  const frameListeners = new Set<(event: any) => void>();
-  const sceneFrames = {
-    getFrames: (sceneId?: string) => {
-      const key = sceneId || Array.from(frameMap.keys())[0];
-      return key ? (frameMap.get(key) ?? null) : null;
+  const boundsMap = new Map<string, SceneBounds>();
+  const boundsListeners = new Set<(event: any) => void>();
+  const sceneBounds = {
+    getBounds: (sceneId?: string) => {
+      const key = sceneId || Array.from(boundsMap.keys())[0];
+      return key ? (boundsMap.get(key) ?? null) : null;
     },
-    getActiveSceneId: () => Array.from(frameMap.keys())[0] ?? null,
-    listSceneIds: () => Array.from(frameMap.keys()),
+    getActiveSceneId: () => Array.from(boundsMap.keys())[0] ?? null,
+    listSceneIds: () => Array.from(boundsMap.keys()),
     onActiveSurfaceChange: () => ({ dispose() {} }),
-    onAnyFramesChange: (listener: (event: any) => void) => {
-      frameListeners.add(listener);
-      return { dispose: () => frameListeners.delete(listener) };
+    onAnyBoundsChange: (listener: (event: any) => void) => {
+      boundsListeners.add(listener);
+      return { dispose: () => boundsListeners.delete(listener) };
     },
-    setFrames: (sceneId: string, frames: SceneFrames) => {
-      frameMap.set(sceneId, frames);
-      frameListeners.forEach((listener) => listener({ sceneId, frames }));
+    setBounds: (sceneId: string, bounds: SceneBounds) => {
+      boundsMap.set(sceneId, bounds);
+      boundsListeners.forEach((listener) => listener({ sceneId, bounds }));
     },
   };
   layoutService.init({
     eventBus: runtime.eventBus,
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
-      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
+      if (identifier === SCENE_BOUNDS_SERVICE) return sceneBounds;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,
@@ -1457,7 +1458,7 @@ async function testSceneLayoutServiceUsesStableSnapshots() {
   );
   assertEqual(changes.length, 0, "pure reads should not emit layout changes");
 
-  sceneFrames.setFrames("front", TEST_SURFACE_FRAMES);
+  sceneBounds.setBounds("front", TEST_SURFACE_BOUNDS);
   const first = layoutService.getLayout("front");
   assert(first, "frame invalidation should produce a layout snapshot");
   assertEqual(first.sceneId, "front", "snapshot should carry its surface id");
@@ -1500,39 +1501,39 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const layoutService = new SceneLayoutService();
-  const frameMap = new Map<string, SceneFrames>();
-  const frameListeners = new Set<(event: any) => void>();
-  const sceneFrames = {
+  const boundsMap = new Map<string, SceneBounds>();
+  const boundsListeners = new Set<(event: any) => void>();
+  const sceneBounds = {
     clear: () => {
-      const previous = Array.from(frameMap.keys());
-      frameMap.clear();
+      const previous = Array.from(boundsMap.keys());
+      boundsMap.clear();
       previous.forEach((sceneId) => {
-        frameListeners.forEach((listener) =>
-          listener({ sceneId, frames: null }),
+        boundsListeners.forEach((listener) =>
+          listener({ sceneId, bounds: null }),
         );
       });
     },
-    getFrames: (sceneId?: string) => {
-      const key = sceneId || Array.from(frameMap.keys())[0];
-      return key ? (frameMap.get(key) ?? null) : null;
+    getBounds: (sceneId?: string) => {
+      const key = sceneId || Array.from(boundsMap.keys())[0];
+      return key ? (boundsMap.get(key) ?? null) : null;
     },
-    getActiveSceneId: () => Array.from(frameMap.keys())[0] ?? null,
-    listSceneIds: () => Array.from(frameMap.keys()),
+    getActiveSceneId: () => Array.from(boundsMap.keys())[0] ?? null,
+    listSceneIds: () => Array.from(boundsMap.keys()),
     onActiveSurfaceChange: () => ({ dispose() {} }),
-    onAnyFramesChange: (listener: (event: any) => void) => {
-      frameListeners.add(listener);
-      return { dispose: () => frameListeners.delete(listener) };
+    onAnyBoundsChange: (listener: (event: any) => void) => {
+      boundsListeners.add(listener);
+      return { dispose: () => boundsListeners.delete(listener) };
     },
-    setFrames: (sceneId: string, frames: SceneFrames) => {
-      frameMap.set(sceneId, frames);
-      frameListeners.forEach((listener) => listener({ sceneId, frames }));
+    setBounds: (sceneId: string, bounds: SceneBounds) => {
+      boundsMap.set(sceneId, bounds);
+      boundsListeners.forEach((listener) => listener({ sceneId, bounds }));
     },
   };
   layoutService.init({
     eventBus: runtime.eventBus,
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
-      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
+      if (identifier === SCENE_BOUNDS_SERVICE) return sceneBounds;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,
@@ -1544,13 +1545,13 @@ async function testSceneLayoutServiceClearsRemovedSurfaceSnapshots() {
     changes.push(layout);
   });
 
-  sceneFrames.setFrames("front", TEST_SURFACE_FRAMES);
+  sceneBounds.setBounds("front", TEST_SURFACE_BOUNDS);
   assert(
     layoutService.getLayout("front"),
     "snapshot should exist before clear",
   );
 
-  sceneFrames.clear();
+  sceneBounds.clear();
   assertEqual(
     layoutService.getLayout("front"),
     null,
@@ -1567,8 +1568,8 @@ async function testSceneLayoutServiceUsesConfiguredViewPadding() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "10%" });
-  const sceneFrames = createMutableSceneFrames({
-    front: TEST_SURFACE_FRAMES,
+  const sceneBounds = createMutableSceneBounds({
+    front: TEST_SURFACE_BOUNDS,
   });
   const layoutService = new SceneLayoutService();
 
@@ -1577,7 +1578,7 @@ async function testSceneLayoutServiceUsesConfiguredViewPadding() {
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
       if (identifier === CONFIGURATION_SERVICE) return config;
-      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
+      if (identifier === SCENE_BOUNDS_SERVICE) return sceneBounds;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,
@@ -1600,8 +1601,8 @@ async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "16%" });
-  const sceneFrames = createMutableSceneFrames({
-    front: TEST_SURFACE_FRAMES,
+  const sceneBounds = createMutableSceneBounds({
+    front: TEST_SURFACE_BOUNDS,
   });
   const layoutService = new SceneLayoutService();
 
@@ -1610,7 +1611,7 @@ async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
     get: ((identifier: unknown) => {
       if (identifier === CANVAS_SERVICE) return canvas;
       if (identifier === CONFIGURATION_SERVICE) return config;
-      if (identifier === SCENE_FRAME_SERVICE) return sceneFrames;
+      if (identifier === SCENE_BOUNDS_SERVICE) return sceneBounds;
       return undefined;
     }) as any,
     getOrThrow: (() => undefined) as any,

@@ -279,10 +279,7 @@ function createEmptySlotDocument(): EditorDocument {
     surfaces: [
       {
         id: "front",
-        geometry: {
-          canvasBounds: { x: 0, y: 0, width: 340, height: 120 },
-          productionBounds: { x: 0, y: 0, width: 340, height: 120 },
-        },
+        bounds: { x: 0, y: 0, width: 340, height: 120 },
         objects: [
           {
             type: "group",
@@ -557,10 +554,7 @@ function createNestedDocument(): EditorDocument {
     surfaces: [
       {
         id: "front",
-        geometry: {
-          canvasBounds: { x: 0, y: 0, width: 300, height: 220 },
-          productionBounds: { x: 0, y: 0, width: 300, height: 220 },
-        },
+        bounds: { x: 0, y: 0, width: 300, height: 220 },
         objects: [
           {
             type: "group",

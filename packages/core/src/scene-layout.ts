@@ -17,7 +17,8 @@ export interface SceneLayoutSnapshot {
   scale: number;
   offsetX: number;
   offsetY: number;
-  contentRect: SceneRect;
+  /** Screen-space projection of `surface.bounds` after contain-fit. */
+  viewRect: SceneRect;
 }
 
 export interface SceneLayoutService extends Service {

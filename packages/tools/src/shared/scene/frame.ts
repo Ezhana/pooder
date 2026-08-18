@@ -31,10 +31,10 @@ export function resolveSceneFrameRect(
 
   return canvasService.toSceneRect({
     space: "screen",
-    left: layout.contentRect.left,
-    top: layout.contentRect.top,
-    width: layout.contentRect.width,
-    height: layout.contentRect.height,
+    left: layout.viewRect.left,
+    top: layout.viewRect.top,
+    width: layout.viewRect.width,
+    height: layout.viewRect.height,
   });
 }
 

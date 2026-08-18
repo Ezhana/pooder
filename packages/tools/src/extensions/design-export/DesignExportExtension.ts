@@ -4,18 +4,26 @@ import {
   ExtensionDefinition,
 } from "@pooder/core";
 import {
+  CONFIGURATION_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   SCENE_EXPORT_SERVICE,
-  SCENE_FRAME_SERVICE,
   SCENE_SERVICE,
-  SceneFrameService,
+  sceneContentRect,
+  type ConfigurationService,
+  type CoordinateRect,
+  type RectMm,
+  type SceneBoundsService,
   SceneService,
   SceneExportService,
   type SceneExportResult,
   type SceneExportSourceSelector,
 } from "@pooder/core";
 import {
+  applyCutMarginToRect,
   createDesignExportCapabilityDefinition,
   DESIGN_EXPORT_CAPABILITY_ID,
+  normalizeCutMode,
+  sceneCropFromRectMm,
   type DesignExportCapabilityApi,
   type DesignExportCapabilityOptions,
   type ExportImageOptions,
@@ -24,7 +32,6 @@ import {
 import { createDesignExportCommands } from "./commands";
 
 export type {
-  DesignExportFrame,
   ExportImageFormat,
   ExportImageOptions,
   ExportImageResult,
@@ -44,15 +51,17 @@ export class DesignExportExtension implements ExtensionDefinition {
   };
   activation = {
     requiresServices: [
+      CONFIGURATION_SERVICE,
+      SCENE_BOUNDS_SERVICE,
       SCENE_EXPORT_SERVICE,
-      SCENE_FRAME_SERVICE,
       SCENE_SERVICE,
     ],
   };
 
   private exportService?: SceneExportService;
-  private sceneFrameService?: SceneFrameService;
+  private sceneBoundsService?: SceneBoundsService;
   private sceneService?: SceneService;
+  private configService?: ConfigurationService;
   private readonly capabilityId: string;
   private readonly configuredSource?: SceneExportSourceSelector;
   private readonly contributeLegacyCommands: boolean;
@@ -69,10 +78,12 @@ export class DesignExportExtension implements ExtensionDefinition {
   activate(context: ExtensionContext) {
     this.exportService =
       context.services.getOrThrow<SceneExportService>(SCENE_EXPORT_SERVICE);
-    this.sceneFrameService =
-      context.services.getOrThrow<SceneFrameService>(SCENE_FRAME_SERVICE);
+    this.sceneBoundsService =
+      context.services.getOrThrow<SceneBoundsService>(SCENE_BOUNDS_SERVICE);
     this.sceneService =
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    this.configService =
+      context.services.getOrThrow<ConfigurationService>(CONFIGURATION_SERVICE);
   }
 
   contribute(): ExtensionContributions {
@@ -102,21 +113,25 @@ export class DesignExportExtension implements ExtensionDefinition {
   async exportImage(
     options: ExportImageOptions = {},
   ): Promise<ExportImageResult[]> {
-    if (!this.exportService || !this.sceneFrameService || !this.sceneService) {
+    if (
+      !this.exportService ||
+      !this.sceneBoundsService ||
+      !this.sceneService ||
+      !this.configService
+    ) {
       throw new Error("design-export-not-initialized");
     }
 
-    const { frame: requestedFrame, ...exportOptions } = options;
-    const useExportFrame = requestedFrame === "export";
+    const { crop: requestedCrop, ...exportOptions } = options;
 
     try {
       const results: SceneExportResult[] = [];
-      for (const sceneId of this.sceneService.listDocumentSceneIds()) {
-        const frames = this.sceneFrameService.getFrames(sceneId);
-        if (!frames) throw new Error("design-export-frame-unavailable");
-        const frame = useExportFrame
-          ? (frames.export ?? frames.production)
-          : frames.production;
+      for (const sceneId of this.listExportSceneIds(requestedCrop)) {
+        const sceneBounds = this.sceneBoundsService.getBounds(sceneId);
+        if (!sceneBounds) throw new Error("design-export-frame-unavailable");
+        const cropRect =
+          requestedCrop ??
+          this.resolveDefaultCrop(sceneContentRect(sceneBounds));
         try {
           results.push(
             await this.exportService.exportImage({
@@ -124,13 +139,7 @@ export class DesignExportExtension implements ExtensionDefinition {
               sceneId,
               crop: {
                 type: "sceneRect",
-                rect: {
-                  left: frame.xMm,
-                  top: frame.yMm,
-                  width: frame.widthMm,
-                  height: frame.heightMm,
-                  space: "scene",
-                },
+                rect: cropRect,
               },
               includeHidden: options.includeHidden ?? true,
               source: options.source ?? this.resolveDefaultSource(),
@@ -180,9 +189,36 @@ export class DesignExportExtension implements ExtensionDefinition {
     }
   }
 
+  private listExportSceneIds(
+    requestedCrop: CoordinateRect<"scene"> | undefined,
+  ): string[] {
+    const sceneIds = this.sceneService?.listDocumentSceneIds() ?? [];
+    if (!requestedCrop) return sceneIds;
+    const activeId = this.sceneService?.getActiveRoot()?.id;
+    const currentId =
+      activeId && sceneIds.includes(activeId) ? activeId : sceneIds[0];
+    return currentId ? [currentId] : [];
+  }
+
+  private resolveDefaultCrop(content: RectMm): CoordinateRect<"scene"> {
+    const cutMode = normalizeCutMode(this.configService?.get("size.cutMode"));
+    const cutMarginMm = Math.max(
+      0,
+      Number(this.configService?.get("size.cutMarginMm", 0)) || 0,
+    );
+    const minMm = Math.max(
+      0.1,
+      Number(this.configService?.get("size.minMm", 0.1)) || 0.1,
+    );
+    return sceneCropFromRectMm(
+      applyCutMarginToRect(content, cutMode, cutMarginMm, minMm),
+    );
+  }
+
   private getDesignExportFacade(): DesignExportCapabilityApi {
     return {
       exportImage: (options) => this.exportImage(options),
     };
   }
 }
+

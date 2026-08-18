@@ -11,7 +11,7 @@ import SessionService from "./SessionService";
 import { ConstraintResolverService } from "../constraint-resolver";
 import { GeometrySourceService } from "../geometry-source";
 import { InteractionService } from "../interaction-service";
-import { DefaultSceneFrameService } from "../scene-frames";
+import { DefaultSceneBoundsService } from "../scene-bounds";
 import {
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
@@ -23,7 +23,7 @@ import {
   CANVAS_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
@@ -45,7 +45,7 @@ export {
   GeometrySourceService,
   ConstraintResolverService,
   InteractionService,
-  DefaultSceneFrameService,
+  DefaultSceneBoundsService,
   CAPABILITY_REGISTRY_SERVICE,
   COMMAND_SERVICE,
   CONFIGURATION_SERVICE,
@@ -56,7 +56,7 @@ export {
   SCENE_SERVICE,
   SCENE_EXPORT_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   SESSION_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
@@ -70,10 +70,10 @@ export type { CanvasService } from "../render";
 export type { SceneExportService } from "../scene-export";
 export type { SceneLayoutService } from "../scene-layout";
 export type {
-  PreparedSceneFramePublication,
-  SceneFrameChangeEvent,
-  SceneFrameService,
-} from "../scene-frames";
+  PreparedSceneBoundsPublication,
+  SceneBoundsChangeEvent,
+  SceneBoundsService,
+} from "../scene-bounds";
 
 export type { CapabilityRegistryChangeEvent } from "./CapabilityRegistryService";
 export type {

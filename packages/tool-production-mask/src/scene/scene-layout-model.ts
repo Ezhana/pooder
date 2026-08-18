@@ -13,10 +13,8 @@ export {
 export type {
   SceneLayoutFitOptions,
   SceneLayoutInput,
-  SceneFrameMm,
   SceneLayoutSnapshot,
   SceneRect,
-  SceneFrames,
   SizeConstraintMode,
   SizeState,
 } from "@pooder/core";

@@ -3,13 +3,13 @@ import type {
   ImageResourceService,
   Service,
   ServiceIdentifier,
-  SceneFrameService,
+  SceneBoundsService,
   SceneService,
   SceneSnapshot,
 } from "@pooder/core";
 import {
   GEOMETRY_SOURCE_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   SCENE_SERVICE,
 } from "@pooder/core";
 import { IMAGE_RESOURCE_SERVICE } from "@pooder/core";
@@ -229,20 +229,20 @@ export function attachBrowserHost(
 
   const viewportDisposables: Array<{ dispose(): void }> = [];
   const observedSceneIds = new Set<string>();
-  const sceneFrameService =
-    runtime.services.get<SceneFrameService>(SCENE_FRAME_SERVICE);
+  const sceneBoundsService =
+    runtime.services.get<SceneBoundsService>(SCENE_BOUNDS_SERVICE);
   const sceneService = runtime.services.get<SceneService>(SCENE_SERVICE);
   const applyViewportLayout = (sceneId: string) => {
     if (!sceneId) return;
     const layout = sceneLayoutService.getLayout(sceneId);
-    const frames = sceneFrameService?.getFrames(sceneId);
-    if (!layout || !frames) return;
+    const sceneBounds = sceneBoundsService?.getBounds(sceneId);
+    if (!layout || !sceneBounds) return;
     canvasService.setViewportLayout({
       scale: layout.scale,
       offsetX: layout.offsetX,
       offsetY: layout.offsetY,
-      width: frames.preview.widthMm * layout.scale,
-      height: frames.preview.heightMm * layout.scale,
+      width: sceneBounds.bounds.width * layout.scale,
+      height: sceneBounds.bounds.height * layout.scale,
     });
     canvasService.requestRenderAll();
   };
@@ -259,9 +259,9 @@ export function attachBrowserHost(
       }),
     );
   };
-  sceneFrameService?.listSceneIds().forEach(observeScene);
+  sceneBoundsService?.listSceneIds().forEach(observeScene);
   applyViewportLayout(getActiveSceneId());
-  const sceneFramesDisposable = sceneFrameService?.onAnyFramesChange(
+  const sceneBoundsDisposable = sceneBoundsService?.onAnyBoundsChange(
     (event) => {
       observeScene(event.sceneId);
       if (event.sceneId === getActiveSceneId()) {
@@ -269,8 +269,8 @@ export function attachBrowserHost(
       }
     },
   );
-  if (sceneFramesDisposable) {
-    viewportDisposables.push(sceneFramesDisposable);
+  if (sceneBoundsDisposable) {
+    viewportDisposables.push(sceneBoundsDisposable);
   }
   const activeRootDisposable = sceneService?.onRootChange((event) => {
     const sceneId = resolveDocumentGraphSceneId(event.activeRoot);

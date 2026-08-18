@@ -87,10 +87,7 @@ const contracts = [
         surfaces: [
           {
             id: "front",
-            geometry: {
-              canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
-              productionBounds: { x: 0, y: 0, width: 100, height: 100 },
-            },
+            bounds: { x: 0, y: 0, width: 100, height: 100 },
             objects: [
               {
                 type: "group",

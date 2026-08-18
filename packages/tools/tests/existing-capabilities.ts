@@ -3,13 +3,13 @@ import {
   OBJECT_IMAGE_RESOLVER_SERVICE,
   RENDER_INTENT_SERVICE,
   SCENE_EXPORT_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   SCENE_SERVICE,
   Pooder,
   evaluateRuntimeCondition,
   type CommandService,
   type RenderIntentService,
-  type SceneFrameService,
+  type SceneBoundsService,
   type SceneService,
 } from "@pooder/core";
 import type {
@@ -84,11 +84,9 @@ class FakeSceneExportService {
   }
 }
 
-const FRAMES = {
-  preview: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
-  production: { xMm: 10, yMm: 5, widthMm: 180, heightMm: 90 },
-  export: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
-  viewportFocus: { xMm: 10, yMm: 5, widthMm: 180, heightMm: 90 },
+const SCENE_BOUNDS = {
+  bounds: { x: 0, y: 0, width: 200, height: 100 },
+  insets: { top: 5, right: 10, bottom: 5, left: 10 },
 };
 
 async function testSharedCurrentCapabilityUtilities(): Promise<void> {
@@ -264,10 +262,7 @@ function createEffectDocument(
     surfaces: [
       {
         id: "front",
-        geometry: {
-          canvasBounds: { x: 0, y: 0, width: 200, height: 100 },
-          productionBounds: { x: 0, y: 0, width: 200, height: 100 },
-        },
+        bounds: { x: 0, y: 0, width: 200, height: 100 },
         objects: [
           {
             type: "group",
@@ -307,8 +302,8 @@ async function testDesignExportCapability(): Promise<void> {
     .getOrThrow<SceneService>(SCENE_SERVICE)
     .registerDocumentScene("front");
   runtime.services
-    .getOrThrow<SceneFrameService>(SCENE_FRAME_SERVICE)
-    .setFrames("front", FRAMES);
+    .getOrThrow<SceneBoundsService>(SCENE_BOUNDS_SERVICE)
+    .setBounds("front", SCENE_BOUNDS);
   await runtime.extensions.flushActivation();
   try {
     assertEqual(
@@ -367,29 +362,100 @@ async function testDesignExportCapability(): Promise<void> {
         type: "sceneRect",
         rect: { left: 10, top: 5, width: 180, height: 90, space: "scene" },
       },
-      "design export should crop to the production frame by default",
+      "design export should crop to the content rect by default",
     );
     assertDeepEqual(
       service.calls.at(-1)?.source,
       { tags: ["export:design"] },
       "design export should use the canonical design export tag by default",
     );
-    await facade.exportImage({ frame: "export" });
+    await facade.exportImage({
+      crop: {
+        left: 0,
+        top: 0,
+        width: 200,
+        height: 100,
+        space: "scene",
+      },
+    });
     assertDeepEqual(
       service.calls.at(-1)?.crop,
       {
         type: "sceneRect",
         rect: { left: 0, top: 0, width: 200, height: 100, space: "scene" },
       },
-      "design export should crop to the export frame when requested",
+      "design export should use an explicit crop when provided",
     );
+
+    runtime.config.update("size.cutMode", "outset");
+    runtime.config.update("size.cutMarginMm", 4);
+    await facade.exportImage();
+    assertDeepEqual(
+      service.calls.at(-1)?.crop,
+      {
+        type: "sceneRect",
+        rect: { left: 6, top: 1, width: 188, height: 98, space: "scene" },
+      },
+      "design export should expand the content rect when cutMode is outset",
+    );
+    runtime.config.update("size.cutMode", "trim");
+    runtime.config.update("size.cutMarginMm", 0);
 
     runtime.services
       .getOrThrow<SceneService>(SCENE_SERVICE)
       .registerDocumentScene("back");
     runtime.services
-      .getOrThrow<SceneFrameService>(SCENE_FRAME_SERVICE)
-      .setFrames("back", FRAMES);
+      .getOrThrow<SceneBoundsService>(SCENE_BOUNDS_SERVICE)
+      .setBounds("back", SCENE_BOUNDS);
+    const explicitCallCount = service.calls.length;
+    await facade.exportImage({
+      crop: {
+        left: 1,
+        top: 2,
+        width: 3,
+        height: 4,
+        space: "scene",
+      },
+    });
+    const explicitCalls = service.calls.slice(explicitCallCount);
+    assertEqual(
+      explicitCalls.length,
+      1,
+      "explicit crop should export only the current scene",
+    );
+    assertEqual(
+      explicitCalls[0]?.sceneId,
+      "front",
+      "explicit crop should target the active document scene",
+    );
+    assertDeepEqual(
+      explicitCalls[0]?.crop,
+      {
+        type: "sceneRect",
+        rect: { left: 1, top: 2, width: 3, height: 4, space: "scene" },
+      },
+      "explicit crop should not be reused as a sibling scene crop",
+    );
+    runtime.services
+      .getOrThrow<SceneService>(SCENE_SERVICE)
+      .setActiveRoot("back");
+    await facade.exportImage({
+      crop: {
+        left: 9,
+        top: 8,
+        width: 7,
+        height: 6,
+        space: "scene",
+      },
+    });
+    assertEqual(
+      service.calls.at(-1)?.sceneId,
+      "back",
+      "explicit crop should follow the active document scene",
+    );
+    runtime.services
+      .getOrThrow<SceneService>(SCENE_SERVICE)
+      .setActiveRoot("front");
     service.errorsBySceneId.set(
       "back",
       new Error("browser-scene-export-empty"),

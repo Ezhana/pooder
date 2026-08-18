@@ -1,6 +1,7 @@
 import type { CapabilityDefinition } from "@pooder/core";
 import type {
   CoordinateRect,
+  RectMm,
   SceneExportOptions,
   SceneExportSourceResult,
   SceneExportSourceSelector,
@@ -9,7 +10,8 @@ import type {
 export const DESIGN_EXPORT_CAPABILITY_ID = "pooder.kit.design-export";
 
 export type ExportImageFormat = "png" | "jpeg";
-export type DesignExportFrame = "production" | "export";
+
+export type CutMode = "trim" | "outset" | "inset";
 
 export interface DesignExportCapabilityOptions {
   capabilityId?: string;
@@ -23,10 +25,10 @@ export interface ExportImageOptions extends Omit<
   format?: ExportImageFormat;
   multiplier?: number;
   /**
-   * Scene crop frame. Defaults to `production` (legacy `cut`/`trim`).
-   * Pass `export` for bleed when the document publishes export bounds.
+   * Explicit millimetre crop for the current document scene only.
+   * Defaults to each scene's content rect, then `size.cutMode`.
    */
-  frame?: DesignExportFrame;
+  crop?: CoordinateRect<"scene">;
 }
 
 export interface ExportImageResult {
@@ -42,6 +44,45 @@ export interface ExportImageResult {
 
 export interface DesignExportCapabilityApi {
   exportImage(options?: ExportImageOptions): Promise<ExportImageResult[]>;
+}
+
+export function normalizeCutMode(value: unknown): CutMode {
+  return value === "outset" || value === "inset" ? value : "trim";
+}
+
+export function applyCutMarginToRect(
+  rect: RectMm,
+  cutMode: CutMode,
+  cutMarginMm: number,
+  minMm: number,
+): RectMm {
+  if (cutMode === "trim" || cutMarginMm <= 0) return { ...rect };
+  if (cutMode === "outset") {
+    return {
+      x: rect.x - cutMarginMm,
+      y: rect.y - cutMarginMm,
+      width: rect.width + cutMarginMm * 2,
+      height: rect.height + cutMarginMm * 2,
+    };
+  }
+  const width = Math.max(minMm, rect.width - cutMarginMm * 2);
+  const height = Math.max(minMm, rect.height - cutMarginMm * 2);
+  return {
+    x: rect.x + (rect.width - width) / 2,
+    y: rect.y + (rect.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+export function sceneCropFromRectMm(rect: RectMm): CoordinateRect<"scene"> {
+  return {
+    left: rect.x,
+    top: rect.y,
+    width: rect.width,
+    height: rect.height,
+    space: "scene",
+  };
 }
 
 export function createDesignExportCapabilityDefinition(

@@ -1,13 +1,13 @@
 import {
   CONFIGURATION_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   Service,
   ServiceContext,
   type CanvasService as CanvasServiceContract,
   type ConfigurationService,
   type SceneLayoutService as SceneLayoutServiceContract,
   type SceneLayoutSnapshot,
-  type SceneFrameService,
+  type SceneBoundsService,
 } from "@pooder/core";
 import { CANVAS_SERVICE } from "./tokens";
 import {
@@ -23,7 +23,7 @@ export interface SceneLayoutServiceOptions {
 export class SceneLayoutService implements Service, SceneLayoutServiceContract {
   private canvasService?: CanvasServiceContract;
   private configService?: ConfigurationService;
-  private sceneFrameService?: SceneFrameService;
+  private sceneBoundsService?: SceneBoundsService;
   private readonly layoutBySceneId = new Map<
     string,
     SceneLayoutSnapshot | null
@@ -48,21 +48,21 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
     const configService = context.get<ConfigurationService>(
       CONFIGURATION_SERVICE,
     );
-    const sceneFrameService =
-      context.get<SceneFrameService>(SCENE_FRAME_SERVICE);
+    const sceneBoundsService =
+      context.get<SceneBoundsService>(SCENE_BOUNDS_SERVICE);
 
-    if (!canvasService || !sceneFrameService) {
+    if (!canvasService || !sceneBoundsService) {
       throw new Error(
-        "[SceneLayoutService] CanvasService and SceneFrameService are required.",
+        "[SceneLayoutService] CanvasService and SceneBoundsService are required.",
       );
     }
 
     this.canvasService = canvasService;
     this.configService = configService;
-    this.sceneFrameService = sceneFrameService;
+    this.sceneBoundsService = sceneBoundsService;
     this.subscriptions.add(canvasService.on("resized", this.onCanvasResized));
     this.subscriptions.add(
-      sceneFrameService.onAnyFramesChange((event) => {
+      sceneBoundsService.onAnyBoundsChange((event) => {
         this.invalidateLayout(event.sceneId);
       }),
     );
@@ -73,7 +73,7 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
         }),
       );
     }
-    sceneFrameService.listSceneIds().forEach((sceneId) => {
+    sceneBoundsService.listSceneIds().forEach((sceneId) => {
       this.recomputeLayout(sceneId);
     });
   }
@@ -82,7 +82,7 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
     this.subscriptions.disposeAll();
     this.canvasService = undefined;
     this.configService = undefined;
-    this.sceneFrameService = undefined;
+    this.sceneBoundsService = undefined;
     this.layoutBySceneId.clear();
     this.revisionBySceneId.clear();
     this.dirtySceneIds.clear();
@@ -120,13 +120,13 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
 
   recomputeLayout(sceneId: string): SceneLayoutSnapshot | null {
     const normalized = this.resolveSceneId(sceneId);
-    if (!normalized || !this.canvasService || !this.sceneFrameService) {
+    if (!normalized || !this.canvasService || !this.sceneBoundsService) {
       return null;
     }
-    const frames = this.sceneFrameService.getFrames(normalized);
-    const layout = frames
+    const sceneBounds = this.sceneBoundsService.getBounds(normalized);
+    const layout = sceneBounds
       ? computeSceneLayout({
-          frames,
+          bounds: sceneBounds.bounds,
           fitOptions: this.resolveFitOptions(),
           revision: this.revisionBySceneId.get(normalized) ?? 0,
           sceneId: normalized,
@@ -148,7 +148,7 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
   };
 
   private invalidateAllLayouts(): void {
-    this.sceneFrameService?.listSceneIds().forEach((sceneId) => {
+    this.sceneBoundsService?.listSceneIds().forEach((sceneId) => {
       this.invalidateLayout(sceneId);
     });
   }
@@ -214,7 +214,7 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
       ...comparableNext,
       revision,
       sceneId,
-      contentRect: { ...comparableNext.contentRect },
+      viewRect: { ...comparableNext.viewRect },
     };
     this.layoutBySceneId.set(sceneId, snapshot);
     this.revisionBySceneId.set(sceneId, revision);
@@ -232,13 +232,13 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
       left.scale === right.scale &&
       left.offsetX === right.offsetX &&
       left.offsetY === right.offsetY &&
-      this.isSameRect(left.contentRect, right.contentRect)
+      this.isSameRect(left.viewRect, right.viewRect)
     );
   }
 
   private isSameRect(
-    left: SceneLayoutSnapshot["contentRect"],
-    right: SceneLayoutSnapshot["contentRect"],
+    left: SceneLayoutSnapshot["viewRect"],
+    right: SceneLayoutSnapshot["viewRect"],
   ): boolean {
     return (
       left.left === right.left &&
@@ -256,7 +256,7 @@ export class SceneLayoutService implements Service, SceneLayoutServiceContract {
     if (!layout) return null;
     return {
       ...layout,
-      contentRect: { ...layout.contentRect },
+      viewRect: { ...layout.viewRect },
     };
   }
 }

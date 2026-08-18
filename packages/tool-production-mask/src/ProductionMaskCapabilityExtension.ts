@@ -6,7 +6,7 @@ import {
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   CapabilityRegistryService,
   SessionConflictError,
   TypedEventEmitter,
@@ -27,7 +27,7 @@ import {
   type SceneService,
   type SessionHandle,
   type SessionService,
-  type SceneFrameService,
+  type SceneBoundsService,
 } from "@pooder/core";
 import {
   CANVAS_SERVICE,
@@ -235,7 +235,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   private pendingPreviewMaskBySource = new Map<string, Promise<string>>();
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
-  private sceneFrameService?: SceneFrameService;
+  private sceneBoundsService?: SceneBoundsService;
   private sceneService?: SceneService;
   private sessionService?: SessionService;
   private renderIntentService?: RenderIntentService;
@@ -303,8 +303,8 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.sceneLayoutService =
       context.services.getOrThrow<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
-    this.sceneFrameService =
-      context.services.get<SceneFrameService>(SCENE_FRAME_SERVICE);
+    this.sceneBoundsService =
+      context.services.get<SceneBoundsService>(SCENE_BOUNDS_SERVICE);
     this.sceneService =
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.sessionService =
@@ -346,7 +346,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     this.clearRenderedMask();
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
-    this.sceneFrameService = undefined;
+    this.sceneBoundsService = undefined;
     this.sceneService = undefined;
     this.sessionService = undefined;
     this.renderIntentService = undefined;
@@ -743,8 +743,8 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
 
   private attachLayoutSubscriptions(): void {
     const layoutService = this.sceneLayoutService;
-    const frameService = this.sceneFrameService;
-    if (!layoutService || !frameService) return;
+    const sceneBoundsService = this.sceneBoundsService;
+    if (!layoutService || !sceneBoundsService) return;
     const observed = new Set<string>();
     const observe = (sceneId: string) => {
       if (!sceneId || observed.has(sceneId)) return;
@@ -753,9 +753,9 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         layoutService.onLayoutChange(sceneId, () => void this.refresh()),
       );
     };
-    frameService.listSceneIds().forEach(observe);
+    sceneBoundsService.listSceneIds().forEach(observe);
     this.subscriptions.add(
-      frameService.onAnyFramesChange((event) => observe(event.sceneId)),
+      sceneBoundsService.onAnyBoundsChange((event) => observe(event.sceneId)),
     );
   }
 

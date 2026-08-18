@@ -6,7 +6,7 @@ import {
   SCENE_SERVICE,
   SESSION_SERVICE,
   SCENE_LAYOUT_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   evaluateRuntimeCondition,
   coordinateMatrix,
   multiplyCoordinateMatrices,
@@ -45,7 +45,7 @@ import {
   type SessionService,
   type RenderIntentService,
   type SceneLayoutService,
-  type SceneFrameService,
+  type SceneBoundsService,
 } from "@pooder/core";
 import type {
   FabricRenderGraphReconcileOptions,
@@ -146,7 +146,7 @@ export class FabricRenderGraphAdapter implements Service {
   private interactionService?: InteractionService;
   private canvasService?: FabricRenderTargetCanvasService;
   private sceneLayoutService?: SceneLayoutService;
-  private sceneFrameService?: SceneFrameService;
+  private sceneBoundsService?: SceneBoundsService;
   private sessionService?: SessionService;
   private graphSubscription?: { dispose(): void };
   private sceneSubscription?: { dispose(): void };
@@ -190,7 +190,7 @@ export class FabricRenderGraphAdapter implements Service {
       | FabricRenderTargetCanvasService
       | undefined;
     this.sceneLayoutService = context.get(SCENE_LAYOUT_SERVICE);
-    this.sceneFrameService = context.get(SCENE_FRAME_SERVICE);
+    this.sceneBoundsService = context.get(SCENE_BOUNDS_SERVICE);
     this.sessionService = context.get(SESSION_SERVICE);
 
     if (!this.renderIntentService || !this.canvasService) {
@@ -283,7 +283,7 @@ export class FabricRenderGraphAdapter implements Service {
     this.interactionService = undefined;
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
-    this.sceneFrameService = undefined;
+    this.sceneBoundsService = undefined;
     this.sessionService = undefined;
     this.syncRequested = false;
     this.syncPromise = null;
@@ -606,8 +606,8 @@ export class FabricRenderGraphAdapter implements Service {
 
   private attachLayoutChangeEvents() {
     const layoutService = this.sceneLayoutService;
-    const sceneFrameService = this.sceneFrameService;
-    if (!layoutService || !sceneFrameService) return;
+    const sceneBoundsService = this.sceneBoundsService;
+    if (!layoutService || !sceneBoundsService) return;
     const observed = new Set<string>();
     const observe = (sceneId: string) => {
       if (!sceneId || observed.has(sceneId)) return;
@@ -629,9 +629,9 @@ export class FabricRenderGraphAdapter implements Service {
         }),
       );
     };
-    sceneFrameService.listSceneIds().forEach(observe);
+    sceneBoundsService.listSceneIds().forEach(observe);
     this.layoutDisposables.push(
-      sceneFrameService.onAnyFramesChange((event) => observe(event.sceneId)),
+      sceneBoundsService.onAnyBoundsChange((event) => observe(event.sceneId)),
     );
   }
 

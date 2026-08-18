@@ -37,6 +37,7 @@ import {
 import {
   findEditorDocumentObject,
   setEditorImageObjectSource,
+  surfaceContentRect,
   upsertEditorDocumentAsset,
   visitEditorDocumentObjects,
   type EditorDocument,
@@ -1225,28 +1226,29 @@ function resolveImageSlotClipFrame(
   objectPlacement: AffinePlacement,
 ) {
   const objectFrame = objectPlacement.localBounds;
-  const production = document.surfaces.find(
+  const content = document.surfaces.find(
     (surface) => surface.id === context.surfaceId,
-  )?.geometry.productionBounds;
-  if (!production) return objectFrame;
-  const productionInObject = transformCoordinateRect(
+  );
+  if (!content) return objectFrame;
+  const contentRect = surfaceContentRect(content);
+  const contentInObject = transformCoordinateRect(
     invertCoordinateMatrix(objectPlacement.localToScene),
     coordinateRect("scene", {
-      left: production.x,
-      top: production.y,
-      width: production.width,
-      height: production.height,
+      left: contentRect.x,
+      top: contentRect.y,
+      width: contentRect.width,
+      height: contentRect.height,
     }),
   );
-  const left = Math.max(objectFrame.left, productionInObject.left);
-  const top = Math.max(objectFrame.top, productionInObject.top);
+  const left = Math.max(objectFrame.left, contentInObject.left);
+  const top = Math.max(objectFrame.top, contentInObject.top);
   const right = Math.min(
     objectFrame.left + objectFrame.width,
-    productionInObject.left + productionInObject.width,
+    contentInObject.left + contentInObject.width,
   );
   const bottom = Math.min(
     objectFrame.top + objectFrame.height,
-    productionInObject.top + productionInObject.height,
+    contentInObject.top + contentInObject.height,
   );
   return right > left && bottom > top
     ? coordinateRect("object-local", {

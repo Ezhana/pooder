@@ -22,7 +22,7 @@ import {
   ConstraintResolverService,
   GeometrySourceService,
   InteractionService,
-  DefaultSceneFrameService,
+  DefaultSceneBoundsService,
   RenderEffectRegistryService,
   RenderIntentCompilerRegistryService,
   RenderIntentService,
@@ -46,7 +46,7 @@ export * from "./contribution";
 export * from "./scene";
 export * from "./render";
 export * from "./scene-export";
-export * from "./scene-frames";
+export * from "./scene-bounds";
 export * from "./scene-layout";
 export * from "./render-intent";
 export * from "./coordinate";
@@ -184,7 +184,7 @@ export class Pooder {
     new RenderIntentCompilerRegistryService();
   private readonly sceneService = new SceneService();
   private readonly sessionService = new SessionService();
-  private readonly sceneFrameService = new DefaultSceneFrameService();
+  private readonly sceneBoundsService = new DefaultSceneBoundsService();
   private readonly geometrySourceService = new GeometrySourceService();
   private readonly constraintResolverService = new ConstraintResolverService(
     this.geometrySourceService,
@@ -232,8 +232,8 @@ export class Pooder {
     this.registerService(this.sessionService, CORE_SERVICE_TOKENS.SESSION);
     this.registerService(this.sceneService, CORE_SERVICE_TOKENS.SCENE);
     this.registerService(
-      this.sceneFrameService,
-      CORE_SERVICE_TOKENS.SCENE_FRAME,
+      this.sceneBoundsService,
+      CORE_SERVICE_TOKENS.SCENE_BOUNDS,
     );
     this.registerService(
       this.geometrySourceService,

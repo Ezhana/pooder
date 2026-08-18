@@ -18,7 +18,7 @@ import {
   createAffinePlacement,
   createStaticGeometrySource,
   ConstraintResolverService,
-  DefaultSceneFrameService,
+  DefaultSceneBoundsService,
   GeometrySourceService,
   createRectSnapLines,
   intersectRects,
@@ -231,7 +231,7 @@ function assertClose(
 
 function computeTestSceneLayout(canvas: FakeLayoutCanvasService, state: any) {
   return computeSceneLayout({
-    frames: state.sceneFrames,
+    bounds: state.sceneBounds.bounds,
     fitOptions: { viewPadding: state.viewPadding ?? "16%" },
     sceneId: "test",
     viewportSize: canvas.getViewportSize(),
@@ -3315,104 +3315,104 @@ async function testPreparedConfigurationPublicationRejectsConcurrentUpdates() {
   );
 }
 
-async function testPreparedSceneFramePublicationRejectsConcurrentUpdates() {
-  const frames = new DefaultSceneFrameService();
+async function testPreparedSceneBoundsPublicationRejectsConcurrentUpdates() {
+  const service = new DefaultSceneBoundsService();
   const stable = {
-    preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    production: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 0, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
-  frames.importFrames({ front: stable });
-  const prepared = frames.prepareImportFrames({
+  service.importBounds({ front: stable });
+  const prepared = service.prepareImportBounds({
     front: {
       ...stable,
-      production: { ...stable.production, widthMm: 85 },
+      insets: { ...stable.insets, right: 10 },
     },
   });
   const concurrent = {
     ...stable,
-    production: { ...stable.production, widthMm: 88 },
+    insets: { ...stable.insets, right: 7 },
   };
-  frames.setFrames("front", concurrent);
+  service.setBounds("front", concurrent);
 
   let rejected = false;
   try {
-    frames.publishImportFrames(prepared);
+    service.publishImportBounds(prepared);
   } catch (error) {
-    rejected = String(error).includes("frames changed");
+    rejected = String(error).includes("bounds changed");
   }
-  assertEqual(rejected, true, "stale scene frame publication should reject");
+  assertEqual(rejected, true, "stale scene bounds publication should reject");
   assertDeepEqual(
-    frames.getFrames("front"),
+    service.getBounds("front"),
     concurrent,
-    "stale scene frame publication must preserve concurrent updates",
+    "stale scene bounds publication must preserve concurrent updates",
   );
 }
 
-async function testSceneFramesRequireExplicitSceneAndKeepInsertionOrder(): Promise<void> {
-  const frames = new DefaultSceneFrameService();
+async function testSceneBoundsRequireExplicitSceneAndKeepInsertionOrder(): Promise<void> {
+  const service = new DefaultSceneBoundsService();
   const front = {
-    preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    production: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 0, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
   const back = {
-    preview: { xMm: 120, yMm: 0, widthMm: 100, heightMm: 80 },
-    production: { xMm: 125, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 120, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
-  frames.importFrames({ front, back });
+  service.importBounds({ front, back });
   assertDeepEqual(
-    frames.listSceneIds(),
+    service.listSceneIds(),
     ["front", "back"],
     "scene ids should keep document insertion order",
   );
   assertDeepEqual(
-    frames.getFrames("front")?.preview,
-    front.preview,
-    "frame lookup should use the explicit scene id",
+    service.getBounds("front")?.bounds,
+    front.bounds,
+    "bounds lookup should use the explicit scene id",
   );
   assertDeepEqual(
-    frames.getFrames("back")?.preview,
-    back.preview,
-    "each scene should retain independent frames",
+    service.getBounds("back")?.bounds,
+    back.bounds,
+    "each scene should retain independent bounds",
   );
 
   let rejected = false;
   try {
-    frames.getFrames("");
+    service.getBounds("");
   } catch {
     rejected = true;
   }
   assertEqual(rejected, true, "implicit scene lookup should reject");
 }
 
-async function testSceneFrameImportsOnlyEmitSemanticChanges() {
-  const frames = new DefaultSceneFrameService();
+async function testSceneBoundsImportsOnlyEmitSemanticChanges() {
+  const service = new DefaultSceneBoundsService();
   const changes: string[] = [];
-  frames.onAnyFramesChange((event) => changes.push(event.sceneId));
+  service.onAnyBoundsChange((event) => changes.push(event.sceneId));
   const front = {
-    preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    production: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 0, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
-  frames.importFrames({ front });
-  assertDeepEqual(changes, ["front"], "initial frame import should emit once");
+  service.importBounds({ front });
+  assertDeepEqual(changes, ["front"], "initial bounds import should emit once");
 
   changes.length = 0;
-  frames.importFrames({ front: { ...front } });
+  service.importBounds({ front: { ...front } });
   assertEqual(
     changes.length,
     0,
-    "equivalent frame imports should not invalidate scene layout",
+    "equivalent bounds imports should not invalidate scene layout",
   );
 
-  frames.importFrames({
+  service.importBounds({
     front: {
       ...front,
-      production: { ...front.production, widthMm: 88 },
+      insets: { ...front.insets, right: 7 },
     },
   });
   assertDeepEqual(
     changes,
     ["front"],
-    "changed frames should invalidate only their surface",
+    "changed bounds should invalidate only their surface",
   );
 }
 
@@ -3880,112 +3880,109 @@ async function testSceneLayoutModelDefaultsAndPadding() {
   );
 }
 
-async function testSceneLayoutModelKeepsContentRectOnPreview() {
+async function testSceneLayoutModelKeepsContentRectOnBounds() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 10,
-    sceneFrames: {
-      export: { xMm: -10, yMm: -10, widthMm: 120, heightMm: 120 },
-      preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      production: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 100, height: 100 },
     },
     stepMm: 0.1,
     unit: "mm",
     viewPadding: "16%",
   });
 
-  assert(layout, "outset layout should resolve");
+  assert(layout, "bounds layout should resolve");
   assertClose(layout.scale, 4.08);
-  assertClose(layout.contentRect.left, 196);
-  assertClose(layout.contentRect.width, 408);
+  assertClose(layout.viewRect.left, 196);
+  assertClose(layout.viewRect.width, 408);
 
   const insetLayout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 10,
-    sceneFrames: {
-      export: { xMm: 10, yMm: 10, widthMm: 80, heightMm: 80 },
-      preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      production: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 100, height: 100 },
+      insets: { top: 10, right: 10, bottom: 10, left: 10 },
     },
     stepMm: 0.1,
     unit: "mm",
     viewPadding: "16%",
   });
 
-  assert(insetLayout, "inset layout should resolve");
-  assertClose(insetLayout.contentRect.width, 408);
+  assert(insetLayout, "insets should not change the fitted bounds");
+  assertClose(insetLayout.viewRect.width, 408);
 }
 
-async function testSceneLayoutModelUsesProductionAsDefaultViewportFocus() {
+async function testSceneLayoutModelFitsFullBounds() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1299 / 709,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 0.1,
-    sceneFrames: {
-      preview: { xMm: 0, yMm: 0, widthMm: 1299, heightMm: 709 },
-      production: { xMm: 265, yMm: 319, widthMm: 770, heightMm: 300 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 1299, height: 709 },
+      insets: { top: 319, right: 264, bottom: 90, left: 265 },
     },
     stepMm: 0.001,
     unit: "mm",
     viewPadding: 0,
   });
 
-  assert(layout, "production frame layout should resolve");
+  assert(layout, "bounds layout should resolve");
   assertClose(layout.scale, 800 / 1299);
-  assertClose(layout.contentRect.centerX, (1299 / 2) * layout.scale);
-  assertClose(layout.contentRect.width, 800);
-  assertClose(layout.contentRect.height, 709 * layout.scale);
+  assertClose(layout.viewRect.centerX, (1299 / 2) * layout.scale);
+  assertClose(layout.viewRect.width, 800);
+  assertClose(layout.viewRect.height, 709 * layout.scale);
 }
 
-async function testSceneLayoutModelClampsFocusedProductionFrame() {
+async function testSceneLayoutModelCentersBounds() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 0.1,
-    sceneFrames: {
-      preview: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
-      production: { xMm: 0, yMm: 0, widthMm: 120, heightMm: 120 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 500, height: 500 },
     },
     stepMm: 0.001,
     unit: "mm",
     viewPadding: 0,
   });
 
-  assert(layout, "edge production frame layout should resolve");
+  assert(layout, "bounds layout should resolve");
   assertClose(layout.scale, 600 / 500);
-  assertClose(layout.contentRect.left, 200);
-  assertClose(layout.contentRect.top, 0);
+  assertClose(layout.viewRect.left, 100);
+  assertClose(layout.viewRect.top, 0);
 }
 
-async function testSceneLayoutModelIgnoresExportFrameForLayout() {
+async function testSceneLayoutModelAccountsForBoundsOrigin() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 0.1,
-    sceneFrames: {
-      export: { xMm: 10, yMm: 15, widthMm: 80, heightMm: 70 },
-      preview: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      production: { xMm: 20, yMm: 20, widthMm: 50, heightMm: 40 },
+    sceneBounds: {
+      bounds: { x: 20, y: 10, width: 100, height: 100 },
     },
     stepMm: 0.001,
     unit: "mm",
     viewPadding: 0,
   });
 
-  assert(layout, "explicit export frame layout should resolve");
-  assertClose(layout.contentRect.left, 130);
-  assertClose(layout.contentRect.width, 100 * layout.scale);
+  assert(layout, "origin-shifted bounds layout should resolve");
+  assertClose(layout.scale, 6);
+  assertClose(layout.viewRect.left, 100);
+  assertClose(layout.viewRect.width, 100 * layout.scale);
+  assertClose(layout.offsetX, 100 - 20 * layout.scale);
+  assertClose(layout.offsetY, 0 - 10 * layout.scale);
 }
 
 async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
@@ -4152,8 +4149,8 @@ async function main() {
       testRenderIntentDocumentUpdatesAreScoped,
     ],
     [
-      "emits scene frame changes only for semantic updates",
-      testSceneFrameImportsOnlyEmitSemanticChanges,
+      "emits scene bounds changes only for semantic updates",
+      testSceneBoundsImportsOnlyEmitSemanticChanges,
     ],
     [
       "rejects prepared render intents after concurrent runtime patches",
@@ -4164,12 +4161,12 @@ async function main() {
       testPreparedConfigurationPublicationRejectsConcurrentUpdates,
     ],
     [
-      "rejects prepared scene frames after concurrent updates",
-      testPreparedSceneFramePublicationRejectsConcurrentUpdates,
+      "rejects prepared scene bounds after concurrent updates",
+      testPreparedSceneBoundsPublicationRejectsConcurrentUpdates,
     ],
     [
-      "requires explicit scene frame lookup without an active pointer",
-      testSceneFramesRequireExplicitSceneAndKeepInsertionOrder,
+      "requires explicit scene bounds lookup without an active pointer",
+      testSceneBoundsRequireExplicitSceneAndKeepInsertionOrder,
     ],
     [
       "sorts render intent patch entries deterministically",
@@ -4200,20 +4197,20 @@ async function main() {
       testSceneLayoutModelDefaultsAndPadding,
     ],
     [
-      "keeps layout content on preview bounds",
-      testSceneLayoutModelKeepsContentRectOnPreview,
+      "keeps layout content on scene bounds",
+      testSceneLayoutModelKeepsContentRectOnBounds,
     ],
     [
-      "uses production as the default viewport focus",
-      testSceneLayoutModelUsesProductionAsDefaultViewportFocus,
+      "fits the full scene bounds",
+      testSceneLayoutModelFitsFullBounds,
     ],
     [
-      "clamps focused production frame to keep preview visible",
-      testSceneLayoutModelClampsFocusedProductionFrame,
+      "centers scene bounds in the viewport",
+      testSceneLayoutModelCentersBounds,
     ],
     [
-      "keeps export frames out of layout snapshots",
-      testSceneLayoutModelIgnoresExportFrameForLayout,
+      "accounts for a non-zero bounds origin",
+      testSceneLayoutModelAccountsForBoundsOrigin,
     ],
   ];
 

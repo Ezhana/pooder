@@ -60,12 +60,8 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
     {
       id: "front",
       title: "Front",
-      geometry: {
-        canvasBounds: { x: 0, y: 0, width: 100, height: 120 },
-        productionBounds: { x: 3, y: 3, width: 94, height: 114 },
-        exportBounds: { x: 0, y: 0, width: 100, height: 120 },
-        safeBounds: { x: 5, y: 5, width: 90, height: 110 },
-      },
+      bounds: { x: 0, y: 0, width: 100, height: 120 },
+      insets: { top: 3, right: 3, bottom: 3, left: 3 },
       objects: [
         {
           type: "group",
@@ -181,12 +177,8 @@ export const REPRESENTATIVE_V8_DOCUMENT_INPUT = {
     {
       id: "back",
       title: "Back",
-      geometry: {
-        canvasBounds: { x: 0, y: 0, width: 100, height: 120 },
-        productionBounds: { x: 3, y: 3, width: 94, height: 114 },
-        exportBounds: { x: 0, y: 0, width: 100, height: 120 },
-        safeBounds: { x: 5, y: 5, width: 90, height: 110 },
-      },
+      bounds: { x: 0, y: 0, width: 100, height: 120 },
+      insets: { top: 3, right: 3, bottom: 3, left: 3 },
       objects: [
         {
           type: "group",

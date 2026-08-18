@@ -3,7 +3,7 @@ import {
   RENDER_INTENT_SERVICE,
   GEOMETRY_SOURCE_SERVICE,
   CONSTRAINT_RESOLVER_SERVICE,
-  SCENE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
   INTERACTION_SERVICE,
@@ -40,7 +40,7 @@ import {
   type RenderIntentPatchEntry,
   type RenderIntentService,
   type PreparedRenderIntentDocumentPublication,
-  type PreparedSceneFramePublication,
+  type PreparedSceneBoundsPublication,
   type Service,
   type ServiceContext,
   type ServiceIdentifier,
@@ -49,7 +49,7 @@ import {
   type SessionScope,
   type SessionValidationResult,
   type SessionService,
-  type SceneFrameService,
+  type SceneBoundsService,
   type SceneService,
   type SceneSnapshot,
 } from "@pooder/core";
@@ -69,6 +69,7 @@ import {
   isEditorLeafObject,
   isEditorExtensionObjectEffect,
   parseEditorDocument,
+  surfaceContentRect,
   selectEditorDocumentObjects,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
@@ -466,11 +467,11 @@ export async function applyEditorDocument(
 
 interface PreparedEditorDocumentApplication {
   result: ApplyEditorDocumentResult;
-  sceneFramePublication: PreparedSceneFramePublication;
+  sceneBoundsPublication: PreparedSceneBoundsPublication;
   renderIntentPublication: PreparedRenderIntentDocumentPublication;
   participantPublications: EditorDocumentPublication[];
   renderIntentService: RenderIntentService;
-  sceneFrameService: SceneFrameService;
+  sceneBoundsService: SceneBoundsService;
   sceneService: SceneService;
 }
 
@@ -602,9 +603,9 @@ async function prepareEditorDocumentApplication(
     return createResult(false, document, allDiagnostics, []);
   }
 
-  const sceneFrameService = runtime.services.getOrThrow<SceneFrameService>(
-    SCENE_FRAME_SERVICE,
-    "SceneFrameService is required to apply an EditorDocument.",
+  const sceneBoundsService = runtime.services.getOrThrow<SceneBoundsService>(
+    SCENE_BOUNDS_SERVICE,
+    "SceneBoundsService is required to apply an EditorDocument.",
   );
   const sceneService = runtime.services.getOrThrow<SceneService>(
     SCENE_SERVICE,
@@ -674,11 +675,11 @@ async function prepareEditorDocumentApplication(
     allDiagnostics,
     collectAppliedSurfaceIds(mergeResult.drafts),
   );
-  const sceneFramePublication = sceneFrameService.prepareImportFrames(
+  const sceneBoundsPublication = sceneBoundsService.prepareImportBounds(
     Object.fromEntries(
       document.surfaces.map((surface) => [
         surface.id,
-        surfaceGeometryToRuntimeFrames(surface),
+        surfaceToRuntimeBounds(surface),
       ]),
     ),
   );
@@ -733,11 +734,11 @@ async function prepareEditorDocumentApplication(
 
   return {
     result,
-    sceneFramePublication,
+    sceneBoundsPublication,
     renderIntentPublication,
     participantPublications,
     renderIntentService,
-    sceneFrameService,
+    sceneBoundsService,
     sceneService,
   };
 }
@@ -747,8 +748,8 @@ function publishEditorDocumentApplication(
   prepared: PreparedEditorDocumentApplication,
   boundary: EditorDocumentPublicationBoundary,
 ): void {
-  prepared.sceneFrameService.assertImportFramesPublicationCurrent(
-    prepared.sceneFramePublication,
+  prepared.sceneBoundsService.assertImportBoundsPublicationCurrent(
+    prepared.sceneBoundsPublication,
   );
   prepared.renderIntentService.assertDocumentIntentsPublicationCurrent(
     prepared.renderIntentPublication,
@@ -758,8 +759,8 @@ function publishEditorDocumentApplication(
     prepared.result.document.surfaces.map((surface) => surface.id),
   );
   boundary.publishDocumentState?.(prepared.result.document);
-  prepared.sceneFrameService.publishImportFrames(
-    prepared.sceneFramePublication,
+  prepared.sceneBoundsService.publishImportBounds(
+    prepared.sceneBoundsPublication,
     { notify: false },
   );
   prepared.renderIntentService.publishDocumentIntents(
@@ -773,9 +774,9 @@ function publishEditorDocumentApplication(
       console.error("EditorDocument publication participant failed.", error);
     }
   });
-  notifyPublication("scene frames", () =>
-    prepared.sceneFrameService.notifyImportFramesPublished(
-      prepared.sceneFramePublication,
+  notifyPublication("scene bounds", () =>
+    prepared.sceneBoundsService.notifyImportBoundsPublished(
+      prepared.sceneBoundsPublication,
     ),
   );
   notifyPublication("render intents", () =>
@@ -2017,8 +2018,8 @@ export function createDocumentObjectGeometrySource(
           0,
           0,
           1,
-          surface.geometry.canvasBounds.x,
-          surface.geometry.canvasBounds.y,
+          surface.bounds.x,
+          surface.bounds.y,
         ]),
       );
       return Boolean(match);
@@ -2234,25 +2235,10 @@ function createResult(
   };
 }
 
-function surfaceGeometryToRuntimeFrames(surface: EditorSurface) {
-  const toFrame = (bounds: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }) => ({
-    xMm: bounds.x,
-    yMm: bounds.y,
-    widthMm: bounds.width,
-    heightMm: bounds.height,
-  });
+function surfaceToRuntimeBounds(surface: EditorSurface) {
   return {
-    preview: toFrame(surface.geometry.canvasBounds),
-    production: toFrame(surface.geometry.productionBounds),
-    ...(surface.geometry.exportBounds
-      ? { export: toFrame(surface.geometry.exportBounds) }
-      : {}),
-    viewportFocus: toFrame(surface.geometry.canvasBounds),
+    bounds: { ...surface.bounds },
+    ...(surface.insets ? { insets: { ...surface.insets } } : {}),
   };
 }
 
@@ -2302,8 +2288,8 @@ function createBaseRenderIntentDrafts(
         0,
         0,
         1,
-        surface.geometry.canvasBounds.x,
-        surface.geometry.canvasBounds.y,
+        surface.bounds.x,
+        surface.bounds.y,
       ]),
       ancestorVisible = true,
       groupId?: string,
@@ -2743,26 +2729,26 @@ function resolveEditorImageClipFrame(
   objectPlacement: AffinePlacement,
 ) {
   const objectFrame = objectPlacement.localBounds;
-  const production = surface.geometry.productionBounds;
+  const content = surfaceContentRect(surface);
   if (!getImageSlotBehaviorConfig(object)) return objectFrame;
-  const productionInObject = transformCoordinateRect(
+  const contentInObject = transformCoordinateRect(
     invertCoordinateMatrix(objectPlacement.localToScene),
     coordinateRect("scene", {
-      left: production.x,
-      top: production.y,
-      width: production.width,
-      height: production.height,
+      left: content.x,
+      top: content.y,
+      width: content.width,
+      height: content.height,
     }),
   );
-  const left = Math.max(objectFrame.left, productionInObject.left);
-  const top = Math.max(objectFrame.top, productionInObject.top);
+  const left = Math.max(objectFrame.left, contentInObject.left);
+  const top = Math.max(objectFrame.top, contentInObject.top);
   const right = Math.min(
     objectFrame.left + objectFrame.width,
-    productionInObject.left + productionInObject.width,
+    contentInObject.left + contentInObject.width,
   );
   const bottom = Math.min(
     objectFrame.top + objectFrame.height,
-    productionInObject.top + productionInObject.height,
+    contentInObject.top + contentInObject.height,
   );
   return right > left && bottom > top
     ? coordinateRect("object-local", {

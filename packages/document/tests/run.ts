@@ -16,6 +16,7 @@ import {
   resolveEditorDocumentAsset,
   selectEditorDocumentObjects,
   selectOneEditorDocumentObject,
+  surfaceContentRect,
   validateEditorDocument,
   validateEditorDocumentEffectSchemas,
   validateEditorDocumentObjectSchemas,
@@ -237,15 +238,52 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   const nonFinite = JSON.parse(
     JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
   ) as Record<string, unknown>;
-  const geometry = (
+  const bounds = (
     (nonFinite.surfaces as Array<Record<string, unknown>>)[0]!
-      .geometry as Record<string, unknown>
-  ).canvasBounds as Record<string, unknown>;
-  geometry.width = Number.POSITIVE_INFINITY;
+      .bounds as Record<string, unknown>
+  );
+  bounds.width = Number.POSITIVE_INFINITY;
   assertEqual(
     validateEditorDocument(nonFinite)[0]?.code,
     "finite-number-required",
     "non-finite geometry should be rejected",
+  );
+
+  const overflowingInsets = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  (
+    (overflowingInsets.surfaces as Array<Record<string, unknown>>)[0] as Record<
+      string,
+      unknown
+    >
+  ).insets = { top: 50, right: 50, bottom: 50, left: 50 };
+  assertEqual(
+    validateEditorDocument(overflowingInsets)[0]?.code,
+    "surface-content-invalid",
+    "insets that collapse content should be rejected",
+  );
+
+  const parsed = parseEditorDocument(REPRESENTATIVE_V8_DOCUMENT_INPUT);
+  assertDeepEqual(
+    surfaceContentRect(parsed.surfaces[0]!),
+    { x: 3, y: 3, width: 94, height: 114 },
+    "content rect should apply insets to bounds",
+  );
+
+  const zeroInsetsInput = JSON.parse(
+    JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
+  ) as Record<string, unknown>;
+  (
+    (zeroInsetsInput.surfaces as Array<Record<string, unknown>>)[0] as Record<
+      string,
+      unknown
+    >
+  ).insets = { top: 0, right: 0, bottom: 0, left: 0 };
+  assertEqual(
+    parseEditorDocument(zeroInsetsInput).surfaces[0]?.insets,
+    undefined,
+    "all-zero insets should be omitted",
   );
 
   const invalidUnion = JSON.parse(

@@ -59,10 +59,8 @@ function createDocument(): EditorDocument {
     surfaces: [
       {
         id: "front",
-        geometry: {
-          canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
-          productionBounds: { x: 5, y: 5, width: 90, height: 90 },
-        },
+        bounds: { x: 0, y: 0, width: 100, height: 100 },
+        insets: { top: 5, right: 5, bottom: 5, left: 5 },
         objects: [
           {
             type: "group",
@@ -166,10 +164,8 @@ async function testStrictApplyAndGeometry(): Promise<void> {
     const document = createDocument();
     document.surfaces.push({
       id: "back",
-      geometry: {
-        canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
-        productionBounds: { x: 5, y: 5, width: 90, height: 90 },
-      },
+      bounds: { x: 0, y: 0, width: 100, height: 100 },
+      insets: { top: 5, right: 5, bottom: 5, left: 5 },
       objects: [],
     });
     const result = await controller.apply(document);

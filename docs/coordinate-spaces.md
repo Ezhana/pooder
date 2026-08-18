@@ -5,8 +5,8 @@ Pooder uses exactly four coordinate spaces:
 - `object-local`: geometry relative to the object itself, such as an
   object-relative clip path.
 - `parent-local`: geometry relative to the containing document object. For a
-  surface root object, the parent origin is `surface.geometry.canvasBounds`'s
-  origin. Persisted document objects use this space.
+  surface root object, the parent origin is `surface.bounds`'s origin.
+  Persisted document objects use this space.
 - `scene`: the canonical editor and render-graph space.
 - `screen`: browser viewport pixels.
 
