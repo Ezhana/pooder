@@ -9,6 +9,7 @@ import type {
 export const DESIGN_EXPORT_CAPABILITY_ID = "pooder.kit.design-export";
 
 export type ExportImageFormat = "png" | "jpeg";
+export type DesignExportFrame = "production" | "export";
 
 export interface DesignExportCapabilityOptions {
   capabilityId?: string;
@@ -21,6 +22,11 @@ export interface ExportImageOptions extends Omit<
 > {
   format?: ExportImageFormat;
   multiplier?: number;
+  /**
+   * Scene crop frame. Defaults to `production` (legacy `cut`/`trim`).
+   * Pass `export` for bleed when the document publishes export bounds.
+   */
+  frame?: DesignExportFrame;
 }
 
 export interface ExportImageResult {

@@ -71,19 +71,24 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
 class FakeSceneExportService {
   calls: Array<Record<string, unknown>> = [];
   error: Error | null = null;
+  errorsBySceneId = new Map<string, Error>();
   response: Record<string, unknown> = {};
 
   async exportImage(options: Record<string, unknown>) {
     this.calls.push(options);
+    const sceneId = String(options.sceneId || "");
+    const sceneError = this.errorsBySceneId.get(sceneId);
+    if (sceneError) throw sceneError;
     if (this.error) throw this.error;
-    return this.response;
+    return { ...this.response, sceneId: sceneId || this.response.sceneId };
   }
 }
 
 const FRAMES = {
   preview: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
-  production: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
-  viewportFocus: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
+  production: { xMm: 10, yMm: 5, widthMm: 180, heightMm: 90 },
+  export: { xMm: 0, yMm: 0, widthMm: 200, heightMm: 100 },
+  viewportFocus: { xMm: 10, yMm: 5, widthMm: 180, heightMm: 90 },
 };
 
 async function testSharedCurrentCapabilityUtilities(): Promise<void> {
@@ -360,14 +365,61 @@ async function testDesignExportCapability(): Promise<void> {
       service.calls.at(-1)?.crop,
       {
         type: "sceneRect",
-        rect: { left: 0, top: 0, width: 200, height: 100, space: "scene" },
+        rect: { left: 10, top: 5, width: 180, height: 90, space: "scene" },
       },
-      "design export should convert document frames to a scene rectangle",
+      "design export should crop to the production frame by default",
     );
     assertDeepEqual(
       service.calls.at(-1)?.source,
       { tags: ["export:design"] },
       "design export should use the canonical design export tag by default",
+    );
+    await facade.exportImage({ frame: "export" });
+    assertDeepEqual(
+      service.calls.at(-1)?.crop,
+      {
+        type: "sceneRect",
+        rect: { left: 0, top: 0, width: 200, height: 100, space: "scene" },
+      },
+      "design export should crop to the export frame when requested",
+    );
+
+    runtime.services
+      .getOrThrow<SceneService>(SCENE_SERVICE)
+      .registerDocumentScene("back");
+    runtime.services
+      .getOrThrow<SceneFrameService>(SCENE_FRAME_SERVICE)
+      .setFrames("back", FRAMES);
+    service.errorsBySceneId.set(
+      "back",
+      new Error("browser-scene-export-empty"),
+    );
+    const partial = await facade.exportImage();
+    assertEqual(
+      partial.length,
+      1,
+      "design export should skip empty scenes instead of failing the batch",
+    );
+    assertEqual(
+      partial[0]?.sceneId,
+      "front",
+      "design export should keep populated scenes when a sibling is empty",
+    );
+    service.errorsBySceneId.set(
+      "front",
+      new Error("browser-scene-export-empty"),
+    );
+    await facade.exportImage().then(
+      () => {
+        throw new Error("all-empty design export should fail");
+      },
+      (error: unknown) => {
+        assertEqual(
+          error instanceof Error ? error.message : "",
+          "no-design-objects-to-export",
+          "design export should fail only when every scene is empty",
+        );
+      },
     );
   } finally {
     await runtime.dispose();

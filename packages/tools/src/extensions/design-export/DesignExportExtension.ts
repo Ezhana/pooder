@@ -24,6 +24,7 @@ import {
 import { createDesignExportCommands } from "./commands";
 
 export type {
+  DesignExportFrame,
   ExportImageFormat,
   ExportImageOptions,
   ExportImageResult,
@@ -105,30 +106,49 @@ export class DesignExportExtension implements ExtensionDefinition {
       throw new Error("design-export-not-initialized");
     }
 
+    const { frame: requestedFrame, ...exportOptions } = options;
+    const useExportFrame = requestedFrame === "export";
+
     try {
       const results: SceneExportResult[] = [];
       for (const sceneId of this.sceneService.listDocumentSceneIds()) {
         const frames = this.sceneFrameService.getFrames(sceneId);
         if (!frames) throw new Error("design-export-frame-unavailable");
-        const frame = frames.export ?? frames.production;
-        results.push(
-          await this.exportService.exportImage({
-            ...options,
-            sceneId,
-            crop: {
-              type: "sceneRect",
-              rect: {
-                left: frame.xMm,
-                top: frame.yMm,
-                width: frame.widthMm,
-                height: frame.heightMm,
-                space: "scene",
+        const frame = useExportFrame
+          ? (frames.export ?? frames.production)
+          : frames.production;
+        try {
+          results.push(
+            await this.exportService.exportImage({
+              ...exportOptions,
+              sceneId,
+              crop: {
+                type: "sceneRect",
+                rect: {
+                  left: frame.xMm,
+                  top: frame.yMm,
+                  width: frame.widthMm,
+                  height: frame.heightMm,
+                  space: "scene",
+                },
               },
-            },
-            includeHidden: options.includeHidden ?? true,
-            source: options.source ?? this.resolveDefaultSource(),
-          }),
-        );
+              includeHidden: options.includeHidden ?? true,
+              source: options.source ?? this.resolveDefaultSource(),
+            }),
+          );
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === "browser-scene-export-empty"
+          ) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!results.length) {
+        throw new Error("no-design-objects-to-export");
       }
 
       return results.map((result) => ({

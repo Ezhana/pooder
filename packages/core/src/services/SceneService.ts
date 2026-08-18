@@ -205,7 +205,9 @@ export default class SceneService implements Service {
     const snapshot: SceneSnapshot = {
       id,
       owner: { type: "session", sessionId },
-      composition: normalizeComposition(input.composition),
+      composition: this.ensureSessionDocumentGraph(
+        normalizeComposition(input.composition),
+      ),
     };
     this.scenesById.set(
       id,
@@ -248,6 +250,10 @@ export default class SceneService implements Service {
     );
     this.handlesById.set(sceneId, new SceneHandleImpl(this, snapshot));
     this.recordSceneChange("added", sceneId);
+    if (!this.activeDocumentRootId) {
+      this.activeDocumentRootId = sceneId;
+    }
+    this.refreshActiveRoot();
   }
 
   unregisterDocumentScene(id: SceneId): void {
@@ -823,6 +829,26 @@ export default class SceneService implements Service {
     if (this.activeRootId === next) return;
     this.activeRootId = next;
     this.events.emit("rootChange", { activeRoot: this.getActiveRoot() });
+  }
+
+  private ensureSessionDocumentGraph(
+    composition: SceneSnapshot["composition"],
+  ): SceneSnapshot["composition"] {
+    if (composition.entries.some((entry) => entry.source === "document-graph")) {
+      return composition;
+    }
+    const documentSceneId = this.activeDocumentRootId;
+    if (!documentSceneId) {
+      throw new Error(
+        "Session scene composition requires a document-graph entry.",
+      );
+    }
+    return {
+      entries: [
+        { source: "document-graph", sceneId: documentSceneId },
+        ...composition.entries,
+      ],
+    };
   }
 
   private cloneScene(scene: SceneRecord): SceneRecord {

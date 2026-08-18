@@ -368,7 +368,7 @@ function createMutableConfig(initial: Record<string, unknown> = {}) {
   };
 }
 
-function createMutableSurfaceFrames(initial: Record<string, SceneFrames> = {}) {
+function createMutableSceneFrames(initial: Record<string, SceneFrames> = {}) {
   const frameMap = new Map<string, SceneFrames>(Object.entries(initial));
   const frameListeners = new Set<(event: any) => void>();
   return {
@@ -861,6 +861,7 @@ async function testSessionRootCompositionIsLocalOnly() {
     initialDraft: {},
   });
   const scenes = runtime.services.getOrThrow(SCENE_SERVICE);
+  scenes.registerDocumentScene("front");
   const scene = scenes.createScene({
     id: "root",
     owner: { type: "session", sessionId: session.descriptor.sessionId },
@@ -915,8 +916,8 @@ async function testSessionRootCompositionIsLocalOnly() {
   const items = canvas.reconcileCalls.at(-1)?.items ?? [];
   assertDeepEqual(
     items.map((item) => item.spec.id),
-    ["underlay-node", "session-image", "control-node"],
-    "composition entry order should be the render order",
+    ["document-node", "underlay-node", "session-image", "control-node"],
+    "session roots should keep the document graph under local overlay entries",
   );
   const sessionImage = items.find(
     (item) => item.spec.id === "session-image",
@@ -1566,7 +1567,7 @@ async function testSceneLayoutServiceUsesConfiguredViewPadding() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "10%" });
-  const sceneFrames = createMutableSurfaceFrames({
+  const sceneFrames = createMutableSceneFrames({
     front: TEST_SURFACE_FRAMES,
   });
   const layoutService = new SceneLayoutService();
@@ -1599,7 +1600,7 @@ async function testSceneLayoutServiceRecomputesOnViewPaddingChange() {
   const runtime = new Pooder();
   const canvas = createLayoutCanvas(() => ({ width: 800, height: 600 }));
   const config = createMutableConfig({ "size.viewPadding": "16%" });
-  const sceneFrames = createMutableSurfaceFrames({
+  const sceneFrames = createMutableSceneFrames({
     front: TEST_SURFACE_FRAMES,
   });
   const layoutService = new SceneLayoutService();
@@ -1709,6 +1710,7 @@ async function testFabricRenderGraphAdapterReportsSyncState() {
     initialDraft: { left: 0.5 },
   });
   const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+  scenes.registerDocumentScene("s1");
   const sessionScene = scenes.createScene({
     id: "image:front:scene",
     owner: { type: "session", sessionId: "image:front" },
@@ -3586,152 +3588,94 @@ async function testSceneExportRequiresOneExplicitScenePerCall() {
   );
 }
 
-async function testSceneExportMatchesRenderGraphNodeIds() {
-  const source = {
-    data: {
-      exportKeys: ["session-image:slot"],
-      tags: ["mockup", "design"],
-      layerId: "image.user.session.image",
-    },
-    visible: false,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 20, y: 30 };
-    },
-    async clone() {
-      return {
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
+function createGraphExportService(graph: { layers: unknown[] }) {
+  const capturedSpecs: any[] = [];
+  const service = new BrowserSceneExportService() as any;
+  service.canvasService = {
+    async createDetachedRenderObject(spec: unknown) {
+      capturedSpecs.push(spec);
+      return {};
     },
   };
-  const exportCanvas = {
-    objects: [] as any[],
-    add(object: any) {
-      this.objects.push(object);
-    },
+  service.geometrySource = {};
+  service.renderIntentService = { getGraph: () => graph };
+  service.renderGraphAdapter = {
+    createExportRenderObjectSpec: (_layer: unknown, node: { id: string }) => ({
+      id: node.id,
+      type: "rect",
+      props: { width: 10, height: 10 },
+      effects: [],
+    }),
+  };
+  service.createExportCanvas = () => ({
+    add() {},
     dispose() {},
     renderAll() {},
-    setDimensions() {},
     toDataURL() {
       return "data:image/png;base64,ok";
     },
-  };
-  const service = new BrowserSceneExportService() as any;
-  service.canvasService = {
-    selectObjects: () => [source],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
-
-  const result = await service.exportImage({
-    crop: {
-      type: "sceneRect",
-      rect: { left: 0, top: 0, width: 100, height: 80 },
-    },
-    source: {
-      elementIds: ["session-image:slot"],
-      layerIds: ["image.user.session.image"],
-      tags: ["mockup"],
-    },
   });
-
-  assertEqual(
-    exportCanvas.objects.length,
-    1,
-    "export should include objects matched by render graph node id",
-  );
-  assertEqual(
-    exportCanvas.objects[0]?.visible,
-    true,
-    "export should force matched clones visible",
-  );
-  assertEqual(
-    result.source.elementIds[0],
-    "session-image:slot",
-    "export result should report render graph node id",
-  );
-  assertDeepEqual(
-    result.source.tags,
-    ["mockup", "design"],
-    "export result should report matched export tags",
-  );
+  return { capturedSpecs, service };
 }
 
 async function testSceneExportCombinesSourceSelectorDimensions() {
-  const createSource = (
-    id: string,
-    data: Record<string, unknown>,
-    options: { excludeFromExport?: boolean; visible?: boolean } = {},
-  ) => ({
-    data: {
-      exportKeys: [id],
-      layerId: "image.user",
-      tags: ["mockup"],
-      ...data,
-    },
-    visible: options.visible ?? true,
-    excludeFromExport: options.excludeFromExport,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 20, y: 30 };
-    },
-    async clone() {
-      return {
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
-  });
-  const exportCanvas = {
-    objects: [] as any[],
-    add(object: any) {
-      this.objects.push(object);
-    },
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,ok";
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
-  service.canvasService = {
-    selectObjects: () => [
-      createSource("match", {}),
-      createSource("wrong-tag", { tags: ["design"] }),
-      createSource("wrong-layer", { layerId: "image.overlay" }),
-      createSource("excluded", {}, { excludeFromExport: true }),
+  const { service } = createGraphExportService({
+    layers: [
+      {
+        id: "image.user",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "match",
+            visible: true,
+            exportKeys: ["match"],
+            tags: ["mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+          {
+            id: "wrong-tag",
+            visible: true,
+            exportKeys: ["wrong-tag"],
+            tags: ["design"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+          {
+            id: "excluded",
+            visible: true,
+            exportKeys: ["excluded"],
+            tags: ["mockup"],
+            props: { excludeFromExport: true },
+            data: {},
+            effects: [],
+          },
+        ],
+      },
+      {
+        id: "image.overlay",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "wrong-layer",
+            visible: true,
+            exportKeys: ["wrong-layer"],
+            tags: ["mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+        ],
+      },
     ],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
+  });
 
   const result = await service.exportImage({
+    sceneId: "front",
     crop: {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
@@ -3742,231 +3686,15 @@ async function testSceneExportCombinesSourceSelectorDimensions() {
     },
   });
 
-  assertEqual(
-    exportCanvas.objects.length,
-    1,
-    "export should require every populated source selector dimension to match",
-  );
   assertDeepEqual(
     result.source.elementIds,
     ["match"],
-    "export should report only objects that matched the combined selector",
+    "export should require every populated source selector dimension to match",
   );
-}
-
-async function testSceneExportUsesCutFrameCrop() {
-  const source = {
-    data: {
-      exportKeys: ["element"],
-      layerId: "image.user",
-    },
-    visible: true,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 280, y: 220 };
-    },
-    async clone() {
-      return {
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
-  };
-  const exportCanvas = {
-    objects: [] as any[],
-    add(object: any) {
-      this.objects.push(object);
-    },
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,ok";
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
-  const cutRect = { left: 125, top: 75, width: 300, height: 180 };
-  service.canvasService = {
-    selectObjects: () => [source],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {
-    recomputeLayout: () => ({
-      sceneId: "legacy",
-      revision: 1,
-      offsetX: 0,
-      offsetY: 0,
-      scale: 1,
-      cutRect,
-      trimRect: cutRect,
-      bleedRect: cutRect,
-    }),
-  };
-  service.createExportCanvas = () => exportCanvas;
-
-  const result = await service.exportImage({
-    crop: { type: "frame", frame: "cut" },
-    includeHidden: true,
-    source: { layerIds: ["image.user"] },
-  });
-
   assertDeepEqual(
-    result.crop,
-    cutRect,
-    "frame export should crop from scene layout cut rect",
-  );
-  assertEqual(
-    result.width,
-    cutRect.width * 2,
-    "frame export width should use cut crop",
-  );
-  assertEqual(
-    result.height,
-    cutRect.height * 2,
-    "frame export height should use cut crop",
-  );
-}
-
-async function testSceneExportClearsClipPathByDefault() {
-  const exportCanvas = {
-    objects: [] as any[],
-    add(object: any) {
-      this.objects.push(object);
-    },
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,ok";
-    },
-  };
-  const source = {
-    data: {
-      exportKeys: ["element"],
-      layerId: "image.user",
-    },
-    visible: true,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 50, y: 40 };
-    },
-    async clone() {
-      return {
-        clipPath: { id: "clip" },
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
-  service.canvasService = {
-    selectObjects: () => [source],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
-
-  await service.exportImage({
-    crop: {
-      type: "sceneRect",
-      rect: { left: 0, top: 0, width: 100, height: 80 },
-    },
-    source: { layerIds: ["image.user"] },
-  });
-
-  assertDeepEqual(
-    exportCanvas.objects[0]?.clipPath,
-    { id: "clip" },
-    "export should preserve render effect clip paths by default",
-  );
-}
-
-async function testSceneExportPreservesClipPathWhenRequested() {
-  const clipPath = { id: "clip" };
-  const exportCanvas = {
-    objects: [] as any[],
-    add(object: any) {
-      this.objects.push(object);
-    },
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,ok";
-    },
-  };
-  const source = {
-    data: {
-      exportKeys: ["element"],
-      layerId: "image.user",
-    },
-    visible: true,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 50, y: 40 };
-    },
-    async clone() {
-      return {
-        clipPath,
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
-  service.canvasService = {
-    selectObjects: () => [source],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
-
-  await service.exportImage({
-    crop: {
-      type: "sceneRect",
-      rect: { left: 0, top: 0, width: 100, height: 80 },
-    },
-    preserveClipPaths: false,
-    source: { layerIds: ["image.user"] },
-  });
-
-  assertEqual(
-    exportCanvas.objects[0]?.clipPath,
-    undefined,
-    "export should clear clip paths when requested",
+    result.source.tags,
+    ["mockup"],
+    "export result should report matched export tags",
   );
 }
 
@@ -4174,67 +3902,44 @@ async function testSceneExportFallsBackToTheUnmaskedImage() {
 }
 
 async function testSceneExportAppliesOutputMask() {
-  const source = {
-    data: {
-      exportKeys: ["element"],
-      layerId: "image.user",
-    },
-    visible: true,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 50, y: 40 };
-    },
-    async clone() {
-      return {
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
-  };
-  const exportCanvas = {
-    objects: [] as any[],
-    add(object: any) {
-      this.objects.push(object);
-    },
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,raw";
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
+  const { service } = createGraphExportService({
+    layers: [
+      {
+        id: "artwork",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "shape",
+            visible: true,
+            exportKeys: ["shape"],
+            tags: ["mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+        ],
+      },
+    ],
+  });
   let outputMaskCall: any;
-  service.canvasService = {
-    selectObjects: () => [source],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
-  service.applyOutputMask = async (url: string, options: any) => {
-    outputMaskCall = { options, url };
+  service.applyOutputMask = async (
+    url: string,
+    sourceKey: string,
+    options: any,
+  ) => {
+    outputMaskCall = { options, sourceKey, url };
     return "data:image/png;base64,masked";
   };
 
   const result = await service.exportImage({
+    sceneId: "front",
     crop: {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
     },
     format: "jpeg",
     outputMask: { mode: "outline", sourceKey: "templateFrame" },
-    source: { layerIds: ["image.user"] },
   });
 
   assertEqual(
@@ -4249,8 +3954,13 @@ async function testSceneExportAppliesOutputMask() {
   );
   assertEqual(
     outputMaskCall?.url,
-    "data:image/png;base64,raw",
+    "data:image/png;base64,ok",
     "scene export should mask the rendered export image",
+  );
+  assertEqual(
+    outputMaskCall?.sourceKey,
+    "templateFrame",
+    "scene export should pass the output mask source key",
   );
   assertDeepEqual(
     outputMaskCall?.options.crop,
@@ -4260,59 +3970,35 @@ async function testSceneExportAppliesOutputMask() {
 }
 
 async function testSceneExportRejectsMissingOutputMaskSource() {
-  const source = {
-    data: {
-      exportKeys: ["element"],
-      layerId: "image.user",
-    },
-    visible: true,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 50, y: 40 };
-    },
-    async clone() {
-      return {
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
-  };
-  const exportCanvas = {
-    add() {},
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,raw";
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
-  service.canvasService = {
-    selectObjects: () => [source],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
+  const { service } = createGraphExportService({
+    layers: [
+      {
+        id: "artwork",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "shape",
+            visible: true,
+            exportKeys: ["shape"],
+            tags: ["mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+        ],
+      },
+    ],
+  });
 
   try {
     await service.exportImage({
+      sceneId: "front",
       crop: {
         type: "sceneRect",
         rect: { left: 0, top: 0, width: 100, height: 80 },
       },
       outputMask: { sourceKey: "templateFrame" },
-      source: { layerIds: ["image.user"] },
     });
     throw new Error("scene export should throw for missing output mask source");
   } catch (error) {
@@ -4325,57 +4011,61 @@ async function testSceneExportRejectsMissingOutputMaskSource() {
 }
 
 async function testSceneExportAllowsHiddenOutputMaskSource() {
-  const source = {
-    data: {
-      exportKeys: ["element"],
-      layerId: "image.user",
-    },
-    visible: true,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    getCenterPoint() {
-      return { x: 50, y: 40 };
-    },
-    async clone() {
-      return {
-        set(values: Record<string, unknown>) {
-          Object.assign(this, values);
-        },
-        setCoords() {},
-      };
-    },
+  const { service } = createGraphExportService({
+    layers: [
+      {
+        id: "image.user",
+        sceneId: "front",
+        visible: true,
+        nodes: [
+          {
+            id: "element",
+            visible: true,
+            exportKeys: ["element"],
+            tags: ["mockup"],
+            props: {},
+            data: {},
+            effects: [],
+          },
+          {
+            id: "mask",
+            visible: false,
+            exportKeys: ["mask"],
+            tags: [],
+            props: {},
+            data: { outputMaskKeys: ["templateFrame"] },
+            effects: [],
+          },
+        ],
+      },
+    ],
+  });
+  let foundHiddenMask = false;
+  service.applyOutputMask = async (
+    _url: string,
+    sourceKey: string,
+    options: { sceneId: string },
+  ) => {
+    const entry = service
+      .selectEntries({
+        crop: { type: "elementBounds" },
+        includeHidden: true,
+        sceneId: options.sceneId,
+      })
+      .find((item: { node: { data: { outputMaskKeys?: unknown } } }) =>
+        Array.isArray(item.node.data.outputMaskKeys)
+          ? item.node.data.outputMaskKeys.includes(sourceKey)
+          : false,
+      );
+    if (!entry) {
+      throw new Error("browser-scene-export-output-mask-source-missing");
+    }
+    foundHiddenMask = entry.node.visible === false;
+    return "data:image/png;base64,masked";
   };
-  const hiddenMask = {
-    data: { outputMaskKeys: ["templateFrame"] },
-    visible: false,
-  };
-  const exportCanvas = {
-    add() {},
-    dispose() {},
-    renderAll() {},
-    setDimensions() {},
-    toDataURL() {
-      return "data:image/png;base64,raw";
-    },
-  };
-  const service = new BrowserSceneExportService() as any;
-  service.canvasService = {
-    selectObjects: () => [source, hiddenMask],
-    getSceneScale: () => 1,
-    toScenePoint: (point: { x: number; y: number }) => point,
-    toSceneRect: (rect: {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-    }) => rect,
-  };
-  service.sceneLayoutService = {};
-  service.createExportCanvas = () => exportCanvas;
-  service.applyOutputMask = async () => "data:image/png;base64,masked";
 
   const result = await service.exportImage({
+    sceneId: "front",
     crop: {
       type: "sceneRect",
       rect: { left: 0, top: 0, width: 100, height: 80 },
@@ -4388,6 +4078,11 @@ async function testSceneExportAllowsHiddenOutputMaskSource() {
     result.url,
     "data:image/png;base64,masked",
     "scene export should allow hidden output mask sources",
+  );
+  assertEqual(
+    foundHiddenMask,
+    true,
+    "scene export should resolve hidden output mask sources",
   );
 }
 
@@ -4672,7 +4367,7 @@ async function main() {
       testFabricRenderGraphAdapterBuildsDrawList,
     ],
     [
-      "composes local-only session roots",
+      "composes session roots over the document graph",
       testSessionRootCompositionIsLocalOnly,
     ],
     [
@@ -4784,6 +4479,22 @@ async function main() {
     [
       "requires one explicit scene per export call",
       testSceneExportRequiresOneExplicitScenePerCall,
+    ],
+    [
+      "combines source selector dimensions during export",
+      testSceneExportCombinesSourceSelectorDimensions,
+    ],
+    [
+      "applies an output mask to the exported image",
+      testSceneExportAppliesOutputMask,
+    ],
+    [
+      "rejects missing output mask sources",
+      testSceneExportRejectsMissingOutputMaskSource,
+    ],
+    [
+      "allows hidden output mask sources",
+      testSceneExportAllowsHiddenOutputMaskSource,
     ],
   ];
 

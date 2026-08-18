@@ -1664,6 +1664,54 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
   });
 }
 
+async function testCreateScenePrependsDocumentGraphWhenMissing() {
+  await withRuntime(async (runtime) => {
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    const session = await sessions.open({
+      descriptor: {
+        sessionId: "overlay-session",
+        ownerId: "scene-owner",
+        scope: {},
+        interactionMode: "cooperative",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    try {
+      scenes.createScene({
+        id: "session-overlay",
+        owner: { type: "session", sessionId: session.descriptor.sessionId },
+        composition: {
+          entries: [{ source: "local", layerIds: ["controls"] }],
+        },
+      });
+      throw new Error("createScene should require a document root");
+    } catch (error) {
+      assertEqual(
+        error instanceof Error ? error.message : "",
+        "Session scene composition requires a document-graph entry.",
+      );
+    }
+    scenes.registerDocumentScene("front");
+    const scene = scenes.createScene({
+      id: "session-overlay",
+      owner: { type: "session", sessionId: session.descriptor.sessionId },
+      composition: {
+        entries: [{ source: "local", layerIds: ["controls"] }],
+      },
+    });
+    assertDeepEqual(scene.composition.entries, [
+      { source: "document-graph", sceneId: "front" },
+      { source: "local", layerIds: ["controls"] },
+    ]);
+    assertEqual(scenes.getActiveRoot()?.id, "session-overlay");
+    await session.cancel();
+    scenes.unregisterDocumentScene("front");
+  });
+}
+
 async function testGeometryPrimitives() {
   assertDeepEqual(
     normalizeRect({ x: 1, y: 2, width: -5, height: 6 }),
@@ -4045,6 +4093,10 @@ async function main() {
     [
       "tracks focused session scene roots and ownership",
       testSessionSceneV2TracksFocusedRootAndOwnership,
+    ],
+    [
+      "prepends document-graph onto local-only session scenes",
+      testCreateScenePrependsDocumentGraphWhenMissing,
     ],
     ["computes geometry primitives", testGeometryPrimitives],
     [
