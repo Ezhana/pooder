@@ -3,10 +3,9 @@
  * Applications should prefer direct Tool package dependencies.
  */
 export {
-  createDesignExportCapability,
   createEdgeDetectionCapability,
+  createExportCapability,
   createImageMaskCapability,
   createImageSlotCapability,
   createMirrorCapability,
-  createSceneExportCapability,
 } from "@pooder/tools";

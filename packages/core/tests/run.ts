@@ -18,7 +18,7 @@ import {
   createAffinePlacement,
   createStaticGeometrySource,
   ConstraintResolverService,
-  DefaultSurfaceFrameService,
+  DefaultSceneBoundsService,
   GeometrySourceService,
   createRectSnapLines,
   intersectRects,
@@ -231,8 +231,9 @@ function assertClose(
 
 function computeTestSceneLayout(canvas: FakeLayoutCanvasService, state: any) {
   return computeSceneLayout({
-    frames: state.sceneFrames,
+    bounds: state.sceneBounds.bounds,
     fitOptions: { viewPadding: state.viewPadding ?? "16%" },
+    sceneId: "test",
     viewportSize: canvas.getViewportSize(),
   });
 }
@@ -1328,7 +1329,7 @@ async function testSessionsWithoutTools() {
     sessions.createSession({
       sessionId: "session.image-placement.front.slot",
       scope: {
-        surfaceId: "front",
+        sceneId: "front",
         subjectId: "slot",
         channel: "image-placement",
       },
@@ -1366,7 +1367,7 @@ async function testSessionsWithoutTools() {
     );
     assertEqual(
       sessions.hasActiveSession({
-        scope: { surfaceId: "front", subjectId: "slot" },
+        scope: { sceneId: "front", subjectId: "slot" },
       }),
       false,
     );
@@ -1395,12 +1396,12 @@ async function testSessionLifecycleEvents() {
 
     sessions.createSession({
       sessionId: "image:front:slot",
-      scope: { surfaceId: "front", subjectId: "slot", channel: "image" },
+      scope: { sceneId: "front", subjectId: "slot", channel: "image" },
       draft: { scale: 1 },
     });
     sessions.createSession({
       sessionId: "image:front:slot-2",
-      scope: { surfaceId: "front", subjectId: "slot-2", channel: "image" },
+      scope: { sceneId: "front", subjectId: "slot-2", channel: "image" },
     });
     sessions.updateSession("image:front:slot", { draft: { scale: 1.2 } });
     sessions.focusSession("image:front:slot");
@@ -1603,6 +1604,8 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
     const sessions =
       runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
     const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    scenes.registerDocumentScene("front");
+    scenes.setActiveRoot("front");
     const session = await sessions.open({
       descriptor: {
         sessionId: "scene-session",
@@ -1618,6 +1621,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       owner: { type: "session", sessionId: session.descriptor.sessionId },
       composition: {
         entries: [
+          { source: "document-graph", sceneId: "front" },
           { source: "local", layerIds: ["underlay"] },
           { source: "local", layerIds: ["controls"] },
         ],
@@ -1636,7 +1640,7 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
     });
     assertDeepEqual(
       scenes.getActiveRoot()?.composition.entries.map((entry) => entry.source),
-      ["local", "local"],
+      ["document-graph", "local", "local"],
     );
 
     const other = await sessions.open({
@@ -1649,13 +1653,62 @@ async function testSessionSceneV2TracksFocusedRootAndOwnership() {
       },
       initialDraft: {},
     });
-    assertEqual(scenes.getActiveRoot(), null);
+    assertEqual(scenes.getActiveRoot()?.id, "front");
     await sessions.open({ descriptor: session.descriptor, initialDraft: {} });
     assertEqual(scenes.getActiveRoot()?.id, "session-root");
     await session.cancel();
     assertEqual(scenes.getSceneHandle("session-root"), undefined);
-    assertEqual(scenes.getActiveRoot(), null);
+    assertEqual(scenes.getActiveRoot()?.id, "front");
     await other.cancel();
+    scenes.unregisterDocumentScene("front");
+  });
+}
+
+async function testCreateScenePrependsDocumentGraphWhenMissing() {
+  await withRuntime(async (runtime) => {
+    const sessions =
+      runtime.services.getOrThrow<SessionService>(SESSION_SERVICE);
+    const scenes = runtime.services.getOrThrow<SceneService>(SCENE_SERVICE);
+    const session = await sessions.open({
+      descriptor: {
+        sessionId: "overlay-session",
+        ownerId: "scene-owner",
+        scope: {},
+        interactionMode: "cooperative",
+        leavePolicy: "block",
+      },
+      initialDraft: {},
+    });
+    try {
+      scenes.createScene({
+        id: "session-overlay",
+        owner: { type: "session", sessionId: session.descriptor.sessionId },
+        composition: {
+          entries: [{ source: "local", layerIds: ["controls"] }],
+        },
+      });
+      throw new Error("createScene should require a document root");
+    } catch (error) {
+      assertEqual(
+        error instanceof Error ? error.message : "",
+        "Session scene composition requires a document-graph entry.",
+      );
+    }
+    scenes.registerDocumentScene("front");
+    const scene = scenes.createScene({
+      id: "session-overlay",
+      owner: { type: "session", sessionId: session.descriptor.sessionId },
+      composition: {
+        entries: [{ source: "local", layerIds: ["controls"] }],
+      },
+    });
+    assertDeepEqual(scene.composition.entries, [
+      { source: "document-graph", sceneId: "front" },
+      { source: "local", layerIds: ["controls"] },
+    ]);
+    assertEqual(scenes.getActiveRoot()?.id, "session-overlay");
+    await session.cancel();
+    scenes.unregisterDocumentScene("front");
   });
 }
 
@@ -2537,7 +2590,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "logical-object",
       },
@@ -2613,7 +2666,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
     interaction.onDidChangeSelection((event) => selections.push(event.subject));
     interaction.selectSubject({
       subjectId: "logical-object",
-      surfaceId: "front",
+      sceneId: "front",
       projectionTargets: graph.layers.flatMap((layer) =>
         layer.nodes.map((node) => ({
           projectionId: node.id,
@@ -2626,7 +2679,7 @@ async function testRenderGraphRecordsSubjectProjectionMemberships() {
       [
         {
           subjectId: "logical-object",
-          surfaceId: "front",
+          sceneId: "front",
           projectionTargets: [
             {
               projectionId: "logical-object:fill",
@@ -2685,7 +2738,7 @@ async function testRenderGraphSeparatesLayerOrderFromNodePath() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId,
         objectId: id,
       },
@@ -2717,7 +2770,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: "logical-image",
       },
@@ -2736,7 +2789,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
       descriptor: {
         sessionId: "session:image-slot",
         ownerId: "test",
-        scope: { subjectId: "logical-image", surfaceId: "front" },
+        scope: { subjectId: "logical-image", sceneId: "front" },
         interactionMode: "exclusive",
         leavePolicy: "block",
       },
@@ -2750,7 +2803,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
         role: "override",
         sessionId: session.descriptor.sessionId,
         subjectId: "logical-image",
-        surfaceId: "front",
+        sceneId: "front",
         provenance: "test:image-slot-working",
         priority: 100,
         replacementTarget: {
@@ -2761,7 +2814,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
           ...createProjection("session:working-image", 0),
           subject: {
             kind: "object",
-            surfaceId: "wrong-input-is-normalized",
+            sceneId: "wrong-input-is-normalized",
             layerId: "art",
             objectId: "wrong-input-is-normalized",
           },
@@ -2772,14 +2825,14 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
         role: "auxiliary",
         sessionId: session.descriptor.sessionId,
         subjectId: "logical-image",
-        surfaceId: "front",
+        sceneId: "front",
         provenance: "test:snap-guide",
         priority: 110,
         projection: {
           id: "session:snap-guide",
           subject: {
             kind: "object",
-            surfaceId: "front",
+            sceneId: "front",
             layerId: "controls",
             objectId: "logical-image",
           },
@@ -2849,7 +2902,7 @@ async function testSessionRenderOverridesComposeAndCleanUpAtomically() {
         role: "override",
         sessionId: "session:priority-winner",
         subjectId: "logical-image",
-        surfaceId: "front",
+        sceneId: "front",
         provenance: "test:priority-winner",
         priority: 200,
         replacementTarget: {
@@ -2913,7 +2966,7 @@ async function testRenderIntentGeometryRolesRemainIndependent() {
         id: "default-geometry",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "art",
           objectId: "default-geometry",
         },
@@ -2948,7 +3001,7 @@ async function testRenderIntentGeometryRolesRemainIndependent() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "art",
           objectId: "image",
         },
@@ -3034,7 +3087,7 @@ async function testRenderIntentRuntimePatchesAreSourceScoped() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
           objectType: "image",
@@ -3151,7 +3204,7 @@ async function testRenderIntentDocumentUpdatesAreScoped() {
       id,
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "art",
         objectId: id,
       },
@@ -3198,7 +3251,7 @@ async function testPreparedRenderIntentPublicationRejectsStaleRuntimePatches() {
       id: "image",
       subject: {
         kind: "object" as const,
-        surfaceId: "front",
+        sceneId: "front",
         layerId: "artwork",
         objectId: "image",
       },
@@ -3262,119 +3315,104 @@ async function testPreparedConfigurationPublicationRejectsConcurrentUpdates() {
   );
 }
 
-async function testPreparedSurfaceFramePublicationRejectsConcurrentUpdates() {
-  const frames = new DefaultSurfaceFrameService();
+async function testPreparedSceneBoundsPublicationRejectsConcurrentUpdates() {
+  const service = new DefaultSceneBoundsService();
   const stable = {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 0, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
-  frames.importFrames({ front: stable });
-  const prepared = frames.prepareImportFrames({
+  service.importBounds({ front: stable });
+  const prepared = service.prepareImportBounds({
     front: {
       ...stable,
-      productionFrame: { ...stable.productionFrame, widthMm: 85 },
+      insets: { ...stable.insets, right: 10 },
     },
   });
   const concurrent = {
     ...stable,
-    productionFrame: { ...stable.productionFrame, widthMm: 88 },
+    insets: { ...stable.insets, right: 7 },
   };
-  frames.setFrames("front", concurrent);
+  service.setBounds("front", concurrent);
 
   let rejected = false;
   try {
-    frames.publishImportFrames(prepared);
+    service.publishImportBounds(prepared);
   } catch (error) {
-    rejected = String(error).includes("frames changed");
+    rejected = String(error).includes("bounds changed");
   }
-  assertEqual(rejected, true, "stale surface frame publication should reject");
+  assertEqual(rejected, true, "stale scene bounds publication should reject");
   assertDeepEqual(
-    frames.getFrames("front"),
+    service.getBounds("front"),
     concurrent,
-    "stale surface frame publication must preserve concurrent updates",
+    "stale scene bounds publication must preserve concurrent updates",
   );
 }
 
-async function testSurfaceFrameActivateSurfaceKeepsInsertionOrder(): Promise<void> {
-  const frames = new DefaultSurfaceFrameService();
-  const changes: Array<string | null> = [];
-  frames.onActiveSurfaceChange((event) => changes.push(event.surfaceId));
+async function testSceneBoundsRequireExplicitSceneAndKeepInsertionOrder(): Promise<void> {
+  const service = new DefaultSceneBoundsService();
   const front = {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 0, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
   const back = {
-    previewBounds: { xMm: 120, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 125, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 120, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
-  frames.importFrames({ front, back });
+  service.importBounds({ front, back });
   assertDeepEqual(
-    frames.listSurfaceIds(),
+    service.listSceneIds(),
     ["front", "back"],
-    "surface ids should keep document insertion order",
-  );
-  assertEqual(
-    frames.getActiveSurfaceId(),
-    "front",
-    "import should activate the first surface",
+    "scene ids should keep document insertion order",
   );
   assertDeepEqual(
-    frames.getFrames()?.previewBounds,
-    front.previewBounds,
-    "omitted getFrames should use the active surface",
-  );
-
-  frames.activateSurface("back");
-  assertEqual(frames.getActiveSurfaceId(), "back", "activateSurface should switch");
-  assertDeepEqual(
-    frames.getFrames()?.previewBounds,
-    back.previewBounds,
-    "active surface frames should follow activateSurface",
+    service.getBounds("front")?.bounds,
+    front.bounds,
+    "bounds lookup should use the explicit scene id",
   );
   assertDeepEqual(
-    changes,
-    ["front", "back"],
-    "active surface listeners should see import then switch",
+    service.getBounds("back")?.bounds,
+    back.bounds,
+    "each scene should retain independent bounds",
   );
 
   let rejected = false;
   try {
-    frames.activateSurface("missing");
+    service.getBounds("");
   } catch {
     rejected = true;
   }
-  assertEqual(rejected, true, "unknown surfaces should reject activateSurface");
+  assertEqual(rejected, true, "implicit scene lookup should reject");
 }
 
-async function testSurfaceFrameImportsOnlyEmitSemanticChanges() {
-  const frames = new DefaultSurfaceFrameService();
+async function testSceneBoundsImportsOnlyEmitSemanticChanges() {
+  const service = new DefaultSceneBoundsService();
   const changes: string[] = [];
-  frames.onAnyFramesChange((event) => changes.push(event.surfaceId));
+  service.onAnyBoundsChange((event) => changes.push(event.sceneId));
   const front = {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 80 },
-    productionFrame: { xMm: 5, yMm: 5, widthMm: 90, heightMm: 70 },
+    bounds: { x: 0, y: 0, width: 100, height: 80 },
+    insets: { top: 5, right: 5, bottom: 5, left: 5 },
   };
-  frames.importFrames({ front });
-  assertDeepEqual(changes, ["front"], "initial frame import should emit once");
+  service.importBounds({ front });
+  assertDeepEqual(changes, ["front"], "initial bounds import should emit once");
 
   changes.length = 0;
-  frames.importFrames({ front: { ...front } });
+  service.importBounds({ front: { ...front } });
   assertEqual(
     changes.length,
     0,
-    "equivalent frame imports should not invalidate scene layout",
+    "equivalent bounds imports should not invalidate scene layout",
   );
 
-  frames.importFrames({
+  service.importBounds({
     front: {
       ...front,
-      productionFrame: { ...front.productionFrame, widthMm: 88 },
+      insets: { ...front.insets, right: 7 },
     },
   });
   assertDeepEqual(
     changes,
     ["front"],
-    "changed frames should invalidate only their surface",
+    "changed bounds should invalidate only their surface",
   );
 }
 
@@ -3388,7 +3426,7 @@ async function testRenderIntentPatchEntriesAreSortedDeterministically() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
         },
@@ -3432,7 +3470,7 @@ async function testRenderIntentPatchClearRemovesOnlyTargetField() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
         },
@@ -3468,7 +3506,7 @@ async function testRenderIntentPatchDiagnosticsAreTyped() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
         },
@@ -3524,7 +3562,7 @@ async function testRenderIntentInteractionAspectCarriesDeclarativeState() {
         id: "image",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "image",
           objectType: "image",
@@ -3706,7 +3744,7 @@ async function testRenderIntentObjectLocalEffects() {
         id: "clip-target",
         subject: {
           kind: "object",
-          surfaceId: "front",
+          sceneId: "front",
           layerId: "artwork",
           objectId: "target",
         },
@@ -3764,7 +3802,7 @@ async function testRenderIntentPatchMergeHelper() {
     id: "object",
     subject: {
       kind: "object" as const,
-      surfaceId: "front",
+      sceneId: "front",
       layerId: "artwork",
       objectId: "object",
     },
@@ -3791,7 +3829,7 @@ async function testRenderIntentPatchMergeHelper() {
     id: "overlay",
     subject: {
       kind: "object",
-      surfaceId: "front",
+      sceneId: "front",
       layerId: "overlay-layer",
       objectId: "overlay",
     },
@@ -3799,7 +3837,7 @@ async function testRenderIntentPatchMergeHelper() {
     visual: { type: "rect" },
   });
   assertEqual(newIntentPatch.diagnostics.length, 0);
-  assertEqual(newIntentPatch.draft?.subject.surfaceId, "front");
+  assertEqual(newIntentPatch.draft?.subject.sceneId, "front");
   assertEqual(newIntentPatch.draft?.ordering.layerId, "overlay-layer");
 
   const missingBasePatch = mergeRenderIntentPatchDraft([], {
@@ -3842,119 +3880,109 @@ async function testSceneLayoutModelDefaultsAndPadding() {
   );
 }
 
-async function testSceneLayoutModelUsesExportFrames() {
+async function testSceneLayoutModelKeepsContentRectOnBounds() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 10,
-    sceneFrames: {
-      exportFrame: { xMm: -10, yMm: -10, widthMm: 120, heightMm: 120 },
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 100, height: 100 },
     },
     stepMm: 0.1,
     unit: "mm",
     viewPadding: "16%",
   });
 
-  assert(layout, "outset layout should resolve");
+  assert(layout, "bounds layout should resolve");
   assertClose(layout.scale, 4.08);
-  assertClose(layout.trimRect.left, 196);
-  assertClose(layout.trimRect.width, 408);
-  assertClose(layout.cutRect.left, 155.2);
-  assertClose(layout.cutRect.width, 489.6);
+  assertClose(layout.viewRect.left, 196);
+  assertClose(layout.viewRect.width, 408);
 
   const insetLayout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 10,
-    sceneFrames: {
-      exportFrame: { xMm: 10, yMm: 10, widthMm: 80, heightMm: 80 },
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      productionFrame: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 100, height: 100 },
+      insets: { top: 10, right: 10, bottom: 10, left: 10 },
     },
     stepMm: 0.1,
     unit: "mm",
     viewPadding: "16%",
   });
 
-  assert(insetLayout, "inset layout should resolve");
-  assertClose(insetLayout.trimRect.width, 408);
-  assertClose(insetLayout.cutRect.width, 326.4);
+  assert(insetLayout, "insets should not change the fitted bounds");
+  assertClose(insetLayout.viewRect.width, 408);
 }
 
-async function testSceneLayoutModelPositionsProductionFrame() {
+async function testSceneLayoutModelFitsFullBounds() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1299 / 709,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 0.1,
-    sceneFrames: {
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 1299, heightMm: 709 },
-      productionFrame: { xMm: 265, yMm: 319, widthMm: 770, heightMm: 300 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 1299, height: 709 },
+      insets: { top: 319, right: 264, bottom: 90, left: 265 },
     },
     stepMm: 0.001,
     unit: "mm",
     viewPadding: 0,
   });
 
-  assert(layout, "production frame layout should resolve");
+  assert(layout, "bounds layout should resolve");
   assertClose(layout.scale, 800 / 1299);
-  assertClose(layout.trimRect.centerX, 650 * layout.scale);
-  assertClose(layout.trimRect.left, 265 * layout.scale);
-  assertClose(layout.trimRect.top, 300 - 150 * layout.scale);
-  assertClose(layout.trimRect.width, 770 * layout.scale);
-  assertClose(layout.trimRect.height, 300 * layout.scale);
-  assertClose(layout.cutRect.left, layout.trimRect.left);
-  assertClose(layout.cutRect.width, layout.trimRect.width);
+  assertClose(layout.viewRect.centerX, (1299 / 2) * layout.scale);
+  assertClose(layout.viewRect.width, 800);
+  assertClose(layout.viewRect.height, 709 * layout.scale);
 }
 
-async function testSceneLayoutModelClampsFocusedProductionFrame() {
+async function testSceneLayoutModelCentersBounds() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 0.1,
-    sceneFrames: {
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
-      productionFrame: { xMm: 0, yMm: 0, widthMm: 120, heightMm: 120 },
+    sceneBounds: {
+      bounds: { x: 0, y: 0, width: 500, height: 500 },
     },
     stepMm: 0.001,
     unit: "mm",
     viewPadding: 0,
   });
 
-  assert(layout, "edge production frame layout should resolve");
+  assert(layout, "bounds layout should resolve");
   assertClose(layout.scale, 600 / 500);
-  assertClose(layout.trimRect.left, 200);
-  assertClose(layout.trimRect.top, 0);
+  assertClose(layout.viewRect.left, 100);
+  assertClose(layout.viewRect.top, 0);
 }
 
-async function testSceneLayoutModelUsesExplicitExportFrame() {
+async function testSceneLayoutModelAccountsForBoundsOrigin() {
   const canvas = new FakeLayoutCanvasService(800, 600);
   const layout = computeTestSceneLayout(canvas, {
     aspectRatio: 1,
     constraintMode: "free",
     maxMm: 2000,
     minMm: 0.1,
-    sceneFrames: {
-      exportFrame: { xMm: 10, yMm: 15, widthMm: 80, heightMm: 70 },
-      previewBounds: { xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 },
-      productionFrame: { xMm: 20, yMm: 20, widthMm: 50, heightMm: 40 },
+    sceneBounds: {
+      bounds: { x: 20, y: 10, width: 100, height: 100 },
     },
     stepMm: 0.001,
     unit: "mm",
     viewPadding: 0,
   });
 
-  assert(layout, "explicit export frame layout should resolve");
-  assertClose(layout.cutRect.left, 190);
-  assertClose(layout.cutRect.width, 80 * layout.scale);
+  assert(layout, "origin-shifted bounds layout should resolve");
+  assertClose(layout.scale, 6);
+  assertClose(layout.viewRect.left, 100);
+  assertClose(layout.viewRect.width, 100 * layout.scale);
+  assertClose(layout.offsetX, 100 - 20 * layout.scale);
+  assertClose(layout.offsetY, 0 - 10 * layout.scale);
 }
 
 async function testImageGeometryKeepsIntrinsicSizeAndResolvesFit() {
@@ -4063,6 +4091,10 @@ async function main() {
       "tracks focused session scene roots and ownership",
       testSessionSceneV2TracksFocusedRootAndOwnership,
     ],
+    [
+      "prepends document-graph onto local-only session scenes",
+      testCreateScenePrependsDocumentGraphWhenMissing,
+    ],
     ["computes geometry primitives", testGeometryPrimitives],
     [
       "keeps intrinsic image size while resolving fit geometry",
@@ -4117,8 +4149,8 @@ async function main() {
       testRenderIntentDocumentUpdatesAreScoped,
     ],
     [
-      "emits surface frame changes only for semantic updates",
-      testSurfaceFrameImportsOnlyEmitSemanticChanges,
+      "emits scene bounds changes only for semantic updates",
+      testSceneBoundsImportsOnlyEmitSemanticChanges,
     ],
     [
       "rejects prepared render intents after concurrent runtime patches",
@@ -4129,12 +4161,12 @@ async function main() {
       testPreparedConfigurationPublicationRejectsConcurrentUpdates,
     ],
     [
-      "rejects prepared surface frames after concurrent updates",
-      testPreparedSurfaceFramePublicationRejectsConcurrentUpdates,
+      "rejects prepared scene bounds after concurrent updates",
+      testPreparedSceneBoundsPublicationRejectsConcurrentUpdates,
     ],
     [
-      "activates surfaces without rebuilding frames",
-      testSurfaceFrameActivateSurfaceKeepsInsertionOrder,
+      "requires explicit scene bounds lookup without an active pointer",
+      testSceneBoundsRequireExplicitSceneAndKeepInsertionOrder,
     ],
     [
       "sorts render intent patch entries deterministically",
@@ -4165,20 +4197,20 @@ async function main() {
       testSceneLayoutModelDefaultsAndPadding,
     ],
     [
-      "computes scene export frame layouts",
-      testSceneLayoutModelUsesExportFrames,
+      "keeps layout content on scene bounds",
+      testSceneLayoutModelKeepsContentRectOnBounds,
     ],
     [
-      "positions trim and cut rectangles from production frame",
-      testSceneLayoutModelPositionsProductionFrame,
+      "fits the full scene bounds",
+      testSceneLayoutModelFitsFullBounds,
     ],
     [
-      "clamps focused production frame to keep preview visible",
-      testSceneLayoutModelClampsFocusedProductionFrame,
+      "centers scene bounds in the viewport",
+      testSceneLayoutModelCentersBounds,
     ],
     [
-      "uses explicit export frame instead of derived cut frame",
-      testSceneLayoutModelUsesExplicitExportFrame,
+      "accounts for a non-zero bounds origin",
+      testSceneLayoutModelAccountsForBoundsOrigin,
     ],
   ];
 

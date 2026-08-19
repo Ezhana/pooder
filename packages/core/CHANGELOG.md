@@ -8,6 +8,20 @@
 
 ## Unreleased
 
+### Major Changes
+
+- Replaced runtime `surfaceId` partitions with `sceneId` across RenderIntent,
+  RenderGraph, sessions, interactions, layout, and export. Removed the old
+  names rather than retaining aliases.
+- Replaced `SurfaceFrameService` and `SURFACE_FRAME_SERVICE` with stateless
+  `SceneFrameService` and `SCENE_FRAME_SERVICE`; active-root ownership now
+  belongs exclusively to `SceneService`.
+- Reduced `SceneExportService` to one required scene plus one required
+  scene-space crop per call. Removed `exportImages`, frame crops, and printing
+  frame vocabulary from core.
+- Removed dieline shapes, cut modes, and trim/cut/bleed layout snapshots from
+  core. `SceneLayoutSnapshot` now exposes a neutral `contentRect`.
+
 ### Added
 
 - Added deterministic `RenderIntentPatchEntry` runtime patch ownership,

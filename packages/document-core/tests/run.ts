@@ -59,10 +59,8 @@ function createDocument(): EditorDocument {
     surfaces: [
       {
         id: "front",
-        geometry: {
-          canvasBounds: { x: 0, y: 0, width: 100, height: 100 },
-          productionBounds: { x: 5, y: 5, width: 90, height: 90 },
-        },
+        bounds: { x: 0, y: 0, width: 100, height: 100 },
+        insets: { top: 5, right: 5, bottom: 5, left: 5 },
         objects: [
           {
             type: "group",
@@ -163,7 +161,14 @@ async function testStrictApplyAndGeometry(): Promise<void> {
   const runtime = new Pooder();
   const controller = registerEditorDocumentService(runtime);
   try {
-    const result = await controller.apply(createDocument());
+    const document = createDocument();
+    document.surfaces.push({
+      id: "back",
+      bounds: { x: 0, y: 0, width: 100, height: 100 },
+      insets: { top: 5, right: 5, bottom: 5, left: 5 },
+      objects: [],
+    });
+    const result = await controller.apply(document);
     assert(
       result.ok,
       `strict document should apply (${JSON.stringify(result.diagnostics)})`,
@@ -199,6 +204,8 @@ async function testStrictApplyAndGeometry(): Promise<void> {
     );
     const missing = await controller.activateSurface("missing");
     assertEqual(missing.ok, false, "unknown surfaces should fail");
+    const back = await controller.activateSurface("back");
+    assertEqual(back.ok, true, "second document surface should activate");
 
     const beforeRevision = renderIntents.getGraph().revision;
     const mutation = await controller.updateObject("artwork", (object) => ({
@@ -209,6 +216,11 @@ async function testStrictApplyAndGeometry(): Promise<void> {
     assert(
       renderIntents.getGraph().revision > beforeRevision,
       "committed mutation should republish render intent",
+    );
+    assertEqual(
+      controller.getActiveSurfaceId(),
+      "back",
+      "document mutations should preserve the active document scene",
     );
   } finally {
     await runtime.dispose();
@@ -594,15 +606,13 @@ async function testUnresolvableImageDetection(): Promise<void> {
 
   assertDeepEqual(
     await collectUnresolvableImageObjectIds(document, service),
-    ["missing"],
-    "only drawable images with unavailable bytes should be reported",
+    ["missing", "missing-hidden", "missing-in-hidden-layer"],
+    "canvas-hidden images still export when tagged, so missing bytes must be reported",
   );
-  // Skipped objects must not even be asked for: a hidden image or an empty slot's
-  // placeholder never reaches the exported pixels, so blocking on them would be wrong.
   assertDeepEqual(
     ensured,
-    ["/missing.png"],
-    "established resources should not be re-fetched and skipped ones not fetched at all",
+    ["/missing.png", "/missing.png", "/missing.png"],
+    "established resources should not be re-fetched and placeholders not fetched at all",
   );
 }
 

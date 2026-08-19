@@ -1,13 +1,12 @@
-import { DesignExportCapabilityExtension } from "./extensions/design-export";
+import { ExportCapability } from "./extensions/export";
 import { EdgeDetectionCapabilityExtension } from "./extensions/edge-detection";
 import { ImageMaskCapabilityExtension } from "./extensions/image-mask";
 import { ImageSlotCapabilityExtension } from "./extensions/image-slot";
 import { MirrorCapabilityExtension } from "./extensions/mirror";
-import { SceneExportCapabilityExtension } from "./extensions/scene-export";
 
-export const createDesignExportCapability = (
-  options?: ConstructorParameters<typeof DesignExportCapabilityExtension>[0],
-) => new DesignExportCapabilityExtension(options);
+export const createExportCapability = (
+  options?: ConstructorParameters<typeof ExportCapability>[0],
+) => new ExportCapability(options);
 
 export const createEdgeDetectionCapability = (
   options?: ConstructorParameters<typeof EdgeDetectionCapabilityExtension>[0],
@@ -24,7 +23,3 @@ export const createImageMaskCapability = (
 export const createMirrorCapability = (
   options?: ConstructorParameters<typeof MirrorCapabilityExtension>[0],
 ) => new MirrorCapabilityExtension(options);
-
-export const createSceneExportCapability = (
-  options?: ConstructorParameters<typeof SceneExportCapabilityExtension>[0],
-) => new SceneExportCapabilityExtension(options);

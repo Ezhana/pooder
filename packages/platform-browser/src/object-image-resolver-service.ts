@@ -265,6 +265,7 @@ export class BrowserObjectImageResolverService
       ? { type: "sceneRect", rect: clipCrop }
       : { type: "elementBounds", elementIds: [objectId] };
     const result = await this.requireSceneExportService().exportImage({
+      sceneId: node.sceneId,
       format,
       multiplier,
       source: { elementIds: [objectId] },

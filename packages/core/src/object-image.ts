@@ -1,5 +1,5 @@
 import type { AffinePlacement, CoordinateRect } from "./coordinate";
-import type { SceneExportFormat } from "./render";
+import type { SceneExportFormat } from "./scene-export";
 import type { Service } from "./service";
 
 export type ObjectImageRepresentation =

@@ -11,13 +11,10 @@ import type SessionService from "./SessionService";
 import type { ConstraintResolverService } from "../constraint-resolver";
 import type { GeometrySourceService } from "../geometry-source";
 import type { InteractionService } from "../interaction-service";
-import type {
-  CanvasService,
-  RenderEffectRegistryService,
-  SceneExportService,
-  SceneLayoutService,
-} from "../render";
-import type { DefaultSurfaceFrameService } from "../surface-frames";
+import type { CanvasService, RenderEffectRegistryService } from "../render";
+import type { SceneExportService } from "../scene-export";
+import type { SceneBoundsService } from "../scene-bounds";
+import type { SceneLayoutService } from "../scene-layout";
 import type { ImageResourceService } from "../image-resource";
 import type { ObjectImageResolverService } from "../object-image";
 
@@ -44,8 +41,8 @@ export const CANVAS_SERVICE =
   createServiceToken<CanvasService>("CanvasService");
 export const SCENE_LAYOUT_SERVICE =
   createServiceToken<SceneLayoutService>("SceneLayoutService");
-export const SURFACE_FRAME_SERVICE =
-  createServiceToken<DefaultSurfaceFrameService>("SurfaceFrameService");
+export const SCENE_BOUNDS_SERVICE =
+  createServiceToken<SceneBoundsService>("SceneBoundsService");
 export const SCENE_EXPORT_SERVICE =
   createServiceToken<SceneExportService>("SceneExportService");
 export const SESSION_SERVICE =
@@ -72,7 +69,7 @@ export const CORE_SERVICE_TOKENS = {
   CANVAS: CANVAS_SERVICE,
   SCENE: SCENE_SERVICE,
   SCENE_LAYOUT: SCENE_LAYOUT_SERVICE,
-  SURFACE_FRAME: SURFACE_FRAME_SERVICE,
+  SCENE_BOUNDS: SCENE_BOUNDS_SERVICE,
   SCENE_EXPORT: SCENE_EXPORT_SERVICE,
   SESSION: SESSION_SERVICE,
   GEOMETRY_SOURCE: GEOMETRY_SOURCE_SERVICE,

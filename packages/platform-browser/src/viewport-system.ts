@@ -26,7 +26,7 @@ export class ViewportSystem {
   constructor(
     containerSize: Size = { width: 0, height: 0 },
     physicalSize: Size = { width: 0, height: 0 },
-    padding: number = 40,
+    padding: number = 0,
   ) {
     this._containerSize = containerSize;
     this._physicalSize = physicalSize;

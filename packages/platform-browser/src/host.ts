@@ -3,9 +3,15 @@ import type {
   ImageResourceService,
   Service,
   ServiceIdentifier,
-  SurfaceFrameService,
+  SceneBoundsService,
+  SceneService,
+  SceneSnapshot,
 } from "@pooder/core";
-import { GEOMETRY_SOURCE_SERVICE, SURFACE_FRAME_SERVICE } from "@pooder/core";
+import {
+  GEOMETRY_SOURCE_SERVICE,
+  SCENE_BOUNDS_SERVICE,
+  SCENE_SERVICE,
+} from "@pooder/core";
 import { IMAGE_RESOURCE_SERVICE } from "@pooder/core";
 import { OBJECT_IMAGE_RESOLVER_SERVICE } from "@pooder/core";
 import { loadPaperGeometryBackend } from "@pooder/geometry-paper";
@@ -222,61 +228,59 @@ export function attachBrowserHost(
   resizeObserver.observe(container);
 
   const viewportDisposables: Array<{ dispose(): void }> = [];
-  const observedSurfaceIds = new Set<string>();
-  const surfaceFrameService = runtime.services.get<SurfaceFrameService>(
-    SURFACE_FRAME_SERVICE,
-  );
-  const applyViewportLayout = (surfaceId: string) => {
-    const layout = sceneLayoutService.getLayout(surfaceId);
-    const frames = surfaceFrameService?.getFrames(surfaceId);
-    if (!layout || !frames) return;
+  const observedSceneIds = new Set<string>();
+  const sceneBoundsService =
+    runtime.services.get<SceneBoundsService>(SCENE_BOUNDS_SERVICE);
+  const sceneService = runtime.services.get<SceneService>(SCENE_SERVICE);
+  const applyViewportLayout = (sceneId: string) => {
+    if (!sceneId) return;
+    const layout = sceneLayoutService.getLayout(sceneId);
+    const sceneBounds = sceneBoundsService?.getBounds(sceneId);
+    if (!layout || !sceneBounds) return;
     canvasService.setViewportLayout({
       scale: layout.scale,
       offsetX: layout.offsetX,
       offsetY: layout.offsetY,
-      width: frames.previewBounds.widthMm * layout.scale,
-      height: frames.previewBounds.heightMm * layout.scale,
+      width: sceneBounds.bounds.width * layout.scale,
+      height: sceneBounds.bounds.height * layout.scale,
     });
     canvasService.requestRenderAll();
   };
-  const getActiveSurfaceId = () =>
-    surfaceFrameService?.getActiveSurfaceId() ||
-    surfaceFrameService?.listSurfaceIds()[0] ||
-    "";
-  const observeSurface = (surfaceId: string) => {
-    if (!surfaceId || observedSurfaceIds.has(surfaceId)) return;
-    observedSurfaceIds.add(surfaceId);
+  const getActiveSceneId = () =>
+    resolveDocumentGraphSceneId(sceneService?.getActiveRoot() ?? null) ?? "";
+  const observeScene = (sceneId: string) => {
+    if (!sceneId || observedSceneIds.has(sceneId)) return;
+    observedSceneIds.add(sceneId);
     viewportDisposables.push(
-      sceneLayoutService.onLayoutChange(surfaceId, () => {
-        if (surfaceId === getActiveSurfaceId()) {
-          applyViewportLayout(surfaceId);
+      sceneLayoutService.onLayoutChange(sceneId, () => {
+        if (sceneId === getActiveSceneId()) {
+          applyViewportLayout(sceneId);
         }
       }),
     );
   };
-  surfaceFrameService?.listSurfaceIds().forEach(observeSurface);
-  applyViewportLayout(getActiveSurfaceId());
-  const surfaceFramesDisposable = surfaceFrameService?.onAnyFramesChange(
+  sceneBoundsService?.listSceneIds().forEach(observeScene);
+  applyViewportLayout(getActiveSceneId());
+  const sceneBoundsDisposable = sceneBoundsService?.onAnyBoundsChange(
     (event) => {
-      observeSurface(event.surfaceId);
-      if (event.surfaceId === getActiveSurfaceId()) {
-        applyViewportLayout(event.surfaceId);
+      observeScene(event.sceneId);
+      if (event.sceneId === getActiveSceneId()) {
+        applyViewportLayout(event.sceneId);
       }
     },
   );
-  if (surfaceFramesDisposable) {
-    viewportDisposables.push(surfaceFramesDisposable);
+  if (sceneBoundsDisposable) {
+    viewportDisposables.push(sceneBoundsDisposable);
   }
-  const activeSurfaceDisposable = surfaceFrameService?.onActiveSurfaceChange(
-    (event) => {
-      if (event.surfaceId) {
-        observeSurface(event.surfaceId);
-        applyViewportLayout(event.surfaceId);
-      }
-    },
-  );
-  if (activeSurfaceDisposable) {
-    viewportDisposables.push(activeSurfaceDisposable);
+  const activeRootDisposable = sceneService?.onRootChange((event) => {
+    const sceneId = resolveDocumentGraphSceneId(event.activeRoot);
+    if (sceneId) {
+      observeScene(sceneId);
+      applyViewportLayout(sceneId);
+    }
+  });
+  if (activeRootDisposable) {
+    viewportDisposables.push(activeRootDisposable);
   }
 
   return {
@@ -306,4 +310,15 @@ export function attachBrowserHost(
       runtime.services.unregister(canvasService, CANVAS_SERVICE);
     },
   };
+}
+
+function resolveDocumentGraphSceneId(
+  root: SceneSnapshot | null,
+): string | null {
+  if (!root) return null;
+  if (root.owner.type === "document") return root.owner.documentSceneId;
+  return (
+    root.composition.entries.find((entry) => entry.source === "document-graph")
+      ?.sceneId ?? null
+  );
 }

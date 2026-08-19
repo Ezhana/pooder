@@ -12,7 +12,9 @@ required extension.
 
 ## Object tree
 
-Each surface owns one `objects` array. Draw order is array order plus
+Each surface owns one `objects` array. Scene world is `bounds` (millimetres).
+Optional `insets` shrink the content rect inside that world; omitted or all-zero
+insets means content equals `bounds`. Draw order is array order plus
 depth-first traversal; index zero is bottommost. Traits never change ordering.
 Document objects do not create render/scene layers: the compiler targets the
 surface id as its render-layer id, while runtime render and scene layers remain
@@ -36,7 +38,7 @@ render before or after another runtime layer.
 
 Every node owns `localToParent`, the sole object-local to parent-local
 transform. A surface root object's parent origin is the origin of
-`surface.geometry.canvasBounds`. Leaf `localFrame` is the declared rectangle
+`surface.bounds`. Leaf `localFrame` is the declared rectangle
 content is placed into; its `x/y` describe geometry and are not an additional
 placement. The three `local*` fields carry their coordinate space in the name
 because the model is flat: there is no `placement` wrapper to supply it.

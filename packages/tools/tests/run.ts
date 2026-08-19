@@ -86,10 +86,8 @@ function createImageSlotDocument(): EditorDocument {
     surfaces: [
       {
         id: "front",
-        geometry: {
-          canvasBounds: { x: 0, y: 0, width: 240, height: 180 },
-          productionBounds: { x: 8, y: 12, width: 220, height: 150 },
-        },
+        bounds: { x: 0, y: 0, width: 240, height: 180 },
+        insets: { top: 12, right: 12, bottom: 18, left: 8 },
         objects: [
           {
             type: "group",

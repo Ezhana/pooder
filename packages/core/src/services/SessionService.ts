@@ -731,7 +731,7 @@ export default class SessionService implements Service {
   private createSessionId(scope?: SessionScope): SessionId {
     const normalized = normalizeScope(scope);
     const parts = [
-      normalized.surfaceId,
+      normalized.sceneId,
       normalized.subjectId,
       normalized.channel,
     ].filter((part): part is string => Boolean(part));
@@ -781,7 +781,7 @@ function normalizeRequiredText(value: unknown, label: string): string {
 
 function normalizeScope(scope: SessionScope = {}): SessionScope {
   return {
-    surfaceId: normalizeNullableText(scope.surfaceId),
+    sceneId: normalizeNullableText(scope.sceneId),
     subjectId: normalizeNullableText(scope.subjectId),
     channel: normalizeNullableText(scope.channel),
     groupId: normalizeNullableText(scope.groupId),
@@ -792,7 +792,7 @@ export function scopeMatches(
   scope: SessionScope,
   query: Partial<SessionScope>,
 ): boolean {
-  return (["surfaceId", "subjectId", "channel", "groupId"] as const).every(
+  return (["sceneId", "subjectId", "channel", "groupId"] as const).every(
     (key) => {
       const expected = query[key];
       return (
@@ -823,7 +823,7 @@ function sessionsConflict(
 }
 
 function scopesEqual(left: SessionScope, right: SessionScope): boolean {
-  return (["surfaceId", "subjectId", "channel", "groupId"] as const).every(
+  return (["sceneId", "subjectId", "channel", "groupId"] as const).every(
     (key) => left[key] === right[key],
   );
 }

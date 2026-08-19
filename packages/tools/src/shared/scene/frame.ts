@@ -15,7 +15,8 @@ export function emptyFrameRect(): FrameRect {
   return { left: 0, top: 0, width: 0, height: 0 };
 }
 
-export function resolveSurfaceFrameRect(
+export function resolveSceneFrameRect(
+  sceneId: string,
   canvasService?: CanvasService,
   sceneLayoutService?: SceneLayoutService,
 ): FrameRect {
@@ -23,17 +24,17 @@ export function resolveSurfaceFrameRect(
     return emptyFrameRect();
   }
 
-  const layout = sceneLayoutService.getLayout();
+  const layout = sceneLayoutService.getLayout(sceneId);
   if (!layout) {
     return emptyFrameRect();
   }
 
   return canvasService.toSceneRect({
     space: "screen",
-    left: layout.cutRect.left,
-    top: layout.cutRect.top,
-    width: layout.cutRect.width,
-    height: layout.cutRect.height,
+    left: layout.viewRect.left,
+    top: layout.viewRect.top,
+    width: layout.viewRect.width,
+    height: layout.viewRect.height,
   });
 }
 

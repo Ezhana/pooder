@@ -67,6 +67,20 @@ export interface EditorRect {
 
 export interface RectMm extends EditorRect {}
 
+export interface BoxInsetsMm {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export const ZERO_BOX_INSETS_MM: BoxInsetsMm = {
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+};
+
 export interface EditorSize {
   width: number;
   height: number;
@@ -96,14 +110,40 @@ export interface EditorDocument {
 export interface EditorSurface {
   id: string;
   title?: string;
-  geometry: {
-    canvasBounds: RectMm;
-    productionBounds: RectMm;
-    exportBounds?: RectMm;
-    safeBounds?: RectMm;
-  };
+  /** Scene world in millimetres. Root `localToScene` origin. */
+  bounds: RectMm;
+  /** Content inset from `bounds`. Omitted or all zeroes means content == bounds. */
+  insets?: BoxInsetsMm;
   /** Draw order is array order plus depth-first traversal; index 0 is bottom. */
   objects: EditorObject[];
+}
+
+export function surfaceInsets(
+  surface: Pick<EditorSurface, "insets">,
+): BoxInsetsMm {
+  return surface.insets ?? ZERO_BOX_INSETS_MM;
+}
+
+export function surfaceContentRect(
+  surface: Pick<EditorSurface, "bounds" | "insets">,
+): RectMm {
+  const insets = surfaceInsets(surface);
+  return {
+    x: surface.bounds.x + insets.left,
+    y: surface.bounds.y + insets.top,
+    width: surface.bounds.width - insets.left - insets.right,
+    height: surface.bounds.height - insets.top - insets.bottom,
+  };
+}
+
+export function surfaceContentRectOrThrow(
+  surface: Pick<EditorSurface, "bounds" | "insets">,
+): RectMm {
+  const content = surfaceContentRect(surface);
+  if (!(content.width > 0 && content.height > 0)) {
+    throw new Error("Surface content rect must have positive width and height.");
+  }
+  return content;
 }
 
 /** Facts shared by every node in the document object tree. */

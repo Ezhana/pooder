@@ -5,6 +5,7 @@ import type {
   DocumentInteractionConstraintSpec,
   DocumentInteractionOperationSpec,
   DocumentInteractionSpec,
+  BoxInsetsMm,
   EditorAsset,
   EditorAssetDataSource,
   EditorDocument,
@@ -200,44 +201,37 @@ function parseExtensionStates(value: unknown): Record<string, JsonValue> {
 function parseSurface(value: unknown, index: number): EditorSurface {
   const path = `surfaces[${index}]`;
   const input = record(value, path);
-  exact(input, ["id", "title", "geometry", "objects"], path);
-  const geometry = record(input.geometry, `${path}.geometry`);
-  exact(
-    geometry,
-    ["canvasBounds", "productionBounds", "exportBounds", "safeBounds"],
-    `${path}.geometry`,
-  );
+  exact(input, ["id", "title", "bounds", "insets", "objects"], path);
+  const bounds = parseBoundsRect(input.bounds, `${path}.bounds`);
+  const parsedInsets =
+    input.insets === undefined
+      ? undefined
+      : parseInsets(input.insets, `${path}.insets`);
+  const insets = parsedInsets && !isZeroInsets(parsedInsets) ? parsedInsets : undefined;
+  const contentInsets = insets ?? {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  };
+  const contentWidth =
+    bounds.width - contentInsets.left - contentInsets.right;
+  const contentHeight =
+    bounds.height - contentInsets.top - contentInsets.bottom;
+  if (!(contentWidth > 0 && contentHeight > 0)) {
+    fail(
+      "surface-content-invalid",
+      "Surface content rect must have positive width and height.",
+      `${path}.insets`,
+    );
+  }
   return {
     id: identifier(input.id, `${path}.id`),
     ...(input.title === undefined
       ? {}
       : { title: string(input.title, `${path}.title`) }),
-    geometry: {
-      canvasBounds: parseRect(
-        geometry.canvasBounds,
-        `${path}.geometry.canvasBounds`,
-      ),
-      productionBounds: parseRect(
-        geometry.productionBounds,
-        `${path}.geometry.productionBounds`,
-      ),
-      ...(geometry.exportBounds === undefined
-        ? {}
-        : {
-            exportBounds: parseRect(
-              geometry.exportBounds,
-              `${path}.geometry.exportBounds`,
-            ),
-          }),
-      ...(geometry.safeBounds === undefined
-        ? {}
-        : {
-            safeBounds: parseRect(
-              geometry.safeBounds,
-              `${path}.geometry.safeBounds`,
-            ),
-          }),
-    },
+    bounds,
+    ...(insets ? { insets } : {}),
     objects: array(input.objects, `${path}.objects`).map(
       (object, objectIndex) =>
         parseObject(object, `${path}.objects[${objectIndex}]`),
@@ -859,6 +853,37 @@ function parseRect(value: unknown, path: string): RectMm {
   };
 }
 
+function parseBoundsRect(value: unknown, path: string): RectMm {
+  const input = record(value, path);
+  exact(input, ["x", "y", "width", "height"], path);
+  return {
+    x: finite(input.x, `${path}.x`),
+    y: finite(input.y, `${path}.y`),
+    width: positive(input.width, `${path}.width`),
+    height: positive(input.height, `${path}.height`),
+  };
+}
+
+function parseInsets(value: unknown, path: string): BoxInsetsMm {
+  const input = record(value, path);
+  exact(input, ["top", "right", "bottom", "left"], path);
+  return {
+    top: nonNegative(input.top, `${path}.top`),
+    right: nonNegative(input.right, `${path}.right`),
+    bottom: nonNegative(input.bottom, `${path}.bottom`),
+    left: nonNegative(input.left, `${path}.left`),
+  };
+}
+
+function isZeroInsets(insets: BoxInsetsMm): boolean {
+  return (
+    insets.top === 0 &&
+    insets.right === 0 &&
+    insets.bottom === 0 &&
+    insets.left === 0
+  );
+}
+
 function parsePoint(value: unknown, path: string): PointMm {
   const input = record(value, path);
   exact(input, ["x", "y"], path);
@@ -944,6 +969,18 @@ function positive(value: unknown, path: string): number {
   const result = finite(value, path);
   if (result <= 0) {
     fail("positive-number-required", "Expected a number greater than 0.", path);
+  }
+  return result;
+}
+
+function nonNegative(value: unknown, path: string): number {
+  const result = finite(value, path);
+  if (result < 0) {
+    fail(
+      "non-negative-number-required",
+      "Expected a number greater than or equal to 0.",
+      path,
+    );
   }
   return result;
 }

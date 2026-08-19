@@ -1,21 +1,25 @@
 import type { ConfigurationService } from "./services";
 import { Coordinate, type Unit } from "./coordinate";
-import type {
-  CanvasSize,
-  SceneFrameMm,
-  SceneLayoutSnapshot,
-  SceneRect,
-  SurfaceSceneFrames,
-  SizeConstraintMode,
-  SizeState,
-  CutMode,
-} from "./render";
+import type { CanvasSize } from "./render";
+import type { RectMm, SceneBounds } from "./scene-bounds";
+import type { SceneLayoutSnapshot, SceneRect } from "./scene-layout";
+
+export type SizeConstraintMode = "free" | "lockAspect" | "equal";
+
+export interface SizeState {
+  unit: Unit;
+  sceneBounds: SceneBounds;
+  constraintMode: SizeConstraintMode;
+  aspectRatio: number;
+  minMm: number;
+  maxMm: number;
+  stepMm: number;
+}
 
 export const DEFAULT_SIZE_STATE: SizeState = {
   unit: "mm",
-  sceneFrames: {
-    previewBounds: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
-    productionFrame: { xMm: 0, yMm: 0, widthMm: 500, heightMm: 500 },
+  sceneBounds: {
+    bounds: { x: 0, y: 0, width: 500, height: 500 },
   },
   constraintMode: "free",
   aspectRatio: 1,
@@ -29,10 +33,10 @@ export interface SceneLayoutFitOptions {
 }
 
 export interface SceneLayoutInput {
-  frames: SurfaceSceneFrames;
+  bounds: RectMm;
   viewportSize: CanvasSize;
   fitOptions?: SceneLayoutFitOptions;
-  surfaceId?: string;
+  sceneId: string;
   revision?: number;
 }
 
@@ -65,11 +69,6 @@ export function normalizeUnit(value: unknown): Unit {
 export function normalizeConstraintMode(value: unknown): SizeConstraintMode {
   if (value === "lockAspect" || value === "equal") return value;
   return "free";
-}
-
-export function normalizeCutMode(value: unknown): CutMode {
-  if (value === "outset" || value === "inset") return value;
-  return "trim";
 }
 
 export function toMm(value: number, fromUnit: Unit): number {
@@ -160,41 +159,32 @@ export function readSizeState(configService: ConfigurationService): SizeState {
     Number(configService.get("size.stepMm", DEFAULT_SIZE_STATE.stepMm)),
   );
 
-  const defaultPreviewBounds = {
-    xMm: 0,
-    yMm: 0,
-    widthMm: sanitizeMmValue(
-      DEFAULT_SIZE_STATE.sceneFrames.previewBounds.widthMm,
-      {
-        minMm,
-        maxMm,
-        stepMm,
-      },
-    ),
-    heightMm: sanitizeMmValue(
-      DEFAULT_SIZE_STATE.sceneFrames.previewBounds.heightMm,
-      {
-        minMm,
-        maxMm,
-        stepMm,
-      },
-    ),
+  const defaultBounds = {
+    x: 0,
+    y: 0,
+    width: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneBounds.bounds.width, {
+      minMm,
+      maxMm,
+      stepMm,
+    }),
+    height: sanitizeMmValue(DEFAULT_SIZE_STATE.sceneBounds.bounds.height, {
+      minMm,
+      maxMm,
+      stepMm,
+    }),
   };
-  const previewBounds = defaultPreviewBounds;
   const aspectRaw = Number(
     configService.get("size.aspectRatio", DEFAULT_SIZE_STATE.aspectRatio),
   );
   const aspectRatio =
     Number.isFinite(aspectRaw) && aspectRaw > 0
       ? aspectRaw
-      : previewBounds.widthMm / Math.max(0.001, previewBounds.heightMm);
-  const productionFrame = previewBounds;
+      : defaultBounds.width / Math.max(0.001, defaultBounds.height);
 
   return {
     unit,
-    sceneFrames: {
-      previewBounds,
-      productionFrame,
+    sceneBounds: {
+      bounds: defaultBounds,
     },
     constraintMode: normalizeConstraintMode(
       configService.get(
@@ -209,16 +199,16 @@ export function readSizeState(configService: ConfigurationService): SizeState {
   };
 }
 
-function rectByFrame(
-  frame: SceneFrameMm,
+function rectByBounds(
+  bounds: RectMm,
   scale: number,
   offsetX: number,
   offsetY: number,
 ): SceneRect {
-  const left = offsetX + frame.xMm * scale;
-  const top = offsetY + frame.yMm * scale;
-  const width = frame.widthMm * scale;
-  const height = frame.heightMm * scale;
+  const left = offsetX + bounds.x * scale;
+  const top = offsetY + bounds.y * scale;
+  const width = bounds.width * scale;
+  const height = bounds.height * scale;
   return {
     left,
     top,
@@ -229,76 +219,6 @@ function rectByFrame(
   };
 }
 
-function boundingRect(left: SceneRect, right: SceneRect): SceneRect {
-  const minLeft = Math.min(left.left, right.left);
-  const minTop = Math.min(left.top, right.top);
-  const maxRight = Math.max(left.left + left.width, right.left + right.width);
-  const maxBottom = Math.max(left.top + left.height, right.top + right.height);
-  const width = maxRight - minLeft;
-  const height = maxBottom - minTop;
-  return {
-    left: minLeft,
-    top: minTop,
-    width,
-    height,
-    centerX: minLeft + width / 2,
-    centerY: minTop + height / 2,
-  };
-}
-
-type ResolvedSurfaceSceneFrames = SurfaceSceneFrames & {
-  exportFrame: SceneFrameMm;
-  viewportFocusFrame: SceneFrameMm;
-};
-
-function deriveSceneFrames(
-  frames: SurfaceSceneFrames,
-): ResolvedSurfaceSceneFrames {
-  const { previewBounds, productionFrame, viewportFocusFrame } = frames;
-  return {
-    previewBounds,
-    productionFrame,
-    exportFrame: frames.exportFrame ?? productionFrame,
-    viewportFocusFrame: viewportFocusFrame ?? productionFrame,
-  };
-}
-
-function resolveFrameOffset(
-  frame: SceneFrameMm,
-  focusFrame: SceneFrameMm,
-  scale: number,
-  canvasWidth: number,
-  canvasHeight: number,
-  padding: number,
-): { offsetX: number; offsetY: number } {
-  const viewportCenterX = canvasWidth / 2;
-  const viewportCenterY = canvasHeight / 2;
-  const initialOffsetX =
-    viewportCenterX - (focusFrame.xMm + focusFrame.widthMm / 2) * scale;
-  const initialOffsetY =
-    viewportCenterY - (focusFrame.yMm + focusFrame.heightMm / 2) * scale;
-
-  const offsetLeftX = padding - frame.xMm * scale;
-  const offsetRightX =
-    canvasWidth - padding - (frame.xMm + frame.widthMm) * scale;
-  const offsetTopY = padding - frame.yMm * scale;
-  const offsetBottomY =
-    canvasHeight - padding - (frame.yMm + frame.heightMm) * scale;
-
-  return {
-    offsetX: clamp(
-      initialOffsetX,
-      Math.min(offsetLeftX, offsetRightX),
-      Math.max(offsetLeftX, offsetRightX),
-    ),
-    offsetY: clamp(
-      initialOffsetY,
-      Math.min(offsetTopY, offsetBottomY),
-      Math.max(offsetTopY, offsetBottomY),
-    ),
-  };
-}
-
 export function computeSceneLayout(
   input: SceneLayoutInput,
 ): SceneLayoutSnapshot | null {
@@ -306,11 +226,9 @@ export function computeSceneLayout(
   const canvasHeight = input.viewportSize.height || 0;
   if (canvasWidth <= 0 || canvasHeight <= 0) return null;
 
-  const sceneFrames = deriveSceneFrames(input.frames);
-  const { previewBounds, productionFrame, exportFrame, viewportFocusFrame } =
-    sceneFrames;
-  const viewWidthMm = previewBounds.widthMm;
-  const viewHeightMm = previewBounds.heightMm;
+  const { bounds } = input;
+  const viewWidthMm = bounds.width;
+  const viewHeightMm = bounds.height;
   if (
     !Number.isFinite(viewWidthMm) ||
     !Number.isFinite(viewHeightMm) ||
@@ -330,15 +248,11 @@ export function computeSceneLayout(
     { width: viewWidthMm, height: viewHeightMm },
     viewPaddingPx,
   );
-  const { offsetX, offsetY } = resolveFrameOffset(
-    previewBounds,
-    viewportFocusFrame,
-    baseLayout.scale,
-    canvasWidth,
-    canvasHeight,
-    viewPaddingPx,
-  );
-  const layout = { ...baseLayout, offsetX, offsetY };
+  const layout = {
+    ...baseLayout,
+    offsetX: baseLayout.offsetX - bounds.x * baseLayout.scale,
+    offsetY: baseLayout.offsetY - bounds.y * baseLayout.scale,
+  };
   if (
     !Number.isFinite(layout.scale) ||
     !Number.isFinite(layout.offsetX) ||
@@ -348,28 +262,17 @@ export function computeSceneLayout(
     return null;
   }
 
-  const trimRect = rectByFrame(
-    productionFrame,
-    layout.scale,
-    layout.offsetX,
-    layout.offsetY,
-  );
-  const cutRect = rectByFrame(
-    exportFrame,
-    layout.scale,
-    layout.offsetX,
-    layout.offsetY,
-  );
-  const bleedRect = boundingRect(trimRect, cutRect);
-
   return {
-    surfaceId: input.surfaceId ?? "",
+    sceneId: input.sceneId,
     revision: input.revision ?? 0,
     scale: layout.scale,
     offsetX: layout.offsetX,
     offsetY: layout.offsetY,
-    trimRect,
-    cutRect,
-    bleedRect,
+    viewRect: rectByBounds(
+      bounds,
+      layout.scale,
+      layout.offsetX,
+      layout.offsetY,
+    ),
   };
 }

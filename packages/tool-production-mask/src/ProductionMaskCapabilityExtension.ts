@@ -6,7 +6,7 @@ import {
   SCENE_LAYOUT_SERVICE,
   SCENE_SERVICE,
   SESSION_SERVICE,
-  SURFACE_FRAME_SERVICE,
+  SCENE_BOUNDS_SERVICE,
   CapabilityRegistryService,
   SessionConflictError,
   TypedEventEmitter,
@@ -27,7 +27,7 @@ import {
   type SceneService,
   type SessionHandle,
   type SessionService,
-  type SurfaceFrameService,
+  type SceneBoundsService,
 } from "@pooder/core";
 import {
   CANVAS_SERVICE,
@@ -68,7 +68,7 @@ import {
 import { POODER_PRODUCTION_MASK_DOCUMENT_CONTRIBUTION } from "./document-contribution";
 import { POODER_PRODUCTION_MASK_LAYER_PRESET } from "./layers";
 import { SubscriptionBag } from "./runtime/subscriptions";
-import { type FrameRect, resolveSurfaceFrameRect } from "./scene/frame";
+import { type FrameRect, resolveSceneFrameRect } from "./scene/frame";
 
 interface ImageSnapshot {
   id: string;
@@ -235,7 +235,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   private pendingPreviewMaskBySource = new Map<string, Promise<string>>();
   private canvasService?: CanvasService;
   private sceneLayoutService?: SceneLayoutService;
-  private surfaceFrameService?: SurfaceFrameService;
+  private sceneBoundsService?: SceneBoundsService;
   private sceneService?: SceneService;
   private sessionService?: SessionService;
   private renderIntentService?: RenderIntentService;
@@ -303,9 +303,8 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       context.services.getOrThrow<CanvasService>(CANVAS_SERVICE);
     this.sceneLayoutService =
       context.services.getOrThrow<SceneLayoutService>(SCENE_LAYOUT_SERVICE);
-    this.surfaceFrameService = context.services.get<SurfaceFrameService>(
-      SURFACE_FRAME_SERVICE,
-    );
+    this.sceneBoundsService =
+      context.services.get<SceneBoundsService>(SCENE_BOUNDS_SERVICE);
     this.sceneService =
       context.services.getOrThrow<SceneService>(SCENE_SERVICE);
     this.sessionService =
@@ -347,7 +346,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     this.clearRenderedMask();
     this.canvasService = undefined;
     this.sceneLayoutService = undefined;
-    this.surfaceFrameService = undefined;
+    this.sceneBoundsService = undefined;
     this.sceneService = undefined;
     this.sessionService = undefined;
     this.renderIntentService = undefined;
@@ -448,7 +447,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
           sessionId,
           ownerId: this.id,
           scope: {
-            surfaceId: descriptor.surfaceId,
+            sceneId: descriptor.surfaceId,
             subjectId: descriptor.maskId,
             channel: PRODUCTION_MASK_SESSION_CHANNEL,
             groupId: EDITOR_INTERACTION_SESSION_GROUP_ID,
@@ -744,19 +743,19 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
 
   private attachLayoutSubscriptions(): void {
     const layoutService = this.sceneLayoutService;
-    const frameService = this.surfaceFrameService;
-    if (!layoutService || !frameService) return;
+    const sceneBoundsService = this.sceneBoundsService;
+    if (!layoutService || !sceneBoundsService) return;
     const observed = new Set<string>();
-    const observe = (surfaceId: string) => {
-      if (!surfaceId || observed.has(surfaceId)) return;
-      observed.add(surfaceId);
+    const observe = (sceneId: string) => {
+      if (!sceneId || observed.has(sceneId)) return;
+      observed.add(sceneId);
       this.subscriptions.add(
-        layoutService.onLayoutChange(surfaceId, () => void this.refresh()),
+        layoutService.onLayoutChange(sceneId, () => void this.refresh()),
       );
     };
-    frameService.listSurfaceIds().forEach(observe);
+    sceneBoundsService.listSceneIds().forEach(observe);
     this.subscriptions.add(
-      frameService.onAnyFramesChange((event) => observe(event.surfaceId)),
+      sceneBoundsService.onAnyBoundsChange((event) => observe(event.sceneId)),
     );
   }
 
@@ -777,6 +776,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
       owner: { type: "session", sessionId },
       composition: {
         entries: [
+          { source: "document-graph", sceneId: descriptor.surfaceId },
           { source: "local", layerIds: [this.originalLayerId] },
           { source: "local", layerIds: [this.coverLayerId] },
           { source: "local", layerIds: [this.maskLayerId] },
@@ -802,7 +802,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
         .flatMap((layer) => layer.nodes)
         .find(
           (node) =>
-            node.surfaceId === descriptor.surfaceId &&
+            node.sceneId === descriptor.surfaceId &&
             node.subjectId === descriptor.settings.reference.objectId,
         ) ?? null
     );
@@ -1052,7 +1052,11 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     this.maskSpecs = maskSpecs;
     this.coverSpecs = coverSpecs;
     this.overlaySpecs = this.buildFrameSpecs(
-      resolveSurfaceFrameRect(this.canvasService, this.sceneLayoutService),
+      resolveSceneFrameRect(
+        descriptor.surfaceId,
+        this.canvasService,
+        this.sceneLayoutService,
+      ),
     );
     this.publishSessionScene();
     this.canvasService.requestRenderAll();

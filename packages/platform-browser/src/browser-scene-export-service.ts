@@ -1,7 +1,6 @@
 import {
   GEOMETRY_SOURCE_SERVICE,
   RENDER_INTENT_SERVICE,
-  SURFACE_FRAME_SERVICE,
   coordinateMatrix,
   type CanvasService,
   type GeometrySourceService,
@@ -18,7 +17,6 @@ import {
   type SceneExportService,
   type Service,
   type ServiceContext,
-  type SurfaceFrameService,
 } from "@pooder/core";
 import { Canvas as FabricCanvas, type FabricObject } from "fabric";
 import {
@@ -30,7 +28,6 @@ import type { FabricRenderGraphAdapter } from "./scene/fabric-render-graph-adapt
 import { applyAlphaMask, renderOutputMask } from "./output-mask";
 
 export type BrowserSceneExportFormat = SceneExportFormat;
-export type BrowserSceneExportFrame = "cut" | "trim" | "bleed";
 export interface BrowserSceneExportRect {
   left: number;
   top: number;
@@ -91,7 +88,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
   private geometrySource?: GeometrySourceService;
   private renderIntentService?: RenderIntentService;
   private renderGraphAdapter?: FabricRenderGraphAdapter;
-  private surfaceFrameService?: SurfaceFrameService;
   private serviceContext?: ServiceContext;
 
   init(context: ServiceContext): void {
@@ -102,7 +98,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     this.geometrySource = context.get(GEOMETRY_SOURCE_SERVICE);
     this.renderIntentService = context.get(RENDER_INTENT_SERVICE);
     this.renderGraphAdapter = context.get(FABRIC_RENDER_GRAPH_ADAPTER);
-    this.surfaceFrameService = context.get(SURFACE_FRAME_SERVICE);
     if (
       !this.canvasService ||
       !this.geometrySource ||
@@ -119,18 +114,19 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     this.geometrySource = undefined;
     this.renderIntentService = undefined;
     this.renderGraphAdapter = undefined;
-    this.surfaceFrameService = undefined;
     this.serviceContext = undefined;
   }
 
   async exportImage(
-    options: BrowserSceneExportOptions = {},
+    options: BrowserSceneExportOptions,
   ): Promise<BrowserSceneExportResult> {
+    const sceneId = String(options?.sceneId || "").trim();
+    if (!sceneId) throw new Error("browser-scene-export-scene-required");
+    if (!options?.crop) throw new Error("browser-scene-export-crop-required");
     const entries = this.selectEntries(options);
     if (!entries.length) throw new Error("browser-scene-export-empty");
 
-    const surfaceId = this.resolveSurfaceId(options);
-    const crop = this.resolveCrop(options.crop, entries, surfaceId);
+    const crop = this.resolveCrop(options.crop, entries);
     if (!isPositiveRect(crop)) {
       throw new Error("browser-scene-export-crop-unavailable");
     }
@@ -177,7 +173,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
               multiplier,
               mode: options.outputMask.mode ?? "alpha",
               sceneToTarget,
-              surfaceId: this.resolveSurfaceId(options),
+              sceneId,
               transparentColor: options.outputMask.transparentColor,
               width,
             },
@@ -190,59 +186,31 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         format,
         multiplier,
         source: {
-          layerIds: Array.from(new Set(entries.map(({ layer }) => layer.id))),
           elementIds: Array.from(
             new Set(entries.flatMap(({ node }) => node.exportKeys)),
           ),
           tags: Array.from(new Set(entries.flatMap(({ node }) => node.tags))),
         },
         crop: { ...crop, space: "scene" },
-        surfaceId: this.resolveSurfaceId(options),
+        sceneId,
       };
     } finally {
       exportCanvas.dispose();
     }
   }
 
-  async exportImages(
-    options: BrowserSceneExportOptions = {},
-  ): Promise<BrowserSceneExportResult[]> {
-    const surfaceIds = this.resolveExportSurfaceIds(options);
-    if (!surfaceIds.length) throw new Error("browser-scene-export-empty");
-    const results: BrowserSceneExportResult[] = [];
-    for (const surfaceId of surfaceIds) {
-      results.push(await this.exportImage({ ...options, surfaceId }));
-    }
-    return results;
-  }
-
   private selectEntries(options: BrowserSceneExportOptions): ExportEntry[] {
     const selector = options.source;
-    const layerIds = new Set(normalizeIds(selector?.layerIds));
     const elementIds = new Set(normalizeIds(selector?.elementIds));
     const tags = new Set(normalizeIds(selector?.tags));
-    const includeHidden = options.includeHidden === true;
-    const surfaceId = this.resolveSurfaceId(options);
+    const sceneId = String(options.sceneId || "").trim();
     const entries: ExportEntry[] = [];
     const renderIntents = this.requireRenderIntentService();
     const graph =
       renderIntents.getDocumentGraph?.() ?? renderIntents.getGraph();
     for (const layer of graph.layers) {
-      if (surfaceId && layer.surfaceId !== surfaceId) continue;
-      if (layerIds.size && !layerIds.has(layer.id)) continue;
+      if (sceneId && layer.sceneId !== sceneId) continue;
       for (const node of layer.nodes) {
-        const authoritativeVisible = layer.visible && node.visible;
-        if (
-          !includeHidden &&
-          selector?.visible === undefined &&
-          !authoritativeVisible
-        )
-          continue;
-        if (
-          selector?.visible !== undefined &&
-          authoritativeVisible !== selector.visible
-        )
-          continue;
         if (
           elementIds.size &&
           !node.exportKeys.some((key) => elementIds.has(key))
@@ -262,17 +230,11 @@ export class BrowserSceneExportService implements Service, SceneExportService {
   }
 
   private resolveCrop(
-    crop: BrowserSceneExportCrop | undefined,
+    crop: BrowserSceneExportCrop,
     entries: ExportEntry[],
-    surfaceId: string,
   ): BrowserSceneExportRect {
-    if (crop?.type === "sceneRect") return { ...crop.rect };
-    if (crop?.type === "frame") {
-      return this.resolveFrameCrop(crop.frame, surfaceId);
-    }
-    const ids = new Set(
-      crop?.type === "elementBounds" ? normalizeIds(crop.elementIds) : [],
-    );
+    if (crop.type === "sceneRect") return { ...crop.rect };
+    const ids = new Set(normalizeIds(crop.elementIds));
     const bounds = entries
       .filter(
         ({ node }) => !ids.size || node.exportKeys.some((key) => ids.has(key)),
@@ -295,24 +257,6 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     return { left, top, width: right - left, height: bottom - top };
   }
 
-  private resolveFrameCrop(
-    frame: BrowserSceneExportFrame,
-    surfaceId: string,
-  ): BrowserSceneExportRect {
-    const frames = this.surfaceFrameService?.getFrames(surfaceId);
-    if (!frames) throw new Error("browser-scene-export-frame-unavailable");
-    const source =
-      frame === "bleed"
-        ? (frames.exportFrame ?? frames.productionFrame)
-        : frames.productionFrame;
-    return {
-      left: source.xMm,
-      top: source.yMm,
-      width: source.widthMm,
-      height: source.heightMm,
-    };
-  }
-
   private async applyOutputMaskWithFallback(
     sourceUrl: string,
     sourceKey: string,
@@ -322,7 +266,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       multiplier: number;
       mode: "alpha" | "outline" | "shape";
       sceneToTarget: Matrix2D<"scene", "screen">;
-      surfaceId?: string;
+      sceneId: string;
       transparentColor?: SceneExportOutputMaskTransparentColor;
       width: number;
     },
@@ -348,7 +292,7 @@ export class BrowserSceneExportService implements Service, SceneExportService {
       multiplier: number;
       mode: "alpha" | "outline" | "shape";
       sceneToTarget: Matrix2D<"scene", "screen">;
-      surfaceId?: string;
+      sceneId: string;
       transparentColor?: SceneExportOutputMaskTransparentColor;
       width: number;
     },
@@ -357,11 +301,9 @@ export class BrowserSceneExportService implements Service, SceneExportService {
     if (!key)
       throw new Error("browser-scene-export-output-mask-source-key-required");
     const entry = this.selectEntries({
-      includeHidden: true,
-      surfaceId: options.surfaceId,
-    }).find(({ node }) =>
-      normalizeIds(node.data.outputMaskKeys).includes(key),
-    );
+      sceneId: options.sceneId,
+      crop: { type: "elementBounds" },
+    }).find(({ node }) => normalizeIds(node.data.outputMaskKeys).includes(key));
     if (!entry)
       throw new Error("browser-scene-export-output-mask-source-missing");
     const source = await this.requireCanvasService().createDetachedRenderObject(
@@ -433,27 +375,5 @@ export class BrowserSceneExportService implements Service, SceneExportService {
         "[BrowserSceneExportService] RenderGraphAdapter is unavailable.",
       );
     return this.renderGraphAdapter;
-  }
-
-  private resolveSurfaceId(options: BrowserSceneExportOptions = {}): string {
-    return (
-      String(options.surfaceId || options.source?.surfaceId || "").trim() ||
-      this.surfaceFrameService?.getActiveSurfaceId() ||
-      this.surfaceFrameService?.listSurfaceIds()[0] ||
-      ""
-    );
-  }
-
-  private resolveExportSurfaceIds(
-    options: BrowserSceneExportOptions = {},
-  ): string[] {
-    const requested = this.resolveSurfaceId({
-      ...options,
-      surfaceId: options.surfaceId || options.source?.surfaceId,
-    });
-    if (options.surfaceId || options.source?.surfaceId) {
-      return requested ? [requested] : [];
-    }
-    return this.surfaceFrameService?.listSurfaceIds() ?? [];
   }
 }

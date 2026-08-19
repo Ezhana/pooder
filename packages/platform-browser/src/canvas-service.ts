@@ -712,7 +712,7 @@ export default class CanvasService implements Service, CanvasServiceContract {
       data.subjectId ||
         data.subject?.objectId ||
         data.subject?.layerId ||
-        data.subject?.surfaceId ||
+        data.subject?.sceneId ||
         data.id ||
         "",
     ).trim();
