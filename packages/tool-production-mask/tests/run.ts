@@ -1,7 +1,7 @@
 import {
   DocumentExtensionRegistry,
-  validateEditorDocumentAssetReferences,
-  type EditorDocument,
+  validateDocumentAssetReferences,
+  type PooderDocument,
 } from "@pooder/document";
 
 import {
@@ -46,7 +46,7 @@ const createState = (): ProductionMaskDocumentState => ({
   },
 });
 
-const createDocument = (): EditorDocument => ({
+const createDocument = (): PooderDocument => ({
   version: 8,
   assets: [
     {
@@ -155,7 +155,7 @@ async function main() {
   const referenceDiagnostics = [
     ...(contribution.validateReferences?.(missingReferences, missingDocument) ??
       []),
-    ...validateEditorDocumentAssetReferences(missingDocument, {
+    ...validateDocumentAssetReferences(missingDocument, {
       extensionRegistry: new DocumentExtensionRegistry([contribution]),
     }),
   ];
@@ -187,7 +187,7 @@ async function main() {
   let persisted = document;
   facade.syncDocument(document, {
     async mutate(mutator) {
-      persisted = JSON.parse(JSON.stringify(persisted)) as EditorDocument;
+      persisted = JSON.parse(JSON.stringify(persisted)) as PooderDocument;
       mutator(persisted);
       return { ok: true, document: persisted };
     },

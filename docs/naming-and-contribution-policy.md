@@ -21,7 +21,7 @@ This policy defines the capability-first architecture and public naming rules.
 - Scene contracts use `Scene*`, caller-addressable groupings use `Layer*`, and
   logical renderable entries use `Object*` or `SceneElement*` as appropriate.
 - `surface` is document vocabulary. It stops at `@pooder/document-core`, which
-  translates `EditorSurface.id` into the runtime `SceneId`. Core contracts,
+  translates `Surface.id` into the runtime `SceneId`. Core contracts,
   RenderGraph partitions, sessions, interactions, frames, and exports use
   `sceneId` exclusively.
 - Public events use owner-scoped names and exported payload types, or typed
@@ -42,7 +42,7 @@ This policy defines the capability-first architecture and public naming rules.
 - Public APIs expose Core contracts, never Fabric objects, DOM nodes, or other
   platform implementation details.
 
-## EditorDocument
+## PooderDocument
 
 - Only the strict v8 model is public. APIs do not expose aliases, migration
   wrappers, or alternate spellings.
@@ -55,6 +55,6 @@ This policy defines the capability-first architecture and public naming rules.
 - Object draw order is surface/group array order plus depth-first traversal;
   index zero is bottommost. Traits do not alter order. Document groups and
   runtime render/scene layers are separate concepts.
-- `EditorDocumentService.activateSurface()` is the document-facing switch API.
+- `PooderDocumentService.activateSurface()` is the document-facing switch API.
   Its implementation validates the surface and calls
   `SceneService.setActiveRoot()`; frame storage has no active pointer.

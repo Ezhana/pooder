@@ -1,15 +1,15 @@
 import { inject, type InjectionKey } from "vue";
 import { Pooder } from "@pooder/core";
 import {
-  registerEditorDocumentService,
-  type ActivateEditorSurfaceResult,
-  type ApplyEditorDocumentOptions,
-  type EditorDocumentPublication,
-  type EditorDocumentSession,
-  type EditorDocumentService,
-  type OpenEditorDocumentSessionInput,
+  registerPooderDocumentService,
+  type ActivateSurfaceResult,
+  type ApplyDocumentOptions,
+  type DocumentPublication,
+  type DocumentSession,
+  type PooderDocumentService,
+  type OpenDocumentSessionInput,
 } from "@pooder/document-core";
-import type { EditorDocument } from "@pooder/document";
+import type { PooderDocument } from "@pooder/document";
 
 export interface PooderConfigurationChangeEvent {
   key: string;
@@ -37,11 +37,11 @@ export interface PooderConfigurationApi {
 
 export interface PooderSessionApi {
   open<TDraft>(
-    input: OpenEditorDocumentSessionInput<TDraft>,
-  ): Promise<EditorDocumentSession<TDraft>>;
+    input: OpenDocumentSessionInput<TDraft>,
+  ): Promise<DocumentSession<TDraft>>;
   get<TDraft = unknown>(
     sessionId: string,
-  ): EditorDocumentSession<TDraft> | undefined;
+  ): DocumentSession<TDraft> | undefined;
   onDidChange(
     listener: (event: PooderSessionChangeEvent) => void,
   ): PooderDisposable;
@@ -60,35 +60,35 @@ export interface PooderSessionChangeEvent {
 
 export interface PooderRuntime {
   readonly config: PooderConfigurationApi;
-  readonly document: EditorDocumentService | null;
+  readonly document: PooderDocumentService | null;
   readonly sessions: PooderSessionApi;
-  activateSurface(surfaceId: string): Promise<ActivateEditorSurfaceResult>;
+  activateSurface(surfaceId: string): Promise<ActivateSurfaceResult>;
   dispose(): Promise<void>;
 }
 
 export interface InstallPooderDocumentOptions extends Omit<
-  ApplyEditorDocumentOptions,
+  ApplyDocumentOptions,
   "afterPublish" | "publicationParticipants"
 > {
   publicationParticipants?: readonly {
     prepare(
       runtime: PooderRuntime,
-      document: EditorDocument,
-      service: EditorDocumentService,
+      document: PooderDocument,
+      service: PooderDocumentService,
     ):
-      | EditorDocumentPublication
+      | DocumentPublication
       | void
-      | Promise<EditorDocumentPublication | void>;
+      | Promise<DocumentPublication | void>;
   }[];
   afterPublish?: (
     runtime: PooderRuntime,
-    document: EditorDocument,
-    service: EditorDocumentService,
+    document: PooderDocument,
+    service: PooderDocumentService,
   ) => Promise<void> | void;
 }
 
 const runtimeCores = new WeakMap<PooderRuntime, Pooder>();
-const runtimeDocuments = new WeakMap<PooderRuntime, EditorDocumentService>();
+const runtimeDocuments = new WeakMap<PooderRuntime, PooderDocumentService>();
 
 export const POODER_RUNTIME_KEY: InjectionKey<PooderRuntime> =
   Symbol("PooderRuntime");
@@ -109,7 +109,7 @@ export function createPooderRuntime(): PooderRuntime {
       return runtimeDocuments.get(runtime) ?? null;
     },
     sessions: {
-      open: <TDraft>(input: OpenEditorDocumentSessionInput<TDraft>) =>
+      open: <TDraft>(input: OpenDocumentSessionInput<TDraft>) =>
         getPooderDocument(runtime).openSession(input),
       get: <TDraft = unknown>(sessionId: string) =>
         getPooderDocument(runtime).getSession<TDraft>(sessionId),
@@ -138,12 +138,12 @@ export function createPooderRuntime(): PooderRuntime {
 export function installPooderDocument(
   runtime: PooderRuntime,
   options: InstallPooderDocumentOptions = {},
-): EditorDocumentService {
+): PooderDocumentService {
   const existing = runtimeDocuments.get(runtime);
   if (existing) return existing;
   const core = resolvePooderRuntimeCore(runtime);
-  let service: EditorDocumentService;
-  service = registerEditorDocumentService(core, {
+  let service: PooderDocumentService;
+  service = registerPooderDocumentService(core, {
     effectSchemaRegistry: options.effectSchemaRegistry,
     resolveEffectCapabilityId: options.resolveEffectCapabilityId,
     validators: options.validators,
@@ -163,11 +163,11 @@ export function installPooderDocument(
 
 export function getPooderDocument(
   runtime: PooderRuntime,
-): EditorDocumentService {
+): PooderDocumentService {
   const service = runtimeDocuments.get(runtime);
   if (!service) {
     throw new Error(
-      "[@pooder/vue] EditorDocumentService is not installed for this runtime.",
+      "[@pooder/vue] PooderDocumentService is not installed for this runtime.",
     );
   }
   return service;
@@ -183,7 +183,7 @@ export function usePooderRuntime(): PooderRuntime {
   return runtime;
 }
 
-export function usePooderDocument(): EditorDocumentService {
+export function usePooderDocument(): PooderDocumentService {
   return getPooderDocument(usePooderRuntime());
 }
 

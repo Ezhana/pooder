@@ -35,16 +35,16 @@ import {
   type SessionService,
 } from "@pooder/core";
 import {
-  findEditorDocumentObject,
-  setEditorImageObjectSource,
+  findDocumentObject,
+  setImageObjectSource,
   surfaceContentRect,
-  upsertEditorDocumentAsset,
-  visitEditorDocumentObjects,
-  type EditorDocument,
-  type EditorImageContentFit,
-  type EditorImageAsset,
-  type EditorImageObject,
-  type EditorObject,
+  upsertDocumentAsset,
+  visitDocumentObjects,
+  type PooderDocument,
+  type ImageContentFit,
+  type ImageAsset,
+  type ImageObject,
+  type PooderObject,
 } from "@pooder/document";
 import {
   IMAGE_SLOT_BEHAVIOR_DEFINITION,
@@ -63,7 +63,7 @@ import {
   type SessionRenderDecorationContribution,
 } from "./capability";
 
-const DEFAULT_PLACEMENT: EditorImageContentFit = {
+const DEFAULT_PLACEMENT: ImageContentFit = {
   fit: "cover",
   anchorX: 0.5,
   anchorY: 0.5,
@@ -112,7 +112,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       SESSION_SERVICE,
     ],
   };
-  private document: EditorDocument | null = null;
+  private document: PooderDocument | null = null;
   private controller: ImageSlotDocumentController | null = null;
   private state: ImageSlotViewState = { phase: "idle", draft: null };
   private readonly listeners = new Set<(state: ImageSlotViewState) => void>();
@@ -134,7 +134,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     assetId: string;
     resolution: Extract<ImageResourceResolution, { ok: true }>;
   } | null = null;
-  private stagedAsset: EditorImageAsset | null = null;
+  private stagedAsset: ImageAsset | null = null;
   private getImageResourceService?: () => ImageResourceService | undefined;
   private openingSession: {
     objectId: string;
@@ -221,7 +221,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   }
 
   bindDocument(
-    document: EditorDocument,
+    document: PooderDocument,
     controller: ImageSlotDocumentController,
   ): void {
     this.document = document;
@@ -381,7 +381,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   }
 
   private async stageAsset(
-    asset: EditorImageAsset,
+    asset: ImageAsset,
     options: { placement?: "reset" | "preserve" } = {},
   ) {
     const draft = this.state.draft;
@@ -429,7 +429,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
     return { ok: true };
   }
 
-  private updatePlacement(partial: Partial<EditorImageContentFit>) {
+  private updatePlacement(partial: Partial<ImageContentFit>) {
     const draft = this.state.draft;
     if (!draft) return { ok: false, reason: "session-not-active" };
     const next = normalizePlacement({ ...draft.placement, ...partial });
@@ -625,10 +625,10 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
       return { type: "error" as const, reason: "asset-not-found" };
     }
     const result = await this.controller.mutate((document) => {
-      if (stagedAsset) upsertEditorDocumentAsset(document, stagedAsset);
-      const current = findEditorDocumentObject(document, draft.objectId);
+      if (stagedAsset) upsertDocumentAsset(document, stagedAsset);
+      const current = findDocumentObject(document, draft.objectId);
       if (!current || current.type !== "image") return;
-      setEditorImageObjectSource(
+      setImageObjectSource(
         document,
         current.id,
         draft.assetId ? { kind: "asset", assetId: draft.assetId } : null,
@@ -885,7 +885,7 @@ export class ImageSlotCapabilityExtension implements ExtensionDefinition {
   }
 
   private async resolveImageAsset(
-    asset: EditorImageAsset,
+    asset: ImageAsset,
   ): Promise<ImageResourceResolution> {
     const assetId = asset.id;
     const descriptor: ImageResourceDescriptor = {
@@ -1221,8 +1221,8 @@ function createImageSlotClipEffect(
 }
 
 function resolveImageSlotClipFrame(
-  document: EditorDocument,
-  context: { object: EditorImageObject; surfaceId: string },
+  document: PooderDocument,
+  context: { object: ImageObject; surfaceId: string },
   objectPlacement: AffinePlacement,
 ) {
   const objectFrame = objectPlacement.localBounds;
@@ -1261,40 +1261,40 @@ function resolveImageSlotClipFrame(
 }
 
 function findImageSlot(
-  document: EditorDocument,
+  document: PooderDocument,
   objectId: string,
-): EditorImageObject | null {
-  let match: EditorImageObject | null = null;
-  visitEditorDocumentObjects(document, ({ object }) => {
+): ImageObject | null {
+  let match: ImageObject | null = null;
+  visitDocumentObjects(document, ({ object }) => {
     if (
       !match &&
       object.id === objectId &&
       object.type === "image" &&
       hasImageSlotBehavior(object)
     )
-      match = object as EditorImageObject;
+      match = object as ImageObject;
   });
   return match;
 }
 
 function findImageSlotContext(
-  document: EditorDocument,
+  document: PooderDocument,
   objectId: string,
-): { object: EditorImageObject; surfaceId: string } | null {
-  let match: { object: EditorImageObject; surfaceId: string } | null = null;
-  visitEditorDocumentObjects(document, ({ object, surface }) => {
+): { object: ImageObject; surfaceId: string } | null {
+  let match: { object: ImageObject; surfaceId: string } | null = null;
+  visitDocumentObjects(document, ({ object, surface }) => {
     if (
       !match &&
       object.id === objectId &&
       object.type === "image" &&
       hasImageSlotBehavior(object)
     )
-      match = { object: object as EditorImageObject, surfaceId: surface.id };
+      match = { object: object as ImageObject, surfaceId: surface.id };
   });
   return match;
 }
 
-function hasImageSlotBehavior(object: EditorObject): boolean {
+function hasImageSlotBehavior(object: PooderObject): boolean {
   return (
     object.behaviors?.some(
       (behavior) => behavior.type === IMAGE_SLOT_BEHAVIOR_TYPE,
@@ -1303,8 +1303,8 @@ function hasImageSlotBehavior(object: EditorObject): boolean {
 }
 
 function toDraft(
-  object: EditorImageObject,
-  _document: EditorDocument,
+  object: ImageObject,
+  _document: PooderDocument,
 ): ImageSlotSessionDraft {
   return {
     objectId: object.id,
@@ -1316,8 +1316,8 @@ function toDraft(
 }
 
 function normalizePlacement(
-  value: EditorImageContentFit,
-): EditorImageContentFit {
+  value: ImageContentFit,
+): ImageContentFit {
   return {
     fit:
       value.fit === "contain" || value.fit === "stretch" ? value.fit : "cover",
@@ -1350,7 +1350,7 @@ function resourceLocation(
 }
 
 function doesDraftLeaveFrameUncovered(
-  document: EditorDocument,
+  document: PooderDocument,
   draft: ImageSlotSessionDraft,
   resolution?: Extract<ImageResourceResolution, { ok: true }>,
 ): boolean {

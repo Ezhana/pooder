@@ -7,13 +7,13 @@ import {
   type RenderIntentService,
 } from "@pooder/core";
 import {
-  resolveEditorDocumentAsset,
-  type EditorDocument,
-  type EditorImageObject,
+  resolveDocumentAsset,
+  type PooderDocument,
+  type ImageObject,
 } from "@pooder/document";
 import {
   collectUnresolvableImageObjectIds,
-  registerEditorDocumentService,
+  registerPooderDocumentService,
   resolveObjectSource,
   sceneFrameToLocalFrame,
 } from "../src";
@@ -44,7 +44,7 @@ function assertDeepEqual(
   }
 }
 
-function createDocument(): EditorDocument {
+function createDocument(): PooderDocument {
   return {
     version: 8,
     assets: [
@@ -159,7 +159,7 @@ function testSourceResolution(): void {
 
 async function testStrictApplyAndGeometry(): Promise<void> {
   const runtime = new Pooder();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const document = createDocument();
     document.surfaces.push({
@@ -274,7 +274,7 @@ async function testDocumentDepthFirstOrderDefinesRenderGraphOrder(): Promise<voi
   ];
 
   const runtime = new Pooder();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const applied = await controller.apply(document);
     assert(applied.ok, "root group ordering document should apply");
@@ -302,7 +302,7 @@ async function testGroupFlatteningPreservesRenderProjection(): Promise<void> {
   assert(group.type === "group", "flattening fixture root should be a group");
   group.localToParent = [1, 0, 0, 1, 30, 40];
 
-  const flattened = JSON.parse(JSON.stringify(grouped)) as EditorDocument;
+  const flattened = JSON.parse(JSON.stringify(grouped)) as PooderDocument;
   const flattenedGroup = flattened.surfaces[0]!.objects[0]!;
   assert(
     flattenedGroup.type === "group",
@@ -318,7 +318,7 @@ async function testGroupFlatteningPreservesRenderProjection(): Promise<void> {
   });
 
   const runtime = new Pooder();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   const renderProjection = () =>
     runtime.services
       .getOrThrow<RenderIntentService>(RENDER_INTENT_SERVICE)
@@ -367,7 +367,7 @@ async function testGroupFlatteningPreservesRenderProjection(): Promise<void> {
 
 async function testRejectedDocumentsRemainAtomic(): Promise<void> {
   const runtime = new Pooder();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const initial = await controller.apply(createDocument());
     assert(initial.ok, "initial document should apply");
@@ -386,7 +386,7 @@ async function testRejectedDocumentsRemainAtomic(): Promise<void> {
 
 async function testSceneTranslationCommit(): Promise<void> {
   const runtime = new Pooder();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const applied = await controller.apply(createDocument());
     assert(applied.ok, "translation fixture should apply");
@@ -414,7 +414,7 @@ async function testSceneTranslationCommit(): Promise<void> {
 
 async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
   const runtime = new Pooder();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const document = createDocument();
     const group = document.surfaces[0]!.objects[0]!;
@@ -453,12 +453,12 @@ async function testImageUploadReplacesOnlyTheTargetSource(): Promise<void> {
       target.source?.assetId !== sibling.source?.assetId,
       "upload should replace only the target source reference",
     );
-    const targetAsset = resolveEditorDocumentAsset(
+    const targetAsset = resolveDocumentAsset(
       exported,
       target.source,
       "image",
     );
-    const siblingAsset = resolveEditorDocumentAsset(
+    const siblingAsset = resolveDocumentAsset(
       exported,
       sibling.source,
       "image",
@@ -536,7 +536,7 @@ async function testUnresolvableImageDetection(): Promise<void> {
   const group = surface.objects[0]!;
   assert(group.type === "group", "fixture root should be a group");
   const template = group.children.find(
-    (object): object is EditorImageObject => object.type === "image",
+    (object): object is ImageObject => object.type === "image",
   )!;
   document.assets.push(
     {
@@ -574,7 +574,7 @@ async function testUnresolvableImageDetection(): Promise<void> {
           },
         },
       ],
-    } as EditorImageObject,
+    } as ImageObject,
   );
   surface.objects.push({
     type: "group",

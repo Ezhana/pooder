@@ -1,7 +1,7 @@
 import type { ExtensionDefinition } from "@pooder/core";
 import {
-  parseEditorDocument,
-  visitEditorDocumentObjects,
+  parseDocument,
+  visitDocumentObjects,
 } from "@pooder/document";
 import {
   createImageSlotCapability,
@@ -37,9 +37,9 @@ export function createCapabilitiesForDocument(
       ? createImageSlotCapability(options.imageSlot)
       : CAPABILITY_FACTORIES[id](),
   );
-  const document = parseEditorDocument(value);
+  const document = parseDocument(value);
   const requiredCapabilityIds = new Set(document.extension.required);
-  visitEditorDocumentObjects(document, ({ object }) => {
+  visitDocumentObjects(document, ({ object }) => {
     object.behaviors?.forEach((behavior) => {
       if (behavior.type === IMAGE_SLOT_BEHAVIOR_TYPE) {
         requiredCapabilityIds.add(IMAGE_SLOT_CAPABILITY_ID);

@@ -6,11 +6,11 @@ import type {
 } from "@pooder/core";
 import type {
   AssetSource,
-  EditorDocument,
-  EditorDocumentDiagnostic,
+  PooderDocument,
+  DocumentDiagnostic,
 } from "@pooder/document";
 
-type EditorImageResource = ImageResourceDescriptor;
+type ImageResource = ImageResourceDescriptor;
 
 import {
   IMAGE_MASK_CAPABILITY_ID,
@@ -94,11 +94,11 @@ export interface ProductionMaskCapabilityOptions {
 export interface ProductionMaskDocumentController {
   mutate(
     callback: (
-      document: EditorDocument,
-    ) => EditorDocument | void | Promise<EditorDocument | void>,
+      document: PooderDocument,
+    ) => PooderDocument | void | Promise<PooderDocument | void>,
   ): Promise<
-    | { ok: true; document: EditorDocument }
-    | { ok: false; reason: string; diagnostics: EditorDocumentDiagnostic[] }
+    | { ok: true; document: PooderDocument }
+    | { ok: false; reason: string; diagnostics: DocumentDiagnostic[] }
   >;
 }
 
@@ -170,7 +170,7 @@ export interface GenerateProductionMaskOptions {
 
 export interface ProductionMaskCapabilityApi {
   syncDocument(
-    document: EditorDocument,
+    document: PooderDocument,
     controller: ProductionMaskDocumentController,
   ): void;
   listMasks(): ProductionMaskDescriptor[];
@@ -182,7 +182,7 @@ export interface ProductionMaskCapabilityApi {
     process?: string;
   }): Promise<ProductionMaskOperationResult>;
   getViewState(): ProductionMaskViewState;
-  setSource(resource: EditorImageResource): ProductionMaskOperationResult;
+  setSource(resource: ImageResource): ProductionMaskOperationResult;
   useReferenceSource(): ProductionMaskOperationResult;
   clearSource(): ProductionMaskOperationResult;
   updateAlpha(

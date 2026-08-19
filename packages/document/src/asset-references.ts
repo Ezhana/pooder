@@ -1,20 +1,20 @@
 import type { DocumentExtensionRegistry } from "./extension-schema";
 import {
-  findEditorDocumentObject,
-  isEditorLeafObject,
-  visitEditorDocumentObjects,
+  findDocumentObject,
+  isLeafObject,
+  visitDocumentObjects,
   type AssetSource,
-  type EditorAsset,
-  type EditorAssetReferenceBinding,
-  type EditorDocument,
-  type EditorDocumentDiagnostic,
+  type Asset,
+  type AssetReferenceBinding,
+  type PooderDocument,
+  type DocumentDiagnostic,
 } from "./index";
 
-export interface EditorDocumentAssetReferenceOptions {
+export interface DocumentAssetReferenceOptions {
   extensionRegistry?: DocumentExtensionRegistry;
 }
 
-export interface EditorDocumentAssetReclamationOptions {
+export interface DocumentAssetReclamationOptions {
   extensionRegistry: DocumentExtensionRegistry;
 }
 
@@ -22,15 +22,15 @@ export interface EditorDocumentAssetReclamationOptions {
  * Collects only declared asset references. Extension JSON is never searched.
  * Behaviors, effects, and document extensions participate through their schema.
  */
-export function collectEditorDocumentAssetReferences(
-  document: EditorDocument,
-  options: EditorDocumentAssetReferenceOptions = {},
-): EditorAssetReferenceBinding[] {
-  const references: EditorAssetReferenceBinding[] = [];
+export function collectDocumentAssetReferences(
+  document: PooderDocument,
+  options: DocumentAssetReferenceOptions = {},
+): AssetReferenceBinding[] {
+  const references: AssetReferenceBinding[] = [];
   const objectSchemas = options.extensionRegistry?.createObjectSchemaRegistry();
   const effectSchemas = options.extensionRegistry?.createEffectSchemaRegistry();
 
-  visitEditorDocumentObjects(document, ({ object, path }) => {
+  visitDocumentObjects(document, ({ object, path }) => {
     if (object.type === "image" && object.source) {
       references.push({
         source: object.source,
@@ -54,7 +54,7 @@ export function collectEditorDocumentAssetReferences(
       );
     });
 
-    if (!isEditorLeafObject(object)) return;
+    if (!isLeafObject(object)) return;
     object.effects?.forEach((effect, effectIndex) => {
       const schema = effectSchemas?.get(effect.type);
       if (!schema?.collectAssetReferences || !("payload" in effect)) return;
@@ -81,11 +81,11 @@ export function collectEditorDocumentAssetReferences(
   return references;
 }
 
-export function validateEditorDocumentAssetReferences(
-  document: EditorDocument,
-  options: EditorDocumentAssetReferenceOptions = {},
-): EditorDocumentDiagnostic[] {
-  return collectEditorDocumentAssetReferences(document, options).flatMap(
+export function validateDocumentAssetReferences(
+  document: PooderDocument,
+  options: DocumentAssetReferenceOptions = {},
+): DocumentDiagnostic[] {
+  return collectDocumentAssetReferences(document, options).flatMap(
     (reference) => {
       const asset = document.assets.find(
         (candidate) => candidate.id === reference.source.assetId,
@@ -117,10 +117,10 @@ export function validateEditorDocumentAssetReferences(
   );
 }
 
-export function resolveEditorDocumentAsset<
-  TAsset extends EditorAsset = EditorAsset,
+export function resolveDocumentAsset<
+  TAsset extends Asset = Asset,
 >(
-  document: EditorDocument,
+  document: PooderDocument,
   source: AssetSource | null | undefined,
   expectedType?: TAsset["type"],
 ): TAsset | undefined {
@@ -133,14 +133,14 @@ export function resolveEditorDocumentAsset<
     : undefined;
 }
 
-export function replaceEditorDocumentAssetReferences(
-  document: EditorDocument,
+export function replaceDocumentAssetReferences(
+  document: PooderDocument,
   assetId: string,
   replacement: AssetSource,
-  options: EditorDocumentAssetReferenceOptions = {},
+  options: DocumentAssetReferenceOptions = {},
 ): number {
   let replaced = 0;
-  collectEditorDocumentAssetReferences(document, options).forEach(
+  collectDocumentAssetReferences(document, options).forEach(
     (reference) => {
       if (reference.source.assetId !== assetId) return;
       reference.replace(replacement);
@@ -150,21 +150,21 @@ export function replaceEditorDocumentAssetReferences(
   return replaced;
 }
 
-export function setEditorImageObjectSource(
-  document: EditorDocument,
+export function setImageObjectSource(
+  document: PooderDocument,
   objectId: string,
   source: AssetSource | null,
 ): AssetSource | null | undefined {
-  const object = findEditorDocumentObject(document, objectId);
+  const object = findDocumentObject(document, objectId);
   if (!object || object.type !== "image") return undefined;
   const previous = object.source;
   object.source = source;
   return previous;
 }
 
-export function upsertEditorDocumentAsset(
-  document: EditorDocument,
-  asset: EditorAsset,
+export function upsertDocumentAsset(
+  document: PooderDocument,
+  asset: Asset,
 ): void {
   const index = document.assets.findIndex(
     (candidate) => candidate.id === asset.id,
@@ -173,8 +173,8 @@ export function upsertEditorDocumentAsset(
   else document.assets.push(asset);
 }
 
-export function createEditorDocumentAssetId(
-  document: EditorDocument,
+export function createDocumentAssetId(
+  document: PooderDocument,
   preferredId: string,
 ): string {
   const existingIds = new Set(document.assets.map((asset) => asset.id));
@@ -184,12 +184,12 @@ export function createEditorDocumentAssetId(
   return `${preferredId}.${sequence}`;
 }
 
-export function reclaimOrphanedEditorDocumentAssets(
-  document: EditorDocument,
-  options: EditorDocumentAssetReclamationOptions,
+export function reclaimOrphanedDocumentAssets(
+  document: PooderDocument,
+  options: DocumentAssetReclamationOptions,
 ): string[] {
   const referenced = new Set(
-    collectEditorDocumentAssetReferences(document, options).map(
+    collectDocumentAssetReferences(document, options).map(
       (reference) => reference.source.assetId,
     ),
   );
@@ -217,9 +217,9 @@ export function isAssetSource(value: unknown): value is AssetSource {
 
 export function createAssetReferenceBinding(
   source: AssetSource,
-  expectedType: EditorAsset["type"],
+  expectedType: Asset["type"],
   path: string,
   replace: (source: AssetSource) => void,
-): EditorAssetReferenceBinding {
+): AssetReferenceBinding {
   return { source, expectedType, path, replace };
 }

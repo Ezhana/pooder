@@ -1,16 +1,16 @@
 # App Workflow Composition
 
-Status: EditorDocument v8
+Status: PooderDocument v8
 Date: 2026-07-29
 
-Applications compose workflows from EditorDocument, core services, browser
+Applications compose workflows from PooderDocument, core services, browser
 platform services, and the remaining focused Tool capabilities. Dieline and
 Feature have no capability, tool, command, configuration state, or renderer
 group.
 
 ## Document surfaces and runtime scenes
 
-`EditorDocument.surfaces` remains the persisted product model. During apply,
+`PooderDocument.surfaces` remains the persisted product model. During apply,
 document-core registers one document scene for each surface, publishes its
 neutral scene frames, and selects the first scene as the active root. A later
 `activateSurface(surfaceId)` call only maps the id to
@@ -48,9 +48,9 @@ transparent proxy; it never creates a Fabric group.
 
 ## App-owned feature workflow
 
-The application opens an `EditorDocumentService.openSession()` whose draft is
+The application opens an `PooderDocumentService.openSession()` whose draft is
 the product-level Feature preset. Its derive callback converts the preset to
-`EditorGroupObject[]`. Working mutations regenerate RenderIntent
+`GroupObject[]`. Working mutations regenerate RenderIntent
 immediately; commit promotes the working document and rollback reapplies the
 snapshot.
 
@@ -65,13 +65,13 @@ Group movement declares `path.follow` or `path.lowest-tangent` against:
 
 Interactive preview and completion validation both use the core
 `ConstraintResolverService`. Applications subscribe to
-`EditorDocumentService.onDidChange()`.
+`PooderDocumentService.onDidChange()`.
 
 ## Edge detection
 
 Edge Detection remains a focused capability. After detection, the application
 atomically updates the cutline's Object Source, source bounds/size, and frame
-through `EditorDocumentService`. Runtime `dieline.*` configuration is input to
+through `PooderDocumentService`. Runtime `dieline.*` configuration is input to
 document creation only and is not mutated after the document exists.
 
 ## Workflow rules

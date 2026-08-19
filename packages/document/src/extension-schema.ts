@@ -1,11 +1,11 @@
 import type {
-  EditorAssetReferenceBinding,
-  EditorDocument,
-  EditorDocumentDiagnostic,
-  EditorDocumentDiagnosticSeverity,
+  AssetReferenceBinding,
+  PooderDocument,
+  DocumentDiagnostic,
+  DocumentDiagnosticSeverity,
   JsonValue,
 } from "./index";
-import { EffectSchemaRegistry, type EditorEffectSchema } from "./effect-schema";
+import { EffectSchemaRegistry, type EffectSchema } from "./effect-schema";
 import {
   ObjectSchemaRegistry,
   type ObjectBehaviorDefinition,
@@ -17,7 +17,7 @@ export interface DocumentValueSchemaIssue {
   code: string;
   message: string;
   path?: string;
-  severity?: EditorDocumentDiagnosticSeverity;
+  severity?: DocumentDiagnosticSeverity;
 }
 
 export interface DocumentValueSchemaContext {
@@ -37,25 +37,25 @@ export interface DocumentPublication {
 }
 
 export interface DocumentPublicationContext {
-  document: EditorDocument;
+  document: PooderDocument;
   extensionId: string;
 }
 
 export interface DocumentExtensionContribution<TState = JsonValue> {
   id: string;
   stateSchema?: DocumentValueSchema<TState>;
-  effects?: readonly EditorEffectSchema[];
+  effects?: readonly EffectSchema[];
   traits?: readonly ObjectTraitDefinition[];
   behaviors?: readonly ObjectBehaviorDefinition[];
   constraints?: readonly ObjectConstraintDefinition[];
   validateReferences?(
     state: TState,
-    document: EditorDocument,
-  ): readonly EditorDocumentDiagnostic[];
+    document: PooderDocument,
+  ): readonly DocumentDiagnostic[];
   collectAssetReferences?(
     state: TState,
     context: DocumentPublicationContext,
-  ): readonly EditorAssetReferenceBinding[];
+  ): readonly AssetReferenceBinding[];
   preparePublication?(
     state: TState,
     context: DocumentPublicationContext,
@@ -146,14 +146,14 @@ export class DocumentExtensionRegistry {
   }
 }
 
-export function validateEditorDocumentExtensions(
+export function validateDocumentExtensions(
   value: unknown,
   registry: DocumentExtensionRegistry,
-): EditorDocumentDiagnostic[] {
+): DocumentDiagnostic[] {
   const input = isRecord(value) ? value : {};
   const extensions = isRecord(input.extensions) ? input.extensions : {};
-  const document = value as EditorDocument;
-  const diagnostics: EditorDocumentDiagnostic[] = [];
+  const document = value as PooderDocument;
+  const diagnostics: DocumentDiagnostic[] = [];
 
   for (const [extensionId, state] of Object.entries(extensions)) {
     const path = `extensions.${extensionId}`;

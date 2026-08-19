@@ -7,8 +7,8 @@ import {
   multiplyCoordinateMatrices,
   type RenderIntentService,
 } from "@pooder/core";
-import type { EditorDocument, EditorImageObject } from "@pooder/document";
-import { registerEditorDocumentService } from "@pooder/document-core";
+import type { PooderDocument, ImageObject } from "@pooder/document";
+import { registerPooderDocumentService } from "@pooder/document-core";
 import {
   FABRIC_RENDER_GRAPH_ADAPTER,
   FabricRenderGraphAdapter,
@@ -223,7 +223,7 @@ class ViewportCanvasService {
   }
 }
 
-function createEmptySlotObject(id: string, left: number): EditorImageObject {
+function createEmptySlotObject(id: string, left: number): ImageObject {
   return {
     type: "image",
     id,
@@ -258,7 +258,7 @@ function createEmptySlotObject(id: string, left: number): EditorImageObject {
   };
 }
 
-function createEmptySlotDocument(): EditorDocument {
+function createEmptySlotDocument(): PooderDocument {
   return {
     version: 8,
     assets: [
@@ -299,11 +299,11 @@ function createEmptySlotDocument(): EditorDocument {
   };
 }
 
-function createOrderedSlotDocument(): EditorDocument {
+function createOrderedSlotDocument(): PooderDocument {
   const createVisualObject = (
     id: string,
     assetId: string,
-  ): EditorImageObject => ({
+  ): ImageObject => ({
     type: "image",
     id,
     tags: ["export:mockup"],
@@ -372,7 +372,7 @@ async function testImageSlotSessionPreservesDocumentPathOrder(): Promise<void> {
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
   runtime.extensions.register(new ImageSlotCapabilityExtension());
   await runtime.extensions.flushActivation();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const applied = await controller.apply(createOrderedSlotDocument());
     assert(
@@ -430,7 +430,7 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
   runtime.extensions.register(new ImageSlotCapabilityExtension());
   await runtime.extensions.flushActivation();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const applied = await controller.apply(createEmptySlotDocument());
     assert(
@@ -533,7 +533,7 @@ async function testEmptyImageSlotPointerActivation(): Promise<void> {
   }
 }
 
-function createNestedDocument(): EditorDocument {
+function createNestedDocument(): PooderDocument {
   return {
     version: 8,
     assets: [
@@ -676,7 +676,7 @@ export async function testImageSlotFabricViewportAndParentTransform(): Promise<v
   runtime.services.register(adapter, FABRIC_RENDER_GRAPH_ADAPTER);
   runtime.extensions.register(new ImageSlotCapabilityExtension());
   await runtime.extensions.flushActivation();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const applied = await controller.apply(createNestedDocument());
     assert(

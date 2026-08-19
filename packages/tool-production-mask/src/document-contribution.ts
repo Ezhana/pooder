@@ -1,10 +1,10 @@
 import {
   createAssetReferenceBinding,
-  findEditorDocumentObject,
+  findDocumentObject,
   isAssetSource,
   type DocumentExtensionContribution,
   type DocumentValueSchemaIssue,
-  type EditorDocumentDiagnostic,
+  type DocumentDiagnostic,
 } from "@pooder/document";
 
 import {
@@ -166,8 +166,8 @@ function validateProductionMaskReferences(
       DocumentExtensionContribution<ProductionMaskDocumentState>["validateReferences"]
     >
   >[1],
-): EditorDocumentDiagnostic[] {
-  const diagnostics: EditorDocumentDiagnostic[] = [];
+): DocumentDiagnostic[] {
+  const diagnostics: DocumentDiagnostic[] = [];
   for (const [maskId, mask] of Object.entries(state.masks)) {
     const path = `masks.${maskId}`;
     const surface = document.surfaces.find(
@@ -179,7 +179,7 @@ function validateProductionMaskReferences(
       );
       continue;
     }
-    const reference = findEditorDocumentObject(
+    const reference = findDocumentObject(
       document,
       mask.production.referenceObjectId,
     );
@@ -222,7 +222,7 @@ function referenceError(
   path: string,
   kind: string,
   id: string,
-): EditorDocumentDiagnostic {
+): DocumentDiagnostic {
   return {
     severity: "error",
     code: `production-mask-${kind}-missing`,

@@ -4,33 +4,33 @@ import type {
   SessionRenderAuxiliaryVisual,
 } from "@pooder/core";
 import type {
-  EditorDocument,
-  EditorImageAsset,
-  EditorImageContentFit,
+  PooderDocument,
+  ImageAsset,
+  ImageContentFit,
 } from "@pooder/document";
 
 export interface ImageSlotDocumentController {
   mutate(
-    callback: (document: EditorDocument) => EditorDocument | void,
+    callback: (document: PooderDocument) => PooderDocument | void,
   ): Promise<
-    | { ok: true; document: EditorDocument }
+    | { ok: true; document: PooderDocument }
     | {
         ok: false;
         reason: string;
-        diagnostics: import("@pooder/document").EditorDocumentDiagnostic[];
+        diagnostics: import("@pooder/document").DocumentDiagnostic[];
       }
   >;
   updateObject(
     objectId: string,
     update: (
-      current: Readonly<import("@pooder/document").EditorObject>,
-    ) => import("@pooder/document").EditorObject,
+      current: Readonly<import("@pooder/document").PooderObject>,
+    ) => import("@pooder/document").PooderObject,
   ): Promise<
-    | { ok: true; document: EditorDocument }
+    | { ok: true; document: PooderDocument }
     | {
         ok: false;
         reason: string;
-        diagnostics: import("@pooder/document").EditorDocumentDiagnostic[];
+        diagnostics: import("@pooder/document").DocumentDiagnostic[];
       }
   >;
 }
@@ -49,7 +49,7 @@ export type ImageSlotPlacementPreset =
 export interface ImageSlotSessionDraft {
   objectId: string;
   assetId?: string;
-  placement: EditorImageContentFit;
+  placement: ImageContentFit;
 }
 
 export interface ImageSlotViewState {
@@ -68,7 +68,7 @@ export type ImageSlotSessionResult =
       type: "placed";
       objectId: string;
       assetId: string;
-      placement: EditorImageContentFit;
+      placement: ImageContentFit;
     }
   | { type: "cleared"; objectId: string };
 
@@ -87,7 +87,7 @@ export interface SessionRenderDecorationContribution {
 export interface ImageSlotCapabilityApi {
   /** @internal Document bridge used by the kit controller after a successful apply. */
   syncDocument(
-    document: EditorDocument,
+    document: PooderDocument,
     controller: ImageSlotDocumentController,
   ): void;
   openSession(input: {
@@ -102,11 +102,11 @@ export interface ImageSlotCapabilityApi {
     options?: { placement?: "reset" | "preserve" },
   ): Promise<{ ok: boolean; reason?: string }>;
   stageAsset(
-    asset: EditorImageAsset,
+    asset: ImageAsset,
     options?: { placement?: "reset" | "preserve" },
   ): Promise<{ ok: boolean; reason?: string }>;
   clearResource(): Promise<{ ok: boolean; reason?: string }>;
-  updatePlacement(partial: Partial<EditorImageContentFit>): {
+  updatePlacement(partial: Partial<ImageContentFit>): {
     ok: boolean;
     reason?: string;
   };

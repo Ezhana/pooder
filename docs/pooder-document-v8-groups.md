@@ -1,6 +1,6 @@
-# EditorDocument v8 object-tree contract
+# PooderDocument v8 object-tree contract
 
-`EditorDocument` version 8 is the only public document model. It is parsed
+`PooderDocument` version 8 is the only public document model. It is parsed
 strictly and has no aliases, migration wrapper, or runtime v7 migrator.
 
 The document's `extension` facet is not a state map. `extension.required` is
@@ -26,7 +26,7 @@ within one layer. Document intents derive their path from object-tree indexes,
 while extension intents must choose an explicit layer order when they need to
 render before or after another runtime layer.
 
-`EditorObject` is an exclusive recursive union:
+`PooderObject` is an exclusive recursive union:
 
 - `group` is a structural transform node with `children`. It has no
   `localFrame`, `localPivot`, `opacity`, `effects`, `source`, `contentFit`, or

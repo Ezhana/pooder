@@ -13,11 +13,11 @@ import {
   type SceneService,
 } from "@pooder/core";
 import type {
-  EditorDocument,
-  EditorObject,
-  EditorObjectEffect,
+  PooderDocument,
+  PooderObject,
+  ObjectEffect,
 } from "@pooder/document";
-import { registerEditorDocumentService } from "../../document-core/src";
+import { registerPooderDocumentService } from "../../document-core/src";
 import {
   EDGE_DETECTION_CAPABILITY_ID,
   EXPORT_CAPABILITY_ID,
@@ -187,7 +187,7 @@ async function testSharedCurrentCapabilityUtilities(): Promise<void> {
 }
 
 function createEffectDocument(
-  effect: EditorObjectEffect | undefined,
+  effect: ObjectEffect | undefined,
   source:
     | { type: "image" }
     | {
@@ -195,8 +195,8 @@ function createEffectDocument(
         shape: "rect" | "circle" | "ellipse" | "heart";
         params: Record<string, never>;
       },
-  traits: EditorObject["traits"] = [],
-): EditorDocument {
+  traits: PooderObject["traits"] = [],
+): PooderDocument {
   const geometry = {
     localFrame: { x: 0, y: 0, width: 80, height: 40 },
     localToParent: [1.15911, 0.31058, -0.20706, 0.77274, 50, 40] as [
@@ -209,7 +209,7 @@ function createEffectDocument(
     ],
     localPivot: { x: 40, y: 20 },
   };
-  const visual: EditorObject =
+  const visual: PooderObject =
     source.type === "image"
       ? {
           type: "image",
@@ -626,7 +626,7 @@ async function testExportCapability(): Promise<void> {
       },
     );
 
-    const controller = registerEditorDocumentService(runtime, {
+    const controller = registerPooderDocumentService(runtime, {
       effectSchemaRegistry: createEffectSchemaRegistry(),
       resolveEffectCapabilityId,
     });
@@ -746,7 +746,7 @@ async function testMirrorCapability(): Promise<void> {
   const runtime = new Pooder();
   runtime.extensions.register(new MirrorCapabilityExtension());
   await runtime.extensions.flushActivation();
-  const controller = registerEditorDocumentService(runtime, {
+  const controller = registerPooderDocumentService(runtime, {
     effectSchemaRegistry: createEffectSchemaRegistry(),
     resolveEffectCapabilityId,
   });

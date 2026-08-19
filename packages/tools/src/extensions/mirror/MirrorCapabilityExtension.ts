@@ -12,10 +12,10 @@ import {
   type RenderIntentService,
 } from "@pooder/core";
 import {
-  findEditorDocumentObject,
-  type EditorDocument,
-  type EditorExtensionObjectEffect,
-  type EditorObject,
+  findDocumentObject,
+  type PooderDocument,
+  type ExtensionObjectEffect,
+  type PooderObject,
 } from "@pooder/document";
 import { getEffectSchema } from "../../document/effect-schemas";
 import {
@@ -93,8 +93,8 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
   }
 
   private createRenderIntentCompiler(): RenderIntentCompilerContribution<
-    EditorExtensionObjectEffect<MirrorEffectPayload>,
-    EditorDocument
+    ExtensionObjectEffect<MirrorEffectPayload>,
+    PooderDocument
   > {
     return {
       capabilityId: this.capabilityId,
@@ -105,8 +105,8 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
 
   private compileDocumentMirrorEffect(
     context: RenderIntentCompilerContext<
-      EditorExtensionObjectEffect<MirrorEffectPayload>,
-      EditorDocument
+      ExtensionObjectEffect<MirrorEffectPayload>,
+      PooderDocument
     >,
   ): RenderIntentPatch | void {
     if (context.target.kind !== "object" || !context.target.objectId) return;
@@ -255,9 +255,3 @@ function isMirrorState(value: unknown): value is MirrorState {
   );
 }
 
-function findDocumentObject(
-  document: EditorDocument,
-  objectId: string,
-): EditorObject | undefined {
-  return findEditorDocumentObject(document, objectId);
-}

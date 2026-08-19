@@ -1,7 +1,7 @@
 {
   "name": "@pooder/document-core",
   "version": "1.0.0",
-  "description": "Core runtime bridge for Pooder editor documents",
+  "description": "Core runtime bridge for Pooder documents",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",

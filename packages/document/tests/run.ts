@@ -2,26 +2,26 @@ import {
   EffectSchemaRegistry,
   DocumentExtensionRegistry,
   ObjectSchemaRegistry,
-  cloneEditorDocument,
-  collectEditorDocumentAssetReferences,
+  cloneDocument,
+  collectDocumentAssetReferences,
   createAssetReferenceBinding,
-  collectEditorDocumentCapabilityRequirements,
-  collectEditorDocumentExtensionRequirements,
-  findEditorDocumentObject,
-  getEditorDocumentObjects,
+  collectDocumentCapabilityRequirements,
+  collectDocumentExtensionRequirements,
+  findDocumentObject,
+  getDocumentObjects,
   isAssetSource,
-  parseEditorDocument,
-  reclaimOrphanedEditorDocumentAssets,
-  replaceEditorDocumentAssetReferences,
-  resolveEditorDocumentAsset,
-  selectEditorDocumentObjects,
-  selectOneEditorDocumentObject,
+  parseDocument,
+  reclaimOrphanedDocumentAssets,
+  replaceDocumentAssetReferences,
+  resolveDocumentAsset,
+  selectDocumentObjects,
+  selectOneDocumentObject,
   surfaceContentRect,
-  validateEditorDocument,
-  validateEditorDocumentEffectSchemas,
-  validateEditorDocumentObjectSchemas,
-  visitEditorDocumentObjects,
-  type EditorDocument,
+  validateDocument,
+  validateDocumentEffectSchemas,
+  validateDocumentObjectSchemas,
+  visitDocumentObjects,
+  type PooderDocument,
 } from "../src";
 import { REPRESENTATIVE_V8_DOCUMENT_INPUT } from "./fixtures/representative-v8-document";
 
@@ -51,13 +51,13 @@ function assertDeepEqual(
   }
 }
 
-function representativeDocument(): EditorDocument {
-  return parseEditorDocument(REPRESENTATIVE_V8_DOCUMENT_INPUT);
+function representativeDocument(): PooderDocument {
+  return parseDocument(REPRESENTATIVE_V8_DOCUMENT_INPUT);
 }
 
 function testStrictRoundTrip(): void {
   const document = representativeDocument();
-  const restored = parseEditorDocument(JSON.parse(JSON.stringify(document)));
+  const restored = parseDocument(JSON.parse(JSON.stringify(document)));
   assertDeepEqual(restored, document, "strict v8 should round-trip exactly");
   assertDeepEqual(
     document.surfaces.map((surface) => surface.id),
@@ -70,12 +70,12 @@ function testStrictRoundTrip(): void {
     "root group order should be preserved from bottom to top",
   );
   assertEqual(
-    findEditorDocumentObject(document, "front.feature.hole")?.id,
+    findDocumentObject(document, "front.feature.hole")?.id,
     "front.feature.hole",
     "nested object lookup should work",
   );
   assertDeepEqual(
-    collectEditorDocumentExtensionRequirements(document),
+    collectDocumentExtensionRequirements(document),
     [
       "pooder.kit.image-slot",
       "pooder.production-mask",
@@ -91,7 +91,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   ) as Record<string, unknown>;
   v7.version = 7;
   assertEqual(
-    validateEditorDocument(v7)[0]?.code,
+    validateDocument(v7)[0]?.code,
     "document-version-invalid",
     "v7 documents should be rejected without a runtime migrator",
   );
@@ -106,7 +106,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
       JSON.stringify(REPRESENTATIVE_V8_DOCUMENT_INPUT),
     ) as Record<string, unknown>;
     input[field] = value;
-    const diagnostic = validateEditorDocument(input)[0];
+    const diagnostic = validateDocument(input)[0];
     assertEqual(
       diagnostic?.code,
       "unknown-field",
@@ -127,12 +127,12 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   )[0]!;
   firstSurface.extension = { required: ["pooder.kit.image-slot"] };
   assertEqual(
-    validateEditorDocument(surfaceExtension)[0]?.code,
+    validateDocument(surfaceExtension)[0]?.code,
     "unknown-field",
     "surface.extension should be rejected",
   );
   assertEqual(
-    validateEditorDocument(surfaceExtension)[0]?.path,
+    validateDocument(surfaceExtension)[0]?.path,
     "surfaces[0].extension",
     "surface.extension path should be stable",
   );
@@ -145,7 +145,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   const object = (group.children as Array<Record<string, unknown>>)[0]!;
   object.frame = { x: 0, y: 0, width: 1, height: 1 };
   assertEqual(
-    validateEditorDocument(input)[0]?.path,
+    validateDocument(input)[0]?.path,
     "surfaces[0].objects[0].children[0].frame",
     "legacy object frame should be rejected at its exact path",
   );
@@ -160,7 +160,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   )[0]!;
   legacyGroup.role = "content";
   assertEqual(
-    validateEditorDocument(groupRole)[0]?.path,
+    validateDocument(groupRole)[0]?.path,
     "surfaces[0].objects[0].role",
     "legacy group role should be rejected at its exact path",
   );
@@ -179,7 +179,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   )[0]!;
   guide.role = "cut";
   assertEqual(
-    validateEditorDocument(guideRole)[0]?.code,
+    validateDocument(guideRole)[0]?.code,
     "unknown-field",
     "guide role should be rejected",
   );
@@ -195,7 +195,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   )[0]!;
   exportObject.traits = [{ type: "core.export", scopes: ["design"] }];
   assertEqual(
-    validateEditorDocument(exportScope)[0]?.code,
+    validateDocument(exportScope)[0]?.code,
     "unknown-field",
     "core.export scopes should be rejected",
   );
@@ -211,7 +211,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   )[0]!;
   taggedObject.tags = ["cut"];
   assertEqual(
-    validateEditorDocument(unnamespacedTag)[0]?.code,
+    validateDocument(unnamespacedTag)[0]?.code,
     "object-tag-namespace-required",
     "object tags should require namespaces",
   );
@@ -228,7 +228,7 @@ function testUnknownAndLegacyFieldsAreRejected(): void {
   delete legacyObject.type;
   legacyObject.source = { kind: "image", assetId: "front-artwork" };
   assertEqual(
-    validateEditorDocument(legacyObjectSource)[0]?.code,
+    validateDocument(legacyObjectSource)[0]?.code,
     "object-type-invalid",
     "legacy image-kind sources should be rejected without compatibility",
   );
@@ -244,7 +244,7 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   );
   bounds.width = Number.POSITIVE_INFINITY;
   assertEqual(
-    validateEditorDocument(nonFinite)[0]?.code,
+    validateDocument(nonFinite)[0]?.code,
     "finite-number-required",
     "non-finite geometry should be rejected",
   );
@@ -259,12 +259,12 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
     >
   ).insets = { top: 50, right: 50, bottom: 50, left: 50 };
   assertEqual(
-    validateEditorDocument(overflowingInsets)[0]?.code,
+    validateDocument(overflowingInsets)[0]?.code,
     "surface-content-invalid",
     "insets that collapse content should be rejected",
   );
 
-  const parsed = parseEditorDocument(REPRESENTATIVE_V8_DOCUMENT_INPUT);
+  const parsed = parseDocument(REPRESENTATIVE_V8_DOCUMENT_INPUT);
   assertDeepEqual(
     surfaceContentRect(parsed.surfaces[0]!),
     { x: 3, y: 3, width: 94, height: 114 },
@@ -281,7 +281,7 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
     >
   ).insets = { top: 0, right: 0, bottom: 0, left: 0 };
   assertEqual(
-    parseEditorDocument(zeroInsetsInput).surfaces[0]?.insets,
+    parseDocument(zeroInsetsInput).surfaces[0]?.insets,
     undefined,
     "all-zero insets should be omitted",
   );
@@ -297,7 +297,7 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   )[0]!;
   object.children = [];
   assertEqual(
-    validateEditorDocument(invalidUnion)[0]?.code,
+    validateDocument(invalidUnion)[0]?.code,
     "unknown-field",
     "visual objects should reject children",
   );
@@ -321,7 +321,7 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
         .objects as Array<Record<string, unknown>>
     )[0]!;
     group[field] = value;
-    const diagnostic = validateEditorDocument(invalidGroup)[0];
+    const diagnostic = validateDocument(invalidGroup)[0];
     assertEqual(
       diagnostic?.code,
       "unknown-field",
@@ -345,7 +345,7 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
   )[0]!;
   clippedLeaf.clip = "frame";
   assertEqual(
-    validateEditorDocument(leafClip)[0]?.code,
+    validateDocument(leafClip)[0]?.code,
     "unknown-field",
     "leaf clip outside contentFit should be rejected",
   );
@@ -373,7 +373,7 @@ function testInvalidNumbersAndUnionsAreRejected(): void {
       contentFit[path.slice("contentFit.".length)] = value;
     }
     assertEqual(
-      validateEditorDocument(invalidNumber)[0]?.code,
+      validateDocument(invalidNumber)[0]?.code,
       expectedCode,
       `${path}=${value} should be rejected`,
     );
@@ -387,7 +387,7 @@ function testGlobalIdsAndReferencesAreStrict(): void {
   const surfaces = duplicate.surfaces as Array<Record<string, unknown>>;
   surfaces[1]!.id = surfaces[0]!.id;
   assert(
-    validateEditorDocument(duplicate).some(
+    validateDocument(duplicate).some(
       (item) => item.code === "document-id-duplicate",
     ),
     "all document ids should be globally unique",
@@ -407,7 +407,7 @@ function testGlobalIdsAndReferencesAreStrict(): void {
   )[0]!;
   cutline.operandObjectId = "missing";
   assert(
-    validateEditorDocument(missing).some(
+    validateDocument(missing).some(
       (item) => item.code === "object-effect-target-missing",
     ),
     "missing effect references should be rejected",
@@ -422,7 +422,7 @@ function testExtensionSchemasAreStrict(): void {
       behaviorType: "pooder.image-slot",
       capabilityId: "pooder.kit.image-slot",
     });
-  const missing = validateEditorDocumentObjectSchemas(
+  const missing = validateDocumentObjectSchemas(
     document,
     new ObjectSchemaRegistry(),
   );
@@ -432,13 +432,13 @@ function testExtensionSchemasAreStrict(): void {
     "unregistered extension traits and behaviors should be rejected",
   );
   assertDeepEqual(
-    validateEditorDocumentObjectSchemas(document, objectRegistry),
+    validateDocumentObjectSchemas(document, objectRegistry),
     [],
     "registered object schemas should validate",
   );
 
-  const effectDocument = cloneEditorDocument(document);
-  const target = findEditorDocumentObject(effectDocument, "back.artwork");
+  const effectDocument = cloneDocument(document);
+  const target = findDocumentObject(effectDocument, "back.artwork");
   assert(target?.type === "shape", "back artwork should be a shape");
   target.effects = [{ type: "test.effect", payload: { count: 1 } }];
   const effectRegistry = new EffectSchemaRegistry([
@@ -452,11 +452,11 @@ function testExtensionSchemasAreStrict(): void {
     },
   ]);
   assertDeepEqual(
-    validateEditorDocumentEffectSchemas(effectDocument, effectRegistry),
+    validateDocumentEffectSchemas(effectDocument, effectRegistry),
     [],
     "registered effect schemas should validate",
   );
-  const requirements = collectEditorDocumentCapabilityRequirements(
+  const requirements = collectDocumentCapabilityRequirements(
     effectDocument,
     {
       availableCapabilityIds: ["test.capability"],
@@ -478,7 +478,7 @@ function testExtensionSchemasAreStrict(): void {
 
 function testCloneAndVisitors(): void {
   const document = representativeDocument();
-  const clone = cloneEditorDocument(document);
+  const clone = cloneDocument(document);
   assertDeepEqual(
     clone,
     document,
@@ -486,10 +486,10 @@ function testCloneAndVisitors(): void {
   );
   assert(clone !== document, "clone should detach the root");
   const visited: string[] = [];
-  visitEditorDocumentObjects(document, ({ path }) => visited.push(path));
+  visitDocumentObjects(document, ({ path }) => visited.push(path));
   assertEqual(
     visited.length,
-    getEditorDocumentObjects(document).length,
+    getDocumentObjects(document).length,
     "visitor and object accessor should agree",
   );
 }
@@ -497,24 +497,24 @@ function testCloneAndVisitors(): void {
 function testObjectSelectors(): void {
   const document = representativeDocument();
   assertDeepEqual(
-    selectEditorDocumentObjects(document, { tags: ["slot:front"] }).map(
+    selectDocumentObjects(document, { tags: ["slot:front"] }).map(
       (object) => object.id,
     ),
     ["front.image-slot"],
     "tag selector should match the image slot",
   );
   assertEqual(
-    selectOneEditorDocumentObject(document, { ids: ["front.dieline"] })?.id,
+    selectOneDocumentObject(document, { ids: ["front.dieline"] })?.id,
     "front.dieline",
     "id selector should resolve one exact object",
   );
   assertEqual(
-    selectOneEditorDocumentObject(document, { tags: ["slot:front"] })?.id,
+    selectOneDocumentObject(document, { tags: ["slot:front"] })?.id,
     "front.image-slot",
     "single-object selector should resolve the image slot",
   );
   assertDeepEqual(
-    selectEditorDocumentObjects(document, {
+    selectDocumentObjects(document, {
       surfaceIds: ["back"],
       tags: ["slot:front"],
     }).map((object) => object.id),
@@ -522,7 +522,7 @@ function testObjectSelectors(): void {
     "surfaceIds should not match tags on another surface",
   );
   assertDeepEqual(
-    selectEditorDocumentObjects(document, { surfaceIds: ["back"] }).map(
+    selectDocumentObjects(document, { surfaceIds: ["back"] }).map(
       (object) => object.id,
     ),
     ["back.content", "back.artwork"],
@@ -533,26 +533,26 @@ function testObjectSelectors(): void {
 function testCentralAssetReferenceLifecycle(): void {
   const document = representativeDocument();
   document.extension = { required: [], states: {} };
-  const slot = findEditorDocumentObject(document, "front.image-slot");
+  const slot = findDocumentObject(document, "front.image-slot");
   assert(
     slot?.type === "image",
     "fixture image slot should be an image object",
   );
   slot.behaviors = undefined;
 
-  const references = collectEditorDocumentAssetReferences(document);
+  const references = collectDocumentAssetReferences(document);
   assertDeepEqual(
     references.map((reference) => reference.source.assetId),
     ["front-artwork"],
     "collector should include declared object asset sources only",
   );
   assertEqual(
-    resolveEditorDocumentAsset(document, slot.source, "image")?.id,
+    resolveDocumentAsset(document, slot.source, "image")?.id,
     "front-artwork",
     "resolver should enforce the expected asset type",
   );
   assertEqual(
-    replaceEditorDocumentAssetReferences(document, "front-artwork", {
+    replaceDocumentAssetReferences(document, "front-artwork", {
       kind: "asset",
       assetId: "image-slot-placeholder",
     }),
@@ -564,7 +564,7 @@ function testCentralAssetReferenceLifecycle(): void {
     "image-slot-placeholder",
     "replacement should mutate the typed source binding",
   );
-  const removed = reclaimOrphanedEditorDocumentAssets(document, {
+  const removed = reclaimOrphanedDocumentAssets(document, {
     extensionRegistry: new DocumentExtensionRegistry(),
   });
   assert(
@@ -627,7 +627,7 @@ function testOrphanReclamationUsesRegisteredExtensionReferences(): void {
   });
 
   assertDeepEqual(
-    reclaimOrphanedEditorDocumentAssets(document, { extensionRegistry }),
+    reclaimOrphanedDocumentAssets(document, { extensionRegistry }),
     [],
     "orphan reclamation should retain object, behavior, and extension assets",
   );

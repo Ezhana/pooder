@@ -1,10 +1,10 @@
 import {
   createAssetReferenceBinding,
-  findEditorDocumentObject,
+  findDocumentObject,
   isAssetSource,
   type DocumentValueSchemaIssue,
-  type EditorImageSlotBehaviorConfig,
-  type EditorObjectBehavior,
+  type ImageSlotBehaviorConfig,
+  type ObjectBehavior,
   type ObjectBehaviorDefinition,
 } from "@pooder/document";
 
@@ -15,7 +15,7 @@ import {
 
 export const IMAGE_SLOT_BEHAVIOR_TYPE = "pooder.image-slot";
 
-export interface ImageSlotObjectBehavior extends EditorObjectBehavior<EditorImageSlotBehaviorConfig> {
+export interface ImageSlotObjectBehavior extends ObjectBehavior<ImageSlotBehaviorConfig> {
   type: typeof IMAGE_SLOT_BEHAVIOR_TYPE;
 }
 
@@ -60,7 +60,7 @@ function validateImageSlotConfig(
 ): DocumentValueSchemaIssue[] {
   if (!isRecord(value)) return [invalid("config", "an object")];
   const issues: DocumentValueSchemaIssue[] = [];
-  const object = findEditorDocumentObject(context.document, context.objectId);
+  const object = findDocumentObject(context.document, context.objectId);
   if (!object || object.type !== "image") {
     issues.push(invalid("", "attached only to an image object"));
   }

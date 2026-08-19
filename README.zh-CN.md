@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-文档驱动的画布编辑引擎。应用提交一份严格的 `EditorDocument`（v8），Pooder 负责校验、编译成渲染意图、在浏览器里投影到画布，并通过 **Capability** 提供可复用的编辑能力。产品工具栏、文案、工作流编排属于应用，不属于引擎。
+文档驱动的画布编辑引擎。应用提交一份严格的 `PooderDocument`（v8），Pooder 负责校验、编译成渲染意图、在浏览器里投影到画布，并通过 **Capability** 提供可复用的编辑能力。产品工具栏、文案、工作流编排属于应用，不属于引擎。
 
 当前作为 Popecho 的 git submodule 使用（`external/pooder`），包通过根 workspace 的 `external/pooder/packages/*` 接入。也可以在本目录独立安装、构建。
 
@@ -10,16 +10,16 @@
 
 | 概念 | 含义 |
 | --- | --- |
-| **EditorDocument** | 唯一公开的持久化模型。`version` 必须是 `8`。不含别名、迁移层或 v7 运行时。 |
+| **PooderDocument** | 唯一公开的持久化模型。`version` 必须是 `8`。不含别名、迁移层或 v7 运行时。 |
 | **Surface** | 文档侧的一面（如正面）。`bounds` 以毫米表示场景世界。 |
-| **Scene** | 运行时图。`document-core` 把 `EditorSurface.id` 映射为 `sceneId`；Core / 渲染 / 导出只认 `sceneId`。 |
+| **Scene** | 运行时图。`document-core` 把 `Surface.id` 映射为 `sceneId`；Core / 渲染 / 导出只认 `sceneId`。 |
 | **Capability** | 可安装的可复用行为（工厂 + 类型化 facade + 可选文档 schema）。不是工具栏按钮。 |
-| **Session** | 由对象 `behaviors` 派生的瞬时工作流状态。不写入 `EditorDocument`。 |
+| **Session** | 由对象 `behaviors` 派生的瞬时工作流状态。不写入 `PooderDocument`。 |
 
 数据流：
 
 ```text
-EditorDocument  ──apply──►  document-core  ──RenderIntent──►  platform-browser (Fabric)
+PooderDocument  ──apply──►  document-core  ──RenderIntent──►  platform-browser (Fabric)
      ▲                         │                                      │
      │                         │ Scene / Geometry / Interaction       │
      └──── mutate / session ◄──┘                                      ▼
@@ -32,7 +32,7 @@ EditorDocument  ──apply──►  document-core  ──RenderIntent──►
 | --- | --- |
 | `@pooder/document` | 运行时无关的 v8 契约：解析、校验、遍历。可在 Node / BFF 使用，禁止依赖 DOM、Canvas、Fabric。 |
 | `@pooder/core` | 无头运行时：扩展生命周期、服务、场景、坐标、命令、Session、RenderIntent。 |
-| `@pooder/document-core` | 把文档接到运行时：`EditorDocumentService`、编译、surface ↔ scene。 |
+| `@pooder/document-core` | 把文档接到运行时：`PooderDocumentService`、编译、surface ↔ scene。 |
 | `@pooder/platform-browser` | 浏览器宿主：Fabric 适配、画布、视口、导出、图片资源。 |
 | `@pooder/geometry-paper` | 按需加载的 Paper.js 几何后端。导入模块本身不碰 DOM。 |
 | `@pooder/vue` | Vue 3 宿主。**根入口可 SSR**；画布与工具注册在 `@pooder/vue/editor`。 |
@@ -82,9 +82,9 @@ import {
   createCapabilitiesForDocument,
   createExportCapability,
 } from "@pooder/tools";
-import type { EditorDocument } from "@pooder/document";
+import type { PooderDocument } from "@pooder/document";
 
-const document: EditorDocument = {
+const document: PooderDocument = {
   version: 8,
   assets: [],
   extension: { required: [], states: {} },
@@ -138,30 +138,30 @@ if (!result.ok) throw new Error(result.diagnostics[0]?.message ?? "apply failed"
 
 `PooderCanvasHost` 会注册 Paper 几何后端并挂上浏览器服务（Canvas、导出、图片资源）。之后用 `documentService.mutate()` / `openSession()` 改文档，用 `runtime.activateSurface(id)` 切面。
 
-无 Vue 时：直接 `new Pooder()`（`@pooder/core`），再 `registerEditorDocumentService`（`@pooder/document-core`）和 `attachBrowserHost`（`@pooder/platform-browser`）。
+无 Vue 时：直接 `new Pooder()`（`@pooder/core`），再 `registerPooderDocumentService`（`@pooder/document-core`）和 `attachBrowserHost`（`@pooder/platform-browser`）。
 
 BFF / Node 只处理文档时，只依赖 `@pooder/document`：
 
 ```ts
-import { parseEditorDocument, validateEditorDocument } from "@pooder/document";
+import { parseDocument, validateDocument } from "@pooder/document";
 
-const document = parseEditorDocument(payload);
-const diagnostics = validateEditorDocument(document);
+const document = parseDocument(payload);
+const diagnostics = validateDocument(document);
 ```
 
-## EditorDocument v8
+## PooderDocument v8
 
 公开模型只有这一份。字段是精确集合：`version`、`assets`、`extension`、`surfaces`。
 
 ```ts
-interface EditorDocument {
+interface PooderDocument {
   version: 8;
-  assets: EditorAsset[];
+  assets: Asset[];
   extension: {
     required: string[]; // BFF 声明的 capability / extension id，不从对象推断
     states: Record<string, JsonValue>;
   };
-  surfaces: EditorSurface[];
+  surfaces: Surface[];
 }
 ```
 
@@ -174,9 +174,9 @@ interface EditorDocument {
 - 工具激活来自 `behaviors`；`interaction` 只描述选择、拖拽和约束。
 - 裁切另一对象用 `core.geometry.clip` 效果，不是 `contentFit`。
 
-`EditorDocumentService.activateSurface(surfaceId)` 是文档侧切面 API，内部调用 `SceneService.setActiveRoot(sceneId)`。
+`PooderDocumentService.activateSurface(surfaceId)` 是文档侧切面 API，内部调用 `SceneService.setActiveRoot(sceneId)`。
 
-更完整的对象树约定见 [docs/editor-document-v8-groups.md](./docs/editor-document-v8-groups.md)。
+更完整的对象树约定见 [docs/pooder-document-v8-groups.md](./docs/pooder-document-v8-groups.md)。
 
 ## Capabilities
 
@@ -251,7 +251,7 @@ pnpm check:architecture             # 含 docs/dependency-boundaries.md
 | [docs/tool-package-contract.md](./docs/tool-package-contract.md) | 独立 Tool 包必须满足的契约 |
 | [docs/document-object-interaction.md](./docs/document-object-interaction.md) | `interaction` vs `behaviors` |
 | [docs/app-workflow-composition.md](./docs/app-workflow-composition.md) | 应用如何组合刀版 / Feature / 导出 |
-| [docs/editor-document-v8-groups.md](./docs/editor-document-v8-groups.md) | v8 对象树、继承、flatten 保证 |
+| [docs/pooder-document-v8-groups.md](./docs/pooder-document-v8-groups.md) | v8 对象树、继承、flatten 保证 |
 
 ## 所有权约定
 

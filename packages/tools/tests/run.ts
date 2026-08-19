@@ -5,15 +5,15 @@ import {
   type RenderIntentService,
 } from "@pooder/core";
 import {
-  registerEditorDocumentService,
-  type EditorDocumentService,
+  registerPooderDocumentService,
+  type PooderDocumentService,
 } from "../../document-core/src";
 import {
-  findEditorDocumentObject,
-  type EditorDocument,
-  type EditorGroupObject,
-  type EditorImageContentFit,
-  type EditorImageObject,
+  findDocumentObject,
+  type PooderDocument,
+  type GroupObject,
+  type ImageContentFit,
+  type ImageObject,
 } from "@pooder/document";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
@@ -59,7 +59,7 @@ function assertMatrixClose(
   });
 }
 
-function createImageSlotDocument(): EditorDocument {
+function createImageSlotDocument(): PooderDocument {
   return {
     version: 8,
     assets: [
@@ -140,7 +140,7 @@ function createImageSlotDocument(): EditorDocument {
   };
 }
 
-function getSlotGroup(document: EditorDocument): EditorGroupObject {
+function getSlotGroup(document: PooderDocument): GroupObject {
   const group = document.surfaces[0]?.objects[0];
   assert(group?.type === "group", "image-slot fixture group should exist");
   return group;
@@ -148,16 +148,16 @@ function getSlotGroup(document: EditorDocument): EditorGroupObject {
 
 async function createHarness(
   imageSlotOptions: Parameters<typeof createImageSlotCapability>[0] = {},
-  document: EditorDocument = createImageSlotDocument(),
+  document: PooderDocument = createImageSlotDocument(),
 ): Promise<{
   runtime: Pooder;
-  controller: EditorDocumentService;
+  controller: PooderDocumentService;
   facade: ImageSlotCapabilityApi;
 }> {
   const runtime = new Pooder();
   runtime.extensions.register(createImageSlotCapability(imageSlotOptions));
   await runtime.extensions.flushActivation();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   const applied = await controller.apply(document);
   assertEqual(applied.ok, true, "image-slot document should apply");
   const facade = runtime.capabilities.get<ImageSlotCapabilityApi>(
@@ -339,7 +339,7 @@ async function testPlaceholderVisibilityAndResourceLifecycle(): Promise<void> {
       .find((object) => object.id === IMAGE_SLOT_ID);
     assertEqual(
       persistedSlot && persistedSlot.type === "image"
-        ? (persistedSlot as EditorImageObject).contentFit.fit
+        ? (persistedSlot as ImageObject).contentFit.fit
         : undefined,
       "cover",
       "placeholder fallback should not mutate persistent content fit",
@@ -412,7 +412,7 @@ async function testSharedPlaceholderAssetLifecycle(): Promise<void> {
   const runtime = new Pooder();
   runtime.extensions.register(createImageSlotCapability());
   await runtime.extensions.flushActivation();
-  const controller = registerEditorDocumentService(runtime);
+  const controller = registerPooderDocumentService(runtime);
   try {
     const document = createImageSlotDocument();
     const group = getSlotGroup(document);
@@ -470,12 +470,12 @@ async function testSharedPlaceholderAssetLifecycle(): Promise<void> {
 }
 
 async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
-  const apply = async (document: EditorDocument) => {
+  const apply = async (document: PooderDocument) => {
     const runtime = new Pooder();
     runtime.extensions.register(createImageSlotCapability());
     await runtime.extensions.flushActivation();
     try {
-      return await registerEditorDocumentService(runtime).apply(document);
+      return await registerPooderDocumentService(runtime).apply(document);
     } finally {
       await runtime.dispose();
     }
@@ -528,7 +528,7 @@ async function testRemovedImageSlotContractsAreRejected(): Promise<void> {
 
   const nonImageSlot = createImageSlotDocument();
   const nonImageObject = getSlotGroup(nonImageSlot).children[0]!;
-  delete (nonImageObject as Partial<EditorImageObject>).contentFit;
+  delete (nonImageObject as Partial<ImageObject>).contentFit;
   Object.assign(nonImageObject, {
     type: "shape",
     source: { kind: "inline", content: { shape: "rect", params: {} } },
@@ -564,7 +564,7 @@ function getCommittedMatrix(runtime: Pooder): number[] {
 async function projectCanvasMatrix(
   runtime: Pooder,
   facade: ImageSlotCapabilityApi,
-  placement: EditorImageContentFit,
+  placement: ImageContentFit,
 ): Promise<number[]> {
   const original = facade.getViewState().draft?.placement;
   assert(original, "active image-slot draft should expose placement");
@@ -617,7 +617,7 @@ async function testImageSlotCommitAndReopenMatrices(): Promise<void> {
         `${fit} session should open`,
       );
       const expected = await projectCanvasMatrix(runtime, facade, {
-        fit: fit as EditorImageContentFit["fit"],
+        fit: fit as ImageContentFit["fit"],
         anchorX: 0.25 + index * 0.15,
         anchorY: 0.7 - index * 0.1,
         zoom: 1.2 + index * 0.1,
@@ -815,7 +815,7 @@ async function testStagedAssetCommitsAtomicallyWithObjectReference(): Promise<vo
       "commit should insert the staged asset",
     );
     const object = committed
-      ? findEditorDocumentObject(committed, IMAGE_SLOT_ID)
+      ? findDocumentObject(committed, IMAGE_SLOT_ID)
       : undefined;
     assertEqual(
       object?.type === "image" && object.source?.kind === "asset"

@@ -1,11 +1,11 @@
 # Document Object Interaction
 
-`EditorObject.interaction` describes only persistent selection, manipulation,
+`PooderObject.interaction` describes only persistent selection, manipulation,
 and manipulation constraints. Tool activation and session behavior belong to
-extension-owned `EditorObject.behaviors`.
+extension-owned `PooderObject.behaviors`.
 
 ```ts
-const imageSlot: EditorObject = {
+const imageSlot: PooderObject = {
   type: "image",
   id: "front.image",
   tags: ["slot:image"],
@@ -56,13 +56,13 @@ const imageSlot: EditorObject = {
 Behavior schemas are registered by their owning extension. Missing behavior or
 constraint schemas are validation errors. Capabilities derive activation,
 exclusive sessions, and transient session scenes from the behavior; none of
-that session state is persisted in `EditorDocument`.
+that session state is persisted in `PooderDocument`.
 
 The browser adapter asks Core `InteractionService` for resolved selection and
 manipulation state. A logical subject may compile into multiple render graph
 projections. Preview patches are derived from declarative `AffinePlacement`,
 and commit produces one scene-space document patch that
-`EditorDocumentService` converts through the parent transform before mutating
+`PooderDocumentService` converts through the parent transform before mutating
 the document.
 
 `selection` and each manipulation operation default to disabled. Any enabled

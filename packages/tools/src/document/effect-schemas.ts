@@ -1,14 +1,14 @@
 import {
   EffectSchemaRegistry,
-  type EditorEffectSchema,
-  type EditorEffectSchemaIssue,
+  type EffectSchema,
+  type EffectSchemaIssue,
 } from "@pooder/document";
 
 export const EFFECT_CAPABILITY_IDS = {
   mirror: "pooder.kit.mirror",
 } as const;
 
-export const EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
+export const EFFECT_SCHEMAS: readonly EffectSchema[] = [
   {
     effectType: "mirror",
     capabilityId: EFFECT_CAPABILITY_IDS.mirror,
@@ -20,7 +20,7 @@ export const EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
   },
 ];
 
-export function getEffectSchema(effectType: string): EditorEffectSchema {
+export function getEffectSchema(effectType: string): EffectSchema {
   const schema = EFFECT_SCHEMAS.find(
     (candidate) => candidate.effectType === effectType,
   );
@@ -32,7 +32,7 @@ export function createEffectSchemaRegistry(): EffectSchemaRegistry {
   return new EffectSchemaRegistry(EFFECT_SCHEMAS);
 }
 
-function validateOptionalRecord(payload: unknown): EditorEffectSchemaIssue[] {
+function validateOptionalRecord(payload: unknown): EffectSchemaIssue[] {
   return payload === undefined || isRecord(payload)
     ? []
     : [invalidType(undefined, "an object")];
@@ -41,7 +41,7 @@ function validateOptionalRecord(payload: unknown): EditorEffectSchemaIssue[] {
 function validateOptionalRecordFields(
   payload: unknown,
   fields: Record<string, "boolean" | "string">,
-): EditorEffectSchemaIssue[] {
+): EffectSchemaIssue[] {
   const issues = validateOptionalRecord(payload);
   if (payload === undefined || !isRecord(payload)) return issues;
   Object.entries(fields).forEach(([field, expected]) => {
@@ -55,7 +55,7 @@ function validateOptionalRecordFields(
 function invalidType(
   path: string | undefined,
   expected: string,
-): EditorEffectSchemaIssue {
+): EffectSchemaIssue {
   return {
     code: "effect-payload-invalid",
     message: `Effect payload${path ? `.${path}` : ""} must be ${expected}.`,
@@ -63,7 +63,7 @@ function invalidType(
   };
 }
 
-function invalidRequiredString(path: string): EditorEffectSchemaIssue {
+function invalidRequiredString(path: string): EffectSchemaIssue {
   return {
     code: "effect-payload-invalid",
     message: `Effect payload.${path} must be a non-empty string.`,
@@ -71,7 +71,7 @@ function invalidRequiredString(path: string): EditorEffectSchemaIssue {
   };
 }
 
-function invalidFiniteNumber(path: string): EditorEffectSchemaIssue {
+function invalidFiniteNumber(path: string): EffectSchemaIssue {
   return {
     code: "effect-payload-invalid",
     message: `Effect payload.${path} must be a finite number.`,
@@ -82,7 +82,7 @@ function invalidFiniteNumber(path: string): EditorEffectSchemaIssue {
 function invalidEnum(
   path: string,
   values: readonly string[],
-): EditorEffectSchemaIssue {
+): EffectSchemaIssue {
   return {
     code: "effect-payload-invalid",
     message: `Effect payload.${path} must be one of: ${values.join(", ")}.`,

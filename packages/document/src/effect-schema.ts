@@ -1,49 +1,49 @@
 import type {
-  EditorAssetReferenceBinding,
-  EditorDocumentDiagnostic,
-  EditorDocumentDiagnosticSeverity,
+  AssetReferenceBinding,
+  DocumentDiagnostic,
+  DocumentDiagnosticSeverity,
 } from "./index";
 
-export interface EditorEffectSchemaIssue {
+export interface EffectSchemaIssue {
   code: string;
   message: string;
   path?: string;
-  severity?: EditorDocumentDiagnosticSeverity;
+  severity?: DocumentDiagnosticSeverity;
 }
 
-export interface EditorEffectSchemaValidationContext {
+export interface EffectSchemaValidationContext {
   effect: Readonly<Record<string, unknown>>;
   effectPath: string;
   effectType: string;
 }
 
-export interface EditorEffectSchema {
+export interface EffectSchema {
   effectType: string;
   capabilityId?: string;
   phase?: "document" | "layout" | "render" | "interaction" | "export";
   require?: "strict" | "warn" | "ignore";
   validate(
     payload: unknown,
-    context: EditorEffectSchemaValidationContext,
-  ): readonly EditorEffectSchemaIssue[];
+    context: EffectSchemaValidationContext,
+  ): readonly EffectSchemaIssue[];
   collectAssetReferences?(
     payload: unknown,
-    context: EditorEffectSchemaValidationContext,
-  ): readonly EditorAssetReferenceBinding[];
+    context: EffectSchemaValidationContext,
+  ): readonly AssetReferenceBinding[];
 }
 
-export interface EditorEffectSchemaValidationOptions {
+export interface EffectSchemaValidationOptions {
   requireRegisteredSchema?: boolean;
 }
 
 export class EffectSchemaRegistry {
-  private readonly schemas = new Map<string, EditorEffectSchema>();
+  private readonly schemas = new Map<string, EffectSchema>();
 
-  constructor(schemas: Iterable<EditorEffectSchema> = []) {
+  constructor(schemas: Iterable<EffectSchema> = []) {
     this.registerMany(schemas);
   }
 
-  register(schema: EditorEffectSchema): this {
+  register(schema: EffectSchema): this {
     const effectType = normalizeIdentifier(schema.effectType);
     if (!effectType) throw new TypeError("Effect schema type is required.");
     if (this.schemas.has(effectType)) {
@@ -53,16 +53,16 @@ export class EffectSchemaRegistry {
     return this;
   }
 
-  registerMany(schemas: Iterable<EditorEffectSchema>): this {
+  registerMany(schemas: Iterable<EffectSchema>): this {
     for (const schema of schemas) this.register(schema);
     return this;
   }
 
-  get(effectType: string): EditorEffectSchema | undefined {
+  get(effectType: string): EffectSchema | undefined {
     return this.schemas.get(normalizeIdentifier(effectType));
   }
 
-  list(): EditorEffectSchema[] {
+  list(): EffectSchema[] {
     return Array.from(this.schemas.values());
   }
 
@@ -77,12 +77,12 @@ export class EffectSchemaRegistry {
   }
 }
 
-export function validateEditorDocumentEffectSchemas(
+export function validateDocumentEffectSchemas(
   value: unknown,
   registry: EffectSchemaRegistry,
-  options: EditorEffectSchemaValidationOptions = {},
-): EditorDocumentDiagnostic[] {
-  const diagnostics: EditorDocumentDiagnostic[] = [];
+  options: EffectSchemaValidationOptions = {},
+): DocumentDiagnostic[] {
+  const diagnostics: DocumentDiagnostic[] = [];
   visitRawEffects(value, (effect, path) => {
     const effectType = normalizeIdentifier(effect.type);
     if (!effectType || isDocumentBuiltinEffect(effectType)) return;
@@ -101,7 +101,7 @@ export function validateEditorDocumentEffectSchemas(
       return;
     }
 
-    const context: EditorEffectSchemaValidationContext = {
+    const context: EffectSchemaValidationContext = {
       effect,
       effectPath: path,
       effectType,

@@ -5,7 +5,7 @@ import {
   type ImageResourceService,
   type Pooder,
 } from "@pooder/core";
-import type { EditorDocument } from "@pooder/document";
+import type { PooderDocument } from "@pooder/document";
 import { collectUnresolvableImageObjectIds } from "@pooder/document-core";
 
 import { getPooderRuntimeCore, type PooderRuntime } from "./runtime";
@@ -65,7 +65,7 @@ export function getPooderCapability<TFacade>(
  */
 export function collectPooderUnresolvableImages(
   runtime: PooderRuntime,
-  document: EditorDocument,
+  document: PooderDocument,
 ): Promise<string[]> {
   const service = getEditorRuntimeCore(
     runtime,

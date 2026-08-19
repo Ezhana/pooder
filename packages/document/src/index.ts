@@ -1,4 +1,4 @@
-import { EditorDocumentParseError, parseEditorDocument } from "./parser";
+import { DocumentParseError, parseDocument } from "./parser";
 
 export * from "./effect-schema";
 export * from "./asset-references";
@@ -50,22 +50,22 @@ export interface DocumentInteractionSpec {
   };
 }
 
-export const EDITOR_DOCUMENT_VERSION = 8 as const;
-export type EditorDocumentVersion = typeof EDITOR_DOCUMENT_VERSION;
-export type EditorDocumentDiagnosticSeverity = "error" | "warning";
-export type EditorDocumentDiagnosticStage =
+export const POODER_DOCUMENT_VERSION = 8 as const;
+export type PooderDocumentVersion = typeof POODER_DOCUMENT_VERSION;
+export type DocumentDiagnosticSeverity = "error" | "warning";
+export type DocumentDiagnosticStage =
   | "document-schema"
   | "effect-schema"
   | "extension-schema"
   | "runtime-capability";
-export interface EditorRect {
+export interface Rect {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
-export interface RectMm extends EditorRect {}
+export interface RectMm extends Rect {}
 
 export interface BoxInsetsMm {
   top: number;
@@ -81,7 +81,7 @@ export const ZERO_BOX_INSETS_MM: BoxInsetsMm = {
   left: 0,
 };
 
-export interface EditorSize {
+export interface Size {
   width: number;
   height: number;
 }
@@ -93,21 +93,21 @@ export interface PointMm {
   y: number;
 }
 
-export interface EditorDocumentExtension {
+export interface DocumentExtension {
   /** Extension ids this document needs. Authored by the BFF; never inferred. */
   required: string[];
   /** Persisted extension-owned state, keyed by those ids. */
   states: Record<string, JsonValue>;
 }
 
-export interface EditorDocument {
-  version: EditorDocumentVersion;
-  assets: EditorAsset[];
-  extension: EditorDocumentExtension;
-  surfaces: EditorSurface[];
+export interface PooderDocument {
+  version: PooderDocumentVersion;
+  assets: Asset[];
+  extension: DocumentExtension;
+  surfaces: Surface[];
 }
 
-export interface EditorSurface {
+export interface Surface {
   id: string;
   title?: string;
   /** Scene world in millimetres. Root `localToScene` origin. */
@@ -115,17 +115,17 @@ export interface EditorSurface {
   /** Content inset from `bounds`. Omitted or all zeroes means content == bounds. */
   insets?: BoxInsetsMm;
   /** Draw order is array order plus depth-first traversal; index 0 is bottom. */
-  objects: EditorObject[];
+  objects: PooderObject[];
 }
 
 export function surfaceInsets(
-  surface: Pick<EditorSurface, "insets">,
+  surface: Pick<Surface, "insets">,
 ): BoxInsetsMm {
   return surface.insets ?? ZERO_BOX_INSETS_MM;
 }
 
 export function surfaceContentRect(
-  surface: Pick<EditorSurface, "bounds" | "insets">,
+  surface: Pick<Surface, "bounds" | "insets">,
 ): RectMm {
   const insets = surfaceInsets(surface);
   return {
@@ -137,7 +137,7 @@ export function surfaceContentRect(
 }
 
 export function surfaceContentRectOrThrow(
-  surface: Pick<EditorSurface, "bounds" | "insets">,
+  surface: Pick<Surface, "bounds" | "insets">,
 ): RectMm {
   const content = surfaceContentRect(surface);
   if (!(content.width > 0 && content.height > 0)) {
@@ -147,7 +147,7 @@ export function surfaceContentRectOrThrow(
 }
 
 /** Facts shared by every node in the document object tree. */
-export interface EditorNodeBase {
+export interface NodeBase {
   id: string;
   tags: string[];
   /** Visibility is inherited with logical AND from every ancestor. */
@@ -156,27 +156,27 @@ export interface EditorNodeBase {
   locked: boolean;
   /** Object-local to parent-local coordinates. */
   localToParent: AffineMatrix;
-  traits?: EditorObjectTrait[];
-  behaviors?: EditorObjectBehavior[];
+  traits?: ObjectTrait[];
+  behaviors?: ObjectBehavior[];
   interaction?: DocumentInteractionSpec;
 }
 
 /** Fields owned only by pixel-producing leaf nodes. */
-export interface EditorLeafBase extends EditorNodeBase {
+export interface LeafBase extends NodeBase {
   /** The declared rectangle content is placed into. x/y are geometry, not placement. */
   localFrame: RectMm;
   /** Editing anchor in object-local space; it is not a transform. */
   localPivot?: PointMm;
   /** Per-object opacity in [0, 1]. Defaults to 1 and is not inherited. */
   opacity?: number;
-  effects?: EditorObjectEffect[];
+  effects?: ObjectEffect[];
 }
 
-export type EditorAssetDataSource =
+export type AssetDataSource =
   | { kind: "url"; url: string }
   | { kind: "data-url"; dataUrl: string };
 
-/** A document-level reference to an entry in EditorDocument.assets. */
+/** A document-level reference to an entry in PooderDocument.assets. */
 export type AssetSource = {
   kind: "asset";
   assetId: string;
@@ -188,24 +188,24 @@ export interface InlineSource<TContent = unknown> {
   content: TContent;
 }
 
-export interface EditorImageAsset {
+export interface ImageAsset {
   id: string;
   type: "image";
-  source: EditorAssetDataSource;
+  source: AssetDataSource;
   mimeType?: string;
-  intrinsicSize?: EditorSize;
+  intrinsicSize?: Size;
 }
 
-export type EditorAsset = EditorImageAsset;
+export type Asset = ImageAsset;
 
-export interface EditorAssetReferenceBinding {
+export interface AssetReferenceBinding {
   source: AssetSource;
-  expectedType: EditorAsset["type"];
+  expectedType: Asset["type"];
   path: string;
   replace(source: AssetSource): void;
 }
 
-export interface EditorImageContentFit {
+export interface ImageContentFit {
   fit: "cover" | "contain" | "stretch";
   anchorX: number;
   anchorY: number;
@@ -215,14 +215,14 @@ export interface EditorImageContentFit {
   clip: "frame" | "none";
 }
 
-export interface EditorPaint {
+export interface Paint {
   fill?: string | null;
   stroke?: string | null;
   strokeWidthMm?: number;
   dashMm?: number[];
 }
 
-export interface EditorImageSlotBehaviorConfig {
+export interface ImageSlotBehaviorConfig {
   accepts?: string[];
   placeholderSource: AssetSource;
 }
@@ -234,13 +234,13 @@ export interface ObjectSelector {
   surfaceIds?: readonly string[];
 }
 
-export interface EditorPathContent {
+export interface PathContent {
   pathData: string;
-  sourceBounds?: EditorRect;
-  sourceSize?: EditorSize;
+  sourceBounds?: Rect;
+  sourceSize?: Size;
 }
 
-export type EditorShapeContent =
+export type ShapeContent =
   | {
       shape: "rect";
       params: { width?: number; height?: number };
@@ -260,38 +260,38 @@ export type EditorShapeContent =
 
 export type ObjectSource = AssetSource | InlineSource | null;
 
-export interface EditorImageObject extends EditorLeafBase {
+export interface ImageObject extends LeafBase {
   type: "image";
   source: AssetSource | null;
-  contentFit: EditorImageContentFit;
+  contentFit: ImageContentFit;
 }
 
-export interface EditorPathObject extends EditorLeafBase {
+export interface PathObject extends LeafBase {
   type: "path";
-  source: InlineSource<EditorPathContent>;
-  paint?: EditorPaint;
+  source: InlineSource<PathContent>;
+  paint?: Paint;
 }
 
-export interface EditorShapeObject extends EditorLeafBase {
+export interface ShapeObject extends LeafBase {
   type: "shape";
-  source: InlineSource<EditorShapeContent>;
-  paint?: EditorPaint;
+  source: InlineSource<ShapeContent>;
+  paint?: Paint;
 }
 
-export type EditorLeafObject =
-  | EditorImageObject
-  | EditorPathObject
-  | EditorShapeObject;
+export type LeafObject =
+  | ImageObject
+  | PathObject
+  | ShapeObject;
 
 /** Structural transform node. It does not produce pixels. */
-export interface EditorGroupObject extends EditorNodeBase {
+export interface GroupObject extends NodeBase {
   type: "group";
-  children: EditorObject[];
+  children: PooderObject[];
 }
 
-export type EditorObject = EditorLeafObject | EditorGroupObject;
+export type PooderObject = LeafObject | GroupObject;
 
-export interface EditorExtensionObjectEffect<TPayload = JsonValue> {
+export interface ExtensionObjectEffect<TPayload = JsonValue> {
   type: string;
   payload?: TPayload;
 }
@@ -309,29 +309,29 @@ export type CoreGeometryEffect =
       participation?: "preview" | "export" | "both";
     };
 
-export type EditorObjectEffect =
+export type ObjectEffect =
   | CoreGeometryEffect
-  | EditorExtensionObjectEffect;
+  | ExtensionObjectEffect;
 
 export type CoreObjectTrait =
   | { type: "core.guide" }
   | { type: "core.output-mask"; keys: string[] };
 
-export interface EditorExtensionObjectTrait<TPayload = JsonValue> {
+export interface ExtensionObjectTrait<TPayload = JsonValue> {
   type: string;
   payload?: TPayload;
 }
 
-export type EditorObjectTrait = CoreObjectTrait | EditorExtensionObjectTrait;
+export type ObjectTrait = CoreObjectTrait | ExtensionObjectTrait;
 
-export interface EditorObjectBehavior<TConfig = JsonValue> {
+export interface ObjectBehavior<TConfig = JsonValue> {
   type: string;
   config?: TConfig;
 }
 
-export interface EditorDocumentDiagnostic {
-  severity: EditorDocumentDiagnosticSeverity;
-  stage?: EditorDocumentDiagnosticStage;
+export interface DocumentDiagnostic {
+  severity: DocumentDiagnosticSeverity;
+  stage?: DocumentDiagnosticStage;
   code: string;
   message: string;
   path: string;
@@ -339,76 +339,76 @@ export interface EditorDocumentDiagnostic {
   effectType?: string;
 }
 
-export type EditorDocumentValidatorDiagnostic = Omit<
-  EditorDocumentDiagnostic,
+export type DocumentValidatorDiagnostic = Omit<
+  DocumentDiagnostic,
   "stage"
 >;
 
-export interface EditorDocumentValidatorContext {
-  document: EditorDocument;
+export interface DocumentValidatorContext {
+  document: PooderDocument;
   path: string;
-  surface?: EditorSurface;
-  object?: EditorObject;
-  effect?: EditorExtensionObjectEffect;
-  addDiagnostic(diagnostic: EditorDocumentValidatorDiagnostic): void;
+  surface?: Surface;
+  object?: PooderObject;
+  effect?: ExtensionObjectEffect;
+  addDiagnostic(diagnostic: DocumentValidatorDiagnostic): void;
 }
 
-export type EditorDocumentValidator = (
-  context: EditorDocumentValidatorContext,
+export type DocumentValidator = (
+  context: DocumentValidatorContext,
 ) => void;
 
-export interface EditorDocumentValidationOptions {
-  validators?: readonly EditorDocumentValidator[];
+export interface DocumentValidationOptions {
+  validators?: readonly DocumentValidator[];
 }
 
-export type EditorDocumentEffectCapabilityResolver = (
-  effect: EditorExtensionObjectEffect,
+export type DocumentEffectCapabilityResolver = (
+  effect: ExtensionObjectEffect,
 ) => string | undefined;
 
-export interface EditorDocumentCapabilityCollectionOptions {
+export interface DocumentCapabilityCollectionOptions {
   availableCapabilityIds?: Iterable<string>;
-  resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
+  resolveEffectCapabilityId?: DocumentEffectCapabilityResolver;
 }
 
-export interface EditorDocumentCapabilityRequirement {
+export interface DocumentCapabilityRequirement {
   capabilityId: string;
   effectType: string;
   path: string;
 }
 
-export interface EditorDocumentCapabilityCollectionResult {
-  requirements: EditorDocumentCapabilityRequirement[];
-  diagnostics: EditorDocumentDiagnostic[];
+export interface DocumentCapabilityCollectionResult {
+  requirements: DocumentCapabilityRequirement[];
+  diagnostics: DocumentDiagnostic[];
 }
 
-export interface EditorDocumentObjectVisitContext {
-  document: EditorDocument;
-  surface: EditorSurface;
+export interface DocumentObjectVisitContext {
+  document: PooderDocument;
+  surface: Surface;
   surfaceIndex: number;
-  object: EditorObject;
+  object: PooderObject;
   objectIndex: number;
-  parentObject?: EditorGroupObject;
+  parentObject?: GroupObject;
   path: string;
 }
 
-export type EditorDocumentObjectVisitor = (
-  context: EditorDocumentObjectVisitContext,
+export type DocumentObjectVisitor = (
+  context: DocumentObjectVisitContext,
 ) => void;
 
-export function isEditorGroupObject(
-  object: EditorObject,
-): object is EditorGroupObject {
+export function isGroupObject(
+  object: PooderObject,
+): object is GroupObject {
   return object.type === "group";
 }
 
-export function isEditorLeafObject(
-  object: EditorObject,
-): object is EditorLeafObject {
+export function isLeafObject(
+  object: PooderObject,
+): object is LeafObject {
   return object.type !== "group";
 }
 
-export function isEditorBuiltinObjectEffect(
-  effect: EditorObjectEffect,
+export function isBuiltinObjectEffect(
+  effect: ObjectEffect,
 ): effect is CoreGeometryEffect {
   return (
     effect.type === "core.geometry.clip" ||
@@ -416,25 +416,25 @@ export function isEditorBuiltinObjectEffect(
   );
 }
 
-export function isEditorExtensionObjectEffect(
-  effect: EditorObjectEffect,
-): effect is EditorExtensionObjectEffect {
-  return !isEditorBuiltinObjectEffect(effect);
+export function isExtensionObjectEffect(
+  effect: ObjectEffect,
+): effect is ExtensionObjectEffect {
+  return !isBuiltinObjectEffect(effect);
 }
 
-export function cloneEditorDocument(document: EditorDocument): EditorDocument {
-  return JSON.parse(JSON.stringify(document)) as EditorDocument;
+export function cloneDocument(document: PooderDocument): PooderDocument {
+  return JSON.parse(JSON.stringify(document)) as PooderDocument;
 }
 
-export function visitEditorDocumentObjects(
-  document: EditorDocument,
-  visitor: EditorDocumentObjectVisitor,
+export function visitDocumentObjects(
+  document: PooderDocument,
+  visitor: DocumentObjectVisitor,
 ): void {
   document.surfaces.forEach((surface, surfaceIndex) => {
     const visit = (
-      objects: EditorObject[],
+      objects: PooderObject[],
       basePath: string,
-      parentObject?: EditorGroupObject,
+      parentObject?: GroupObject,
     ) => {
       objects.forEach((object, objectIndex) => {
         const path = `${basePath}[${objectIndex}]`;
@@ -447,7 +447,7 @@ export function visitEditorDocumentObjects(
           ...(parentObject ? { parentObject } : {}),
           path,
         });
-        if (isEditorGroupObject(object)) {
+        if (isGroupObject(object)) {
           visit(object.children, `${path}.children`, object);
         }
       });
@@ -456,27 +456,27 @@ export function visitEditorDocumentObjects(
   });
 }
 
-export function getEditorDocumentObjects(
-  document: EditorDocument,
-): EditorObject[] {
-  const objects: EditorObject[] = [];
-  visitEditorDocumentObjects(document, ({ object }) => objects.push(object));
+export function getDocumentObjects(
+  document: PooderDocument,
+): PooderObject[] {
+  const objects: PooderObject[] = [];
+  visitDocumentObjects(document, ({ object }) => objects.push(object));
   return objects;
 }
 
-export function findEditorDocumentObject(
-  document: EditorDocument,
+export function findDocumentObject(
+  document: PooderDocument,
   objectId: string,
-): EditorObject | undefined {
-  let result: EditorObject | undefined;
-  visitEditorDocumentObjects(document, ({ object }) => {
+): PooderObject | undefined {
+  let result: PooderObject | undefined;
+  visitDocumentObjects(document, ({ object }) => {
     if (!result && object.id === objectId) result = object;
   });
   return result;
 }
 
 export function matchesObjectSelector(
-  object: EditorObject,
+  object: PooderObject,
   selector: ObjectSelector,
 ): boolean {
   const ids = normalizeSelectorValues(selector.ids);
@@ -489,24 +489,24 @@ export function matchesObjectSelector(
     : Array.from(tags).every((tag) => objectTags.has(tag));
 }
 
-export function selectEditorDocumentObjects(
-  document: EditorDocument,
+export function selectDocumentObjects(
+  document: PooderDocument,
   selector: ObjectSelector = {},
-): EditorObject[] {
+): PooderObject[] {
   const surfaceIds = normalizeSelectorValues(selector.surfaceIds);
-  const objects: EditorObject[] = [];
-  visitEditorDocumentObjects(document, ({ object, surface }) => {
+  const objects: PooderObject[] = [];
+  visitDocumentObjects(document, ({ object, surface }) => {
     if (surfaceIds && !surfaceIds.has(surface.id)) return;
     if (matchesObjectSelector(object, selector)) objects.push(object);
   });
   return objects;
 }
 
-export function selectOneEditorDocumentObject(
-  document: EditorDocument,
+export function selectOneDocumentObject(
+  document: PooderDocument,
   selector: ObjectSelector,
-): EditorObject | undefined {
-  const objects = selectEditorDocumentObjects(document, selector);
+): PooderObject | undefined {
+  const objects = selectDocumentObjects(document, selector);
   if (objects.length > 1) throw new Error("document-object-selector-ambiguous");
   return objects[0];
 }
@@ -521,8 +521,8 @@ function normalizeSelectorValues(
   return normalized.size ? normalized : undefined;
 }
 
-export function collectEditorDocumentExtensionRequirements(
-  document: EditorDocument,
+export function collectDocumentExtensionRequirements(
+  document: PooderDocument,
 ): string[] {
   return uniqueRequirementIds(document.extension.required);
 }
@@ -536,29 +536,29 @@ function uniqueRequirementIds(values: readonly string[] | undefined): string[] {
   return Array.from(requirements);
 }
 
-export function collectEditorDocumentCapabilityRequirements(
+export function collectDocumentCapabilityRequirements(
   value: unknown,
-  options: EditorDocumentCapabilityCollectionOptions = {},
-): EditorDocumentCapabilityCollectionResult {
-  let document: EditorDocument;
+  options: DocumentCapabilityCollectionOptions = {},
+): DocumentCapabilityCollectionResult {
+  let document: PooderDocument;
   try {
-    document = parseEditorDocument(value);
+    document = parseDocument(value);
   } catch (error) {
     return {
       requirements: [],
       diagnostics:
-        error instanceof EditorDocumentParseError ? error.diagnostics : [],
+        error instanceof DocumentParseError ? error.diagnostics : [],
     };
   }
-  const requirements: EditorDocumentCapabilityRequirement[] = [];
-  const diagnostics: EditorDocumentDiagnostic[] = [];
+  const requirements: DocumentCapabilityRequirement[] = [];
+  const diagnostics: DocumentDiagnostic[] = [];
   const available = options.availableCapabilityIds
     ? new Set(options.availableCapabilityIds)
     : undefined;
-  visitEditorDocumentObjects(document, ({ object, path }) => {
-    if (!isEditorLeafObject(object)) return;
+  visitDocumentObjects(document, ({ object, path }) => {
+    if (!isLeafObject(object)) return;
     object.effects?.forEach((effect, index) => {
-      if (!isEditorExtensionObjectEffect(effect)) return;
+      if (!isExtensionObjectEffect(effect)) return;
       const effectPath = `${path}.effects[${index}]`;
       const capabilityId = options.resolveEffectCapabilityId?.(effect);
       if (!capabilityId) {

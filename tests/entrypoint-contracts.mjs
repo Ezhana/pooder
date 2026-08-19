@@ -16,7 +16,7 @@ const contracts = [
       delete globalThis.document;
       delete globalThis.HTMLCanvasElement;
       const documentModule = await import("./packages/document/dist/index.mjs");
-      if (typeof documentModule.validateEditorDocument !== "function") {
+      if (typeof documentModule.validateDocument !== "function") {
         throw new Error("Document public contract is unavailable.");
       }
     `,

@@ -1,7 +1,7 @@
 # Capability Authoring Guide
 
 Persistent document-object hit testing and activation are declared through
-`EditorObject.interaction`; see [Document Object Interaction](./document-object-interaction.md).
+`PooderObject.interaction`; see [Document Object Interaction](./document-object-interaction.md).
 Capabilities should use transient scenes for session-owned interaction visuals.
 
 Status: P6.S2 documentation
@@ -130,7 +130,7 @@ Document surfaces are translated at the document-core boundary. A capability
 that talks to core services uses `sceneId`, including `SessionScope`,
 `SessionRenderContribution`, RenderIntent subjects, and RenderGraph layers.
 Document-aware code may retain `surfaceId` only while reading or mutating the
-EditorDocument.
+PooderDocument.
 
 Scene export is deliberately one-scene-per-call:
 

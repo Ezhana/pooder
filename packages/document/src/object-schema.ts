@@ -1,16 +1,16 @@
 import type {
   DocumentConstraintSpec,
-  EditorAssetReferenceBinding,
-  EditorDocument,
-  EditorDocumentDiagnostic,
-  EditorObjectBehavior,
-  EditorObjectTrait,
+  AssetReferenceBinding,
+  PooderDocument,
+  DocumentDiagnostic,
+  ObjectBehavior,
+  ObjectTrait,
   JsonValue,
 } from "./index";
 import type { DocumentValueSchemaIssue } from "./extension-schema";
 
 export interface ObjectSchemaContext {
-  document: EditorDocument;
+  document: PooderDocument;
   objectId: string;
   path: string;
 }
@@ -18,7 +18,7 @@ export interface ObjectSchemaContext {
 export interface ObjectTraitDefinition {
   traitType: string;
   validate?(
-    trait: EditorObjectTrait,
+    trait: ObjectTrait,
     context: ObjectSchemaContext,
   ): readonly DocumentValueSchemaIssue[];
 }
@@ -27,17 +27,17 @@ export interface ObjectBehaviorDefinition {
   behaviorType: string;
   capabilityId: string;
   compileInteraction?(
-    behavior: EditorObjectBehavior,
+    behavior: ObjectBehavior,
     context: ObjectSchemaContext,
   ): ObjectBehaviorInteractionSpec | undefined;
   validate?(
-    behavior: EditorObjectBehavior,
+    behavior: ObjectBehavior,
     context: ObjectSchemaContext,
   ): readonly DocumentValueSchemaIssue[];
   collectAssetReferences?(
-    behavior: EditorObjectBehavior,
+    behavior: ObjectBehavior,
     context: ObjectSchemaContext,
-  ): readonly EditorAssetReferenceBinding[];
+  ): readonly AssetReferenceBinding[];
 }
 
 export interface ObjectBehaviorInteractionSpec {
@@ -111,13 +111,13 @@ export class ObjectSchemaRegistry {
   }
 }
 
-export function validateEditorDocumentObjectSchemas(
-  document: EditorDocument,
+export function validateDocumentObjectSchemas(
+  document: PooderDocument,
   registry: ObjectSchemaRegistry,
-): EditorDocumentDiagnostic[] {
-  const diagnostics: EditorDocumentDiagnostic[] = [];
+): DocumentDiagnostic[] {
+  const diagnostics: DocumentDiagnostic[] = [];
   const visitObjects = (
-    objects: EditorDocument["surfaces"][number]["objects"],
+    objects: PooderDocument["surfaces"][number]["objects"],
     path: string,
   ) => {
     objects.forEach((object, objectIndex) => {
@@ -172,7 +172,7 @@ export function validateEditorDocumentObjectSchemas(
 }
 
 function validateInstance<TDefinition>(
-  diagnostics: EditorDocumentDiagnostic[],
+  diagnostics: DocumentDiagnostic[],
   definition: TDefinition | undefined,
   kind: "trait" | "behavior" | "constraint",
   type: string,

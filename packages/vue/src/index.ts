@@ -18,14 +18,14 @@ export type {
   PooderRuntime,
   PooderSessionApi,
 } from "./runtime";
-export type { ActivateEditorSurfaceResult } from "@pooder/document-core";
+export type { ActivateSurfaceResult } from "@pooder/document-core";
 export type {
-  ApplyEditorDocumentResult,
+  ApplyDocumentResult,
   DocumentDraft,
-  EditorDocumentSession,
-  EditorDocumentSessionDerive,
-  EditorDocumentChangeEvent,
-  EditorDocumentMutationResult,
-  EditorDocumentService,
-  OpenEditorDocumentSessionInput,
+  DocumentSession,
+  DocumentSessionDerive,
+  DocumentChangeEvent,
+  DocumentMutationResult,
+  PooderDocumentService,
+  OpenDocumentSessionInput,
 } from "@pooder/document-core";

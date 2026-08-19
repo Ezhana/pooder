@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-A document-driven canvas editing engine. Applications submit a strict `EditorDocument` (v8). Pooder validates it, compiles it into render intents, projects those onto a browser canvas, and exposes reusable editing behavior through **capabilities**. Product toolbars, copy, and workflow orchestration belong to the application, not the engine.
+A document-driven canvas editing engine. Applications submit a strict `PooderDocument` (v8). Pooder validates it, compiles it into render intents, projects those onto a browser canvas, and exposes reusable editing behavior through **capabilities**. Product toolbars, copy, and workflow orchestration belong to the application, not the engine.
 
 Pooder currently lives as a Popecho git submodule (`external/pooder`). Its packages are included through the root workspace glob `external/pooder/packages/*`. You can also install and build from this directory on its own.
 
@@ -10,16 +10,16 @@ Pooder currently lives as a Popecho git submodule (`external/pooder`). Its packa
 
 | Term | Meaning |
 | --- | --- |
-| **EditorDocument** | The only public persistence model. `version` must be `8`. No aliases, migration layer, or v7 runtime. |
+| **PooderDocument** | The only public persistence model. `version` must be `8`. No aliases, migration layer, or v7 runtime. |
 | **Surface** | One document-side face (for example the front). `bounds` is the scene world in millimetres. |
-| **Scene** | The runtime graph. `document-core` maps `EditorSurface.id` to `sceneId`. Core, rendering, and export use `sceneId` exclusively. |
+| **Scene** | The runtime graph. `document-core` maps `Surface.id` to `sceneId`. Core, rendering, and export use `sceneId` exclusively. |
 | **Capability** | Installable reusable behavior: a factory, a typed facade, and optional document schema. Not a toolbar button. |
-| **Session** | Transient workflow state derived from object `behaviors`. It is not written into `EditorDocument`. |
+| **Session** | Transient workflow state derived from object `behaviors`. It is not written into `PooderDocument`. |
 
 Data flow:
 
 ```text
-EditorDocument  ──apply──►  document-core  ──RenderIntent──►  platform-browser (Fabric)
+PooderDocument  ──apply──►  document-core  ──RenderIntent──►  platform-browser (Fabric)
      ▲                         │                                      │
      │                         │ Scene / Geometry / Interaction       │
      └──── mutate / session ◄──┘                                      ▼
@@ -32,7 +32,7 @@ EditorDocument  ──apply──►  document-core  ──RenderIntent──►
 | --- | --- |
 | `@pooder/document` | Runtime-neutral v8 contract: parse, validate, visit. Usable in Node / BFF. Must not depend on DOM, Canvas, or Fabric. |
 | `@pooder/core` | Headless runtime: extension lifecycle, services, scenes, coordinates, commands, sessions, RenderIntent. |
-| `@pooder/document-core` | Bridges the document onto the runtime: `EditorDocumentService`, compilation, surface ↔ scene. |
+| `@pooder/document-core` | Bridges the document onto the runtime: `PooderDocumentService`, compilation, surface ↔ scene. |
 | `@pooder/platform-browser` | Browser host: Fabric adapter, canvas, viewport, export, image resources. |
 | `@pooder/geometry-paper` | Lazily loaded Paper.js geometry backend. Importing the module does not touch the DOM. |
 | `@pooder/vue` | Vue 3 host. The **root entry is SSR-safe**; canvas and tool registration live in `@pooder/vue/editor`. |
@@ -82,9 +82,9 @@ import {
   createCapabilitiesForDocument,
   createExportCapability,
 } from "@pooder/tools";
-import type { EditorDocument } from "@pooder/document";
+import type { PooderDocument } from "@pooder/document";
 
-const document: EditorDocument = {
+const document: PooderDocument = {
   version: 8,
   assets: [],
   extension: { required: [], states: {} },
@@ -138,30 +138,30 @@ if (!result.ok) throw new Error(result.diagnostics[0]?.message ?? "apply failed"
 
 `PooderCanvasHost` registers the Paper geometry backend and attaches browser services (canvas, export, image resources). After that, mutate the document with `documentService.mutate()` / `openSession()`, and switch faces with `runtime.activateSurface(id)`.
 
-Without Vue, construct `new Pooder()` from `@pooder/core`, then call `registerEditorDocumentService` (`@pooder/document-core`) and `attachBrowserHost` (`@pooder/platform-browser`).
+Without Vue, construct `new Pooder()` from `@pooder/core`, then call `registerPooderDocumentService` (`@pooder/document-core`) and `attachBrowserHost` (`@pooder/platform-browser`).
 
 When a BFF or Node process only handles documents, depend on `@pooder/document` alone:
 
 ```ts
-import { parseEditorDocument, validateEditorDocument } from "@pooder/document";
+import { parseDocument, validateDocument } from "@pooder/document";
 
-const document = parseEditorDocument(payload);
-const diagnostics = validateEditorDocument(document);
+const document = parseDocument(payload);
+const diagnostics = validateDocument(document);
 ```
 
-## EditorDocument v8
+## PooderDocument v8
 
 There is one public model. The field set is exact: `version`, `assets`, `extension`, `surfaces`.
 
 ```ts
-interface EditorDocument {
+interface PooderDocument {
   version: 8;
-  assets: EditorAsset[];
+  assets: Asset[];
   extension: {
     required: string[]; // BFF-authored capability / extension ids; never inferred
     states: Record<string, JsonValue>;
   };
-  surfaces: EditorSurface[];
+  surfaces: Surface[];
 }
 ```
 
@@ -174,9 +174,9 @@ Object-tree rules:
 - Tool activation comes from `behaviors`. `interaction` describes selection, manipulation, and constraints only.
 - Clipping to another object is a `core.geometry.clip` effect, not a `contentFit` concern.
 
-`EditorDocumentService.activateSurface(surfaceId)` is the document-facing switch API. It calls `SceneService.setActiveRoot(sceneId)`.
+`PooderDocumentService.activateSurface(surfaceId)` is the document-facing switch API. It calls `SceneService.setActiveRoot(sceneId)`.
 
-The full object-tree contract is in [docs/editor-document-v8-groups.md](./docs/editor-document-v8-groups.md).
+The full object-tree contract is in [docs/pooder-document-v8-groups.md](./docs/pooder-document-v8-groups.md).
 
 ## Capabilities
 
@@ -251,7 +251,7 @@ Publishing uses [changesets](./.changeset/README.md): `pnpm changeset` → `pnpm
 | [docs/tool-package-contract.md](./docs/tool-package-contract.md) | Contract a standalone tool package must satisfy |
 | [docs/document-object-interaction.md](./docs/document-object-interaction.md) | `interaction` vs `behaviors` |
 | [docs/app-workflow-composition.md](./docs/app-workflow-composition.md) | How apps compose dieline / feature / export workflows |
-| [docs/editor-document-v8-groups.md](./docs/editor-document-v8-groups.md) | v8 object tree, inheritance, flatten guarantee |
+| [docs/pooder-document-v8-groups.md](./docs/pooder-document-v8-groups.md) | v8 object tree, inheritance, flatten guarantee |
 
 ## Ownership
 

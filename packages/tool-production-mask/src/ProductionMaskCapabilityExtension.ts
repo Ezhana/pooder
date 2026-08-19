@@ -35,12 +35,12 @@ import {
   type RenderObjectSpec,
 } from "@pooder/core";
 import {
-  resolveEditorDocumentAsset,
-  upsertEditorDocumentAsset,
-  type EditorDocument,
+  resolveDocumentAsset,
+  upsertDocumentAsset,
+  type PooderDocument,
 } from "@pooder/document";
 
-type EditorImageResource = ImageResourceDescriptor;
+type ImageResource = ImageResourceDescriptor;
 import {
   IMAGE_MASK_CAPABILITY_ID,
   type ImageMaskCapabilityApi,
@@ -159,7 +159,7 @@ const normalizeSettings = (
     : {}),
 });
 
-const resourceLocation = (resource: EditorImageResource | undefined): string =>
+const resourceLocation = (resource: ImageResource | undefined): string =>
   resource
     ? resource.kind === "data-url"
       ? resource.dataUrl
@@ -167,7 +167,7 @@ const resourceLocation = (resource: EditorImageResource | undefined): string =>
     : "";
 
 const listDescriptors = (
-  document: EditorDocument | null,
+  document: PooderDocument | null,
 ): ProductionMaskDescriptor[] => {
   if (!document) return [];
   const state = document.extension.states[
@@ -196,7 +196,7 @@ const listDescriptors = (
 };
 
 const replaceMaskProduction = (
-  document: EditorDocument,
+  document: PooderDocument,
   maskId: string,
   settings: ProductionMaskSettings,
 ): boolean => {
@@ -227,9 +227,9 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   metadata = { name: "ProductionMaskCapabilityExtension" };
   activation: ExtensionActivationSpec;
 
-  private document: EditorDocument | null = null;
+  private document: PooderDocument | null = null;
   private documentController: ProductionMaskDocumentController | null = null;
-  private readonly pendingAssets = new Map<string, EditorImageResource>();
+  private readonly pendingAssets = new Map<string, ImageResource>();
   private selectedMaskId: string | null = null;
   private previewMaskBySource = new Map<string, string>();
   private pendingPreviewMaskBySource = new Map<string, Promise<string>>();
@@ -379,7 +379,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   }
 
   private syncDocument(
-    document: EditorDocument,
+    document: PooderDocument,
     controller: ProductionMaskDocumentController,
   ): void {
     this.document = clone(document);
@@ -504,7 +504,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
   }
 
   private setSource(
-    resource: EditorImageResource,
+    resource: ImageResource,
   ): ProductionMaskOperationResult {
     const sourceUrl = resourceLocation(resource);
     if (!sourceUrl) return { ok: false, reason: "source-empty" };
@@ -663,7 +663,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
               ? { intrinsicSize: clone(resource.intrinsicSize) }
               : {}),
           };
-          upsertEditorDocumentAsset(document, asset);
+          upsertDocumentAsset(document, asset);
         }
       }
       if (
@@ -846,7 +846,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
     const pending = this.pendingAssets.get(source.assetId);
     if (pending) return resourceLocation(pending);
     const asset = this.document
-      ? resolveEditorDocumentAsset(
+      ? resolveDocumentAsset(
           this.document,
           { kind: "asset", assetId: source.assetId },
           "image",
@@ -860,7 +860,7 @@ export class ProductionMaskCapabilityExtension implements ExtensionDefinition {
 
   private stageMaskAsset(
     maskId: string,
-    resource: EditorImageResource,
+    resource: ImageResource,
   ): string {
     const assetId = `${maskId}.source`;
     this.pendingAssets.set(assetId, clone(resource));

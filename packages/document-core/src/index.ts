@@ -56,52 +56,52 @@ import {
 import {
   EffectSchemaRegistry,
   DocumentExtensionRegistry,
-  cloneEditorDocument,
-  createEditorDocumentAssetId,
-  reclaimOrphanedEditorDocumentAssets,
-  resolveEditorDocumentAsset,
-  setEditorImageObjectSource,
-  upsertEditorDocumentAsset,
-  collectEditorDocumentCapabilityRequirements,
-  findEditorDocumentObject,
-  isEditorBuiltinObjectEffect,
-  isEditorGroupObject,
-  isEditorLeafObject,
-  isEditorExtensionObjectEffect,
-  parseEditorDocument,
+  cloneDocument,
+  createDocumentAssetId,
+  reclaimOrphanedDocumentAssets,
+  resolveDocumentAsset,
+  setImageObjectSource,
+  upsertDocumentAsset,
+  collectDocumentCapabilityRequirements,
+  findDocumentObject,
+  isBuiltinObjectEffect,
+  isGroupObject,
+  isLeafObject,
+  isExtensionObjectEffect,
+  parseDocument,
   surfaceContentRect,
-  selectEditorDocumentObjects,
-  validateEditorDocument,
-  validateEditorDocumentEffectSchemas,
-  validateEditorDocumentExtensions,
-  validateEditorDocumentObjectSchemas,
-  validateEditorDocumentAssetReferences,
-  type EditorDocument,
+  selectDocumentObjects,
+  validateDocument,
+  validateDocumentEffectSchemas,
+  validateDocumentExtensions,
+  validateDocumentObjectSchemas,
+  validateDocumentAssetReferences,
+  type PooderDocument,
   type AffineMatrix,
-  type EditorDocumentCapabilityCollectionOptions,
-  type EditorDocumentDiagnostic,
-  type EditorDocumentEffectCapabilityResolver,
-  type EditorDocumentValidationOptions,
+  type DocumentCapabilityCollectionOptions,
+  type DocumentDiagnostic,
+  type DocumentEffectCapabilityResolver,
+  type DocumentValidationOptions,
   type DocumentInteractionSpec,
-  type EditorExtensionObjectEffect,
-  type EditorGroupObject,
-  type EditorImageObject,
-  type EditorImageSlotBehaviorConfig,
-  type EditorImageAsset,
-  type EditorAssetDataSource,
-  type EditorObject,
-  type EditorObjectEffect,
-  type EditorObjectTrait,
-  type EditorSurface,
+  type ExtensionObjectEffect,
+  type GroupObject,
+  type ImageObject,
+  type ImageSlotBehaviorConfig,
+  type ImageAsset,
+  type AssetDataSource,
+  type PooderObject,
+  type ObjectEffect,
+  type ObjectTrait,
+  type Surface,
   type DocumentExtensionContribution,
   type ObjectSchemaContext,
   type ObjectSchemaRegistry,
   type ObjectBehaviorInteractionSpec,
   type ObjectSource,
-  type EditorLeafObject,
-  type EditorPathObject,
-  type EditorShapeObject,
-  type EditorShapeContent,
+  type LeafObject,
+  type PathObject,
+  type ShapeObject,
+  type ShapeContent,
   type ObjectSelector,
 } from "@pooder/document";
 
@@ -128,15 +128,15 @@ export interface ResolvedVisual {
 }
 
 export interface GeometryResolver {
-  resolve(object: EditorPathObject | EditorShapeObject): ResolvedVisual | null;
+  resolve(object: PathObject | ShapeObject): ResolvedVisual | null;
   hitTest(
-    object: EditorPathObject | EditorShapeObject,
+    object: PathObject | ShapeObject,
     point: GeometryPoint,
   ): boolean;
 }
 
 export class DefaultGeometryResolver implements GeometryResolver {
-  resolve(object: EditorPathObject | EditorShapeObject): ResolvedVisual | null {
+  resolve(object: PathObject | ShapeObject): ResolvedVisual | null {
     if (object.type === "path") {
       const source = object.source;
       const pathData = source.content.pathData.trim();
@@ -163,7 +163,7 @@ export class DefaultGeometryResolver implements GeometryResolver {
   }
 
   hitTest(
-    object: EditorPathObject | EditorShapeObject,
+    object: PathObject | ShapeObject,
     point: GeometryPoint,
   ): boolean {
     const visual = this.resolve(object);
@@ -177,7 +177,7 @@ export class SourceResolver {
     private readonly geometryResolver: GeometryResolver = new DefaultGeometryResolver(),
   ) {}
 
-  resolve(object: EditorLeafObject): ResolvedVisual | null {
+  resolve(object: LeafObject): ResolvedVisual | null {
     switch (object.type) {
       case "image":
         return null;
@@ -191,12 +191,12 @@ export class SourceResolver {
 }
 
 export function resolveObjectSource(
-  object: EditorLeafObject,
+  object: LeafObject,
 ): ResolvedVisual | null {
   return new SourceResolver().resolve(object);
 }
 
-export interface EditorDocumentRuntime {
+export interface PooderDocumentRuntime {
   readonly extensions?: {
     listDocumentContributions(): unknown[];
   };
@@ -217,47 +217,47 @@ export interface EditorDocumentRuntime {
   };
 }
 
-export interface EditorDocumentPublication {
+export interface DocumentPublication {
   /** Must be synchronous and non-throwing. All fallible work belongs in prepare. */
   publish(): void;
 }
 
-export interface EditorDocumentPublicationParticipant {
+export interface DocumentPublicationParticipant {
   prepare(context: {
-    runtime: EditorDocumentRuntime;
-    document: EditorDocument;
+    runtime: PooderDocumentRuntime;
+    document: PooderDocument;
   }):
-    | EditorDocumentPublication
+    | DocumentPublication
     | void
-    | Promise<EditorDocumentPublication | void>;
+    | Promise<DocumentPublication | void>;
 }
 
-export interface ApplyEditorDocumentOptions {
+export interface ApplyDocumentOptions {
   effectSchemaRegistry?: EffectSchemaRegistry;
-  resolveEffectCapabilityId?: EditorDocumentEffectCapabilityResolver;
-  validators?: EditorDocumentValidationOptions["validators"];
-  publicationParticipants?: readonly EditorDocumentPublicationParticipant[];
+  resolveEffectCapabilityId?: DocumentEffectCapabilityResolver;
+  validators?: DocumentValidationOptions["validators"];
+  publicationParticipants?: readonly DocumentPublicationParticipant[];
   afterPublish?: (
-    runtime: EditorDocumentRuntime,
-    document: EditorDocument,
+    runtime: PooderDocumentRuntime,
+    document: PooderDocument,
   ) => Promise<void> | void;
 }
 
-export interface ApplyEditorDocumentResult {
+export interface ApplyDocumentResult {
   ok: boolean;
-  document: EditorDocument;
-  diagnostics: EditorDocumentDiagnostic[];
-  surfaces: EditorSurface[];
+  document: PooderDocument;
+  diagnostics: DocumentDiagnostic[];
+  surfaces: Surface[];
   appliedSurfaceIds: string[];
 }
 
-export type EditorDocumentSource = "committed" | "working";
+export type DocumentSource = "committed" | "working";
 
-export type EditorDocumentMutationCallback = (
-  document: EditorDocument,
-) => EditorDocument | void | Promise<EditorDocument | void>;
+export type DocumentMutationCallback = (
+  document: PooderDocument,
+) => PooderDocument | void | Promise<PooderDocument | void>;
 
-export type EditorDocumentMutationFailureReason =
+export type DocumentMutationFailureReason =
   | "document-not-found"
   | "draft-inactive"
   | "parent-not-found"
@@ -268,42 +268,42 @@ export type EditorDocumentMutationFailureReason =
   | "mutation-failed"
   | "validation-failed";
 
-export type EditorDocumentMutationResult =
-  | { ok: true; document: EditorDocument }
+export type DocumentMutationResult =
+  | { ok: true; document: PooderDocument }
   | {
       ok: false;
-      reason: EditorDocumentMutationFailureReason;
-      diagnostics: EditorDocumentDiagnostic[];
+      reason: DocumentMutationFailureReason;
+      diagnostics: DocumentDiagnostic[];
     };
 
-export interface EditorDocumentChangeEvent {
+export interface DocumentChangeEvent {
   type: "replace" | "mutate" | "commit" | "rollback";
-  committed: EditorDocument | null;
-  working: EditorDocument | null;
+  committed: PooderDocument | null;
+  working: PooderDocument | null;
   draftId?: string;
 }
 
 export interface DocumentDraftOptions {
-  source?: EditorDocumentSource;
+  source?: DocumentSource;
 }
 
 export interface DocumentDraft {
   readonly id: string;
-  export(): EditorDocument | null;
+  export(): PooderDocument | null;
   mutate(
-    callback: EditorDocumentMutationCallback,
-  ): Promise<EditorDocumentMutationResult>;
-  commit(): Promise<EditorDocumentMutationResult>;
-  rollback(): Promise<EditorDocumentMutationResult>;
+    callback: DocumentMutationCallback,
+  ): Promise<DocumentMutationResult>;
+  commit(): Promise<DocumentMutationResult>;
+  rollback(): Promise<DocumentMutationResult>;
 }
 
-export type EditorDocumentSessionDerive<TDraft> = (
+export type DocumentSessionDerive<TDraft> = (
   draft: Readonly<TDraft>,
   /** Fresh clone of the committed document captured when the session opened. */
-  document: EditorDocument,
-) => EditorDocument | void | Promise<EditorDocument | void>;
+  document: PooderDocument,
+) => PooderDocument | void | Promise<PooderDocument | void>;
 
-export interface OpenEditorDocumentSessionInput<TDraft> {
+export interface OpenDocumentSessionInput<TDraft> {
   /** Stable application id. Generated when omitted. */
   sessionId?: string;
   /** Logical transaction scope. Document sessions with the same scope conflict. */
@@ -311,10 +311,10 @@ export interface OpenEditorDocumentSessionInput<TDraft> {
     channel?: string | null;
   };
   initialDraft: TDraft;
-  derive: EditorDocumentSessionDerive<TDraft>;
+  derive: DocumentSessionDerive<TDraft>;
   validate?(
     draft: Readonly<TDraft>,
-    working: EditorDocument,
+    working: PooderDocument,
   ):
     | boolean
     | SessionValidationResult
@@ -323,43 +323,43 @@ export interface OpenEditorDocumentSessionInput<TDraft> {
   concurrency?: "reject" | "replace";
 }
 
-export interface EditorDocumentSession<TDraft> {
+export interface DocumentSession<TDraft> {
   readonly id: string;
   readonly scope: SessionScope;
   readonly draft: TDraft;
   update(
     update: TDraft | ((draft: TDraft) => TDraft),
-  ): Promise<EditorDocumentMutationResult>;
+  ): Promise<DocumentMutationResult>;
   validate(): Promise<SessionValidationResult>;
-  commit(): Promise<EditorDocumentMutationResult>;
-  rollback(): Promise<EditorDocumentMutationResult>;
+  commit(): Promise<DocumentMutationResult>;
+  rollback(): Promise<DocumentMutationResult>;
 }
 
-export interface EditorDocumentObjectInsertOptions {
+export interface DocumentObjectInsertOptions {
   index?: number;
 }
 
-export interface EditorDocumentSelectorMutationOptions {
+export interface DocumentSelectorMutationOptions {
   expectedCount?: number;
 }
 
-export interface EditorDocumentImageResourceUpdate {
-  source?: EditorAssetDataSource | null;
+export interface DocumentImageResourceUpdate {
+  source?: AssetDataSource | null;
   mimeType?: string;
-  intrinsicSize?: EditorImageAsset["intrinsicSize"];
+  intrinsicSize?: ImageAsset["intrinsicSize"];
   visible?: boolean;
 }
 
-export interface EditorDocumentManipulationCommit {
+export interface DocumentManipulationCommit {
   subjectId: string;
   sceneTransformPatch: SceneTransformPatch;
   /** Scene-space fallback for matrix decomposition during resize/rotate. */
   frame?: { left: number; top: number; width: number; height: number };
   rotation?: number;
-  parentMatrix?: EditorDocumentMatrix;
+  parentMatrix?: DocumentMatrix;
 }
 
-export type EditorDocumentMatrix = readonly [
+export type DocumentMatrix = readonly [
   number,
   number,
   number,
@@ -368,83 +368,83 @@ export type EditorDocumentMatrix = readonly [
   number,
 ];
 
-export type ActivateEditorSurfaceResult =
+export type ActivateSurfaceResult =
   | { ok: true; surfaceId: string }
   | {
       ok: false;
       reason: Extract<
-        EditorDocumentMutationFailureReason,
+        DocumentMutationFailureReason,
         "document-not-found" | "surface-not-found"
       >;
     };
 
-export interface EditorDocumentService extends Service {
-  apply(document: unknown): Promise<ApplyEditorDocumentResult>;
-  export(source?: EditorDocumentSource): EditorDocument | null;
-  activateSurface(surfaceId: string): Promise<ActivateEditorSurfaceResult>;
+export interface PooderDocumentService extends Service {
+  apply(document: unknown): Promise<ApplyDocumentResult>;
+  export(source?: DocumentSource): PooderDocument | null;
+  activateSurface(surfaceId: string): Promise<ActivateSurfaceResult>;
   getActiveSurfaceId(): string | null;
   onActiveSurfaceChange(
     listener: (event: { surfaceId: string | null }) => void,
   ): Disposable;
   mutate(
-    callback: EditorDocumentMutationCallback,
-  ): Promise<EditorDocumentMutationResult>;
+    callback: DocumentMutationCallback,
+  ): Promise<DocumentMutationResult>;
   beginDraft(options?: DocumentDraftOptions): Promise<DocumentDraft>;
   openSession<TDraft>(
-    input: OpenEditorDocumentSessionInput<TDraft>,
-  ): Promise<EditorDocumentSession<TDraft>>;
+    input: OpenDocumentSessionInput<TDraft>,
+  ): Promise<DocumentSession<TDraft>>;
   getSession<TDraft = unknown>(
     sessionId: string,
-  ): EditorDocumentSession<TDraft> | undefined;
-  onDidChange(listener: (event: EditorDocumentChangeEvent) => void): Disposable;
+  ): DocumentSession<TDraft> | undefined;
+  onDidChange(listener: (event: DocumentChangeEvent) => void): Disposable;
   insertObject(
     surfaceId: string,
     parentId: string | null,
-    object: EditorObject,
-    options?: EditorDocumentObjectInsertOptions,
-  ): Promise<EditorDocumentMutationResult>;
+    object: PooderObject,
+    options?: DocumentObjectInsertOptions,
+  ): Promise<DocumentMutationResult>;
   updateObject(
     objectId: string,
-    update: (current: Readonly<EditorObject>) => EditorObject,
-  ): Promise<EditorDocumentMutationResult>;
-  removeObject(objectId: string): Promise<EditorDocumentMutationResult>;
+    update: (current: Readonly<PooderObject>) => PooderObject,
+  ): Promise<DocumentMutationResult>;
+  removeObject(objectId: string): Promise<DocumentMutationResult>;
   selectObjects(
     selector: ObjectSelector,
-    source?: EditorDocumentSource,
-  ): EditorObject[];
+    source?: DocumentSource,
+  ): PooderObject[];
   selectOneObject(
     selector: ObjectSelector,
-    source?: EditorDocumentSource,
-  ): EditorObject | undefined;
+    source?: DocumentSource,
+  ): PooderObject | undefined;
   updateObjects(
     selector: ObjectSelector,
-    update: (current: Readonly<EditorObject>) => EditorObject,
-    options?: EditorDocumentSelectorMutationOptions,
-  ): Promise<EditorDocumentMutationResult>;
+    update: (current: Readonly<PooderObject>) => PooderObject,
+    options?: DocumentSelectorMutationOptions,
+  ): Promise<DocumentMutationResult>;
   updateImageResources(
     selector: ObjectSelector,
-    update: EditorDocumentImageResourceUpdate,
-    options?: EditorDocumentSelectorMutationOptions,
-  ): Promise<EditorDocumentMutationResult>;
+    update: DocumentImageResourceUpdate,
+    options?: DocumentSelectorMutationOptions,
+  ): Promise<DocumentMutationResult>;
   validateObjectConstraints(
     objectId: string,
-    source?: EditorDocumentSource,
+    source?: DocumentSource,
   ): SessionValidationResult;
   commitManipulation(
-    manipulation: EditorDocumentManipulationCommit,
-  ): Promise<EditorDocumentMutationResult>;
+    manipulation: DocumentManipulationCommit,
+  ): Promise<DocumentMutationResult>;
 }
 
-export const EDITOR_DOCUMENT_SERVICE =
-  createServiceToken<EditorDocumentService>("EditorDocumentService");
+export const POODER_DOCUMENT_SERVICE =
+  createServiceToken<PooderDocumentService>("PooderDocumentService");
 
 interface EffectContext {
-  surface: EditorSurface;
-  object?: EditorObject;
+  surface: Surface;
+  object?: PooderObject;
 }
 
 interface EffectEntry {
-  effect: EditorExtensionObjectEffect;
+  effect: ExtensionObjectEffect;
   context: EffectContext;
   path: string;
 }
@@ -457,39 +457,39 @@ const EFFECT_PHASE_ORDER = {
   export: 4,
 } as const;
 
-export async function applyEditorDocument(
-  runtime: EditorDocumentRuntime,
+export async function applyDocument(
+  runtime: PooderDocumentRuntime,
   value: unknown,
-  options: ApplyEditorDocumentOptions = {},
-): Promise<ApplyEditorDocumentResult> {
-  return applyEditorDocumentInternal(runtime, value, options, "replace");
+  options: ApplyDocumentOptions = {},
+): Promise<ApplyDocumentResult> {
+  return applyDocumentInternal(runtime, value, options, "replace");
 }
 
-interface PreparedEditorDocumentApplication {
-  result: ApplyEditorDocumentResult;
+interface PreparedDocumentApplication {
+  result: ApplyDocumentResult;
   sceneBoundsPublication: PreparedSceneBoundsPublication;
   renderIntentPublication: PreparedRenderIntentDocumentPublication;
-  participantPublications: EditorDocumentPublication[];
+  participantPublications: DocumentPublication[];
   renderIntentService: RenderIntentService;
   sceneBoundsService: SceneBoundsService;
   sceneService: SceneService;
 }
 
-interface EditorDocumentPublicationBoundary {
-  publishDocumentState?(document: EditorDocument): void;
+interface DocumentPublicationBoundary {
+  publishDocumentState?(document: PooderDocument): void;
   notifyDocumentPublished?(): void;
 }
 
-async function applyEditorDocumentInternal(
-  runtime: EditorDocumentRuntime,
+async function applyDocumentInternal(
+  runtime: PooderDocumentRuntime,
   value: unknown,
-  options: ApplyEditorDocumentOptions,
+  options: ApplyDocumentOptions,
   renderIntentMode: "replace" | "update",
-  boundary: EditorDocumentPublicationBoundary = {},
-): Promise<ApplyEditorDocumentResult> {
-  let prepared: PreparedEditorDocumentApplication | ApplyEditorDocumentResult;
+  boundary: DocumentPublicationBoundary = {},
+): Promise<ApplyDocumentResult> {
+  let prepared: PreparedDocumentApplication | ApplyDocumentResult;
   try {
-    prepared = await prepareEditorDocumentApplication(
+    prepared = await prepareDocumentApplication(
       runtime,
       value,
       options,
@@ -506,7 +506,7 @@ async function applyEditorDocumentInternal(
   if (!("renderIntentPublication" in prepared)) return prepared;
 
   try {
-    publishEditorDocumentApplication(runtime, prepared, boundary);
+    publishDocumentApplication(runtime, prepared, boundary);
   } catch (error) {
     return createResult(
       false,
@@ -522,19 +522,19 @@ async function applyEditorDocumentInternal(
   try {
     await options.afterPublish?.(runtime, prepared.result.document);
   } catch (error) {
-    console.error("EditorDocument afterPublish notification failed.", error);
+    console.error("PooderDocument afterPublish notification failed.", error);
   }
   return prepared.result;
 }
 
-async function prepareEditorDocumentApplication(
-  runtime: EditorDocumentRuntime,
+async function prepareDocumentApplication(
+  runtime: PooderDocumentRuntime,
   value: unknown,
-  options: ApplyEditorDocumentOptions,
+  options: ApplyDocumentOptions,
   renderIntentMode: "replace" | "update",
-): Promise<PreparedEditorDocumentApplication | ApplyEditorDocumentResult> {
+): Promise<PreparedDocumentApplication | ApplyDocumentResult> {
   const validationOptions = toValidationOptions(options);
-  const documentSchemaDiagnostics = validateEditorDocument(
+  const documentSchemaDiagnostics = validateDocument(
     value,
     validationOptions,
   );
@@ -546,14 +546,14 @@ async function prepareEditorDocumentApplication(
       [],
     );
   }
-  const document = parseEditorDocument(value);
+  const document = parseDocument(value);
   const extensionRegistry = createRuntimeDocumentExtensionRegistry(runtime);
   const effectSchemaRegistry = mergeEffectSchemaRegistries(
     extensionRegistry.createEffectSchemaRegistry(),
     options.effectSchemaRegistry,
   );
   const collectionOptions = toCollectionOptions(options, effectSchemaRegistry);
-  const extensionDiagnostics = validateEditorDocumentExtensions(
+  const extensionDiagnostics = validateDocumentExtensions(
     value,
     extensionRegistry,
   );
@@ -561,18 +561,18 @@ async function prepareEditorDocumentApplication(
     return createResult(false, document, extensionDiagnostics, []);
   }
   const objectSchemaRegistry = extensionRegistry.createObjectSchemaRegistry();
-  const objectSchemaDiagnostics = validateEditorDocumentObjectSchemas(
+  const objectSchemaDiagnostics = validateDocumentObjectSchemas(
     document,
     objectSchemaRegistry,
   );
   if (hasErrors(objectSchemaDiagnostics)) {
     return createResult(false, document, objectSchemaDiagnostics, []);
   }
-  const effectSchemaDiagnostics = validateEditorDocumentEffectSchemas(
+  const effectSchemaDiagnostics = validateDocumentEffectSchemas(
     value,
     effectSchemaRegistry,
   );
-  const assetReferenceDiagnostics = validateEditorDocumentAssetReferences(
+  const assetReferenceDiagnostics = validateDocumentAssetReferences(
     document,
     { extensionRegistry },
   );
@@ -587,7 +587,7 @@ async function prepareEditorDocumentApplication(
     return createResult(false, document, diagnostics, []);
   }
 
-  const capabilityResult = collectEditorDocumentCapabilityRequirements(
+  const capabilityResult = collectDocumentCapabilityRequirements(
     document,
     {
       ...collectionOptions,
@@ -605,21 +605,21 @@ async function prepareEditorDocumentApplication(
 
   const sceneBoundsService = runtime.services.getOrThrow<SceneBoundsService>(
     SCENE_BOUNDS_SERVICE,
-    "SceneBoundsService is required to apply an EditorDocument.",
+    "SceneBoundsService is required to apply an PooderDocument.",
   );
   const sceneService = runtime.services.getOrThrow<SceneService>(
     SCENE_SERVICE,
-    "SceneService is required to apply an EditorDocument.",
+    "SceneService is required to apply an PooderDocument.",
   );
 
   const renderIntentService = runtime.services.getOrThrow<RenderIntentService>(
     RENDER_INTENT_SERVICE,
-    "RenderIntentService is required to apply an EditorDocument.",
+    "RenderIntentService is required to apply an PooderDocument.",
   );
   const compilerRegistry =
     runtime.services.getOrThrow<RenderIntentCompilerRegistryService>(
       RENDER_INTENT_COMPILER_REGISTRY_SERVICE,
-      "RenderIntentCompilerRegistryService is required to apply an EditorDocument.",
+      "RenderIntentCompilerRegistryService is required to apply an PooderDocument.",
     );
   const resolvedImages = await resolveDocumentImageResources(runtime, document);
   const intentDrafts = createBaseRenderIntentDrafts(
@@ -687,7 +687,7 @@ async function prepareEditorDocumentApplication(
     mergeResult.drafts,
     renderIntentMode,
   );
-  const participantPublications: EditorDocumentPublication[] = [];
+  const participantPublications: DocumentPublication[] = [];
   for (const contribution of extensionRegistry.list()) {
     const state = document.extension.states[contribution.id];
     if (state === undefined || !contribution.preparePublication) continue;
@@ -743,10 +743,10 @@ async function prepareEditorDocumentApplication(
   };
 }
 
-function publishEditorDocumentApplication(
-  _runtime: EditorDocumentRuntime,
-  prepared: PreparedEditorDocumentApplication,
-  boundary: EditorDocumentPublicationBoundary,
+function publishDocumentApplication(
+  _runtime: PooderDocumentRuntime,
+  prepared: PreparedDocumentApplication,
+  boundary: DocumentPublicationBoundary,
 ): void {
   prepared.sceneBoundsService.assertImportBoundsPublicationCurrent(
     prepared.sceneBoundsPublication,
@@ -771,7 +771,7 @@ function publishEditorDocumentApplication(
     try {
       publication.publish();
     } catch (error) {
-      console.error("EditorDocument publication participant failed.", error);
+      console.error("PooderDocument publication participant failed.", error);
     }
   });
   notifyPublication("scene bounds", () =>
@@ -814,18 +814,18 @@ function notifyPublication(label: string, notify: () => void): void {
   try {
     notify();
   } catch (error) {
-    console.error(`EditorDocument ${label} notification failed.`, error);
+    console.error(`PooderDocument ${label} notification failed.`, error);
   }
 }
 
-export class DefaultEditorDocumentService implements EditorDocumentService {
-  private committedDocument: EditorDocument | null = null;
-  private workingDocument: EditorDocument | null = null;
+export class DefaultPooderDocumentService implements PooderDocumentService {
+  private committedDocument: PooderDocument | null = null;
+  private workingDocument: PooderDocument | null = null;
   private activeDraftId: string | null = null;
-  private activeDraftSnapshot: EditorDocument | null = null;
+  private activeDraftSnapshot: PooderDocument | null = null;
   private draftSequence = 0;
   private readonly listeners = new Set<
-    (event: EditorDocumentChangeEvent) => void
+    (event: DocumentChangeEvent) => void
   >();
   private operationQueue: Promise<void> = Promise.resolve();
   private manipulationSubscription?: { dispose(): void };
@@ -833,13 +833,13 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private documentGeometrySubscription?: { dispose(): void };
   private readonly documentSessions = new Map<
     string,
-    EditorDocumentSession<unknown>
+    DocumentSession<unknown>
   >();
   private sessionSequence = 0;
 
   constructor(
-    private readonly runtime: EditorDocumentRuntime,
-    private readonly options: ApplyEditorDocumentOptions = {},
+    private readonly runtime: PooderDocumentRuntime,
+    private readonly options: ApplyDocumentOptions = {},
   ) {}
 
   init(context: ServiceContext): void {
@@ -877,12 +877,12 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     this.listeners.clear();
   }
 
-  async apply(value: unknown): Promise<ApplyEditorDocumentResult> {
+  async apply(value: unknown): Promise<ApplyDocumentResult> {
     return this.enqueue(async () => {
       return this.applyDocumentToRuntime(value, "replace", {
         publishDocumentState: (document) => {
-          this.committedDocument = cloneEditorDocument(document);
-          this.workingDocument = cloneEditorDocument(document);
+          this.committedDocument = cloneDocument(document);
+          this.workingDocument = cloneDocument(document);
           this.activeDraftId = null;
           this.activeDraftSnapshot = null;
         },
@@ -891,15 +891,15 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     });
   }
 
-  export(source: EditorDocumentSource = "committed"): EditorDocument | null {
+  export(source: DocumentSource = "committed"): PooderDocument | null {
     const document =
       source === "working" ? this.workingDocument : this.committedDocument;
-    return document ? cloneEditorDocument(document) : null;
+    return document ? cloneDocument(document) : null;
   }
 
   async activateSurface(
     surfaceId: string,
-  ): Promise<ActivateEditorSurfaceResult> {
+  ): Promise<ActivateSurfaceResult> {
     return this.enqueue(async () => this.activateSurfaceSync(surfaceId));
   }
 
@@ -922,8 +922,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   }
 
   async mutate(
-    callback: EditorDocumentMutationCallback,
-  ): Promise<EditorDocumentMutationResult> {
+    callback: DocumentMutationCallback,
+  ): Promise<DocumentMutationResult> {
     return this.enqueue(() =>
       this.mutateWorking(callback, this.activeDraftId ?? undefined),
     );
@@ -940,8 +940,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       if (!source) throw new Error("Cannot begin a draft without a document.");
       const draftId = `document-draft-${++this.draftSequence}`;
       this.activeDraftId = draftId;
-      this.activeDraftSnapshot = cloneEditorDocument(source);
-      this.workingDocument = cloneEditorDocument(source);
+      this.activeDraftSnapshot = cloneDocument(source);
+      this.workingDocument = cloneDocument(source);
       return {
         id: draftId,
         export: () =>
@@ -955,40 +955,40 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   }
 
   async openSession<TDraft>(
-    input: OpenEditorDocumentSessionInput<TDraft>,
-  ): Promise<EditorDocumentSession<TDraft>> {
+    input: OpenDocumentSessionInput<TDraft>,
+  ): Promise<DocumentSession<TDraft>> {
     const sessionId =
       normalizeObjectId(input.sessionId) ||
       `document-session-${++this.sessionSequence}`;
     const existing = this.documentSessions.get(sessionId);
-    if (existing) return existing as EditorDocumentSession<TDraft>;
+    if (existing) return existing as DocumentSession<TDraft>;
 
     const sessionService = this.runtime.services.getOrThrow<SessionService>(
       SESSION_SERVICE,
-      "SessionService is required to open an editor document session.",
+      "SessionService is required to open a document session.",
     );
     const sessionSnapshot = this.export("committed");
     if (!sessionSnapshot) {
       throw new Error(
-        "Cannot open an editor document session without a document.",
+        "Cannot open a document session without a document.",
       );
     }
     const scope: SessionScope = {
       sceneId: input.scope?.sceneId ?? null,
       subjectId: input.scope?.subjectId ?? null,
       channel: input.scope?.channel ?? "document",
-      groupId: "editor-document",
+      groupId: "pooder-document",
     };
     let documentDraft: DocumentDraft | undefined;
-    let rollbackResult: EditorDocumentMutationResult | undefined;
+    let rollbackResult: DocumentMutationResult | undefined;
 
     const handle = await sessionService.open<
       TDraft,
-      EditorDocumentMutationResult
+      DocumentMutationResult
     >({
       descriptor: {
         sessionId,
-        ownerId: "editor-document-service",
+        ownerId: "pooder-document-service",
         scope,
         interactionMode: "exclusive",
         leavePolicy: "block",
@@ -1001,12 +1001,12 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
           const result = await documentDraft.mutate(() =>
             input.derive(
               context.getDraft(),
-              cloneEditorDocument(sessionSnapshot),
+              cloneDocument(sessionSnapshot),
             ),
           );
           if (!result.ok) {
             await documentDraft.rollback();
-            throw new EditorDocumentSessionMutationError(result);
+            throw new DocumentSessionMutationError(result);
           }
         },
         validate: async (context) => {
@@ -1016,19 +1016,19 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         },
         commit: async () => {
           const result = await requireDocumentDraft(documentDraft).commit();
-          if (!result.ok) throw new EditorDocumentSessionMutationError(result);
+          if (!result.ok) throw new DocumentSessionMutationError(result);
           return result;
         },
         rollback: async () => {
           rollbackResult = await requireDocumentDraft(documentDraft).rollback();
           if (!rollbackResult.ok) {
-            throw new EditorDocumentSessionMutationError(rollbackResult);
+            throw new DocumentSessionMutationError(rollbackResult);
           }
         },
         cancel: async () => {
           rollbackResult = await requireDocumentDraft(documentDraft).rollback();
           if (!rollbackResult.ok) {
-            throw new EditorDocumentSessionMutationError(rollbackResult);
+            throw new DocumentSessionMutationError(rollbackResult);
           }
         },
       },
@@ -1044,21 +1044,21 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     );
     this.documentSessions.set(
       sessionId,
-      session as EditorDocumentSession<unknown>,
+      session as DocumentSession<unknown>,
     );
     return session;
   }
 
   getSession<TDraft = unknown>(
     sessionId: string,
-  ): EditorDocumentSession<TDraft> | undefined {
+  ): DocumentSession<TDraft> | undefined {
     return this.documentSessions.get(normalizeObjectId(sessionId)) as
-      | EditorDocumentSession<TDraft>
+      | DocumentSession<TDraft>
       | undefined;
   }
 
   onDidChange(
-    listener: (event: EditorDocumentChangeEvent) => void,
+    listener: (event: DocumentChangeEvent) => void,
   ): Disposable {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };
@@ -1067,9 +1067,9 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   insertObject(
     surfaceId: string,
     parentId: string | null,
-    object: EditorObject,
-    options: EditorDocumentObjectInsertOptions = {},
-  ): Promise<EditorDocumentMutationResult> {
+    object: PooderObject,
+    options: DocumentObjectInsertOptions = {},
+  ): Promise<DocumentMutationResult> {
     let found = false;
     return this.mutate((document) => {
       for (const surface of document.surfaces) {
@@ -1092,19 +1092,19 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   updateObject(
     objectId: string,
-    update: (current: Readonly<EditorObject>) => EditorObject,
-  ): Promise<EditorDocumentMutationResult> {
+    update: (current: Readonly<PooderObject>) => PooderObject,
+  ): Promise<DocumentMutationResult> {
     const id = normalizeObjectId(objectId);
     if (!id) return Promise.resolve(mutationFailure("object-not-found"));
     return this.mutate((document) => {
-      const object = findEditorDocumentObject(document, id);
+      const object = findDocumentObject(document, id);
       if (!object) throw new DocumentMutationError("object-not-found");
       const updated = update(cloneDocumentObject(object));
       replaceSourceObject(document, id, cloneDocumentObject(updated));
     });
   }
 
-  removeObject(objectId: string): Promise<EditorDocumentMutationResult> {
+  removeObject(objectId: string): Promise<DocumentMutationResult> {
     const id = normalizeObjectId(objectId);
     if (!id) return Promise.resolve(mutationFailure("object-not-found"));
     return this.mutate((document) => {
@@ -1116,16 +1116,16 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   selectObjects(
     selector: ObjectSelector,
-    source: EditorDocumentSource = "working",
-  ): EditorObject[] {
+    source: DocumentSource = "working",
+  ): PooderObject[] {
     const document = this.export(source);
-    return document ? selectEditorDocumentObjects(document, selector) : [];
+    return document ? selectDocumentObjects(document, selector) : [];
   }
 
   selectOneObject(
     selector: ObjectSelector,
-    source: EditorDocumentSource = "working",
-  ): EditorObject | undefined {
+    source: DocumentSource = "working",
+  ): PooderObject | undefined {
     const objects = this.selectObjects(selector, source);
     if (objects.length > 1)
       throw new Error("document-object-selector-ambiguous");
@@ -1134,14 +1134,14 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   updateObjects(
     selector: ObjectSelector,
-    update: (current: Readonly<EditorObject>) => EditorObject,
-    options: EditorDocumentSelectorMutationOptions = {},
-  ): Promise<EditorDocumentMutationResult> {
+    update: (current: Readonly<PooderObject>) => PooderObject,
+    options: DocumentSelectorMutationOptions = {},
+  ): Promise<DocumentMutationResult> {
     if (!selector.ids?.length && !selector.tags?.length) {
       return Promise.resolve(mutationFailure("object-not-found"));
     }
     return this.mutate((document) => {
-      const objects = selectEditorDocumentObjects(document, selector);
+      const objects = selectDocumentObjects(document, selector);
       assertSelectorCount(objects.length, options.expectedCount);
       if (!objects.length) throw new DocumentMutationError("object-not-found");
       objects.forEach((object) =>
@@ -1156,14 +1156,14 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   updateImageResources(
     selector: ObjectSelector,
-    update: EditorDocumentImageResourceUpdate,
-    options: EditorDocumentSelectorMutationOptions = {},
-  ): Promise<EditorDocumentMutationResult> {
+    update: DocumentImageResourceUpdate,
+    options: DocumentSelectorMutationOptions = {},
+  ): Promise<DocumentMutationResult> {
     if (!selector.ids?.length && !selector.tags?.length) {
       return Promise.resolve(mutationFailure("object-not-found"));
     }
     return this.mutate((document) => {
-      const objects = selectEditorDocumentObjects(document, selector);
+      const objects = selectDocumentObjects(document, selector);
       assertSelectorCount(objects.length, options.expectedCount);
       if (!objects.length) throw new DocumentMutationError("object-not-found");
       if (objects.some((object) => object.type !== "image")) {
@@ -1174,18 +1174,18 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         if (update.visible !== undefined) object.visible = update.visible;
         if (update.source === undefined) return;
         if (update.source === null) {
-          setEditorImageObjectSource(document, object.id, null);
+          setImageObjectSource(document, object.id, null);
           return;
         }
-        const assetId = createEditorDocumentAssetId(
+        const assetId = createDocumentAssetId(
           document,
           `asset:${object.id}`,
         );
-        setEditorImageObjectSource(document, object.id, {
+        setImageObjectSource(document, object.id, {
           kind: "asset",
           assetId,
         });
-        const asset: EditorImageAsset = {
+        const asset: ImageAsset = {
           id: assetId,
           type: "image",
           source: { ...update.source },
@@ -1194,18 +1194,18 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
             ? { intrinsicSize: { ...update.intrinsicSize } }
             : {}),
         };
-        upsertEditorDocumentAsset(document, asset);
+        upsertDocumentAsset(document, asset);
       });
     });
   }
 
   validateObjectConstraints(
     objectId: string,
-    source: EditorDocumentSource = "working",
+    source: DocumentSource = "working",
   ): SessionValidationResult {
     const document = this.export(source);
     const object = document
-      ? findEditorDocumentObject(document, normalizeObjectId(objectId))
+      ? findDocumentObject(document, normalizeObjectId(objectId))
       : undefined;
     if (!object) return { ok: false, detail: "object-not-found" };
     const constraints =
@@ -1250,8 +1250,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   }
 
   commitManipulation(
-    manipulation: EditorDocumentManipulationCommit,
-  ): Promise<EditorDocumentMutationResult> {
+    manipulation: DocumentManipulationCommit,
+  ): Promise<DocumentMutationResult> {
     if (manipulation.sceneTransformPatch.type === "translate") {
       const localDelta = sceneDeltaToLocalDelta(
         manipulation.sceneTransformPatch.delta,
@@ -1282,20 +1282,20 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
 
   private async mutateDraft(
     draftId: string,
-    callback: EditorDocumentMutationCallback,
-  ): Promise<EditorDocumentMutationResult> {
+    callback: DocumentMutationCallback,
+  ): Promise<DocumentMutationResult> {
     if (this.activeDraftId !== draftId)
       return mutationFailure("draft-inactive");
     return this.mutateWorking(callback, draftId);
   }
 
   private async mutateWorking(
-    callback: EditorDocumentMutationCallback,
+    callback: DocumentMutationCallback,
     draftId?: string,
-  ): Promise<EditorDocumentMutationResult> {
+  ): Promise<DocumentMutationResult> {
     if (!this.workingDocument) return mutationFailure("document-not-found");
-    const candidate = cloneEditorDocument(this.workingDocument);
-    let returned: EditorDocument | void;
+    const candidate = cloneDocument(this.workingDocument);
+    let returned: PooderDocument | void;
     try {
       returned = await callback(candidate);
     } catch (error) {
@@ -1303,15 +1303,15 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
         ? mutationFailure(error.reason)
         : mutationFailure("mutation-failed");
     }
-    const next = returned ? cloneEditorDocument(returned) : candidate;
-    reclaimOrphanedEditorDocumentAssets(next, {
+    const next = returned ? cloneDocument(returned) : candidate;
+    reclaimOrphanedDocumentAssets(next, {
       extensionRegistry: createRuntimeDocumentExtensionRegistry(this.runtime),
     });
     const result = await this.applyDocumentToRuntime(next, "update", {
       publishDocumentState: (document) => {
-        this.workingDocument = cloneEditorDocument(document);
+        this.workingDocument = cloneDocument(document);
         if (!draftId) {
-          this.committedDocument = cloneEditorDocument(document);
+          this.committedDocument = cloneDocument(document);
         }
       },
       notifyDocumentPublished: () =>
@@ -1320,32 +1320,32 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     if (!result.ok) {
       return mutationFailure("validation-failed", result.diagnostics);
     }
-    return { ok: true, document: cloneEditorDocument(result.document) };
+    return { ok: true, document: cloneDocument(result.document) };
   }
 
   private async commitDraft(
     draftId: string,
-  ): Promise<EditorDocumentMutationResult> {
+  ): Promise<DocumentMutationResult> {
     if (this.activeDraftId !== draftId || !this.workingDocument) {
       return mutationFailure("draft-inactive");
     }
-    this.committedDocument = cloneEditorDocument(this.workingDocument);
+    this.committedDocument = cloneDocument(this.workingDocument);
     this.activeDraftId = null;
     this.activeDraftSnapshot = null;
     this.emit("commit", draftId);
-    return { ok: true, document: cloneEditorDocument(this.committedDocument) };
+    return { ok: true, document: cloneDocument(this.committedDocument) };
   }
 
   private async rollbackDraft(
     draftId: string,
-  ): Promise<EditorDocumentMutationResult> {
+  ): Promise<DocumentMutationResult> {
     if (this.activeDraftId !== draftId || !this.activeDraftSnapshot) {
       return mutationFailure("draft-inactive");
     }
-    const snapshot = cloneEditorDocument(this.activeDraftSnapshot);
+    const snapshot = cloneDocument(this.activeDraftSnapshot);
     const result = await this.applyDocumentToRuntime(snapshot, "update", {
       publishDocumentState: (document) => {
-        this.workingDocument = cloneEditorDocument(document);
+        this.workingDocument = cloneDocument(document);
         this.activeDraftId = null;
         this.activeDraftSnapshot = null;
       },
@@ -1354,7 +1354,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     if (!result.ok) {
       return mutationFailure("validation-failed", result.diagnostics);
     }
-    return { ok: true, document: cloneEditorDocument(snapshot) };
+    return { ok: true, document: cloneDocument(snapshot) };
   }
 
   private async writeManipulationToDocument(
@@ -1382,12 +1382,12 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   }
 
   private createDocumentSession<TDraft>(
-    handle: SessionHandle<TDraft, EditorDocumentMutationResult>,
-    input: OpenEditorDocumentSessionInput<TDraft>,
-    sessionSnapshot: EditorDocument,
+    handle: SessionHandle<TDraft, DocumentMutationResult>,
+    input: OpenDocumentSessionInput<TDraft>,
+    sessionSnapshot: PooderDocument,
     getDocumentDraft: () => DocumentDraft,
-    getRollbackResult: () => EditorDocumentMutationResult | undefined,
-  ): EditorDocumentSession<TDraft> {
+    getRollbackResult: () => DocumentMutationResult | undefined,
+  ): DocumentSession<TDraft> {
     const service = this;
     return {
       get id() {
@@ -1407,7 +1407,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
             : update;
         const candidate = cloneSessionDraft(next);
         const result = await getDocumentDraft().mutate(() =>
-          input.derive(candidate, cloneEditorDocument(sessionSnapshot)),
+          input.derive(candidate, cloneDocument(sessionSnapshot)),
         );
         if (result.ok) handle.updateDraft(candidate);
         return result;
@@ -1432,8 +1432,8 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     };
   }
 
-  private emit(type: EditorDocumentChangeEvent["type"], draftId?: string) {
-    const event: EditorDocumentChangeEvent = {
+  private emit(type: DocumentChangeEvent["type"], draftId?: string) {
+    const event: DocumentChangeEvent = {
       type,
       committed: this.export("committed"),
       working: this.export("working"),
@@ -1443,7 +1443,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
       try {
         listener(event);
       } catch (error) {
-        console.error("EditorDocumentService change listener failed.", error);
+        console.error("PooderDocumentService change listener failed.", error);
       }
     });
   }
@@ -1451,9 +1451,9 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
   private async applyDocumentToRuntime(
     value: unknown,
     mode: "replace" | "update",
-    boundary: EditorDocumentPublicationBoundary,
-  ): Promise<ApplyEditorDocumentResult> {
-    return applyEditorDocumentInternal(
+    boundary: DocumentPublicationBoundary,
+  ): Promise<ApplyDocumentResult> {
+    return applyDocumentInternal(
       this.runtime,
       value,
       this.options,
@@ -1462,7 +1462,7 @@ export class DefaultEditorDocumentService implements EditorDocumentService {
     );
   }
 
-  private activateSurfaceSync(surfaceId: string): ActivateEditorSurfaceResult {
+  private activateSurfaceSync(surfaceId: string): ActivateSurfaceResult {
     const document = this.workingDocument ?? this.committedDocument;
     if (!document) return { ok: false, reason: "document-not-found" };
     const normalized = String(surfaceId || "").trim();
@@ -1499,9 +1499,9 @@ function resolveDocumentSceneId(root: SceneSnapshot | null): string | null {
 }
 
 function translateDocumentObject(
-  object: EditorObject,
+  object: PooderObject,
   delta: { x: number; y: number },
-): EditorObject {
+): PooderObject {
   const [a, b, c, d, e, f] = object.localToParent;
   return {
     ...object,
@@ -1510,10 +1510,10 @@ function translateDocumentObject(
 }
 
 function resizeDocumentObject(
-  object: EditorObject,
+  object: PooderObject,
   frame: GeometryRect,
-): EditorObject {
-  if (isEditorLeafObject(object)) {
+): PooderObject {
+  if (isLeafObject(object)) {
     const [a, b, c, d] = object.localToParent;
     return {
       ...object,
@@ -1560,7 +1560,7 @@ function resizeDocumentObject(
 
 function sceneDeltaToLocalDelta(
   delta: { x: number; y: number },
-  parentMatrix?: EditorDocumentMatrix,
+  parentMatrix?: DocumentMatrix,
 ): { x: number; y: number } {
   if (!parentMatrix) return { x: delta.x, y: delta.y };
   const inverse = invertDocumentMatrix(parentMatrix);
@@ -1571,36 +1571,36 @@ function sceneDeltaToLocalDelta(
   };
 }
 
-export function registerEditorDocumentService(
-  runtime: EditorDocumentRuntime,
-  options: ApplyEditorDocumentOptions = {},
-): EditorDocumentService {
-  const existing = runtime.services.get?.(EDITOR_DOCUMENT_SERVICE);
+export function registerPooderDocumentService(
+  runtime: PooderDocumentRuntime,
+  options: ApplyDocumentOptions = {},
+): PooderDocumentService {
+  const existing = runtime.services.get?.(POODER_DOCUMENT_SERVICE);
   if (existing) return existing;
   if (!runtime.services.register) {
     throw new Error(
-      "Runtime service registration is required for EditorDocumentService.",
+      "Runtime service registration is required for PooderDocumentService.",
     );
   }
-  const service = new DefaultEditorDocumentService(runtime, options);
-  if (!runtime.services.register(service, EDITOR_DOCUMENT_SERVICE)) {
-    throw new Error("Failed to register EditorDocumentService.");
+  const service = new DefaultPooderDocumentService(runtime, options);
+  if (!runtime.services.register(service, POODER_DOCUMENT_SERVICE)) {
+    throw new Error("Failed to register PooderDocumentService.");
   }
   return service;
 }
 
 function toValidationOptions(
-  options: ApplyEditorDocumentOptions,
-): EditorDocumentValidationOptions {
+  options: ApplyDocumentOptions,
+): DocumentValidationOptions {
   return {
     validators: options.validators,
   };
 }
 
 function toCollectionOptions(
-  options: ApplyEditorDocumentOptions,
+  options: ApplyDocumentOptions,
   effectSchemaRegistry: EffectSchemaRegistry,
-): EditorDocumentCapabilityCollectionOptions {
+): DocumentCapabilityCollectionOptions {
   return {
     resolveEffectCapabilityId: (effect) =>
       options.resolveEffectCapabilityId?.(effect) ||
@@ -1609,8 +1609,8 @@ function toCollectionOptions(
 }
 
 function resolveEffectCapabilityId(
-  effect: EditorExtensionObjectEffect,
-  options: ApplyEditorDocumentOptions,
+  effect: ExtensionObjectEffect,
+  options: ApplyDocumentOptions,
   effectSchemaRegistry: EffectSchemaRegistry,
 ): string | undefined {
   return (
@@ -1620,7 +1620,7 @@ function resolveEffectCapabilityId(
 }
 
 function createRuntimeDocumentExtensionRegistry(
-  runtime: EditorDocumentRuntime,
+  runtime: PooderDocumentRuntime,
 ): DocumentExtensionRegistry {
   const contributions = runtime.extensions?.listDocumentContributions() ?? [];
   return new DocumentExtensionRegistry(
@@ -1653,16 +1653,16 @@ function normalizeObjectId(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function cloneDocumentObject(object: EditorObject): EditorObject {
-  return JSON.parse(JSON.stringify(object)) as EditorObject;
+function cloneDocumentObject(object: PooderObject): PooderObject {
+  return JSON.parse(JSON.stringify(object)) as PooderObject;
 }
 
 function findGroupObject(
-  objects: readonly EditorObject[],
+  objects: readonly PooderObject[],
   objectId: string,
-): EditorGroupObject | undefined {
+): GroupObject | undefined {
   for (const object of objects) {
-    if (isEditorGroupObject(object)) {
+    if (isGroupObject(object)) {
       if (object.id === objectId) return object;
       const nested = findGroupObject(object.children, objectId);
       if (nested) return nested;
@@ -1672,11 +1672,11 @@ function findGroupObject(
 }
 
 function replaceSourceObject(
-  document: EditorDocument,
+  document: PooderDocument,
   objectId: string,
-  next: EditorObject,
+  next: PooderObject,
 ): void {
-  const replaceIn = (objects: EditorObject[] | undefined): boolean => {
+  const replaceIn = (objects: PooderObject[] | undefined): boolean => {
     if (!objects) return false;
     for (let index = 0; index < objects.length; index += 1) {
       const object = objects[index]!;
@@ -1684,7 +1684,7 @@ function replaceSourceObject(
         objects[index] = next;
         return true;
       }
-      if (isEditorGroupObject(object) && replaceIn(object.children)) {
+      if (isGroupObject(object) && replaceIn(object.children)) {
         return true;
       }
     }
@@ -1696,10 +1696,10 @@ function replaceSourceObject(
 }
 
 function removeSourceObject(
-  document: EditorDocument,
+  document: PooderDocument,
   objectId: string,
 ): boolean {
-  const removeFrom = (objects: EditorObject[] | undefined): boolean => {
+  const removeFrom = (objects: PooderObject[] | undefined): boolean => {
     if (!objects) return false;
     for (let index = 0; index < objects.length; index += 1) {
       const object = objects[index]!;
@@ -1707,7 +1707,7 @@ function removeSourceObject(
         objects.splice(index, 1);
         return true;
       }
-      if (isEditorGroupObject(object) && removeFrom(object.children)) {
+      if (isGroupObject(object) && removeFrom(object.children)) {
         return true;
       }
     }
@@ -1722,7 +1722,7 @@ function removeSourceObject(
 }
 
 class DocumentMutationError extends Error {
-  constructor(readonly reason: EditorDocumentMutationFailureReason) {
+  constructor(readonly reason: DocumentMutationFailureReason) {
     super(reason);
   }
 }
@@ -1736,14 +1736,14 @@ function assertSelectorCount(
   }
 }
 
-class EditorDocumentSessionMutationError extends Error {
-  constructor(readonly result: EditorDocumentMutationResult) {
+class DocumentSessionMutationError extends Error {
+  constructor(readonly result: DocumentMutationResult) {
     super(result.ok ? "document-session-mutation-failed" : result.reason);
   }
 }
 
 function requireDocumentDraft(draft: DocumentDraft | undefined): DocumentDraft {
-  if (!draft) throw new Error("Editor document session draft is unavailable.");
+  if (!draft) throw new Error("Document session draft is unavailable.");
   return draft;
 }
 
@@ -1757,10 +1757,10 @@ function cloneSessionDraft<T>(draft: T): T {
 
 function validationDetailToDiagnostics(
   detail: unknown,
-): EditorDocumentDiagnostic[] {
+): DocumentDiagnostic[] {
   if (!Array.isArray(detail)) return [];
   return detail.filter(
-    (entry): entry is EditorDocumentDiagnostic =>
+    (entry): entry is DocumentDiagnostic =>
       typeof entry === "object" &&
       entry !== null &&
       "severity" in entry &&
@@ -1769,15 +1769,15 @@ function validationDetailToDiagnostics(
 }
 
 function mutationFailure(
-  reason: EditorDocumentMutationFailureReason,
-  diagnostics: EditorDocumentDiagnostic[] = [],
-): EditorDocumentMutationResult {
+  reason: DocumentMutationFailureReason,
+  diagnostics: DocumentDiagnostic[] = [],
+): DocumentMutationResult {
   return { ok: false, reason, diagnostics };
 }
 
 export function sceneFrameToLocalFrame(
   frame: { left: number; top: number; width: number; height: number },
-  parentMatrix?: EditorDocumentMatrix,
+  parentMatrix?: DocumentMatrix,
 ): { left: number; top: number; width: number; height: number } {
   if (!parentMatrix) return { ...frame };
   const inverse = invertDocumentMatrix(parentMatrix);
@@ -1806,7 +1806,7 @@ export function sceneFrameToLocalFrame(
 
 function normalizeDocumentMatrix(
   value: unknown,
-): EditorDocumentMatrix | undefined {
+): DocumentMatrix | undefined {
   if (
     !Array.isArray(value) ||
     value.length !== 6 ||
@@ -1814,12 +1814,12 @@ function normalizeDocumentMatrix(
   ) {
     return undefined;
   }
-  return value as unknown as EditorDocumentMatrix;
+  return value as unknown as DocumentMatrix;
 }
 
 function invertDocumentMatrix(
-  matrix: EditorDocumentMatrix,
-): EditorDocumentMatrix | undefined {
+  matrix: DocumentMatrix,
+): DocumentMatrix | undefined {
   const [a, b, c, d, e, f] = matrix;
   const determinant = a * d - b * c;
   if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) {
@@ -1836,7 +1836,7 @@ function invertDocumentMatrix(
 }
 
 function transformDocumentPoint(
-  matrix: EditorDocumentMatrix,
+  matrix: DocumentMatrix,
   x: number,
   y: number,
 ): { x: number; y: number } {
@@ -1847,10 +1847,10 @@ function transformDocumentPoint(
 }
 
 function cloneObjectEffects(
-  effects: EditorObjectEffect[] | undefined,
-): EditorObjectEffect[] | undefined {
+  effects: ObjectEffect[] | undefined,
+): ObjectEffect[] | undefined {
   return effects?.length
-    ? (JSON.parse(JSON.stringify(effects)) as EditorObjectEffect[])
+    ? (JSON.parse(JSON.stringify(effects)) as ObjectEffect[])
     : undefined;
 }
 
@@ -1893,14 +1893,14 @@ function createPathAffinePlacement(
 }
 
 function createFrameAffinePlacement(
-  object: EditorObject,
+  object: PooderObject,
   parentLocalToScene = coordinateMatrix(
     "parent-local",
     "scene",
     [1, 0, 0, 1, 0, 0],
   ),
 ): AffinePlacement {
-  const localBounds = isEditorGroupObject(object)
+  const localBounds = isGroupObject(object)
     ? deriveGroupLocalBounds(object)
     : coordinateRect("object-local", {
         left: object.localFrame.x,
@@ -1908,7 +1908,7 @@ function createFrameAffinePlacement(
         width: object.localFrame.width,
         height: object.localFrame.height,
       });
-  const pivot = (isEditorLeafObject(object)
+  const pivot = (isLeafObject(object)
     ? object.localPivot
     : undefined) ?? {
     x: localBounds.left + localBounds.width / 2,
@@ -1925,11 +1925,11 @@ function createFrameAffinePlacement(
 }
 
 function deriveGroupLocalBounds(
-  group: EditorGroupObject,
+  group: GroupObject,
 ): import("@pooder/core").CoordinateRect<"object-local"> {
   let bounds: import("@pooder/core").CoordinateRect<"object-local"> | undefined;
   for (const child of group.children) {
-    const childBounds = isEditorGroupObject(child)
+    const childBounds = isGroupObject(child)
       ? deriveGroupLocalBounds(child)
       : coordinateRect("object-local", {
           left: child.localFrame.x,
@@ -1971,17 +1971,17 @@ function deriveGroupLocalBounds(
 export const DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID = "document-object";
 
 export function createDocumentObjectGeometrySource(
-  getDocument: () => EditorDocument | null,
+  getDocument: () => PooderDocument | null,
   geometryService: GeometrySourceService,
 ): GeometrySource {
   const findPlacement = (
     objectId: string,
-  ): { object: EditorObject; placement: AffinePlacement } | undefined => {
+  ): { object: PooderObject; placement: AffinePlacement } | undefined => {
     const document = getDocument();
     if (!document) return undefined;
-    let match: { object: EditorObject; placement: AffinePlacement } | undefined;
+    let match: { object: PooderObject; placement: AffinePlacement } | undefined;
     const visit = (
-      objects: EditorObject[] | undefined,
+      objects: PooderObject[] | undefined,
       parentLocalToScene = coordinateMatrix(
         "parent-local",
         "scene",
@@ -1997,7 +1997,7 @@ export function createDocumentObjectGeometrySource(
           match = { object, placement };
           return true;
         }
-        if (isEditorGroupObject(object)) {
+        if (isGroupObject(object)) {
           visit(
             object.children,
             coordinateMatrix(
@@ -2031,7 +2031,7 @@ export function createDocumentObjectGeometrySource(
     const resolved = findPlacement(ref.geometryId);
     if (!resolved) return null;
     const { object, placement } = resolved;
-    if (isEditorGroupObject(object)) {
+    if (isGroupObject(object)) {
       const bounds = transformCoordinateRect(
         placement.localToScene,
         placement.localBounds,
@@ -2099,7 +2099,7 @@ export function createDocumentObjectGeometrySource(
       if (object.id !== targetId) return;
       object.effects?.forEach((effect) => {
         if (
-          !isEditorBuiltinObjectEffect(effect) ||
+          !isBuiltinObjectEffect(effect) ||
           effect.type !== "core.geometry.boolean"
         )
           return;
@@ -2158,7 +2158,7 @@ export function createDocumentObjectGeometrySource(
   };
 }
 
-function getDocumentObjectDescriptors(document: EditorDocument) {
+function getDocumentObjectDescriptors(document: PooderDocument) {
   const descriptors: Array<{
     ref: GeometryRef;
     kind: GeometrySnapshot["kind"];
@@ -2166,25 +2166,25 @@ function getDocumentObjectDescriptors(document: EditorDocument) {
     metadata: Record<string, unknown>;
   }> = [];
   document.surfaces.forEach((surface) => {
-    const visit = (objects: EditorObject[] | undefined) =>
+    const visit = (objects: PooderObject[] | undefined) =>
       objects?.forEach((object) => {
         descriptors.push({
           ref: {
             sourceId: DOCUMENT_OBJECT_GEOMETRY_SOURCE_ID,
             geometryId: object.id,
           },
-          kind: isEditorGroupObject(object)
+          kind: isGroupObject(object)
             ? "compound"
             : object.type === "image"
               ? "rect"
               : "path",
-          space: isEditorGroupObject(object) ? "scene" : "object-local",
+          space: isGroupObject(object) ? "scene" : "object-local",
           metadata: {
             objectId: object.id,
             sceneId: surface.id,
           },
         });
-        if (isEditorGroupObject(object)) visit(object.children);
+        if (isGroupObject(object)) visit(object.children);
       });
     visit(surface.objects);
   });
@@ -2192,7 +2192,7 @@ function getDocumentObjectDescriptors(document: EditorDocument) {
 }
 
 function rotateObjectLocalToParent(
-  localToParent: EditorDocumentMatrix,
+  localToParent: DocumentMatrix,
   rotationDegrees: number,
 ): AffineMatrix {
   const [a, b, c, d, e, f] = localToParent;
@@ -2211,7 +2211,7 @@ function rotateObjectLocalToParent(
   ];
 }
 
-function createRejectedDocumentSnapshot(): EditorDocument {
+function createRejectedDocumentSnapshot(): PooderDocument {
   return {
     version: 8,
     assets: [],
@@ -2222,10 +2222,10 @@ function createRejectedDocumentSnapshot(): EditorDocument {
 
 function createResult(
   ok: boolean,
-  document: EditorDocument,
-  diagnostics: EditorDocumentDiagnostic[],
+  document: PooderDocument,
+  diagnostics: DocumentDiagnostic[],
   appliedSurfaceIds: string[],
-): ApplyEditorDocumentResult {
+): ApplyDocumentResult {
   return {
     ok,
     document,
@@ -2235,7 +2235,7 @@ function createResult(
   };
 }
 
-function surfaceToRuntimeBounds(surface: EditorSurface) {
+function surfaceToRuntimeBounds(surface: Surface) {
   return {
     bounds: { ...surface.bounds },
     ...(surface.insets ? { insets: { ...surface.insets } } : {}),
@@ -2245,7 +2245,7 @@ function surfaceToRuntimeBounds(surface: EditorSurface) {
 function createPublicationDiagnostic(
   code: string,
   error: unknown,
-): EditorDocumentDiagnostic {
+): DocumentDiagnostic {
   return {
     severity: "error",
     stage: "runtime-capability",
@@ -2255,16 +2255,16 @@ function createPublicationDiagnostic(
   };
 }
 
-function hasErrors(diagnostics: EditorDocumentDiagnostic[]): boolean {
+function hasErrors(diagnostics: DocumentDiagnostic[]): boolean {
   return diagnostics.some((item) => item.severity === "error");
 }
 
 function collectAvailableCapabilityIds(
-  runtime: EditorDocumentRuntime,
-  document: EditorDocument,
-  options: EditorDocumentCapabilityCollectionOptions,
+  runtime: PooderDocumentRuntime,
+  document: PooderDocument,
+  options: DocumentCapabilityCollectionOptions,
 ): string[] {
-  const result = collectEditorDocumentCapabilityRequirements(document, options);
+  const result = collectDocumentCapabilityRequirements(document, options);
   return Array.from(
     new Set(
       result.requirements
@@ -2275,14 +2275,14 @@ function collectAvailableCapabilityIds(
 }
 
 function createBaseRenderIntentDrafts(
-  document: EditorDocument,
+  document: PooderDocument,
   resolvedImages: ReadonlyMap<string, ImageResourceResolution>,
   objectSchemaRegistry: ObjectSchemaRegistry,
 ): RenderIntentDraft[] {
   const drafts: RenderIntentDraft[] = [];
   document.surfaces.forEach((surface, surfaceIndex) => {
     const visit = (
-      objects: EditorObject[] | undefined,
+      objects: PooderObject[] | undefined,
       parentLocalToScene = coordinateMatrix("parent-local", "scene", [
         1,
         0,
@@ -2309,7 +2309,7 @@ function createBaseRenderIntentDrafts(
           objectSchemaRegistry,
           { document, objectId: object.id, path: objectPath },
         );
-        if (isEditorGroupObject(object)) {
+        if (isGroupObject(object)) {
           if (interaction) {
             drafts.push(
               createGroupInteractionProxyDraft(
@@ -2361,7 +2361,7 @@ function createBaseRenderIntentDrafts(
   visitDocumentVisualObjects(document, (object) => {
     object.effects?.forEach((effect, effectIndex) => {
       if (
-        !isEditorBuiltinObjectEffect(effect) ||
+        !isBuiltinObjectEffect(effect) ||
         effect.type !== "core.geometry.clip"
       )
         return;
@@ -2406,20 +2406,20 @@ function createBaseRenderIntentDrafts(
 }
 
 function visitDocumentVisualObjects(
-  document: EditorDocument,
-  visitor: (object: EditorLeafObject) => void,
+  document: PooderDocument,
+  visitor: (object: LeafObject) => void,
 ): void {
-  const visit = (objects: EditorObject[] | undefined) =>
+  const visit = (objects: PooderObject[] | undefined) =>
     objects?.forEach((object) => {
-      if (isEditorGroupObject(object)) visit(object.children);
+      if (isGroupObject(object)) visit(object.children);
       else visitor(object);
     });
   document.surfaces.forEach((surface) => visit(surface.objects));
 }
 
 function createGroupInteractionProxyDraft(
-  surface: EditorSurface,
-  object: EditorGroupObject,
+  surface: Surface,
+  object: GroupObject,
   layerOrder: number,
   path: readonly number[],
   visible: boolean,
@@ -2427,9 +2427,9 @@ function createGroupInteractionProxyDraft(
   interaction: InteractionSpec,
 ): RenderIntentDraft {
   const memberNodeIds: string[] = [];
-  const collectMembers = (children: EditorObject[]) =>
+  const collectMembers = (children: PooderObject[]) =>
     children.forEach((child) => {
-      if (isEditorGroupObject(child)) collectMembers(child.children);
+      if (isGroupObject(child)) collectMembers(child.children);
       else memberNodeIds.push(child.id);
     });
   collectMembers(object.children);
@@ -2474,13 +2474,13 @@ function createGroupInteractionProxyDraft(
 }
 
 function createObjectRenderIntentDraft(
-  surface: EditorSurface,
-  object: EditorLeafObject,
+  surface: Surface,
+  object: LeafObject,
   layerOrder: number,
   path: readonly number[],
   visible: boolean,
   imageResolution?: ImageResourceResolution,
-  imageAsset?: EditorImageAsset,
+  imageAsset?: ImageAsset,
   framePlacement: AffinePlacement = createFrameAffinePlacement(object),
   groupId?: string,
   interaction?: InteractionSpec,
@@ -2497,7 +2497,7 @@ function createObjectRenderIntentDraft(
           (
             trait,
           ): trait is Extract<
-            EditorObjectTrait,
+            ObjectTrait,
             { type: "core.output-mask" }
           > => trait.type === "core.output-mask",
         )
@@ -2561,14 +2561,14 @@ function createObjectRenderIntentDraft(
   if (object.type === "image") {
     return createImageRenderIntentDraft(
       base,
-      object as EditorImageObject,
+      object as ImageObject,
       visible,
       imageResolution,
       imageAsset,
       placeholderFallback,
-      resolveEditorImageClipFrame(
+      resolveImageClipFrame(
         surface,
-        object as EditorImageObject,
+        object as ImageObject,
         framePlacement,
       ),
     );
@@ -2611,10 +2611,10 @@ function createObjectRenderIntentDraft(
 
 function createImageRenderIntentDraft(
   base: Omit<RenderIntentDraft, "visual">,
-  object: EditorImageObject,
+  object: ImageObject,
   visible: boolean,
   resolution?: ImageResourceResolution,
-  resource?: EditorImageAsset,
+  resource?: ImageAsset,
   placeholderFallback = false,
   clipFrame?: import("@pooder/core").CoordinateRect<"object-local">,
 ): RenderIntentDraft {
@@ -2683,7 +2683,7 @@ function createImageRenderIntentDraft(
     effects: geometry?.clip
       ? [
           ...(base.effects ?? []),
-          createEditorImageClipEffect(
+          createImageClipEffect(
             object.id,
             geometry.clip,
             base.placement!,
@@ -2725,9 +2725,9 @@ function createImageRenderIntentDraft(
   };
 }
 
-function resolveEditorImageClipFrame(
-  surface: EditorSurface,
-  object: EditorImageObject,
+function resolveImageClipFrame(
+  surface: Surface,
+  object: ImageObject,
   objectPlacement: AffinePlacement,
 ) {
   const objectFrame = objectPlacement.localBounds;
@@ -2763,34 +2763,34 @@ function resolveEditorImageClipFrame(
 }
 
 function getImageSlotBehaviorConfig(
-  object: EditorImageObject,
-): EditorImageSlotBehaviorConfig | undefined {
+  object: ImageObject,
+): ImageSlotBehaviorConfig | undefined {
   const behavior = object.behaviors?.find(
     (candidate) => candidate.type === "pooder.image-slot",
   );
   return behavior?.config && typeof behavior.config === "object"
-    ? (behavior.config as unknown as EditorImageSlotBehaviorConfig)
+    ? (behavior.config as unknown as ImageSlotBehaviorConfig)
     : undefined;
 }
 
 function resolveImageVisualAsset(
-  document: EditorDocument,
-  object: EditorImageObject,
-): EditorImageAsset | undefined {
+  document: PooderDocument,
+  object: ImageObject,
+): ImageAsset | undefined {
   const source =
     object.source ?? getImageSlotBehaviorConfig(object)?.placeholderSource;
-  return resolveEditorDocumentAsset<EditorImageAsset>(
+  return resolveDocumentAsset<ImageAsset>(
     document,
     source,
     "image",
   );
 }
 
-function isImageSlotPlaceholderFallback(object: EditorImageObject): boolean {
+function isImageSlotPlaceholderFallback(object: ImageObject): boolean {
   return object.source === null && Boolean(getImageSlotBehaviorConfig(object));
 }
 
-function createEditorImageClipEffect(
+function createImageClipEffect(
   objectId: string,
   frame: import("@pooder/core").CoordinateRect<"object-local">,
   objectPlacement: AffinePlacement,
@@ -2821,7 +2821,7 @@ function createEditorImageClipEffect(
 }
 
 function imageResourceDescriptor(
-  asset: EditorImageAsset,
+  asset: ImageAsset,
 ): ImageResourceDescriptor {
   return {
     ...asset.source,
@@ -2837,17 +2837,17 @@ function imageResourceDescriptor(
  * instead of re-deriving the whole document's resources on every apply.
  */
 async function resolveDocumentImageResources(
-  runtime: EditorDocumentRuntime,
-  document: EditorDocument,
+  runtime: PooderDocumentRuntime,
+  document: PooderDocument,
 ): Promise<Map<string, ImageResourceResolution>> {
   const service = runtime.services.get?.<ImageResourceService>(
     IMAGE_RESOURCE_SERVICE,
   );
   const resolutions = new Map<string, ImageResourceResolution>();
   const pending: Array<Promise<void>> = [];
-  const collect = (objects: EditorObject[] | undefined) =>
+  const collect = (objects: PooderObject[] | undefined) =>
     objects?.forEach((object) => {
-      if (isEditorGroupObject(object)) {
+      if (isGroupObject(object)) {
         collect(object.children);
         return;
       }
@@ -2884,7 +2884,7 @@ async function resolveDocumentImageResources(
  * ones cost no I/O.
  */
 export async function collectUnresolvableImageObjectIds(
-  document: EditorDocument,
+  document: PooderDocument,
   service: Pick<ImageResourceService, "read" | "ensure"> | undefined,
 ): Promise<string[]> {
   if (!service) return [];
@@ -2893,9 +2893,9 @@ export async function collectUnresolvableImageObjectIds(
   const judge = (objectId: string, resolution: ImageResourceResolution) => {
     if (!resolution.ok) unresolvable.push(objectId);
   };
-  const collect = (objects: EditorObject[] | undefined) =>
+  const collect = (objects: PooderObject[] | undefined) =>
     objects?.forEach((object) => {
-      if (isEditorGroupObject(object)) {
+      if (isGroupObject(object)) {
         collect(object.children);
         return;
       }
@@ -2922,11 +2922,11 @@ export async function collectUnresolvableImageObjectIds(
 
 async function compileRenderIntentPatches(
   compilerRegistry: RenderIntentCompilerRegistryService,
-  document: EditorDocument,
+  document: PooderDocument,
   capabilityId: string,
   entry: EffectEntry,
-  runtime: EditorDocumentRuntime,
-  diagnostics: EditorDocumentDiagnostic[],
+  runtime: PooderDocumentRuntime,
+  diagnostics: DocumentDiagnostic[],
 ): Promise<RenderIntentPatch[]> {
   const target = resolveRenderIntentTarget(
     entry.effect,
@@ -2995,18 +2995,18 @@ function normalizeRenderIntentPatches(
   return Array.isArray(value) ? value : [value];
 }
 
-function collectEffectEntries(document: EditorDocument): EffectEntry[] {
+function collectEffectEntries(document: PooderDocument): EffectEntry[] {
   const entries: EffectEntry[] = [];
   document.surfaces.forEach((surface, surfaceIndex) => {
     const collectObjectEntries = (
-      objects: EditorObject[] | undefined,
+      objects: PooderObject[] | undefined,
       objectsPath: string,
     ) =>
       objects?.forEach((object, objectIndex) => {
         const objectPath = `${objectsPath}/${objectIndex}`;
-        if (isEditorLeafObject(object)) {
+        if (isLeafObject(object)) {
           object.effects?.forEach((effect, effectIndex) => {
-            if (isEditorExtensionObjectEffect(effect)) {
+            if (isExtensionObjectEffect(effect)) {
               entries.push({
                 effect,
                 context: { surface, object },
@@ -3015,7 +3015,7 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
             }
           });
         }
-        if (isEditorGroupObject(object)) {
+        if (isGroupObject(object)) {
           collectObjectEntries(object.children, `${objectPath}/children`);
         }
       });
@@ -3025,7 +3025,7 @@ function collectEffectEntries(document: EditorDocument): EffectEntry[] {
 }
 
 function createObjectInteractionAspect(
-  object: EditorObject,
+  object: PooderObject,
   registry: ObjectSchemaRegistry,
   context: ObjectSchemaContext,
 ): InteractionSpec | undefined {
@@ -3072,9 +3072,9 @@ function normalizeBehaviorInteraction(
 }
 
 function resolveRenderIntentTarget(
-  _effect: EditorExtensionObjectEffect,
+  _effect: ExtensionObjectEffect,
   context: EffectContext,
-  _document: EditorDocument,
+  _document: PooderDocument,
 ): RenderIntentDraft["subject"] | null {
   if (!context.object) return null;
   return {
@@ -3086,9 +3086,9 @@ function resolveRenderIntentTarget(
   };
 }
 
-function findObjectContext(document: EditorDocument, objectId: string) {
+function findObjectContext(document: PooderDocument, objectId: string) {
   for (const surface of document.surfaces) {
-    const object = findEditorDocumentObject(
+    const object = findDocumentObject(
       { ...document, surfaces: [surface] },
       objectId,
     );
@@ -3098,18 +3098,18 @@ function findObjectContext(document: EditorDocument, objectId: string) {
 }
 
 function severityForEffect(
-  _effect: EditorExtensionObjectEffect,
-): EditorDocumentDiagnostic["severity"] {
+  _effect: ExtensionObjectEffect,
+): DocumentDiagnostic["severity"] {
   return "error";
 }
 
 function createDiagnostic(
   entry: EffectEntry,
-  severity: EditorDocumentDiagnostic["severity"],
+  severity: DocumentDiagnostic["severity"],
   code: string,
   message: string,
   capabilityId?: string,
-): EditorDocumentDiagnostic {
+): DocumentDiagnostic {
   return {
     severity,
     code,
@@ -3122,7 +3122,7 @@ function createDiagnostic(
 
 function createRenderIntentDiagnostic(
   diagnostic: RenderIntentDiagnostic,
-): EditorDocumentDiagnostic {
+): DocumentDiagnostic {
   return {
     severity: diagnostic.severity,
     code: diagnostic.code,
@@ -3163,7 +3163,7 @@ function normalizeOutputMaskKeys(value: unknown): string[] {
 }
 
 function resolveShapeSource(
-  source: EditorShapeContent,
+  source: ShapeContent,
 ): Omit<ResolvedVisual, "source"> | null {
   switch (source.shape) {
     case "rect": {

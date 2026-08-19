@@ -6,99 +6,99 @@ import type {
   DocumentInteractionOperationSpec,
   DocumentInteractionSpec,
   BoxInsetsMm,
-  EditorAsset,
-  EditorAssetDataSource,
-  EditorDocument,
-  EditorDocumentDiagnostic,
-  EditorDocumentExtension,
-  EditorDocumentValidationOptions,
-  EditorGroupObject,
-  EditorImageContentFit,
-  EditorImageObject,
-  EditorLeafObject,
-  EditorObject,
-  EditorObjectBehavior,
-  EditorObjectEffect,
-  EditorObjectTrait,
-  EditorPaint,
-  EditorPathContent,
-  EditorShapeContent,
-  EditorRect,
-  EditorSurface,
+  Asset,
+  AssetDataSource,
+  PooderDocument,
+  DocumentDiagnostic,
+  DocumentExtension,
+  DocumentValidationOptions,
+  GroupObject,
+  ImageContentFit,
+  ImageObject,
+  LeafObject,
+  PooderObject,
+  ObjectBehavior,
+  ObjectEffect,
+  ObjectTrait,
+  Paint,
+  PathContent,
+  ShapeContent,
+  Rect,
+  Surface,
   JsonValue,
   PointMm,
   RectMm,
 } from "./index";
 import {
-  isEditorBuiltinObjectEffect,
-  isEditorExtensionObjectEffect,
-  isEditorLeafObject,
-  visitEditorDocumentObjects,
+  isBuiltinObjectEffect,
+  isExtensionObjectEffect,
+  isLeafObject,
+  visitDocumentObjects,
 } from "./index";
 
-export class EditorDocumentParseError extends Error {
-  constructor(readonly diagnostics: EditorDocumentDiagnostic[]) {
-    super(diagnostics[0]?.message ?? "EditorDocument is invalid.");
-    this.name = "EditorDocumentParseError";
+export class DocumentParseError extends Error {
+  constructor(readonly diagnostics: DocumentDiagnostic[]) {
+    super(diagnostics[0]?.message ?? "PooderDocument is invalid.");
+    this.name = "DocumentParseError";
   }
 }
 
 class ParseFailure extends Error {
-  constructor(readonly diagnostic: EditorDocumentDiagnostic) {
+  constructor(readonly diagnostic: DocumentDiagnostic) {
     super(diagnostic.message);
   }
 }
 
-export function parseEditorDocument(value: unknown): EditorDocument {
+export function parseDocument(value: unknown): PooderDocument {
   try {
     const input = record(value, "document");
     exact(input, ["version", "assets", "extension", "surfaces"], "document");
     if (input.version !== 8) {
       fail(
         "document-version-invalid",
-        "EditorDocument version must be exactly 8.",
+        "PooderDocument version must be exactly 8.",
         "version",
       );
     }
-    const document: EditorDocument = {
+    const document: PooderDocument = {
       version: 8,
       assets: array(input.assets, "assets").map(parseAsset),
       extension: parseDocumentExtension(input.extension),
       surfaces: array(input.surfaces, "surfaces").map(parseSurface),
     };
     const diagnostics = validateDocumentReferences(document);
-    if (diagnostics.length) throw new EditorDocumentParseError(diagnostics);
+    if (diagnostics.length) throw new DocumentParseError(diagnostics);
     return document;
   } catch (error) {
-    if (error instanceof EditorDocumentParseError) throw error;
+    if (error instanceof DocumentParseError) throw error;
     if (error instanceof ParseFailure) {
-      throw new EditorDocumentParseError([error.diagnostic]);
+      throw new DocumentParseError([error.diagnostic]);
     }
     throw error;
   }
 }
 
-export function validateEditorDocument(
+export function validateDocument(
   value: unknown,
-  options: EditorDocumentValidationOptions = {},
-): EditorDocumentDiagnostic[] {
-  let document: EditorDocument;
+  options: DocumentValidationOptions = {},
+): DocumentDiagnostic[] {
+  let document: PooderDocument;
   try {
-    document = parseEditorDocument(value);
+    document = parseDocument(value);
   } catch (error) {
-    return error instanceof EditorDocumentParseError
+    return error instanceof DocumentParseError
       ? error.diagnostics
       : [
           diagnostic(
             "document-parse-failed",
             error instanceof Error
               ? error.message
-              : "EditorDocument parsing failed.",
+              : "PooderDocument parsing failed.",
             "document",
           ),
         ];
   }
-  const diagnostics: EditorDocumentDiagnostic[] = [];
+  const diagnostics: DocumentDiagnostic[] = [];
   const runValidators = (
     context: Omit<
       Parameters<NonNullable<typeof options.validators>[number]>[0],
@@ -117,11 +117,11 @@ export function validateEditorDocument(
     const surfacePath = `surfaces[${surfaceIndex}]`;
     runValidators({ document, surface, path: surfacePath });
   });
-  visitEditorDocumentObjects(document, ({ surface, object, path }) => {
+  visitDocumentObjects(document, ({ surface, object, path }) => {
     runValidators({ document, surface, object, path });
-    if (!isEditorLeafObject(object)) return;
+    if (!isLeafObject(object)) return;
     object.effects?.forEach((effect, index) => {
-      if (!isEditorExtensionObjectEffect(effect)) return;
+      if (!isExtensionObjectEffect(effect)) return;
       runValidators({
         document,
         surface,
@@ -134,7 +134,7 @@ export function validateEditorDocument(
   return diagnostics;
 }
 
-function parseAsset(value: unknown, index: number): EditorAsset {
+function parseAsset(value: unknown, index: number): Asset {
   const path = `assets[${index}]`;
   const input = record(value, path);
   exact(input, ["id", "type", "source", "mimeType", "intrinsicSize"], path);
@@ -159,7 +159,7 @@ function parseAsset(value: unknown, index: number): EditorAsset {
   };
 }
 
-function parseAssetSource(value: unknown, path: string): EditorAssetDataSource {
+function parseAssetSource(value: unknown, path: string): AssetDataSource {
   const input = record(value, path);
   if (input.kind === "url") {
     exact(input, ["kind", "url"], path);
@@ -179,7 +179,7 @@ function parseAssetSource(value: unknown, path: string): EditorAssetDataSource {
   );
 }
 
-function parseDocumentExtension(value: unknown): EditorDocumentExtension {
+function parseDocumentExtension(value: unknown): DocumentExtension {
   const input = record(value, "extension");
   exact(input, ["required", "states"], "extension");
   return {
@@ -198,7 +198,7 @@ function parseExtensionStates(value: unknown): Record<string, JsonValue> {
   );
 }
 
-function parseSurface(value: unknown, index: number): EditorSurface {
+function parseSurface(value: unknown, index: number): Surface {
   const path = `surfaces[${index}]`;
   const input = record(value, path);
   exact(input, ["id", "title", "bounds", "insets", "objects"], path);
@@ -239,7 +239,7 @@ function parseSurface(value: unknown, index: number): EditorSurface {
   };
 }
 
-function parseObject(value: unknown, path: string): EditorObject {
+function parseObject(value: unknown, path: string): PooderObject {
   const input = record(value, path);
   const nodeFields = [
     "type",
@@ -293,7 +293,7 @@ function parseObject(value: unknown, path: string): EditorObject {
       children: array(input.children, `${path}.children`).map((child, index) =>
         parseObject(child, `${path}.children[${index}]`),
       ),
-    } satisfies EditorGroupObject;
+    } satisfies GroupObject;
   }
   const leafFields = [
     ...nodeFields,
@@ -326,7 +326,7 @@ function parseObject(value: unknown, path: string): EditorObject {
       type: "image",
       source: parseImageObjectSource(input.source, `${path}.source`),
       contentFit: parseImageContentFit(input.contentFit, `${path}.contentFit`),
-    } satisfies EditorImageObject;
+    } satisfies ImageObject;
   }
   if (input.type !== "path" && input.type !== "shape") {
     fail("object-type-invalid", "Object type is invalid.", `${path}.type`);
@@ -341,7 +341,7 @@ function parseObject(value: unknown, path: string): EditorObject {
       : {
           paint: parsePaint(input.paint, `${path}.paint`),
         }),
-  } as EditorLeafObject;
+  } as LeafObject;
 }
 
 function parseAffineMatrix(value: unknown, path: string): AffineMatrix {
@@ -361,7 +361,7 @@ function parseAffineMatrix(value: unknown, path: string): AffineMatrix {
 function parseImageObjectSource(
   value: unknown,
   path: string,
-): EditorImageObject["source"] {
+): ImageObject["source"] {
   if (value === null) return null;
   const input = record(value, path);
   if (input.kind === "asset") {
@@ -382,7 +382,7 @@ function parseInlineObjectSource(
   type: "path" | "shape",
   value: unknown,
   path: string,
-): EditorLeafObject["source"] {
+): LeafObject["source"] {
   const input = record(value, path);
   exact(input, ["kind", "content"], path);
   if (input.kind !== "inline") {
@@ -399,7 +399,7 @@ function parseInlineObjectSource(
       ["pathData", "sourceBounds", "sourceSize"],
       `${path}.content`,
     );
-    const parsed: EditorPathContent = {
+    const parsed: PathContent = {
       pathData: identifier(content.pathData, `${path}.content.pathData`),
       ...(content.sourceBounds === undefined
         ? {}
@@ -431,7 +431,7 @@ function parseInlineObjectSource(
         `${path}.content.shape`,
       );
     }
-    const shape = content.shape as EditorShapeContent["shape"];
+    const shape = content.shape as ShapeContent["shape"];
     const paramsPath = `${path}.content.params`;
     const params = record(content.params, paramsPath);
     const parseOptionalNumber = (key: string) =>
@@ -466,7 +466,7 @@ function parseInlineObjectSource(
           ...parseOptionalNumber("height"),
         },
       };
-    })() as EditorShapeContent;
+    })() as ShapeContent;
     return { kind: "inline", content: parsed };
   }
   fail("object-type-invalid", "Object type is invalid.", `${path}.type`);
@@ -475,14 +475,14 @@ function parseInlineObjectSource(
 function parseImageContentFit(
   value: unknown,
   path: string,
-): EditorImageContentFit {
+): ImageContentFit {
   const input = record(value, path);
   exact(input, ["fit", "anchorX", "anchorY", "zoom", "rotation", "clip"], path);
   if (!["cover", "contain", "stretch"].includes(input.fit as string)) {
     fail("image-fit-invalid", "Image fit is invalid.", `${path}.fit`);
   }
   return {
-    fit: input.fit as EditorImageContentFit["fit"],
+    fit: input.fit as ImageContentFit["fit"],
     anchorX: unitInterval(input.anchorX, `${path}.anchorX`),
     anchorY: unitInterval(input.anchorY, `${path}.anchorY`),
     zoom: positive(input.zoom, `${path}.zoom`),
@@ -491,7 +491,7 @@ function parseImageContentFit(
   };
 }
 
-function parsePaint(value: unknown, path: string): EditorPaint {
+function parsePaint(value: unknown, path: string): Paint {
   const input = record(value, path);
   exact(input, ["fill", "stroke", "strokeWidthMm", "dashMm"], path);
   const color = (entry: unknown, entryPath: string) =>
@@ -518,7 +518,7 @@ function parsePaint(value: unknown, path: string): EditorPaint {
   };
 }
 
-function parseTrait(value: unknown, path: string): EditorObjectTrait {
+function parseTrait(value: unknown, path: string): ObjectTrait {
   const input = record(value, path);
   const type = identifier(input.type, `${path}.type`);
   if (type === "core.guide") {
@@ -538,7 +538,7 @@ function parseTrait(value: unknown, path: string): EditorObjectTrait {
   };
 }
 
-function parseEffect(value: unknown, path: string): EditorObjectEffect {
+function parseEffect(value: unknown, path: string): ObjectEffect {
   const input = record(value, path);
   const type = identifier(input.type, `${path}.type`);
   if (type === "core.geometry.clip") {
@@ -604,7 +604,7 @@ function parseParticipation(value: unknown, path: string) {
   return { participation: value } as const;
 }
 
-function parseBehavior(value: unknown, path: string): EditorObjectBehavior {
+function parseBehavior(value: unknown, path: string): ObjectBehavior {
   const input = record(value, path);
   exact(input, ["type", "config"], path);
   return {
@@ -743,9 +743,9 @@ function parseConstraintApplication(value: unknown, path: string) {
 }
 
 function validateDocumentReferences(
-  document: EditorDocument,
-): EditorDocumentDiagnostic[] {
-  const diagnostics: EditorDocumentDiagnostic[] = [];
+  document: PooderDocument,
+): DocumentDiagnostic[] {
+  const diagnostics: DocumentDiagnostic[] = [];
   const allIds = new Map<string, string>();
   const addId = (id: string, path: string) => {
     const previous = allIds.get(id);
@@ -767,15 +767,15 @@ function validateDocumentReferences(
   });
   const objects = new Map<
     string,
-    { object: EditorObject; surfaceId: string; path: string }
+    { object: PooderObject; surfaceId: string; path: string }
   >();
-  visitEditorDocumentObjects(document, ({ object, surface, path }) => {
+  visitDocumentObjects(document, ({ object, surface, path }) => {
     addId(object.id, `${path}.id`);
     objects.set(object.id, { object, surfaceId: surface.id, path });
   });
   const assetIds = new Set(document.assets.map((asset) => asset.id));
   const dependencies = new Map<string, Set<string>>();
-  visitEditorDocumentObjects(document, ({ object, surface, path }) => {
+  visitDocumentObjects(document, ({ object, surface, path }) => {
     const imageSource = object.type === "image" ? object.source : null;
     if (imageSource && !assetIds.has(imageSource.assetId)) {
       diagnostics.push(
@@ -786,9 +786,9 @@ function validateDocumentReferences(
         ),
       );
     }
-    if (!isEditorLeafObject(object)) return;
+    if (!isLeafObject(object)) return;
     object.effects?.forEach((effect, index) => {
-      if (!isEditorBuiltinObjectEffect(effect)) return;
+      if (!isBuiltinObjectEffect(effect)) return;
       const isClip = effect.type === "core.geometry.clip";
       const field = isClip ? "sourceObjectId" : "operandObjectId";
       const targetId = isClip ? effect.sourceObjectId : effect.operandObjectId;
@@ -1039,7 +1039,7 @@ function exact(
   if (unknown) {
     fail(
       "unknown-field",
-      `Field "${unknown}" is not allowed in EditorDocument v8.`,
+      `Field "${unknown}" is not allowed in PooderDocument v8.`,
       `${path}.${unknown}`,
     );
   }
@@ -1053,6 +1053,6 @@ function diagnostic(
   code: string,
   message: string,
   path: string,
-): EditorDocumentDiagnostic {
+): DocumentDiagnostic {
   return { severity: "error", stage: "document-schema", code, message, path };
 }

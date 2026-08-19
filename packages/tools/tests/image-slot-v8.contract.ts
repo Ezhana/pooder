@@ -1,5 +1,5 @@
-import type { EditorDocument, EditorImageObject } from "@pooder/document";
-import { validateEditorDocument } from "@pooder/document";
+import type { PooderDocument, ImageObject } from "@pooder/document";
+import { validateDocument } from "@pooder/document";
 import {
   IMAGE_SLOT_CAPABILITY_ID,
   type ImageSlotCapabilityApi,
@@ -15,7 +15,7 @@ const contentFit = {
   clip: "frame",
 } as const;
 
-const emptySlot: EditorImageObject = {
+const emptySlot: ImageObject = {
   type: "image",
   id: "artwork",
   tags: ["slot:artwork"],
@@ -41,7 +41,7 @@ const emptySlot: EditorImageObject = {
   ],
 };
 
-const document: EditorDocument = {
+const document: PooderDocument = {
   version: 8,
   assets: [
     {
@@ -76,7 +76,7 @@ const document: EditorDocument = {
   ],
 };
 
-const diagnostics = validateEditorDocument(document);
+const diagnostics = validateDocument(document);
 if (diagnostics.length) throw new Error("v8 image slot contract is invalid");
 
 declare const facade: ImageSlotCapabilityApi;
