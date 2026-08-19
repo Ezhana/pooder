@@ -3,11 +3,12 @@ import type {
   CoordinateRect,
   RectMm,
   SceneExportCrop,
+  SceneExportOutputMask,
   SceneExportSourceResult,
   SceneExportSourceSelector,
 } from "@pooder/core";
 
-export const DESIGN_EXPORT_CAPABILITY_ID = "pooder.kit.design-export";
+export const EXPORT_CAPABILITY_ID = "pooder.export";
 
 export type ExportImageFormat = "png" | "jpeg";
 
@@ -15,27 +16,26 @@ export type CutMode = "trim" | "outset" | "inset";
 
 export type ExportPurpose = "design" | "mockup";
 
-export type NamedExportCropFrame = "cut" | "trim" | "bleed";
+export type ExportCropPolicy = "content" | "bleed";
 
-export interface DesignExportCapabilityOptions {
+export interface ExportCapabilityOptions {
   capabilityId?: string;
-  source?: SceneExportSourceSelector;
 }
 
 export type ExportCropInput =
   | SceneExportCrop
   | CoordinateRect<"scene">
-  | NamedExportCropFrame;
+  | ExportCropPolicy;
 
 export interface ExportImageOptions {
   sceneId: string;
+  purpose: ExportPurpose;
+  crop?: ExportCropInput;
+  source?: SceneExportSourceSelector;
+  outputMask?: SceneExportOutputMask;
   format?: ExportImageFormat;
   multiplier?: number;
-  source?: SceneExportSourceSelector;
-  /**
-   * Explicit crop for this scene. Defaults to the content rect after `size.cutMode`.
-   */
-  crop?: ExportCropInput;
+  preserveClipPaths?: boolean;
 }
 
 export interface ExportImageResult {
@@ -49,8 +49,59 @@ export interface ExportImageResult {
   sceneId: string;
 }
 
-export interface DesignExportCapabilityApi {
+export interface ExportCapabilityApi {
   exportImage(options: ExportImageOptions): Promise<ExportImageResult>;
+}
+
+export const DEFAULT_DESIGN_EXPORT_TAGS = ["export:design"] as const;
+export const DEFAULT_MOCKUP_EXPORT_TAGS = ["export:mockup"] as const;
+
+/** Auto-mask for mockup only applies to this known white-backed key. */
+export const DEFAULT_MOCKUP_OUTPUT_MASK_KEY = "templateFrame";
+
+export const DEFAULT_MOCKUP_OUTPUT_MASK_TRANSPARENT_COLOR = {
+  red: 255,
+  green: 255,
+  blue: 255,
+  tolerance: 8,
+} as const;
+
+export function defaultSourceForPurpose(
+  purpose: ExportPurpose,
+): SceneExportSourceSelector {
+  return {
+    tags:
+      purpose === "mockup"
+        ? DEFAULT_MOCKUP_EXPORT_TAGS
+        : DEFAULT_DESIGN_EXPORT_TAGS,
+  };
+}
+
+export function resolveDefaultOutputMask(
+  purpose: ExportPurpose,
+  keys: readonly string[],
+  explicit?: SceneExportOutputMask,
+): SceneExportOutputMask | undefined {
+  if (explicit) return explicit;
+  if (purpose !== "mockup") return undefined;
+  const uniqueKeys = [
+    ...new Set(
+      keys.map((key) => String(key || "").trim()).filter((key) => key.length > 0),
+    ),
+  ];
+  if (uniqueKeys.length === 0) return undefined;
+  if (uniqueKeys.length > 1) {
+    throw new Error("export-output-mask-ambiguous");
+  }
+  const [sourceKey] = uniqueKeys;
+  if (!sourceKey || sourceKey !== DEFAULT_MOCKUP_OUTPUT_MASK_KEY) {
+    throw new Error("export-output-mask-required");
+  }
+  return {
+    mode: "outline",
+    sourceKey,
+    transparentColor: { ...DEFAULT_MOCKUP_OUTPUT_MASK_TRANSPARENT_COLOR },
+  };
 }
 
 export function normalizeCutMode(value: unknown): CutMode {
@@ -101,15 +152,16 @@ export interface ResolveExportCropInput {
   minMm?: unknown;
 }
 
-export function resolveExportCrop(input: ResolveExportCropInput): SceneExportCrop {
+export function resolveExportCrop(
+  input: ResolveExportCropInput,
+): SceneExportCrop {
   const crop = input.crop;
   if (isSceneExportCrop(crop)) return crop;
   if (isSceneCoordinateRect(crop)) {
     return { type: "sceneRect", rect: crop };
   }
-  const namedFrame = crop === "cut" || crop === "trim" || crop === "bleed" ? crop : undefined;
-  const applyCutMargin = input.purpose === "design" || namedFrame === "bleed";
-  const rect = applyCutMargin
+  const applyBleed = crop === "bleed" || (crop !== "content" && input.purpose === "design");
+  const rect = applyBleed
     ? applyCutMarginToRect(
         input.content,
         normalizeCutMode(input.cutMode),
@@ -126,7 +178,9 @@ function isSceneExportCrop(value: unknown): value is SceneExportCrop {
   return type === "sceneRect" || type === "elementBounds";
 }
 
-function isSceneCoordinateRect(value: unknown): value is CoordinateRect<"scene"> {
+function isSceneCoordinateRect(
+  value: unknown,
+): value is CoordinateRect<"scene"> {
   if (!value || typeof value !== "object") return false;
   const rect = value as Partial<CoordinateRect<"scene">>;
   return (
@@ -138,20 +192,19 @@ function isSceneCoordinateRect(value: unknown): value is CoordinateRect<"scene">
   );
 }
 
-export function createDesignExportCapabilityDefinition(
-  facade: DesignExportCapabilityApi,
-  options: DesignExportCapabilityOptions = {},
-): CapabilityDefinition<DesignExportCapabilityApi> {
+export function createExportCapabilityDefinition(
+  facade: ExportCapabilityApi,
+  options: ExportCapabilityOptions = {},
+): CapabilityDefinition<ExportCapabilityApi> {
   return {
-    id: options.capabilityId || DESIGN_EXPORT_CAPABILITY_ID,
+    id: options.capabilityId || EXPORT_CAPABILITY_ID,
     metadata: {
-      name: "Design Export",
+      name: "Export",
       description:
-        "Export selected design layers, elements, and scene crops without " +
-        "requiring a kit-owned workflow tool.",
-      tags: ["kit", "export", "image"],
+        "Document-aware raster export. Purpose selects membership and crop; " +
+        "SceneExportService remains the primitive.",
+      tags: ["export", "image"],
     },
-    commands: [{ id: "exportImage", title: "Export Image" }],
     facade,
   };
 }

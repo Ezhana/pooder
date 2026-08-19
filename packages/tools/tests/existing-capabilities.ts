@@ -19,25 +19,25 @@ import type {
 } from "@pooder/document";
 import { registerEditorDocumentService } from "../../document-core/src";
 import {
-  DESIGN_EXPORT_CAPABILITY_ID,
   EDGE_DETECTION_CAPABILITY_ID,
+  EXPORT_CAPABILITY_ID,
   IMAGE_MASK_CAPABILITY_ID,
   MIRROR_CAPABILITY_ID,
-  SCENE_EXPORT_CAPABILITY_ID,
-  DesignExportCapabilityExtension,
   EdgeDetectionCapabilityExtension,
+  ExportCapability,
   ImageMaskCapabilityExtension,
   MirrorCapabilityExtension,
-  SceneExportCapabilityExtension,
   createOfficialToolEffectSchemaRegistry,
   mapImageMaskAlpha,
   normalizeImageMaskAlpha,
+  resolveDefaultOutputMask,
+  DEFAULT_MOCKUP_OUTPUT_MASK_KEY,
   resolveOfficialToolDocumentEffectCapabilityId,
-  type DesignExportCapabilityApi,
   type EdgeDetectionCapabilityApi,
+  type ExportCapabilityApi,
+  type ExportPurpose,
   type ImageMaskCapabilityApi,
   type MirrorCapabilityApi,
-  type SceneExportCapabilityApi,
 } from "../src";
 import {
   circularMorphology,
@@ -187,7 +187,7 @@ async function testSharedCurrentCapabilityUtilities(): Promise<void> {
 }
 
 function createEffectDocument(
-  effect: EditorObjectEffect,
+  effect: EditorObjectEffect | undefined,
   source:
     | { type: "image" }
     | {
@@ -195,6 +195,7 @@ function createEffectDocument(
         shape: "rect" | "circle" | "ellipse" | "heart";
         params: Record<string, never>;
       },
+  traits: EditorObject["traits"] = [],
 ): EditorDocument {
   const geometry = {
     localFrame: { x: 0, y: 0, width: 80, height: 40 },
@@ -216,6 +217,7 @@ function createEffectDocument(
           tags: ["visual:test"],
           visible: true,
           locked: false,
+          ...(traits.length ? { traits } : {}),
           ...geometry,
           source: { kind: "asset", assetId: "visual.asset" },
           contentFit: {
@@ -227,7 +229,7 @@ function createEffectDocument(
             clip: "frame",
           },
           opacity: 1,
-          effects: [effect],
+          ...(effect ? { effects: [effect] } : {}),
         }
       : {
           type: "shape",
@@ -235,6 +237,7 @@ function createEffectDocument(
           tags: ["visual:test"],
           visible: true,
           locked: false,
+          ...(traits.length ? { traits } : {}),
           ...geometry,
           source: {
             kind: "inline",
@@ -243,7 +246,7 @@ function createEffectDocument(
               params: source.params,
             },
           },
-          effects: [effect],
+          ...(effect ? { effects: [effect] } : {}),
         };
   return {
     version: 8,
@@ -279,7 +282,58 @@ function createEffectDocument(
   };
 }
 
-async function testDesignExportCapability(): Promise<void> {
+async function testExportCapability(): Promise<void> {
+  assertDeepEqual(
+    resolveDefaultOutputMask("mockup", [DEFAULT_MOCKUP_OUTPUT_MASK_KEY]),
+    {
+      mode: "outline",
+      sourceKey: DEFAULT_MOCKUP_OUTPUT_MASK_KEY,
+      transparentColor: { red: 255, green: 255, blue: 255, tolerance: 8 },
+    },
+    "mockup should auto-apply the canonical white templateFrame mask",
+  );
+  assertEqual(
+    resolveDefaultOutputMask("mockup", []),
+    undefined,
+    "mockup should skip output mask when the document has no keys",
+  );
+  assertEqual(
+    resolveDefaultOutputMask("design", [DEFAULT_MOCKUP_OUTPUT_MASK_KEY]),
+    undefined,
+    "design should not auto-apply an output mask",
+  );
+  try {
+    resolveDefaultOutputMask("mockup", [
+      DEFAULT_MOCKUP_OUTPUT_MASK_KEY,
+      "otherMask",
+    ]);
+    throw new Error("multiple output-mask keys should fail");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "export-output-mask-ambiguous",
+      "multiple output-mask keys should require an explicit mask",
+    );
+  }
+  try {
+    resolveDefaultOutputMask("mockup", ["otherMask"]);
+    throw new Error("unknown output-mask key should fail");
+  } catch (error) {
+    assertEqual(
+      error instanceof Error ? error.message : "",
+      "export-output-mask-required",
+      "unknown output-mask keys should require an explicit mask",
+    );
+  }
+  assertDeepEqual(
+    resolveDefaultOutputMask("mockup", ["otherMask"], {
+      mode: "outline",
+      sourceKey: "otherMask",
+    }),
+    { mode: "outline", sourceKey: "otherMask" },
+    "explicit output mask should win over graph keys",
+  );
+
   const runtime = new Pooder();
   const service = new FakeSceneExportService();
   service.response = {
@@ -295,7 +349,7 @@ async function testDesignExportCapability(): Promise<void> {
     url: "data:image/png;base64,design",
     width: 90,
   };
-  runtime.extensions.register(new DesignExportCapabilityExtension());
+  runtime.extensions.register(new ExportCapability());
   runtime.services.register(service as never, SCENE_EXPORT_SERVICE);
   runtime.services
     .getOrThrow<SceneService>(SCENE_SERVICE)
@@ -306,55 +360,55 @@ async function testDesignExportCapability(): Promise<void> {
   await runtime.extensions.flushActivation();
   try {
     assertEqual(
-      runtime.extensions.getState(DESIGN_EXPORT_CAPABILITY_ID)?.state,
+      runtime.extensions.getState(EXPORT_CAPABILITY_ID)?.state,
       "active",
-      "design export should activate",
+      "export should activate",
+    );
+    assertEqual(
+      runtime.capabilities.list().filter((capability) =>
+        capability.id.includes("export"),
+      ).length,
+      1,
+      "runtime should register exactly one export capability",
     );
     assertEqual(
       runtime.services
         .getOrThrow<CommandService>(COMMAND_SERVICE)
         .getCommand("exportImage"),
       undefined,
-      "design export must not restore the legacy command",
+      "export must not restore the legacy command",
     );
-    const facade = runtime.capabilities.get<DesignExportCapabilityApi>(
-      DESIGN_EXPORT_CAPABILITY_ID,
+    const facade = runtime.capabilities.get<ExportCapabilityApi>(
+      EXPORT_CAPABILITY_ID,
     );
-    assert(facade, "design export facade should be registered");
+    assert(facade, "export facade should be registered");
     const result = await facade.exportImage({
       multiplier: 3,
+      purpose: "design",
       sceneId: "front",
       source: { elementIds: ["visual"] },
     });
     assertDeepEqual(
       service.calls.at(-1)?.source,
       { elementIds: ["visual"] },
-      "design export should delegate the explicit source",
+      "export should delegate the explicit source",
     );
-    assertEqual(
-      result.url,
-      "data:image/png;base64,design",
-      "design export url",
-    );
-    assertEqual(
-      result.sceneId,
-      "front",
-      "design export should include the scene id",
-    );
+    assertEqual(result.url, "data:image/png;base64,design", "export url");
+    assertEqual(result.sceneId, "front", "export should include the scene id");
     assertDeepEqual(
       result.source,
       {
         elementIds: ["visual"],
         tags: ["design"],
       },
-      "design export should map the platform source result",
+      "export should map the platform source result",
     );
     assertDeepEqual(
       result.crop,
       { left: 1, top: 2, width: 30, height: 20 },
-      "design export should map the platform crop",
+      "export should map the platform crop",
     );
-    await facade.exportImage({ sceneId: "front" });
+    await facade.exportImage({ purpose: "design", sceneId: "front" });
     assertDeepEqual(
       service.calls.at(-1)?.crop,
       {
@@ -374,9 +428,15 @@ async function testDesignExportCapability(): Promise<void> {
         "includeHidden",
       ),
       false,
-      "design export must not rewrite membership with includeHidden",
+      "export must not rewrite membership with includeHidden",
+    );
+    assertEqual(
+      service.calls.at(-1)?.preserveClipPaths,
+      true,
+      "export should preserve clip paths by default",
     );
     await facade.exportImage({
+      purpose: "design",
       sceneId: "front",
       crop: {
         left: 0,
@@ -392,12 +452,12 @@ async function testDesignExportCapability(): Promise<void> {
         type: "sceneRect",
         rect: { left: 0, top: 0, width: 200, height: 100, space: "scene" },
       },
-      "design export should use an explicit crop when provided",
+      "export should use an explicit crop when provided",
     );
 
-    runtime.config.update("size.cutMode", "outset");
-    runtime.config.update("size.cutMarginMm", 4);
-    await facade.exportImage({ sceneId: "front" });
+    runtime.config.update("export.cutMode", "outset");
+    runtime.config.update("export.cutMarginMm", 4);
+    await facade.exportImage({ purpose: "design", sceneId: "front" });
     assertDeepEqual(
       service.calls.at(-1)?.crop,
       {
@@ -406,8 +466,30 @@ async function testDesignExportCapability(): Promise<void> {
       },
       "design export should expand the content rect when cutMode is outset",
     );
-    runtime.config.update("size.cutMode", "trim");
-    runtime.config.update("size.cutMarginMm", 0);
+    await facade.exportImage({ purpose: "mockup", sceneId: "front" });
+    assertDeepEqual(
+      service.calls.at(-1)?.crop,
+      {
+        type: "sceneRect",
+        rect: { left: 10, top: 5, width: 180, height: 90, space: "scene" },
+      },
+      "mockup export should crop to the content rect",
+    );
+    assertDeepEqual(
+      service.calls.at(-1)?.source,
+      { tags: ["export:mockup"] },
+      "mockup export should use the canonical mockup export tag by default",
+    );
+    assertEqual(
+      Object.prototype.hasOwnProperty.call(
+        service.calls.at(-1) ?? {},
+        "outputMask",
+      ),
+      false,
+      "mockup export should skip output mask when the document has no keys",
+    );
+    runtime.config.update("export.cutMode", "trim");
+    runtime.config.update("export.cutMarginMm", 0);
 
     runtime.services
       .getOrThrow<SceneService>(SCENE_SERVICE)
@@ -417,6 +499,7 @@ async function testDesignExportCapability(): Promise<void> {
       .setBounds("back", SCENE_BOUNDS);
     const explicitCallCount = service.calls.length;
     await facade.exportImage({
+      purpose: "design",
       sceneId: "back",
       crop: {
         left: 1,
@@ -433,100 +516,27 @@ async function testDesignExportCapability(): Promise<void> {
       "back",
       "export should use the requested sceneId",
     );
-    await facade.exportImage({ sceneId: "front" }).then(
+    await facade.exportImage({ purpose: "design", sceneId: "front" }).then(
       () => undefined,
       () => {
         throw new Error("front should still export independently");
       },
     );
-    service.errorsBySceneId.set(
-      "front",
-      new Error("browser-scene-export-empty"),
-    );
-    await facade.exportImage({ sceneId: "front" }).then(
-      () => {
-        throw new Error("empty design export should fail");
-      },
-      (error: unknown) => {
-        assertEqual(
-          error instanceof Error ? error.message : "",
-          "no-design-objects-to-export",
-          "design export should fail when the requested scene is empty",
-        );
-      },
-    );
-  } finally {
-    await runtime.dispose();
-  }
-}
 
-async function testSceneExportCapability(): Promise<void> {
-  const runtime = new Pooder();
-  const service = new FakeSceneExportService();
-  service.response = {
-    crop: { left: 4, top: 5, width: 120, height: 90 },
-    format: "png",
-    height: 90,
-    multiplier: 1,
-    source: { elementIds: [], tags: [] },
-    url: "data:image/png;base64,scene",
-    width: 120,
-    sceneId: "front",
-  };
-  runtime.extensions.register(new SceneExportCapabilityExtension());
-  runtime.services.register(service as never, SCENE_EXPORT_SERVICE);
-  await runtime.extensions.flushActivation();
-  try {
-    const facade = runtime.capabilities.get<SceneExportCapabilityApi>(
-      SCENE_EXPORT_CAPABILITY_ID,
-    );
-    assert(facade, "scene export facade should be registered");
-    const result = await facade.exportImage({
-      crop: {
-        type: "sceneRect",
-        rect: { space: "scene", left: 4, top: 5, width: 120, height: 90 },
-      },
-      sceneId: "front",
-      source: { tags: ["export:mockup"] },
-    });
-    assertEqual(
-      Object.prototype.hasOwnProperty.call(
-        service.calls.at(-1) ?? {},
-        "includeHidden",
-      ),
-      false,
-      "scene export must not accept includeHidden",
-    );
-    assertEqual(
-      service.calls.at(-1)?.preserveClipPaths,
-      true,
-      "scene export should preserve clip paths by default",
-    );
-    assertEqual(result.url, "data:image/png;base64,scene", "scene export url");
-    assertDeepEqual(
-      result.source,
-      { elementIds: [], tags: [] },
-      "scene export should map the platform source result",
-    );
-    assertDeepEqual(
-      result.crop,
-      { left: 4, top: 5, width: 120, height: 90 },
-      "scene export should map the platform crop",
-    );
     await facade.exportImage({
-      crop: { type: "elementBounds" },
+      purpose: "mockup",
       sceneId: "front",
       preserveClipPaths: false,
     });
     assertEqual(
       service.calls.at(-1)?.preserveClipPaths,
       false,
-      "scene export should accept preserveClipPaths=false",
+      "export should accept preserveClipPaths=false",
     );
     await facade.exportImage({
-      crop: { type: "elementBounds" },
       format: "jpeg",
       outputMask: { mode: "outline", sourceKey: "frame" },
+      purpose: "mockup",
       sceneId: "front",
     });
     assertEqual(
@@ -537,20 +547,38 @@ async function testSceneExportCapability(): Promise<void> {
     assertDeepEqual(
       service.calls.at(-1)?.outputMask,
       { mode: "outline", sourceKey: "frame" },
-      "scene export should delegate output mask options",
+      "export should delegate explicit output mask options",
     );
+
+    service.errorsBySceneId.set(
+      "front",
+      new Error("browser-scene-export-empty"),
+    );
+    await facade.exportImage({ purpose: "design", sceneId: "front" }).then(
+      () => {
+        throw new Error("empty export should fail");
+      },
+      (error: unknown) => {
+        assertEqual(
+          error instanceof Error ? error.message : "",
+          "export-empty",
+          "export should fail when the requested scene is empty",
+        );
+      },
+    );
+    service.errorsBySceneId.clear();
     for (const [platformError, capabilityError] of [
-      ["browser-scene-export-empty", "scene-export-empty"],
-      ["browser-scene-export-failed", "scene-export-failed"],
+      ["browser-scene-export-empty", "export-empty"],
+      ["browser-scene-export-failed", "export-failed"],
       [
         "browser-scene-export-output-mask-source-missing",
-        "scene-export-output-mask-source-missing",
+        "export-output-mask-source-missing",
       ],
     ] as const) {
       service.error = new Error(platformError);
       await facade
         .exportImage({
-          crop: { type: "elementBounds" },
+          purpose: "mockup",
           sceneId: "front",
         })
         .then(
@@ -566,6 +594,149 @@ async function testSceneExportCapability(): Promise<void> {
           },
         );
     }
+    service.error = null;
+
+    await facade
+      .exportImage({
+        purpose: "preview" as ExportPurpose,
+        sceneId: "front",
+      })
+      .then(
+        () => {
+          throw new Error("invalid purpose should fail");
+        },
+        (error: unknown) => {
+          assertEqual(
+            error instanceof Error ? error.message : "",
+            "export-purpose-required",
+            "invalid purpose should not reuse export-scene-required",
+          );
+        },
+      );
+    await facade.exportImage({ purpose: "design", sceneId: " " }).then(
+      () => {
+        throw new Error("missing scene should fail");
+      },
+      (error: unknown) => {
+        assertEqual(
+          error instanceof Error ? error.message : "",
+          "export-scene-required",
+          "missing sceneId should stay export-scene-required",
+        );
+      },
+    );
+
+    const controller = registerEditorDocumentService(runtime, {
+      effectSchemaRegistry: createOfficialToolEffectSchemaRegistry(),
+      resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
+    });
+    const masked = await controller.apply(
+      createEffectDocument(undefined, { type: "image" }, [
+        { type: "core.output-mask", keys: [DEFAULT_MOCKUP_OUTPUT_MASK_KEY] },
+      ]),
+    );
+    assertEqual(masked.ok, true, "output-mask document should apply");
+    runtime.services
+      .getOrThrow<SceneBoundsService>(SCENE_BOUNDS_SERVICE)
+      .setBounds("front", SCENE_BOUNDS);
+    await facade.exportImage({ purpose: "mockup", sceneId: "front" });
+    assertDeepEqual(
+      service.calls.at(-1)?.outputMask,
+      {
+        mode: "outline",
+        sourceKey: DEFAULT_MOCKUP_OUTPUT_MASK_KEY,
+        transparentColor: { red: 255, green: 255, blue: 255, tolerance: 8 },
+      },
+      "mockup export should read templateFrame from the compiled graph",
+    );
+
+    const ambiguous = await controller.apply({
+      ...createEffectDocument(undefined, { type: "image" }, [
+        { type: "core.output-mask", keys: [DEFAULT_MOCKUP_OUTPUT_MASK_KEY] },
+      ]),
+      surfaces: [
+        {
+          id: "front",
+          bounds: { x: 0, y: 0, width: 200, height: 100 },
+          objects: [
+            {
+              type: "group",
+              id: "artwork",
+              tags: [],
+              visible: true,
+              locked: false,
+              localToParent: [1, 0, 0, 1, 0, 0],
+              children: [
+                {
+                  type: "image",
+                  id: "visual",
+                  tags: ["visual:test"],
+                  visible: true,
+                  locked: false,
+                  traits: [
+                    {
+                      type: "core.output-mask",
+                      keys: [DEFAULT_MOCKUP_OUTPUT_MASK_KEY],
+                    },
+                  ],
+                  localFrame: { x: 0, y: 0, width: 80, height: 40 },
+                  localToParent: [1, 0, 0, 1, 50, 40],
+                  localPivot: { x: 40, y: 20 },
+                  source: { kind: "asset", assetId: "visual.asset" },
+                  contentFit: {
+                    fit: "contain",
+                    anchorX: 0.5,
+                    anchorY: 0.5,
+                    zoom: 1,
+                    rotation: 0,
+                    clip: "frame",
+                  },
+                  opacity: 1,
+                },
+                {
+                  type: "image",
+                  id: "visual-alt",
+                  tags: ["visual:alt"],
+                  visible: true,
+                  locked: false,
+                  traits: [{ type: "core.output-mask", keys: ["otherMask"] }],
+                  localFrame: { x: 0, y: 0, width: 80, height: 40 },
+                  localToParent: [1, 0, 0, 1, 50, 40],
+                  localPivot: { x: 40, y: 20 },
+                  source: { kind: "asset", assetId: "visual.asset" },
+                  contentFit: {
+                    fit: "contain",
+                    anchorX: 0.5,
+                    anchorY: 0.5,
+                    zoom: 1,
+                    rotation: 0,
+                    clip: "frame",
+                  },
+                  opacity: 1,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    assertEqual(
+      ambiguous.ok,
+      true,
+      "ambiguous output-mask document should apply",
+    );
+    await facade.exportImage({ purpose: "mockup", sceneId: "front" }).then(
+      () => {
+        throw new Error("ambiguous graph mask keys should fail");
+      },
+      (error: unknown) => {
+        assertEqual(
+          error instanceof Error ? error.message : "",
+          "export-output-mask-ambiguous",
+          "capability should require an explicit mask when the graph has multiple keys",
+        );
+      },
+    );
   } finally {
     await runtime.dispose();
   }
@@ -736,8 +907,7 @@ async function testEdgeDetectionCapability(): Promise<void> {
 export async function runExistingCapabilityRegressions(): Promise<void> {
   const tests: Array<[string, () => Promise<void>]> = [
     ["shared capability utilities", testSharedCurrentCapabilityUtilities],
-    ["DesignExport", testDesignExportCapability],
-    ["SceneExport", testSceneExportCapability],
+    ["Export", testExportCapability],
     ["Mirror", testMirrorCapability],
     ["ImageMask", testImageMaskCapability],
     ["EdgeDetection", testEdgeDetectionCapability],
