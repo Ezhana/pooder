@@ -1,7 +1,7 @@
 {
   "name": "@pooder/kit",
   "version": "10.0.0",
-  "description": "Optional factory-only aggregate for official Pooder Tools",
+  "description": "Optional factory-only aggregate for Pooder tools",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",

@@ -27,12 +27,12 @@ import {
   ExportCapability,
   ImageMaskCapabilityExtension,
   MirrorCapabilityExtension,
-  createOfficialToolEffectSchemaRegistry,
+  createEffectSchemaRegistry,
   mapImageMaskAlpha,
   normalizeImageMaskAlpha,
   resolveDefaultOutputMask,
   DEFAULT_MOCKUP_OUTPUT_MASK_KEY,
-  resolveOfficialToolDocumentEffectCapabilityId,
+  resolveEffectCapabilityId,
   type EdgeDetectionCapabilityApi,
   type ExportCapabilityApi,
   type ExportPurpose,
@@ -627,8 +627,8 @@ async function testExportCapability(): Promise<void> {
     );
 
     const controller = registerEditorDocumentService(runtime, {
-      effectSchemaRegistry: createOfficialToolEffectSchemaRegistry(),
-      resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
+      effectSchemaRegistry: createEffectSchemaRegistry(),
+      resolveEffectCapabilityId,
     });
     const masked = await controller.apply(
       createEffectDocument(undefined, { type: "image" }, [
@@ -747,8 +747,8 @@ async function testMirrorCapability(): Promise<void> {
   runtime.extensions.register(new MirrorCapabilityExtension());
   await runtime.extensions.flushActivation();
   const controller = registerEditorDocumentService(runtime, {
-    effectSchemaRegistry: createOfficialToolEffectSchemaRegistry(),
-    resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
+    effectSchemaRegistry: createEffectSchemaRegistry(),
+    resolveEffectCapabilityId,
   });
   try {
     const applied = await controller.apply(

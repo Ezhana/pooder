@@ -17,7 +17,7 @@ import {
   type EditorExtensionObjectEffect,
   type EditorObject,
 } from "@pooder/document";
-import { getOfficialToolEffectSchema } from "../../document/effect-schemas";
+import { getEffectSchema } from "../../document/effect-schemas";
 import {
   MIRROR_CAPABILITY_ID,
   createMirrorCapabilityDefinition,
@@ -78,7 +78,7 @@ export class MirrorCapabilityExtension implements ExtensionDefinition {
         }),
       ],
       documentExtensions: [
-        { id: this.id, effects: [getOfficialToolEffectSchema("mirror")] },
+        { id: this.id, effects: [getEffectSchema("mirror")] },
       ],
       renderIntentCompilers: [this.createRenderIntentCompiler()],
     };

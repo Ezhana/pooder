@@ -1,5 +1,5 @@
 /**
- * Optional factory-only aggregate for official Pooder Tool packages.
+ * Optional factory-only aggregate for Pooder tool packages.
  * Applications should prefer direct Tool package dependencies.
  */
 export {

@@ -1,7 +1,7 @@
 {
   "name": "@pooder/tools",
   "version": "9.0.0",
-  "description": "Official capability-based tools for Pooder editor",
+  "description": "Capability-based tools for the Pooder editor",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",

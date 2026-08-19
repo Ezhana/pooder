@@ -9,36 +9,33 @@ import {
 } from "../factories";
 import { IMAGE_SLOT_CAPABILITY_ID } from "../extensions/image-slot";
 import { MIRROR_CAPABILITY_ID } from "../extensions/mirror";
-import { collectOfficialToolDocumentCapabilityRequirements } from "./index";
+import { collectDocumentCapabilityRequirements } from "./index";
 import { IMAGE_SLOT_BEHAVIOR_TYPE } from "./behavior-schemas";
 
-const OFFICIAL_TOOL_EFFECT_FACTORIES: Record<
-  string,
-  () => ExtensionDefinition
-> = {
+const CAPABILITY_FACTORIES: Record<string, () => ExtensionDefinition> = {
   [IMAGE_SLOT_CAPABILITY_ID]: () => createImageSlotCapability(),
   [MIRROR_CAPABILITY_ID]: () => createMirrorCapability(),
 };
 
-export function createOfficialToolCapabilitiesForDocument(
+export function createCapabilitiesForDocument(
   value: unknown,
   options: {
     imageSlot?: Parameters<typeof createImageSlotCapability>[0];
   } = {},
 ): ExtensionDefinition[] {
-  const result = collectOfficialToolDocumentCapabilityRequirements(value);
+  const result = collectDocumentCapabilityRequirements(value);
   const capabilityIds = Array.from(
     new Set(
       result.requirements
         .map((item) => item.capabilityId)
-        .filter((id) => OFFICIAL_TOOL_EFFECT_FACTORIES[id]),
+        .filter((id) => CAPABILITY_FACTORIES[id]),
     ),
   );
 
   const capabilities = capabilityIds.map((id) =>
     id === IMAGE_SLOT_CAPABILITY_ID
       ? createImageSlotCapability(options.imageSlot)
-      : OFFICIAL_TOOL_EFFECT_FACTORIES[id](),
+      : CAPABILITY_FACTORIES[id](),
   );
   const document = parseEditorDocument(value);
   const requiredCapabilityIds = new Set(document.extension.required);

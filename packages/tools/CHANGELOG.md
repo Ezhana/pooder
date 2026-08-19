@@ -4,6 +4,8 @@
 
 ### Major Changes
 
+- Dropped the `Official` prefix from `@pooder/tools` document helpers. The
+  public factory is now `createCapabilitiesForDocument`.
 - Moved official capability implementations out of `@pooder/kit`. Kit now
   explicitly re-exports factories only; `@pooder/tools` remains a migration
   aggregate while implementations move to standalone Tool packages.

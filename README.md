@@ -36,7 +36,7 @@ EditorDocument  ──apply──►  document-core  ──RenderIntent──►
 | `@pooder/platform-browser` | Browser host: Fabric adapter, canvas, viewport, export, image resources. |
 | `@pooder/geometry-paper` | Lazily loaded Paper.js geometry backend. Importing the module does not touch the DOM. |
 | `@pooder/vue` | Vue 3 host. The **root entry is SSR-safe**; canvas and tool registration live in `@pooder/vue/editor`. |
-| `@pooder/tools` | Migration aggregate for existing official capabilities (image-slot, mirror, edge-detection, image-mask, export). |
+| `@pooder/tools` | Migration aggregate for existing capabilities (image-slot, mirror, edge-detection, image-mask, export). |
 | `@pooder/production-mask` | Standalone tool package: document-backed production masks (white ink and similar). |
 | `@pooder/image-mask-contract` | Neutral contract for cross-tool collaboration. Implementations must not depend on each other. |
 | `@pooder/kit` | Optional convenience entry that **re-exports tool factories only**. New applications should depend on concrete tool packages. |
@@ -79,8 +79,8 @@ import {
   registerPooderTools,
 } from "@pooder/vue/editor";
 import {
+  createCapabilitiesForDocument,
   createExportCapability,
-  createOfficialToolCapabilitiesForDocument,
 } from "@pooder/tools";
 import type { EditorDocument } from "@pooder/document";
 
@@ -120,7 +120,7 @@ const documentService = installPooderDocument(runtime);
 
 registerPooderTools(runtime, [
   createExportCapability(),
-  ...createOfficialToolCapabilitiesForDocument(document),
+  ...createCapabilitiesForDocument(document),
 ]);
 
 await flushPooderTools(runtime);
@@ -178,9 +178,9 @@ Object-tree rules:
 
 The full object-tree contract is in [docs/editor-document-v8-groups.md](./docs/editor-document-v8-groups.md).
 
-## Official capabilities
+## Capabilities
 
-Applications install capabilities from `extension.required` and object behaviors. `createOfficialToolCapabilitiesForDocument()` collects the official capabilities that still live in `@pooder/tools`.
+Applications install capabilities from `extension.required` and object behaviors. `createCapabilitiesForDocument()` collects the capabilities that still live in `@pooder/tools`.
 
 | Capability | Package | Default id |
 | --- | --- | --- |

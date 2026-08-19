@@ -11,55 +11,49 @@ import {
 
 import type { ImageSlotDocumentController } from "../extensions/image-slot/capability";
 import {
-  OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
-  createOfficialToolEffectSchemaRegistry,
+  EFFECT_CAPABILITY_IDS,
+  createEffectSchemaRegistry,
 } from "./effect-schemas";
 
 export * from "./behavior-schemas";
 export {
-  OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
-  OFFICIAL_TOOL_EFFECT_SCHEMAS,
-  createOfficialToolEffectSchemaRegistry,
+  EFFECT_CAPABILITY_IDS,
+  EFFECT_SCHEMAS,
+  createEffectSchemaRegistry,
 } from "./effect-schemas";
 export {
   IMAGE_SLOT_CAPABILITY_ID,
   IMAGE_SLOT_OPEN_SESSION_COMMAND_ID,
 } from "../extensions/image-slot/capability";
 
-export type OfficialToolCapabilityResolver = <T = unknown>(
+export type CapabilityResolver = <T = unknown>(
   id: string,
 ) => T | null | undefined;
 
-export type OfficialToolDocumentEffectType =
-  keyof typeof OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS;
+export type DocumentEffectType = keyof typeof EFFECT_CAPABILITY_IDS;
 
-export type OfficialToolDocumentEffect<TPayload = Record<string, unknown>> =
+export type DocumentEffect<TPayload = Record<string, unknown>> =
   EditorExtensionObjectEffect<TPayload> & {
-    type: OfficialToolDocumentEffectType;
+    type: DocumentEffectType;
   };
 
-export function isOfficialToolDocumentEffectType(
-  type: string,
-): type is OfficialToolDocumentEffectType {
-  return Object.prototype.hasOwnProperty.call(
-    OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS,
-    type,
-  );
+export function isDocumentEffectType(type: string): type is DocumentEffectType {
+  return Object.prototype.hasOwnProperty.call(EFFECT_CAPABILITY_IDS, type);
 }
 
-export function resolveOfficialToolDocumentEffectCapabilityId(
+export function resolveEffectCapabilityId(
   effect: EditorExtensionObjectEffect,
 ): string | undefined {
-  return isOfficialToolDocumentEffectType(effect.type)
-    ? OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS[effect.type]
+  return isDocumentEffectType(effect.type)
+    ? EFFECT_CAPABILITY_IDS[effect.type]
     : undefined;
 }
 
-export function parseOfficialToolDocument(value: unknown): EditorDocument {
+export function parseDocument(value: unknown): EditorDocument {
   return parseEditorDocument(value);
 }
 
-export function validateOfficialToolDocument(
+export function validateDocument(
   value: unknown,
   options: EditorDocumentValidationOptions = {},
 ) {
@@ -69,14 +63,11 @@ export function validateOfficialToolDocument(
   }
   return [
     ...documentDiagnostics,
-    ...validateEditorDocumentEffectSchemas(
-      value,
-      createOfficialToolEffectSchemaRegistry(),
-    ),
+    ...validateEditorDocumentEffectSchemas(value, createEffectSchemaRegistry()),
   ];
 }
 
-export function collectOfficialToolDocumentCapabilityRequirements(
+export function collectDocumentCapabilityRequirements(
   value: unknown,
   options: Omit<
     EditorDocumentCapabilityCollectionOptions,
@@ -86,12 +77,12 @@ export function collectOfficialToolDocumentCapabilityRequirements(
   const document = parseEditorDocument(value);
   return collectEditorDocumentCapabilityRequirements(document, {
     ...options,
-    resolveEffectCapabilityId: resolveOfficialToolDocumentEffectCapabilityId,
+    resolveEffectCapabilityId,
   });
 }
 
-export async function synchronizeOfficialToolsForDocument(
-  getCapability: OfficialToolCapabilityResolver,
+export async function synchronizeToolsForDocument(
+  getCapability: CapabilityResolver,
   document: EditorDocument,
   controller?: ImageSlotDocumentController,
 ): Promise<void> {

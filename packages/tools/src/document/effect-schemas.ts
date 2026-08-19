@@ -4,14 +4,14 @@ import {
   type EditorEffectSchemaIssue,
 } from "@pooder/document";
 
-export const OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS = {
+export const EFFECT_CAPABILITY_IDS = {
   mirror: "pooder.kit.mirror",
 } as const;
 
-export const OFFICIAL_TOOL_EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
+export const EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
   {
     effectType: "mirror",
-    capabilityId: OFFICIAL_TOOL_DOCUMENT_EFFECT_CAPABILITY_IDS.mirror,
+    capabilityId: EFFECT_CAPABILITY_IDS.mirror,
     validate: (payload) =>
       validateOptionalRecordFields(payload, {
         horizontal: "boolean",
@@ -20,18 +20,16 @@ export const OFFICIAL_TOOL_EFFECT_SCHEMAS: readonly EditorEffectSchema[] = [
   },
 ];
 
-export function getOfficialToolEffectSchema(
-  effectType: string,
-): EditorEffectSchema {
-  const schema = OFFICIAL_TOOL_EFFECT_SCHEMAS.find(
+export function getEffectSchema(effectType: string): EditorEffectSchema {
+  const schema = EFFECT_SCHEMAS.find(
     (candidate) => candidate.effectType === effectType,
   );
-  if (!schema) throw new Error(`Unknown official tool effect "${effectType}".`);
+  if (!schema) throw new Error(`Unknown effect "${effectType}".`);
   return schema;
 }
 
-export function createOfficialToolEffectSchemaRegistry(): EffectSchemaRegistry {
-  return new EffectSchemaRegistry(OFFICIAL_TOOL_EFFECT_SCHEMAS);
+export function createEffectSchemaRegistry(): EffectSchemaRegistry {
+  return new EffectSchemaRegistry(EFFECT_SCHEMAS);
 }
 
 function validateOptionalRecord(payload: unknown): EditorEffectSchemaIssue[] {

@@ -36,7 +36,7 @@ EditorDocument  ──apply──►  document-core  ──RenderIntent──►
 | `@pooder/platform-browser` | 浏览器宿主：Fabric 适配、画布、视口、导出、图片资源。 |
 | `@pooder/geometry-paper` | 按需加载的 Paper.js 几何后端。导入模块本身不碰 DOM。 |
 | `@pooder/vue` | Vue 3 宿主。**根入口可 SSR**；画布与工具注册在 `@pooder/vue/editor`。 |
-| `@pooder/tools` | 现有官方能力的迁移聚合包（image-slot、mirror、edge-detection、image-mask、export）。 |
+| `@pooder/tools` | 现有能力的迁移聚合包（image-slot、mirror、edge-detection、image-mask、export）。 |
 | `@pooder/production-mask` | 独立 Tool 包：文档驱动的生产掩膜（白墨等）。 |
 | `@pooder/image-mask-contract` | 跨 Tool 协作的中立契约。实现互不直接依赖。 |
 | `@pooder/kit` | 可选便利入口，**只再导出 Tool 工厂**。新应用应直接依赖具体 Tool 包。 |
@@ -79,8 +79,8 @@ import {
   registerPooderTools,
 } from "@pooder/vue/editor";
 import {
+  createCapabilitiesForDocument,
   createExportCapability,
-  createOfficialToolCapabilitiesForDocument,
 } from "@pooder/tools";
 import type { EditorDocument } from "@pooder/document";
 
@@ -120,7 +120,7 @@ const documentService = installPooderDocument(runtime);
 
 registerPooderTools(runtime, [
   createExportCapability(),
-  ...createOfficialToolCapabilitiesForDocument(document),
+  ...createCapabilitiesForDocument(document),
 ]);
 
 await flushPooderTools(runtime);
@@ -178,9 +178,9 @@ interface EditorDocument {
 
 更完整的对象树约定见 [docs/editor-document-v8-groups.md](./docs/editor-document-v8-groups.md)。
 
-## 官方 Capabilities
+## Capabilities
 
-应用按文档的 `extension.required` 和对象 behaviors 安装能力。`createOfficialToolCapabilitiesForDocument()` 会根据文档收集 `@pooder/tools` 里已有的官方能力。
+应用按文档的 `extension.required` 和对象 behaviors 安装能力。`createCapabilitiesForDocument()` 会根据文档收集 `@pooder/tools` 里已有的能力。
 
 | Capability | 包 | 默认 id |
 | --- | --- | --- |
